@@ -13,9 +13,11 @@ describe('open report stability', () => {
 
   it('keeps report reload behind the explicit toolbar refresh action', () => {
     const canvas = readFileSync('src/components/workflow/canvas/WorkflowCanvas.tsx', 'utf8')
+    const viewer = readFileSync('src/components/workflow/ReportViewer.tsx', 'utf8')
 
-    expect(canvas).toContain('window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_REFRESH_EVENT))')
-    expect(canvas).toContain('onRefresh={handleReportRefresh}')
+    expect(viewer).toContain('onClick={refresh}')
+    expect(viewer).toContain('aria-label="Refresh report"')
+    expect(canvas).not.toContain('window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_REFRESH_EVENT))')
   })
 
   it('does not let outer polling remount the report iframe', () => {

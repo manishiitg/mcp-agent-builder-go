@@ -11,8 +11,6 @@ import (
 // drop the key entirely — which is what agents rely on to "remove" a prior
 // override so a step falls back to preset/default behavior.
 func TestClearStepConfigField(t *testing.T) {
-	truePtr := true
-
 	cases := []struct {
 		name           string
 		field          string
@@ -42,14 +40,6 @@ func TestClearStepConfigField(t *testing.T) {
 				sc.AgentConfigs = &AgentConfigs{AdditionalReadPaths: []string{"variables"}}
 			},
 			assertJSONGone: "additional_read_paths",
-		},
-		{
-			name:  "clears bool pointer (lock_learnings)",
-			field: "lock_learnings",
-			prep: func(sc *StepConfig) {
-				sc.AgentConfigs = &AgentConfigs{LockLearnings: &truePtr}
-			},
-			assertJSONGone: "lock_learnings",
 		},
 		{
 			name:  "clears string field (knowledgebase_contribution)",

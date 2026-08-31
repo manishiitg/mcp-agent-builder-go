@@ -1,6 +1,6 @@
 import { memo, type ReactElement } from 'react'
 import { Handle, Position } from '@xyflow/react'
-import { CheckCircle, XCircle, Loader2, Plus, RefreshCw, Route } from 'lucide-react'
+import { CheckCircle, GitBranch, XCircle, Loader2, Plus, RefreshCw, Route } from 'lucide-react'
 import type { RoutingStepNodeData } from '../hooks/usePlanToFlow'
 import type { ChangeType } from '../hooks/usePlanData'
 import { getExecutionModeVisuals } from './executionModeVisuals'
@@ -41,10 +41,10 @@ const statusIcons: Record<string, ReactElement | null> = {
 
 export const RoutingStepNode = memo(({ data, selected }: RoutingStepNodeProps) => {
   const { title, routing_question, routes, status, stepIndex, changeType, isOrphan } = data
-  // Reused as-is for both routing (the "route"/major-fork concept) and
-  // branch (the small in-flow decision, PLAT-259) -- only the untitled-step
-  // fallback label needs to say which one this actually is.
-  const fallbackLabel = data.step?.type === 'branch' ? `Branch ${stepIndex + 1}` : `Routing ${stepIndex + 1}`
+  const isBranch = data.step?.type === 'branch'
+  const fallbackLabel = isBranch ? `Branch ${stepIndex + 1}` : `Routing ${stepIndex + 1}`
+  const DecisionIcon = isBranch ? GitBranch : Route
+  const decisionLabel = isBranch ? 'Branch' : 'Route'
   const executionMode = data.step?.agent_configs?.declared_execution_mode
   const executionModeReason = data.step?.agent_configs?.declared_execution_mode_reason
   const executionModeVisuals = getExecutionModeVisuals(executionMode, executionModeReason)
@@ -91,18 +91,30 @@ export const RoutingStepNode = memo(({ data, selected }: RoutingStepNodeProps) =
         <div className="px-3 py-2 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2">
           <div className="flex items-center gap-1.5 min-w-0 flex-1">
             <div
-              className={`flex items-center justify-center w-6 h-6 rounded-md flex-shrink-0 ${ModeIcon ? executionModeVisuals.iconBoxClassName : 'bg-teal-100 dark:bg-teal-900/40'}`}
-              title={executionModeVisuals.title}
+              className={`flex items-center justify-center w-6 h-6 rounded-md flex-shrink-0 border ${
+                isBranch
+                  ? 'border-violet-200 bg-violet-100 text-violet-700 dark:border-violet-800 dark:bg-violet-900/40 dark:text-violet-300'
+                  : 'border-teal-200 bg-teal-100 text-teal-700 dark:border-teal-800 dark:bg-teal-900/40 dark:text-teal-300'
+              }`}
+              title={isBranch ? 'Branch: a small decision inside the current flow' : 'Route: a major workflow path'}
             >
-              {ModeIcon ? (
-                <ModeIcon className="w-3.5 h-3.5" />
-              ) : (
-                <Route className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
-              )}
+              <DecisionIcon className="w-3.5 h-3.5" />
             </div>
             <div className="text-xs font-semibold text-gray-900 dark:text-white truncate">
               {title || fallbackLabel}
             </div>
+            <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
+              isBranch
+                ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300'
+                : 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300'
+            }`}>
+              {decisionLabel}
+            </span>
+            {ModeIcon && (
+              <span title={executionModeVisuals.title} className="shrink-0">
+                <ModeIcon className={`h-3.5 w-3.5 ${executionModeVisuals.iconClassName}`} />
+              </span>
+            )}
             {statusIcon}
           </div>
 

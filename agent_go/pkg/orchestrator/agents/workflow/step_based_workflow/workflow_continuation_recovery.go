@@ -333,10 +333,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) queueRecoveredDirectLearning(state *W
 		hcpo.recordWorkflowContinuationPhaseForRunFolder(context.Background(), state.RunFolder, state.StepID, state.StepPath, workflowContinuationOwnerStepExecution, workflowContinuationPhaseDirectLearning, workflowContinuationStatusSkipped, "direct learning gates disabled", nil)
 		return
 	}
-	if hcpo.shouldSkipDirectLearningsDueToLock(context.Background(), stepCfg, runtime.StepIndex) {
-		hcpo.recordWorkflowContinuationPhaseForRunFolder(context.Background(), state.RunFolder, state.StepID, state.StepPath, workflowContinuationOwnerStepExecution, workflowContinuationPhaseDirectLearning, workflowContinuationStatusSkipped, "lock_learnings=true with existing _global content", nil)
-		return
-	}
 	learnObjective := ""
 	if stepCfg != nil {
 		learnObjective = stepCfg.LearningObjective

@@ -2585,7 +2585,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 
 				// LEARNING PHASE: Runs for ALL agents regardless of validation status
 				// Validation being disabled does NOT prevent learning from running
-				// Learning will run if: not disabled, not locked, and not skipped due to temp LLM override
+				// Learning runs only when learnings_access is read-write and an objective exists.
 				// LEARNING DISABLED: Skip learning agents entirely
 				// Learnings WRITE gate — controlled by learnings_access="read-write" AND
 				// non-empty learning_objective (the extraction target for the writer).
@@ -2596,26 +2596,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 				isLearningDisabled := !canWriteLearnings(agentConfigs, step, hcpo.isEvaluationMode)
 				if isScriptedMode {
 					hcpo.GetLogger().Info(fmt.Sprintf("🐍 [scripted_code] Step %d — main.py remains executable truth; SKILL.md writes gated by learnings_access=%s", stepIndex+1, resolveLearningsAccess(agentConfigs)))
-				}
-				// LOCK LEARNINGS: Check if learnings are locked (prevents learning agent from running but still uses existing learnings)
-				// EXCEPTION: If learnings are locked but learnings don't exist, still run learning to create initial learnings
-				isLearningsLocked := agentConfigs != nil && agentConfigs.LockLearnings != nil && *agentConfigs.LockLearnings
-				shouldSkipLearningDueToLock := false
-				if isLearningsLocked {
-					// Check if learnings folder exists and has content
-					learningsEmpty, err := hcpo.isStepLearningsFolderEmpty(ctx, step.GetID(), stepIndex, stepPath)
-					if err != nil {
-						// If we can't check, assume empty and run learning
-						hcpo.GetLogger().Info(fmt.Sprintf("🔒 Learnings locked but cannot check if learnings exist - will run learning to create initial learnings for step %d", stepIndex+1))
-						shouldSkipLearningDueToLock = false
-					} else if learningsEmpty {
-						// Learnings are locked but folder is empty - run learning to create initial learnings
-						hcpo.GetLogger().Info(fmt.Sprintf("🔒 Learnings locked but folder is empty - will run learning to create initial learnings for step %d", stepIndex+1))
-						shouldSkipLearningDueToLock = false
-					} else {
-						// Learnings are locked and learnings exist - skip learning
-						shouldSkipLearningDueToLock = true
-					}
 				}
 				// Pre-validation result drives validationResponse (set above).
 				// Safety guard: if somehow nil, default to success so learning + KB can proceed.
@@ -2638,13 +2618,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 				// retired. All steps now use direct-mode learning: the step agent
 				// itself writes SKILL.md inline during its dedicated post-completion
 				// turn (gated earlier in this method by shouldDirectWriteLearnings
-				// and the learningsDirectPerformed flag). The lock / disabled log
-				// lines are kept so operators see the gate, but no background
-				// launch happens.
+				// and the learningsDirectPerformed flag). No background launch happens.
 				if isLearningDisabled {
 					hcpo.GetLogger().Info(fmt.Sprintf("⏭️ Learning disabled: Skipping learning for step %d", stepIndex+1))
-				} else if shouldSkipLearningDueToLock {
-					hcpo.GetLogger().Info(fmt.Sprintf("🔒 Learnings locked: Skipping learning for step %d (using existing learnings)", stepIndex+1))
 				}
 
 				// Post-step KB update AGENT (the separate reviewer that re-read the step

@@ -1,4 +1,42 @@
 import type { ChatTab } from '../../stores/useChatStore'
+import type { PollingEvent } from '../../services/api-types'
+
+const RESTORABLE_CHAT_CONTENT_EVENTS = new Set(['user_message', 'conversation_end', 'unified_completion'])
+
+/** Find an untouched interactive Chat placeholder that can safely receive a
+ * restored conversation. A read-only Schedule/full-run tab must never be
+ * repurposed for restore: doing so leaves schedule metadata and the conversion
+ * icon attached to an interactive conversation. */
+export function reusableBlankWorkflowChatTabId(
+  tabs: Record<string, ChatTab>,
+  tabEvents: Record<string, PollingEvent[]>,
+  presetQueryId?: string | null,
+): string | null {
+  const candidates = Object.values(tabs).filter(tab => {
+    if (tab.metadata?.mode !== 'workflow' || tab.metadata?.isViewOnly === true) return false
+    if (presetQueryId && tab.metadata?.presetQueryId && tab.metadata.presetQueryId !== presetQueryId) return false
+    if (!tab.sessionId) return true
+    return !(tabEvents[tab.sessionId] || []).some(event => RESTORABLE_CHAT_CONTENT_EVENTS.has(event.type || ''))
+  })
+  candidates.sort((a, b) => {
+    const aBuilder = a.metadata?.phaseId === 'workflow-builder' ? 1 : 0
+    const bBuilder = b.metadata?.phaseId === 'workflow-builder' ? 1 : 0
+    if (aBuilder !== bBuilder) return bBuilder - aBuilder
+    return (b.lastAccessedAt || b.createdAt || 0) - (a.lastAccessedAt || a.createdAt || 0)
+  })
+  return candidates[0]?.tabId || null
+}
+
+/** Detect the legacy corruption produced when Restore reused a read-only
+ * runtime tab. A legitimate read-only Schedule restore never carries
+ * restoredConversationPath; that marker belongs to interactive restoration. */
+export function isMisclassifiedRestoredWorkflowChat(tab: ChatTab): boolean {
+  return Boolean(
+    tab.metadata?.mode === 'workflow' &&
+    tab.metadata?.isViewOnly === true &&
+    tab.config?.restoredConversationPath,
+  )
+}
 
 // Convert an observed scheduled/bot conversation into an editable Builder tab
 // without changing the logical conversation identity. The same session ID is

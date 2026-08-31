@@ -1698,13 +1698,11 @@ func (api *StreamingAPI) processBatchedBackgroundAgentCompletions(sessionID stri
 		}
 		workshopMode := ""
 		isLockCode := false
-		isLockLearnings := false
 		lockCodeConsecutiveFailures := 0
 		lockCodeNeedsReview := false
 		if snap.Metadata != nil {
 			workshopMode = snap.Metadata["workshop_mode"]
 			isLockCode = snap.Metadata["lock_code"] == "true"
-			isLockLearnings = snap.Metadata["lock_learnings"] == "true"
 			if v := snap.Metadata["lock_code_consecutive_failures"]; v != "" {
 				if n, perr := strconv.Atoi(v); perr == nil {
 					lockCodeConsecutiveFailures = n
@@ -1712,7 +1710,7 @@ func (api *StreamingAPI) processBatchedBackgroundAgentCompletions(sessionID stri
 			}
 			lockCodeNeedsReview = snap.Metadata["lock_code_needs_review"] == "true"
 		}
-		actionHint := buildWorkshopActionHint(workshopMode, isLockCode, isLockLearnings, lockCodeConsecutiveFailures, lockCodeNeedsReview, snap.Status == BGAgentFailed)
+		actionHint := buildWorkshopActionHint(workshopMode, isLockCode, lockCodeConsecutiveFailures, lockCodeNeedsReview, snap.Status == BGAgentFailed)
 		batchContext := autoNotificationBracketContext(snap.Metadata)
 		parts = append(parts, fmt.Sprintf("- **%s**%s: %s\n  Result: %s%s", strings.TrimSpace(snap.Name), batchContext, snap.Status, resultText, actionHint))
 		if batchWorkflowRunDirective == "" {
@@ -1758,7 +1756,7 @@ func (api *StreamingAPI) processBatchedBackgroundAgentCompletions(sessionID stri
 // this function only adds extra guidance for cases where the engine has silently degraded behavior
 // the orchestrator wouldn't otherwise know about — most notably fast-path failures on locked steps,
 // where the fix loop is disabled and the step gets exactly one shot at running the saved main.py.
-func buildWorkshopActionHint(workshopMode string, isLockCode, isLockLearnings bool, lockCodeConsecutiveFailures int, lockCodeNeedsReview, failed bool) string {
+func buildWorkshopActionHint(workshopMode string, isLockCode bool, lockCodeConsecutiveFailures int, lockCodeNeedsReview, failed bool) string {
 	if !failed {
 		return ""
 	}
@@ -1775,24 +1773,6 @@ func buildWorkshopActionHint(workshopMode string, isLockCode, isLockLearnings bo
 				"Strongly consider clearing `lock_code` and patching the script rather than treating "+
 				"this as one more transient failure.",
 			lockCodeConsecutiveFailures, lockCodeConsecutiveFailures, lockCodeNeedsReview)
-	}
-	if isLockCode && isLockLearnings {
-		return "\n\n[LOCKED STEP FAILED] This step is locked " +
-			"(`lock_code=true`, `lock_learnings=true`) and ran on the fast path, " +
-			"so only the saved main.py executed — no fix loop, no LLM repair attempt. " +
-			"Investigate the failure: read the run folder " +
-			"(`step_*_status.json`, `scripted_fast_path.json`, screenshots, downloaded files) " +
-			"and decide between two recovery paths:\n" +
-			"  1. **Fix main.py** — if there's a real bug in the script (these accumulate over time as " +
-			"sites and APIs change), clear `lock_code` via `update_step_config` and update the script. " +
-			"Use `review_step_code` or rewrite directly based on what you find.\n" +
-			"  2. **Re-run with `fast_path_only=false`** — calls `execute_step` again with the fast path " +
-			"disabled so the full agentic path engages. The LLM will drive tools directly, can repair " +
-			"the run live, and (if `lock_code` is cleared) save an updated main.py back to learnings. " +
-			"Good first move when you're not sure whether it's a script bug or environmental.\n" +
-			"If after inspection it's clearly environmental (bad creds, MFA prompt, captcha) and the " +
-			"script is fine, surface that to the user instead of touching the code." +
-			streakHint
 	}
 	if isLockCode {
 		return "\n\n[CODE-LOCKED FAILURE] `lock_code=true` so the fix loop is disabled and the saved " +
@@ -1899,13 +1879,11 @@ func (api *StreamingAPI) buildAutoNotificationMessage(sessionID string, snap Bac
 	// Append mode-specific action hint so the agent knows what to do next.
 	workshopMode := ""
 	isLockCode := false
-	isLockLearnings := false
 	lockCodeConsecutiveFailures := 0
 	lockCodeNeedsReview := false
 	if snap.Metadata != nil {
 		workshopMode = snap.Metadata["workshop_mode"]
 		isLockCode = snap.Metadata["lock_code"] == "true"
-		isLockLearnings = snap.Metadata["lock_learnings"] == "true"
 		if v := snap.Metadata["lock_code_consecutive_failures"]; v != "" {
 			if n, perr := strconv.Atoi(v); perr == nil {
 				lockCodeConsecutiveFailures = n
@@ -1914,7 +1892,7 @@ func (api *StreamingAPI) buildAutoNotificationMessage(sessionID string, snap Bac
 		lockCodeNeedsReview = snap.Metadata["lock_code_needs_review"] == "true"
 	}
 	isFailed := snap.Status == BGAgentFailed
-	actionHint := buildWorkshopActionHint(workshopMode, isLockCode, isLockLearnings, lockCodeConsecutiveFailures, lockCodeNeedsReview, isFailed)
+	actionHint := buildWorkshopActionHint(workshopMode, isLockCode, lockCodeConsecutiveFailures, lockCodeNeedsReview, isFailed)
 	presentationOnly := snap.Metadata != nil && snap.Metadata["completion_mode"] == "present_result"
 	if presentationOnly {
 		// A guided review/fix child already owns evidence collection and durable

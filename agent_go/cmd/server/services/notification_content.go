@@ -10,8 +10,33 @@ package services
 // renders that instead; a channel without one falls back to the plain message.
 // Add Slack/WhatsApp slices the same way when those channels grow rich content.
 type NotificationContent struct {
-	Text  string        // common fallback (mirrors the `message` arg)
-	Gmail *GmailContent // Gmail-specific rendering (nil = derive from message)
+	Text    string               // common fallback (mirrors the `message` arg)
+	Summary *NotificationSummary // channel-neutral structured summary for durable/internal surfaces
+	Gmail   *GmailContent        // Gmail-specific rendering (nil = derive from message)
+}
+
+// NotificationSummary is the channel-neutral representation of a structured
+// workflow notification. External connectors may render it, while the
+// org_dashboard connector persists it without parsing Slack blocks or Gmail
+// HTML. Kind is one of general, run_summary, or pulse_summary. Only the latter
+// two are durable Org Dashboard inputs.
+type NotificationSummary struct {
+	Kind     string                       `json:"kind"`
+	Title    string                       `json:"title,omitempty"`
+	Status   string                       `json:"status,omitempty"`
+	Route    string                       `json:"route,omitempty"`
+	Fields   []NotificationSummaryField   `json:"fields,omitempty"`
+	Sections []NotificationSummarySection `json:"sections,omitempty"`
+}
+
+type NotificationSummaryField struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+type NotificationSummarySection struct {
+	Heading string `json:"heading"`
+	Body    string `json:"body"`
 }
 
 // GmailContent is the Gmail-specific rendering. Every field is optional and

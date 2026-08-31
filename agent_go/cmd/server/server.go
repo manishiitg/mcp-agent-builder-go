@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	_ "net/http/pprof" // Register pprof handlers
@@ -801,8 +802,12 @@ func buildWorkflowNotificationInstructionsPrompt(runInstructions, pulseInstructi
 func notificationDestinationFromQuery(req QueryRequest, userID string) *services.NotificationDestination {
 	platform := strings.ToLower(strings.TrimSpace(req.BotPlatform))
 	dest := &services.NotificationDestination{
-		UserID:       userID,
-		WorkflowName: workflowNameFromWorkspacePath(req.SelectedFolder),
+		UserID:        userID,
+		WorkflowName:  workflowNameFromWorkspacePath(req.SelectedFolder),
+		WorkspacePath: strings.TrimSpace(req.SelectedFolder),
+	}
+	if req.ExecutionOptions != nil && len(req.ExecutionOptions.RouteSelections) > 0 {
+		dest.RouteSelections = maps.Clone(req.ExecutionOptions.RouteSelections)
 	}
 	switch platform {
 	case "slack":
@@ -855,7 +860,7 @@ func notificationDestinationFromQuery(req QueryRequest, userID string) *services
 		}
 		dest.Gmail.BlockedRecipients = append(dest.Gmail.BlockedRecipients, req.NotificationBlockRecipients...)
 	}
-	if dest.UserID == "" && dest.Slack == nil && dest.SlackWebhook == nil && dest.WhatsApp == nil && dest.Gmail == nil &&
+	if dest.UserID == "" && dest.WorkspacePath == "" && dest.Slack == nil && dest.SlackWebhook == nil && dest.WhatsApp == nil && dest.Gmail == nil &&
 		len(dest.ExcludeChannels) == 0 && len(dest.RunSummaryRecipients) == 0 && len(dest.PulseSummaryRecipients) == 0 &&
 		len(dest.RunSummaryWebhooks) == 0 && len(dest.PulseSummaryWebhooks) == 0 {
 		return nil
@@ -1617,6 +1622,10 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	notificationManager := services.GetNotificationManager()
 	if notificationManager != nil {
+		// The Org Dashboard is an always-on internal notification destination.
+		// It persists classified workflow summaries independently of whether any
+		// external channel is configured or successfully delivers.
+		notificationManager.RegisterConnector(services.NewOrgDashboardConnector())
 		notificationManager.SetFeedbackResponseFunc(
 			func(uniqueID string, response string) error {
 				store := virtualtools.GetHumanFeedbackStore()
@@ -2354,6 +2363,7 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Auto-improvement framework — see docs/workflow/auto_improvement_framework.md
 	apiRouter.HandleFunc("/workflow/builder-doc", api.handleGetBuilderDoc).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/org-dashboard/notifications", api.handleGetOrgDashboardNotifications).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/plan-changelog", api.handleGetPlanChangelog).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/plan-changelog/prune", requireWorkflowWriteAccess(api.handlePrunePlanChangelog)).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/framework-health", api.handleGetFrameworkHealth).Methods("GET", "OPTIONS")
@@ -5015,6 +5025,15 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if len(fileContextBlockedWriteFolders) > 0 {
 					workspace.SetSessionFolderGuardBlockedWritePaths(sessionID, fileContextBlockedWriteFolders)
 				}
+				// PLAT-221: the main Workflow Builder is a managed DB client just
+				// like its workshop children. Give the dedicated DB tools their
+				// trusted logical capability and hard-block raw db.sqlite/WAL/SHM
+				// access so a denied migration cannot fall back to the sqlite CLI.
+				todo_creation_human.ConfigureManagedWorkflowDBSession(
+					sessionID,
+					workflowPhaseFolder,
+					!currentUserIsReadOnly,
+				)
 				if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, hostDownloadsBrowserMode(req)); hostDownloads != "" {
 					log.Printf("[WORKFLOW PHASE FOLDER GUARD] Added read-write CDP host Downloads: %s", hostDownloads)
 				}
@@ -5506,6 +5525,14 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					workspace.SetSessionFolderGuard(sessionID,
 						phaseReadPaths,
 						[]string{phaseWorkspacePath, "Downloads"},
+					)
+					// The phase setup above rebuilds the long-lived Builder guard.
+					// Reapply the managed DB boundary on every setup/restore so old
+					// sessions cannot retain broad raw SQLite or sidecar access.
+					todo_creation_human.ConfigureManagedWorkflowDBSession(
+						sessionID,
+						phaseWorkspacePath,
+						!currentUserIsReadOnly,
 					)
 					if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, hostDownloadsBrowserMode(req)); hostDownloads != "" {
 						log.Printf("[WORKFLOW_PHASE] Added read-write CDP host Downloads: %s", hostDownloads)

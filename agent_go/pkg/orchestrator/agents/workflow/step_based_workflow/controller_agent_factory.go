@@ -310,6 +310,24 @@ func configureWorkflowDBSession(sessionID, workspacePath, dbAccess string, direc
 	common.SetSessionFolderGuardBlockedPaths(sessionID, common.DeduplicateStrings(blocked))
 }
 
+// ConfigureManagedWorkflowDBSession applies the workflow database trust
+// boundary to a long-lived managed session such as the main Workflow Builder
+// chat. These sessions are configured outside this package, unlike workflow
+// steps and workshop child agents, so they need an explicit exported entry
+// point rather than duplicating the logical grant and raw-file deny rules.
+//
+// Managed sessions must use query_workflow_db, mutate_workflow_db, and
+// apply_workflow_db_migration. Raw access to db.sqlite and its WAL/SHM
+// sidecars stays blocked even when the surrounding db/ folder is writable for
+// migrations, documentation, and db/assets.
+func ConfigureManagedWorkflowDBSession(sessionID, workspacePath string, readWrite bool) {
+	dbAccess := DBAccessRead
+	if readWrite {
+		dbAccess = DBAccessReadWrite
+	}
+	configureWorkflowDBSession(sessionID, workspacePath, dbAccess, false)
+}
+
 func dbWritePathGranted(writePaths []string, workspacePath string) bool {
 	want := filepath.Clean(getDBPath(workspacePath))
 	for _, path := range writePaths {

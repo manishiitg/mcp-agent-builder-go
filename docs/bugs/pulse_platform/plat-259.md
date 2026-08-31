@@ -5,10 +5,10 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `third independent review's findings resolved` — the canonical workshop prompt and every named reference doc now offer `branch` as the fixed-choice alternative to `routing`, with a guidance-contract test locking both in; Execution Logs now reports a branch run's real step type instead of hardcoding `routing`; the platform's generic plan add/update HTTP API (distinct from the Builder-native tools) now accepts branch steps. Frontend per-route reporting tabs and live manual reverify remain the only open items |
+| Ticket state | `migration tool contract repaired after live verification` — the canonical workshop prompt and every named reference doc now offer `branch` as the fixed-choice alternative to `routing`; Execution Logs retains the executed type; generic plan APIs accept branch steps; and the atomic routing/branch conversion tool now publishes the changelog `reason` its executor requires. Frontend per-route reporting tabs and a successful live manual rerun remain open |
 | Last synchronized | `2026-08-30` |
 
-- **Type:** platform feature (design only, no code changed). Filed at the
+- **Type:** implemented platform feature. Originally filed at the
   user's explicit request immediately after the design converged, to record
   the full negotiated shape before implementation starts.
 - **Origin:** the user opened a design discussion, not a bug report: today's
@@ -512,7 +512,7 @@ PLAT-259 is still not complete for three newly confirmed integration reasons:
    `branch` from the step-type list and explicitly tells the agent to use
    deterministic `routing` for fixed branch choices. The same stale direction
    remains in `plan-design.md`, `planning-steps.md`, `message-sequence.md`,
-   `regular.md`, and parts of `workflow-tools.md`. Normal plan creation can
+   `scripted.md`, and parts of `workflow-tools.md`. Normal plan creation can
    therefore keep producing routing steps for the small decisions PLAT-259
    introduced `branch` to represent. Update every canonical entry point and
    add a guidance-contract test that requires both types and their distinction.
@@ -551,7 +551,7 @@ Addressed all three findings:
    list and the per-step-deep-dive doc list. Extended the same fix to
    every other canonical entry point the review named:
    `plan-design.md`, `planning-steps.md`, `message-sequence.md`,
-   `regular.md`, and `workflow-tools.md` (which was also missing
+   `scripted.md`, and `workflow-tools.md` (which was also missing
    `add_branch_step`/`update_branch_step` from its tool lists entirely).
    Two new regression tests lock this in:
    `TestCanonicalWorkshopPromptOffersBranchForFixedChoices`
@@ -688,3 +688,36 @@ All fixes verified: `go build ./...`, `gofmt -l` clean; `go test
 ./pkg/orchestrator/agents/workflow/step_based_workflow/...`,
 `./cmd/server/...`, `./cmd/server/guidance/...` green (only the same
 pre-existing unrelated `virtual-tools` failure).
+
+## Live migration contract failure fixed (2026-08-30)
+
+The first real `/migrate-routing-to-branch` run against `build-in-public`
+proved the new atomic conversion tool could not be called: its executor used
+the standard `requireReason(args)` changelog guard, but
+`getConvertRoutingBranchStepTypeSchema` exposed only `existing_step_id` and
+`target_type`. Omitting `reason` therefore failed in the handler, while
+supplying it was rejected as an unknown field by the bridge. The run correctly
+made no workflow changes and recorded the platform finding `PUL-4E3281CD`.
+
+Fixed the contract at its source:
+
+- the tool schema now publishes and requires `reason`;
+- the registered tool description and both relevant guidance documents show
+  the complete three-argument contract;
+- `TestConvertRoutingBranchStepTypeSchemaPublishesReason` locks the published
+  schema to the executor requirement, preventing another handler/schema split.
+
+The `build-in-public` plan remains unchanged by this platform repair. Rerun
+the migration after deploying/restarting the updated server; the four proposed
+conversions still require a fresh classification pass, and the existing
+route-evaluation finding `PUL-4D0912A3` remains separate workflow work.
+
+## Plan-canvas distinction added (2026-08-30)
+
+Routing and branch already persisted and executed as separate types, but the
+plan canvas reused an indistinguishable node presentation. The shared node now
+renders routing with a teal `Route` icon and visible `Route` label, while a
+branch renders with a violet `GitBranch` icon and visible `Branch` label.
+Execution-mode iconography remains available separately, so making the step
+type visible does not discard scripted/agentic/direct execution information.
+The production frontend build passes.

@@ -24,14 +24,13 @@ After a step runs successfully, always check: could a stale/fake output file pas
 
 ### 2. Learning Configuration
 
-The learning system has **two active dimensions** per step: `learnings_access` controls read/write scope, and `lock_learnings` freezes writes. `learnings_write_method` is retained only for old plan.json compatibility; new plans should omit it.
+The learning system has **one active permission control** per step: `learnings_access` controls read/write scope. New plans should omit the retired `learnings_write_method` compatibility field.
 
 - **Default access is `"read"`** (inferred when `learnings_access` is unset). Every step — including simple plumbing — sees `_global/SKILL.md` in its prompt for cross-step context. Do NOT set `learnings_access: "none"` on plumbing steps just because they don't contribute; they still benefit from reading.
 - **Opt into writing** by setting `learnings_access: "read-write"` AND a non-empty `learning_objective`. Required only for steps that produce durable HOW-knowledge: browser selectors/timing/auth flows, API/MCP request/response quirks, CLI/SDK command patterns, output parsing rules, retry/recovery behavior, and file-format pitfalls. The validator enforces the pairing.
 - **Writes are direct-only**: when `learnings_access="read-write"` and `learning_objective` are set, the step agent itself writes `_global/SKILL.md` in a dedicated post-completion user-message turn. Folder guard widens only for that turn; main execution cannot write learnings. This turn is part of step finalization, so it completes before the workflow advances to the next step. Direct-mode guidance is NOT in the step's main system prompt — the agent sees it only in the dedicated turn. Parallel direct-learning turns are serialized by an in-process mutex.
 - **Do not write learnings** for routing/condition steps, schema validation, mechanical transforms, aggregation/report data shaping, human approval/input, message-only steps, pure db/KB readers, or mature scripted steps whose `main.py` already captures the execution method. Leave these at `"read"` unless `_global/SKILL.md` would actively mislead them.
 - **Use `"none"` sparingly** — only when the global skill content would actively mislead the step (rare) or when the step is so divorced from the target system that reading the skill just burns tokens.
-- **Learning locks are manual**: runtime execution never auto-sets or auto-clears `lock_learnings`. Set it only when the Workshop user intentionally decides this step should stop writing SKILL.md, and record the rationale in `review_notes`.
 - **scripted steps**: usually `learnings_access: "read"` (not `"read-write"`). The saved `learnings/{step-id}/main.py` IS the learned artifact — the HOW is encoded as code. Opt into write only when there's cross-step HOW knowledge the script itself can't capture (e.g. operator notes, patterns spanning multiple steps).
 - **Clearing a bad setting**: if a step was miss-configured with `learnings_access: "read-write"` but shouldn't contribute, clear it via `update_step_config(step_id, clear_fields=["learnings_access", "learning_objective"])`.
 
@@ -42,27 +41,24 @@ Good `learning_objective` examples:
 
 Bad learning objectives: "learn from this run", "remember the result", "save useful info", or anything that asks for facts/results instead of reusable HOW.
 
-#### The Three Locks — What They Freeze and When To Use
+#### The Per-Step Code Lock — What It Freezes and When To Use
 
-Mature workflows accumulate three kinds of state that you can freeze independently. Use this table to pick the right lock:
+Only saved scripted code has a lock. Learning writes are controlled directly by `learnings_access`.
 
 | Lock | Scope | Freezes | Prevents | Use when |
 | --- | --- | --- | --- | --- |
-| `lock_learnings` | Per-step | `learnings/_global/SKILL.md` content the step relies on | Learning agent from updating SKILL.md after this step runs | Manually set when the Workshop user decides the step should stop writing SKILL.md, usually after reviewing stable learning notes. Include `review_notes`; runtime does not auto-lock or auto-unlock it. |
 | `lock_code` | Per-step (scripted only) | `learnings/{step-id}/main.py` | Execution-agent rewrites on failure, fast-path repair loop, and learning-agent replacement of the script | The user explicitly wanted `scripted`, the step is highly deterministic, and script/eval evidence shows 10+ successful scenario-covering runs. Hand-patched scripts still need this evidence before freezing, otherwise keep `lock_code=false` so repair can continue. |
-| `lock_knowledgebase` | Workflow-level | `knowledgebase/notes/` auto-updates after step completions | Post-step KB update agent from firing across ALL steps (reads still work) | Domain knowledge has stabilized — use the read-only `/improve-knowledge` checklist plus the parent fixer for intentional curation, while stopping per-step LLM cost |
 
 **After hand-editing an artifact**: do not lock it automatically. Verify the edit against real scenario-covering runs first. Lock only when the user explicitly asks or the artifact has enough evidence to be treated as stable; otherwise leave it unlocked so later runs can expose and repair drift. Record the decision in `review_notes`.
 
 **Description changes and lock state**: The step description is the source of truth that learnings and scripted code were generated against.
 
-- **`lock_learnings` does NOT auto-unlock.** If you changed the description semantically and `lock_learnings` is set, the frozen SKILL.md updates may now be wrong for the new intent — clear it explicitly: `update_step_config(step_id, lock_learnings=false)`.
 - **`lock_code` does NOT auto-unlock.** If you changed the description semantically and `lock_code` is set, the frozen main.py may now be wrong for the new intent — clear it explicitly: `update_step_config(step_id, lock_code=false)`.
 - Pure **rewording** (clarifying existing instructions without changing intent) may still change the description hash used in metadata. Treat the hash as review evidence, not as an automatic lock lifecycle.
 - When you meaningfully change a step's description, clear `description_reviewed` so future reviewers know the description needs a fresh eyeballing.
 - **Reconcile the blast radius.** When a bounded fix changes a step's output contract, db writes, or behavior, run `read_skill(skills=[{"name":"builder-reference","path":"references/plan-change-impact.md"}])` and reconcile the dependents (downstream steps, evals, report dashboard, db, learnings, KB) before treating the fix as done — do not repair one step and silently break what reads it.
 
-**Reviewing descriptions during repair**: Treat each touched step's `description` as a first-class review target, not just something to fix when it is obviously stale. Ask: does it still describe what the step actually does and should produce this run? A drifted or vague description silently corrupts the learnings and scripted code generated against it. Realign it when it no longer matches, then clear the matching `lock_learnings`/`lock_code` and `description_reviewed` so regenerated artifacts track the real intent.
+**Reviewing descriptions during repair**: Treat each touched step's `description` as a first-class review target, not just something to fix when it is obviously stale. Ask: does it still describe what the step actually does and should produce this run? A drifted or vague description silently corrupts the learnings and scripted code generated against it. Realign it when it no longer matches, reassess `learnings_access`, and clear `lock_code` plus `description_reviewed` when the saved script must regenerate.
 
 **Hallucination prevention**: A step can report success while its output is *ungrounded* — fabricated values, an action claimed with no backing tool call/artifact, numbers that contradict the run trace, or a generic/templated result that ignores this run's real inputs. That is a reliability bug even when the step “passed.” Repair a hallucination-prone step by making fabrication hard to pass:
 - **Demand evidence in `validation_schema`** — require real, run-specific fields (IDs, URLs, timestamps, counts that must trace to this run) and anti-staleness checks, not a bare `success: true`, so a made-up or leftover output can't validate.
@@ -70,7 +66,7 @@ Mature workflows accumulate three kinds of state that you can freeze independent
 - **Require grounding in the description** — instruct the step to derive values only from real tool output / fetched data and to cite where each value came from, never to infer or fill them in.
 Trust output you can trace back to real evidence, not a self-reported success.
 
-**Workflow-level KB lock**: Separate from the per-step locks, the workflow as a whole can be frozen against KB drift with `update_workflow_config(lock_knowledgebase=true)`. This is the right move once the domain is well-understood and the post-step update agent mostly produces no-op confirmations. While locked, use the `/improve-knowledge` checklist with a generic read-only reviewer and let the parent fixer apply bounded edits; only the automatic per-step updater is suppressed.
+**KB writes are step-based**: A step writes KB notes only when `knowledgebase_access` is `write` or `read-write` and it has a non-empty `knowledgebase_contribution`. When a contributor no longer produces durable new facts, change that step to `knowledgebase_access="read"`. Do not freeze unrelated KB writers workflow-wide. Use the `/improve-knowledge` checklist with a generic read-only reviewer and let the parent fixer apply bounded intentional curation.
 
 ### 3. Managing Learnings
 Learnings are stored as SKILL.md files in the workspace at 'learnings/_global/SKILL.md'. Each learning file MUST use YAML frontmatter format:
@@ -85,10 +81,9 @@ user-invocable: false
 ```
 You can read, edit, and delete them using **execute_shell_command** and **diff_patch_workspace_file**:
 - **Read learnings**: 'cat learnings/_global/SKILL.md' to read the global learning file
-- **Read metadata**: 'cat learnings/{step-id}/.learning_metadata.json' for iteration counts, lock status, success history
-- **Edit learnings**: Use **diff_patch_workspace_file** to update learnings/_global/SKILL.md. If learnings are locked, edits are used directly by the execution agent. If unlocked, the learning agent may overwrite on next run — suggest locking after manual edits.
-- **Delete learnings**: 'rm learnings/_global/SKILL.md' to reset global learnings. Then unlock learnings via update_step_config so fresh learnings are generated on next run.
-- **Lock after editing**: Always suggest lock_learnings=true after manual edits to prevent the learning agent from overwriting.
+- **Read metadata**: 'cat learnings/{step-id}/.learning_metadata.json' for iteration counts and success history.
+- **Edit learnings**: Use **diff_patch_workspace_file** to update learnings/_global/SKILL.md. A step with `learnings_access="read-write"` may refine the shared skill on a later successful run; use `"read"` when it should consume curated guidance without contributing.
+- **Delete learnings**: 'rm learnings/_global/SKILL.md' to reset global learnings. Keep or grant `learnings_access="read-write"` only on steps with a concrete reusable-HOW objective so fresh guidance can be generated.
 - **Legacy migration**: If you find '*_learning.md' files (old format) instead of SKILL.md, migrate their content into a new SKILL.md with proper frontmatter and delete the legacy files.
 
 ### 3b. Debugging & Fixing Scripted Code Steps (scripted)
@@ -127,10 +122,9 @@ For steps in scripted mode, the saved Python script at `learnings/{step-id}/main
 
 **4. Validate across groups** — If the workflow has multiple groups, test the fix against other groups too. Check `script_metadata.json` group_stats to see which groups were failing.
 
-**5. Lock** — After confirming the fix works:
-- `update_step_config(step_id, lock_learnings=true)` to prevent the learning agent from overwriting the SKILL.md notes that guided your fix.
+**5. Lock code when proven** — After confirming the fix works:
 - `update_step_config(step_id, lock_code=true)` to freeze `learnings/{step-id}/main.py` itself only after the scripted gate is satisfied: explicit user request, highly deterministic behavior, and 10+ successful scenario-covering runs with eval/run evidence at target. With `lock_code=true`, the script is used as-is on every run: the fix loop cannot rewrite it, and the execution agent will never replace it after a failure.
-- **Do not lock code just because you hand-patched it.** After a hand-fix, keep `lock_code=false` until the script proves stable across the 10+ run scenario surface. `lock_learnings=true` can still freeze the WHY (SKILL.md) when the learning notes are correct.
+- **Do not lock code just because you hand-patched it.** After a hand-fix, keep `lock_code=false` until the script proves stable across the 10+ run scenario surface.
 
 **Key principle**: Always edit `learnings/{step-id}/main.py`, never `execution/{step-id}/code/main.py`. The execution copy is overwritten from learnings on every run.
 
@@ -199,12 +193,11 @@ After running a step, review it for optimization — but follow this priority or
   - Are they **repetitive**? If the same pattern appears across multiple learning files, consolidate it into the step description and delete the redundant files.
 - **Learning lifecycle by step complexity:**
   - **Simple steps** (single tool call, straightforward output): leave `learning_objective` empty (the default). Learning is opt-in; simple steps don't earn their keep with the learning-agent overhead.
-  - **Medium steps** (2-5 tool calls, clear pattern): Run with learning for **2-3 successful runs**, review learnings, then **lock**. Use update_step_config(step_id, lock_learnings=true).
-  - **Complex steps** (many tool calls, branching logic, API interactions, error handling): Run with learning for **3-5 successful runs**. Review and curate learnings after each run — edit out noise, keep actionable patterns. Lock once learnings stabilize (same patterns appearing across runs).
-  - **Sub-agent steps** (todo_task routes): Each sub-agent has its own learning lifecycle. Lock sub-agents independently as they mature.
-- **When to lock**: Lock learnings when you see the same patterns repeated across 2+ consecutive successful runs. Locking skips the learning agent (saves tokens/time) but the execution agent still uses the frozen learnings.
-- **When to unlock**: Unlock if you change the step description significantly, add/remove tools, or the step starts failing after environment changes. Then re-run to generate fresh learnings.
-- **Always lock after manual edits**: If you edit a learning file with diff_patch_workspace_file, immediately lock to prevent the learning agent from overwriting your edits.
+  - **Medium steps** (2-5 tool calls, clear pattern): Run with write access for **2-3 successful runs**, review learnings, then change to `learnings_access="read"` when new contributions become redundant.
+  - **Complex steps** (many tool calls, branching logic, API interactions, error handling): Run with write access for **3-5 successful runs**. Review and curate learnings after each run — edit out noise and keep actionable patterns. Retain write access only while the step is still producing useful reusable HOW.
+  - **Sub-agent steps** (todo_task routes): Each sub-agent has its own learning access and objective; review them independently.
+- **When to stop writes**: Change to `learnings_access="read"` when the same patterns repeat across successful runs. The execution agent still consumes the curated shared learnings without paying for a contribution turn.
+- **When to resume writes**: Restore `read-write` with a concrete objective if the description/tools change materially or failures reveal new reusable HOW.
 
 **Priority 3 — Efficiency (fix only after fundamentals are solid):**
 - **Tool Calls** — Redundant reads, repeated searches, wasted API calls. Usually a symptom of a vague description — fix the description first, then check if tool waste drops.
@@ -258,20 +251,19 @@ When the user asks to enable scripted execution for a step, use: update_step_con
 **After the Pulse Fixer applies reviewed changes:**
 - If all failing steps were fixed and no significant structural changes were needed, update review_notes and lock stable learnings only when their evidence threshold is met.
 - If significant changes were applied, re-run the workflow to verify, then update description_reviewed/review_notes only once the new behavior passes consistently.
-- If you make major changes to the step description, tools, or validation schema, clear stale locks in the same call: `update_step_config(step_id, lock_learnings=false, lock_code=false, description_reviewed=false)`.
+- If you make major changes to the step description, tools, or validation schema, reassess `learnings_access` and clear stale code review state in the same call: `update_step_config(step_id, lock_code=false, description_reviewed=false)`.
 
 **When you lock a scripted step, lock its code only after strong evidence**:
-- `update_step_config(step_id, lock_learnings=true, lock_code=true)` — only after the user explicitly wanted `scripted`, the step is highly deterministic, and `script_metadata.json` / eval evidence shows 10+ successful runs across the groups/scenarios you care about. Without `lock_code`, a single transient failure can trigger the fix loop to rewrite a script that was actually working, but premature locking freezes drift and is harder to unwind.
+- `update_step_config(step_id, lock_code=true)` — only after the user explicitly wanted `scripted`, the step is highly deterministic, and `script_metadata.json` / eval evidence shows 10+ successful runs across the groups/scenarios you care about. Without `lock_code`, a single transient failure can trigger the fix loop to rewrite a script that was actually working, but premature locking freezes drift and is harder to unwind.
 - Only lock code when the script has been stable across multiple runs AND multiple groups (if the workflow is multi-group). Flaky scripts should be fixed first, not frozen.
 
-**`lock_learnings` is independent of `scripted`**:
-- It is valid to recommend `lock_learnings=true` while a step remains `agentic`.
+**Learning access is independent of `scripted`**: agentic and scripted steps may read the shared skill; grant write access only for a concrete reusable-HOW contribution.
 - A step does not need to migrate to `scripted` before its shared SKILL.md guidance is mature enough to freeze.
 - This is often the right sequence for browser steps: keep execution mode as `agentic`, stabilize and lock the shared learnings first, and only consider `scripted` later if the user explicitly wants it and the browser flow proves durable enough to script.
 
-**When the knowledgebase stops changing, lock it workflow-wide**:
-- After several successful runs where the post-step KB update agent produces only trivial/no-op edits under `knowledgebase/notes/`, set `update_workflow_config(lock_knowledgebase=true)`. Reads keep working; the automatic writer stops. This is a pure cost-saver — no output quality regression.
-- If you later add a new step that needs to capture new domain facts, either unlock temporarily (`lock_knowledgebase=false`) for a few runs, or run the read-only `/improve-knowledge` checklist and let the parent fixer apply the recommended curation.
+**When one step's KB contribution stops changing, make that step read-only**:
+- After several successful runs where a step produces only trivial/no-op KB edits, set that step's `knowledgebase_access="read"` and clear its `knowledgebase_contribution`. Other legitimate KB writers keep working.
+- If that step later needs to capture new domain facts, restore `read-write` together with a specific contribution contract, or run the read-only `/improve-knowledge` checklist and let the parent fixer apply bounded curation.
 
 **Use `/improve-knowledge` to review intentional KB cleanup/curation; the parent fixer writes**:
 - `mode="targeted"`: use this when you already know the cleanup operation. Examples: *"merge notes/architecture.md and notes/topology.md"*, *"drop sections in notes/recommendation-history.md that mention iteration-0/abandoned"*, *"rename topic company-acme to company-acme-corp and rewrite cross-references"*, *"compact notes/architecture.md to under 10KB"*, *"fix notes/_index.json"*.

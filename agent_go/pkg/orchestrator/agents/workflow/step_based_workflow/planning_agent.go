@@ -257,8 +257,8 @@ type AgentConfigs struct {
 	ExecutionMaxTurns            *int             `json:"execution_max_turns,omitempty"`             // default: 500
 	LearningObjective            string           `json:"learning_objective,omitempty"`              // What SKILL.md should capture from successful runs of this step — selectors, timings, auth flows, tool-call patterns, API quirks. This is the instruction the step agent uses during its post-completion turn to know what HOW-to-run knowledge to extract. Required when learnings_access includes write; must be specific (not "learn from this run").
 	LearningsAccess              string           `json:"learnings_access,omitempty"`                // "read" | "read-write" | "none". Mirrors knowledgebase_access. "read" (default): step sees global SKILL.md in its prompt but doesn't write. "read-write": reads and writes — requires learning_objective to be non-empty. "none": no read, no write. Empty = legacy auto-migration (see resolveLearningsAccess). Writes happen via the step agent's own post-completion turn (shell + diff_patch_workspace_file); no separate analyzer runs.
-	LockLearnings                *bool            `json:"lock_learnings,omitempty"`                  // lock learnings (SKILL.md) - prevents new writes but still uses existing SKILL.md (nil = not set/unlocked, true = locked, false = explicitly unlocked). Setting true requires a non-empty lock_learnings_reason.
-	LockLearningsReason          string           `json:"lock_learnings_reason,omitempty"`           // PLAT-059. Why this step is frozen. Required whenever lock_learnings is set true — update_step_config rejects the lock without it. A locked step still reads the whole shared skill but can never contribute to it, so the freeze needs a stated justification a later reviewer can judge rather than infer.
+	LegacyLockLearnings          *bool            `json:"lock_learnings,omitempty"`                  // PLAT-263 migration-only. true is normalized to learnings_access="read"; false is removed. Never consumed by runtime.
+	LegacyLockLearningsReason    string           `json:"lock_learnings_reason,omitempty"`           // PLAT-263 migration-only audit residue; removed with LegacyLockLearnings.
 	LockCode                     *bool            `json:"lock_code,omitempty"`                       // lock code (main.py) - prevents LLM-rewritten main.py from being saved back to learnings, skips fix loop (nil = not set/unlocked, true = locked, false = explicitly unlocked)
 	SelectedServers              []string         `json:"selected_servers,omitempty"`                // step-level MCP server selection (subset of preset servers)
 	SelectedTools                []string         `json:"selected_tools,omitempty"`                  // step-level tool selection (format: "server:tool" or "server:*" for all tools)
@@ -274,7 +274,7 @@ type AgentConfigs struct {
 	DeclaredExecutionMode        string           `json:"declared_execution_mode,omitempty"`         // Required mode decision for the step: "scripted" or "agentic" (legacy values "learn_code" / "code_exec" are still accepted on read)
 	DeclaredExecutionModeReason  string           `json:"declared_execution_mode_reason,omitempty"`  // Audit trail: why the declared mode is the best fit. Not consumed by Go runtime, but preserved so future LLM reviewers (harden, replan) reading raw step_config.json see the original decision rationale.
 	DescriptionReviewed          *bool            `json:"description_reviewed,omitempty"`            // True when the step description has been reviewed — clarity AND secrets/hardcoded values.
-	ReviewNotes                  string           `json:"review_notes,omitempty"`                    // Free-form rationale covering why config, locks, learning/KB choices, or description review state are justified.
+	ReviewNotes                  string           `json:"review_notes,omitempty"`                    // Free-form rationale covering why config, learning/KB choices, code locks, or description review state are justified.
 	DriftReview                  *StepDriftReview `json:"drift_review,omitempty"`                    // Plan-drift review record: evidence from the last completed plan_drift_review pass over this step, plus a NeedsReview flag every persisted field change sets true (clearDriftReviewAfterPlanUpdate). Nil (no record yet) or NeedsReview==true both mean "due." Set by that module or its manual slash-command equivalent; never by a step-editing agent directly.
 }
 
@@ -4006,7 +4006,7 @@ func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []Pl
 		b.WriteString("- Description & schema quality: this edit touched description or validation_schema — call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/step-description.md\"}]) and apply it before finalizing.\n")
 	}
 	b.WriteString("- Pre-validation: confirm validation_schema still matches the new output files/fields; update plan validation_schema or step_config validation_schema if needed.\n")
-	b.WriteString("- Learnings: review learning_objective, learnings_access, lock_learnings, and any learnings/_global or learnings/" + stepID + " content for stale execution know-how.\n")
+	b.WriteString("- Learnings: review learning_objective, learnings_access, and any learnings/_global or learnings/" + stepID + " content for stale execution know-how. Use learnings_access=\"read\" when the step should consume guidance without writing it.\n")
 	b.WriteString("- DB: if output/state shape changed, update db/README.md, the db/db.sqlite table schema/writers/upsert rules, and any report widgets (sql) that read those columns.\n")
 	b.WriteString("- KB: if business context or notes consumed/produced changed, update knowledgebase_access, knowledgebase_contribution, and description references.\n")
 	b.WriteString("- Scripted code: if this step uses scripted/code execution or learnings/" + stepID + "/main.py exists, patch or regenerate main.py, or delete stale script state when returning to agentic execution.\n")
@@ -4038,7 +4038,7 @@ func buildAddedStepArtifactSetupNotice(stepID, stepType string) string {
 	b.WriteString("\n\nNew step artifact setup required.\n")
 	b.WriteString("- Step config: decide execution_llm/tier, servers/tools, browser mode, skills, secrets, and description_reviewed in planning/step_config.json.\n")
 	b.WriteString("- Pre-validation: add or confirm validation_schema for required inputs/outputs and generated files.\n")
-	b.WriteString("- Learnings: decide learnings_access, learning_objective, lock_learnings, and whether this step should write reusable execution know-how.\n")
+	b.WriteString("- Learnings: decide learnings_access, learning_objective, and whether this step should write reusable execution know-how.\n")
 	b.WriteString("- DB: decide whether the step reads/writes db/ files; update db/README.md and schemas/merge rules if it does.\n")
 	b.WriteString("- KB: decide knowledgebase_access and knowledgebase_contribution for business context and notes.\n")
 	b.WriteString("- Scripted code: if " + stepType + " step " + stepID + " should run code, create or review learnings/" + stepID + "/main.py and set code execution config; otherwise make sure no stale script is implied.\n")
@@ -4122,7 +4122,7 @@ func handleTodoTaskRouteArtifactReview(ctx context.Context, workspacePath, paren
 }
 
 // createUpdateRegularStepExecutor edits the internal regular plan type exposed as update_scripted_step.
-func createUpdateRegularStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
+func createUpdateRegularStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
@@ -4160,7 +4160,7 @@ func createUpdateRegularStepExecutor(workspacePath string, logger loggerv2.Logge
 		// successful write.
 		fieldChanges := make([]PlanFieldChange, 0)
 
-		stepIndex, _, err := updateSingleStep(plan, partialUpdate, &fieldChanges)
+		_, _, err = updateSingleStep(plan, partialUpdate, &fieldChanges)
 		if err != nil {
 			return "", err
 		}
@@ -4187,15 +4187,6 @@ func createUpdateRegularStepExecutor(workspacePath string, logger loggerv2.Logge
 			StepIDs: []string{partialUpdate.ExistingStepID},
 			Changes: fieldChanges,
 		}, readFile, writeFile, logger)
-
-		// Unlock learnings for updated step
-		if unlockLearningsFunc != nil && stepIndex >= 0 {
-			if err := unlockLearningsFunc(ctx, partialUpdate.ExistingStepID, stepIndex); err != nil {
-				logger.Warn(fmt.Sprintf("⚠️ Failed to unlock learnings for updated step %s: %v", partialUpdate.ExistingStepID, err))
-			} else {
-				logger.Info(fmt.Sprintf("🔓 Unlocked learnings for updated step %s (plan was modified)", partialUpdate.ExistingStepID))
-			}
-		}
 
 		dependentReviewNotice := handlePlanStepDependentArtifactReview(ctx, workspacePath, partialUpdate.ExistingStepID, fieldChanges, readFile, writeFile, logger)
 
@@ -4261,7 +4252,7 @@ func prepareMessageSequenceUpdateTarget(plan *PlanningResponse, stepConfigs []St
 	}
 }
 
-func createUpdateMessageSequenceStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
+func createUpdateMessageSequenceStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
@@ -4300,7 +4291,7 @@ func createUpdateMessageSequenceStepExecutor(workspacePath string, logger logger
 				NewValue: string(StepTypeMessageSeq),
 			})
 		}
-		stepIndex, _, err := updateSingleStep(plan, partialUpdate, &fieldChanges)
+		_, _, err = updateSingleStep(plan, partialUpdate, &fieldChanges)
 		if err != nil {
 			return "", err
 		}
@@ -4332,11 +4323,6 @@ func createUpdateMessageSequenceStepExecutor(workspacePath string, logger logger
 			StepIDs: []string{partialUpdate.ExistingStepID},
 			Changes: fieldChanges,
 		}, readFile, writeFile, logger)
-		if unlockLearningsFunc != nil && stepIndex >= 0 {
-			if err := unlockLearningsFunc(ctx, partialUpdate.ExistingStepID, stepIndex); err != nil {
-				logger.Warn(fmt.Sprintf("⚠️ Failed to unlock learnings for updated message_sequence step %s: %v", partialUpdate.ExistingStepID, err))
-			}
-		}
 		dependentReviewNotice := handlePlanStepDependentArtifactReview(ctx, workspacePath, partialUpdate.ExistingStepID, fieldChanges, readFile, writeFile, logger)
 		upgradeNotice := ""
 		if upgradedLegacyRegular {
@@ -4390,9 +4376,8 @@ func extractStringArray(args map[string]interface{}, key string) ([]string, erro
 }
 
 // createDeletePlanStepsExecutor creates an executor function for delete_plan_steps tool
-// unlockLearningsFunc is optional - if provided, it will be called after plan deletions to unlock learnings
 // Note: For deleted steps, we unlock based on the old plan's step indices before deletion
-func createDeletePlanStepsExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
+func createDeletePlanStepsExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
@@ -4440,11 +4425,9 @@ func createDeletePlanStepsExecutor(workspacePath string, logger loggerv2.Logger,
 		}
 
 		// Capture deleted steps BEFORE filtering (for changelog revert support)
-		// Also capture step indices for unlock operations
 		// Convert to JSON for changelog storage
 		deletedSteps := make([]json.RawMessage, 0, len(deletedIDs))
-		deletedStepIndices := make(map[string]int) // stepID -> old step index
-		for i, step := range oldPlan.Steps {
+		for _, step := range oldPlan.Steps {
 			stepID := step.GetID()
 			if deletedSet[stepID] {
 				// Marshal step to JSON for changelog
@@ -4454,7 +4437,6 @@ func createDeletePlanStepsExecutor(workspacePath string, logger loggerv2.Logger,
 					continue
 				}
 				deletedSteps = append(deletedSteps, stepJSON)
-				deletedStepIndices[stepID] = i
 			}
 		}
 
@@ -4467,7 +4449,7 @@ func createDeletePlanStepsExecutor(workspacePath string, logger loggerv2.Logger,
 		}
 
 		// Also capture and filter orphan steps
-		for i, step := range oldPlan.OrphanSteps {
+		for _, step := range oldPlan.OrphanSteps {
 			stepID := step.GetID()
 			if deletedSet[stepID] {
 				stepJSON, err := json.Marshal(step)
@@ -4476,7 +4458,6 @@ func createDeletePlanStepsExecutor(workspacePath string, logger loggerv2.Logger,
 					continue
 				}
 				deletedSteps = append(deletedSteps, stepJSON)
-				deletedStepIndices[stepID] = len(oldPlan.Steps) + i // offset by main steps count
 			}
 		}
 
@@ -4526,20 +4507,6 @@ func createDeletePlanStepsExecutor(workspacePath string, logger loggerv2.Logger,
 		// mechanism to roll it back), but is surfaced loudly in the tool's own
 		// response rather than only logged, so it cannot be silently missed.
 		prunedConfigIDs, driftReviewFlagFailed := cascadeDeleteStepConfigsRetried(ctx, workspacePath, deletedSet, deletedIDs, readFile, writeFile, logger)
-
-		// Unlock learnings for all deleted steps (if unlock function provided)
-		// Use old step indices from before deletion
-		if unlockLearningsFunc != nil {
-			for _, stepID := range deletedIDs {
-				if oldStepIndex, exists := deletedStepIndices[stepID]; exists {
-					if err := unlockLearningsFunc(ctx, stepID, oldStepIndex); err != nil {
-						logger.Warn(fmt.Sprintf("⚠️ Failed to unlock learnings for deleted step %s: %v", stepID, err))
-					} else {
-						logger.Info(fmt.Sprintf("🔓 Unlocked learnings for deleted step %s (plan was modified)", stepID))
-					}
-				}
-			}
-		}
 
 		cleanupNotice := buildDeletedStepArtifactCleanupNotice(deletedIDs, prunedConfigIDs, driftReviewFlagFailed)
 
@@ -4608,7 +4575,7 @@ func createCleanupOrphanStepConfigsExecutor(workspacePath string, logger loggerv
 }
 
 // createUpdateHumanInputStepExecutor creates an executor function for update_human_input_step tool
-func createUpdateHumanInputStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
+func createUpdateHumanInputStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
@@ -4658,8 +4625,7 @@ func createUpdateHumanInputStepExecutor(workspacePath string, logger loggerv2.Lo
 
 		fieldChanges := make([]PlanFieldChange, 0)
 
-		var stepIndex int
-		stepIndex, _, err = updateSingleStep(plan, partialUpdate, &fieldChanges)
+		_, _, err = updateSingleStep(plan, partialUpdate, &fieldChanges)
 		if err != nil {
 			return "", err
 		}
@@ -4686,15 +4652,6 @@ func createUpdateHumanInputStepExecutor(workspacePath string, logger loggerv2.Lo
 			Changes: fieldChanges,
 		}, readFile, writeFile, logger)
 
-		// Unlock learnings for updated step
-		if unlockLearningsFunc != nil && stepIndex >= 0 {
-			if err := unlockLearningsFunc(ctx, partialUpdate.ExistingStepID, stepIndex); err != nil {
-				logger.Warn(fmt.Sprintf("⚠️ Failed to unlock learnings for updated step %s: %v", partialUpdate.ExistingStepID, err))
-			} else {
-				logger.Info(fmt.Sprintf("🔓 Unlocked learnings for updated step %s (plan was modified)", partialUpdate.ExistingStepID))
-			}
-		}
-
 		dependentReviewNotice := handlePlanStepDependentArtifactReview(ctx, workspacePath, partialUpdate.ExistingStepID, fieldChanges, readFile, writeFile, logger)
 
 		logger.Info(fmt.Sprintf("✅ Updated human input step '%s' in plan", partialUpdate.ExistingStepID))
@@ -4703,7 +4660,7 @@ func createUpdateHumanInputStepExecutor(workspacePath string, logger loggerv2.Lo
 }
 
 // createUpdateTodoTaskStepExecutor creates an executor function for update_todo_task_step tool
-func createUpdateTodoTaskStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
+func createUpdateTodoTaskStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
@@ -4809,15 +4766,6 @@ func createUpdateTodoTaskStepExecutor(workspacePath string, logger loggerv2.Logg
 			Changes: fieldChanges,
 		}, readFile, writeFile, logger)
 
-		// Unlock learnings for updated step
-		if unlockLearningsFunc != nil && stepIndex >= 0 {
-			if err := unlockLearningsFunc(ctx, partialUpdate.ExistingStepID, stepIndex); err != nil {
-				logger.Warn(fmt.Sprintf("⚠️ Failed to unlock learnings for updated step %s: %v", partialUpdate.ExistingStepID, err))
-			} else {
-				logger.Info(fmt.Sprintf("🔓 Unlocked learnings for updated step %s (plan was modified)", partialUpdate.ExistingStepID))
-			}
-		}
-
 		_ = todoTaskStep // Suppress unused variable warning
 		dependentReviewNotice := handlePlanStepDependentArtifactReview(ctx, workspacePath, partialUpdate.ExistingStepID, fieldChanges, readFile, writeFile, logger)
 		logger.Info(fmt.Sprintf("✅ Updated todo task step '%s' in plan", partialUpdate.ExistingStepID))
@@ -4826,13 +4774,13 @@ func createUpdateTodoTaskStepExecutor(workspacePath string, logger loggerv2.Logg
 }
 
 // createAddRoutingStepExecutor creates an executor function for add_routing_step tool
-func createAddRoutingStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
-	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "routing", unlockLearningsFunc)
+func createAddRoutingStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
+	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "routing")
 }
 
 // createAddBranchStepExecutor creates an executor function for add_branch_step tool.
-func createAddBranchStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
-	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "branch", unlockLearningsFunc)
+func createAddBranchStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
+	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "branch")
 }
 
 // validateRoutingStepFieldsTyped validates that a RoutingPlanStep has all required fields
@@ -4912,7 +4860,7 @@ func validateBranchStepFieldsTyped(step *BranchPlanStep) error {
 }
 
 // createUpdateRoutingStepExecutor creates an executor function for update_routing_step tool
-func createUpdateRoutingStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
+func createUpdateRoutingStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
@@ -4996,12 +4944,6 @@ func createUpdateRoutingStepExecutor(workspacePath string, logger loggerv2.Logge
 			Changes: fieldChanges,
 		}, readFile, writeFile, logger)
 
-		if unlockLearningsFunc != nil && stepIndex >= 0 {
-			if err := unlockLearningsFunc(ctx, partialUpdate.ExistingStepID, stepIndex); err != nil {
-				logger.Warn(fmt.Sprintf("⚠️ Failed to unlock learnings for updated step %s: %v", partialUpdate.ExistingStepID, err))
-			}
-		}
-
 		dependentReviewNotice := handlePlanStepDependentArtifactReview(ctx, workspacePath, partialUpdate.ExistingStepID, fieldChanges, readFile, writeFile, logger)
 
 		logger.Info(fmt.Sprintf("✅ Updated routing step '%s' in plan", partialUpdate.ExistingStepID))
@@ -5012,7 +4954,7 @@ func createUpdateRoutingStepExecutor(workspacePath string, logger loggerv2.Logge
 // createUpdateBranchStepExecutor creates an executor function for update_branch_step
 // tool. Mirrors createUpdateRoutingStepExecutor exactly -- same shape, *BranchPlanStep
 // instead of *RoutingPlanStep.
-func createUpdateBranchStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
+func createUpdateBranchStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
@@ -5096,12 +5038,6 @@ func createUpdateBranchStepExecutor(workspacePath string, logger loggerv2.Logger
 			Changes: fieldChanges,
 		}, readFile, writeFile, logger)
 
-		if unlockLearningsFunc != nil && stepIndex >= 0 {
-			if err := unlockLearningsFunc(ctx, partialUpdate.ExistingStepID, stepIndex); err != nil {
-				logger.Warn(fmt.Sprintf("⚠️ Failed to unlock learnings for updated step %s: %v", partialUpdate.ExistingStepID, err))
-			}
-		}
-
 		dependentReviewNotice := handlePlanStepDependentArtifactReview(ctx, workspacePath, partialUpdate.ExistingStepID, fieldChanges, readFile, writeFile, logger)
 
 		logger.Info(fmt.Sprintf("✅ Updated branch step '%s' in plan", partialUpdate.ExistingStepID))
@@ -5123,9 +5059,13 @@ func getConvertRoutingBranchStepTypeSchema() string {
 				"type": "string",
 				"enum": ["routing", "branch"],
 				"description": "The type to convert the step to. Must differ from its current type -- routing to convert a branch step into a routing step, branch to convert a routing step into a branch step."
+			},
+			"reason": {
+				"type": "string",
+				"description": "One-sentence rationale for reclassifying the step. Recorded in the plan changelog."
 			}
 		},
-		"required": ["existing_step_id", "target_type"]
+		"required": ["existing_step_id", "target_type", "reason"]
 	}`
 }
 
@@ -5144,7 +5084,7 @@ func getConvertRoutingBranchStepTypeSchema() string {
 // that claimed continuity was false. Keeping the same id throughout, in one
 // mutation, means step_config.json's row for it is never orphaned at all --
 // there is nothing to lose and nothing to restore.
-func createConvertRoutingBranchStepTypeExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
+func createConvertRoutingBranchStepTypeExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
@@ -5241,12 +5181,6 @@ func createConvertRoutingBranchStepTypeExecutor(workspacePath string, logger log
 			Changes: fieldChanges,
 		}, readFile, writeFile, logger)
 
-		if unlockLearningsFunc != nil {
-			if err := unlockLearningsFunc(ctx, stepID, stepIndex); err != nil {
-				logger.Warn(fmt.Sprintf("⚠️ Failed to unlock learnings for converted step %s: %v", stepID, err))
-			}
-		}
-
 		dependentReviewNotice := handlePlanStepDependentArtifactReview(ctx, workspacePath, stepID, fieldChanges, readFile, writeFile, logger)
 
 		logger.Info(fmt.Sprintf("✅ Converted step '%s' from %s to %s (same id, step_config.json/drift-review history preserved)", stepID, oldType, targetType))
@@ -5255,8 +5189,8 @@ func createConvertRoutingBranchStepTypeExecutor(workspacePath string, logger log
 }
 
 // createAddRegularStepExecutor creates the internal regular plan type exposed as add_scripted_step.
-func createAddRegularStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
-	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "regular", unlockLearningsFunc)
+func createAddRegularStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
+	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "regular")
 }
 
 func upsertNewScriptedRegularStepConfig(configs []StepConfig, stepID, title string) []StepConfig {
@@ -5326,18 +5260,18 @@ func configureRegularStepsAsScripted(ctx context.Context, workspacePath string, 
 	return len(regularSteps), nil
 }
 
-func createAddMessageSequenceStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
-	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "message_sequence", unlockLearningsFunc)
+func createAddMessageSequenceStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
+	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "message_sequence")
 }
 
 // createAddHumanInputStepExecutor creates an executor function for add_human_input_step tool
-func createAddHumanInputStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
-	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "human_input", unlockLearningsFunc)
+func createAddHumanInputStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
+	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "human_input")
 }
 
 // createAddTodoTaskStepExecutor creates an executor function for add_todo_task_step tool
-func createAddTodoTaskStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
-	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "todo_task", unlockLearningsFunc)
+func createAddTodoTaskStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
+	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "todo_task")
 }
 
 // validateTodoTaskStepFieldsTyped validates that a TodoTaskPlanStep has all required fields
@@ -5550,8 +5484,7 @@ func validateTodoTaskNestingDepth(step PlanStepInterface, todoRouteDepth int) er
 
 // createSingleStepAdder is a shared executor that handles adding a single step to the plan
 // stepType is used for logging and validation purposes
-// unlockLearningsFunc is optional - if provided, it will be called after step addition to unlock learnings
-func createSingleStepAdder(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error, stepType string, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
+func createSingleStepAdder(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error, stepType string) func(context.Context, map[string]interface{}) (string, error) {
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
@@ -5737,26 +5670,6 @@ func createSingleStepAdder(workspacePath string, logger loggerv2.Logger, readFil
 			AddedSteps: addedStepJSON,
 		}, readFile, writeFile, logger)
 
-		// Unlock learnings for the newly added step (if unlock function provided)
-		if unlockLearningsFunc != nil {
-			// Find the step index in the new plan
-			stepIndex := -1
-			stepID := typedStep.GetID()
-			for i, s := range newPlan.Steps {
-				if s.GetID() == stepID {
-					stepIndex = i
-					break
-				}
-			}
-			if stepIndex >= 0 {
-				if err := unlockLearningsFunc(ctx, stepID, stepIndex); err != nil {
-					logger.Warn(fmt.Sprintf("⚠️ Failed to unlock learnings for newly added step %s: %v", stepID, err))
-				} else {
-					logger.Info(fmt.Sprintf("🔓 Unlocked learnings for newly added step %s (plan was modified)", stepID))
-				}
-			}
-		}
-
 		setupNotice := buildAddedStepArtifactSetupNotice(typedStep.GetID(), stepType)
 		if scriptedRegularCount > 0 {
 			setupNotice += fmt.Sprintf("\n\nConfigured %d new regular execution boundary/boundaries with declared_execution_mode=scripted. Author and test each learnings/<step-id>/main.py before production use.", scriptedRegularCount)
@@ -5799,7 +5712,6 @@ func createCreatePlanExecutor(workspacePath string, logger loggerv2.Logger, read
 // registerPlanModificationTools registers all plan modification tools (plan update tools only)
 // Note: human_feedback is NOT registered here because it's already included in WorkspaceTools
 // This shared function is used by planning agent, code exec debugging agent, etc.
-// unlockLearningsFunc is optional - if provided, it will be called after plan modifications to unlock learnings
 func registerPlanModificationTools(
 	mcpAgent DefinitionToolRegistrar,
 	workspacePath string,
@@ -5808,7 +5720,6 @@ func registerPlanModificationTools(
 	writeFile func(context.Context, string, string) error,
 	moveFile func(context.Context, string, string) error,
 	agentName string, // e.g., "planning agent" or "plan improvement agent"
-	unlockLearningsFunc func(context.Context, string, int) error, // Optional: function to unlock learnings after plan modifications
 ) error {
 	mcpAgent = planChangeOriginRegistrar{DefinitionToolRegistrar: mcpAgent, agentName: agentName}
 	rawWriteFile := writeFile
@@ -5887,7 +5798,7 @@ func registerPlanModificationTools(
 		"update_scripted_step",
 		"Update an existing deterministic scripted step. The internal plan type remains regular, but this tool only edits a checked-in script boundary implemented by learnings/<step-id>/main.py. Provide existing_step_id and only the contract fields to change. Use next_step_id to chain scripted steps inside a selected route and make the final script converge on a shared downstream step. Do not use it for conversational or judgment-heavy work; those steps must be message_sequence. The plan is updated immediately. After a substantive change, update and test main.py and review whether validation, learnings, and downstream consumers still match the contract; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		regularUpdateParams,
-		createUpdateRegularStepExecutor(workspacePath, logger, readFile, writeFile, unlockLearningsFunc),
+		createUpdateRegularStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register update_scripted_step tool: %w", err)
@@ -5906,7 +5817,7 @@ func registerPlanModificationTools(
 		"update_human_input_step",
 		"Update a human input step in the plan. Provide existing_step_id (required) to identify which human input step to update, and only include the fields you want to change (question, response_type, options, variable_name, context_output, next_step_id, if_yes_next_step_id/if_no_next_step_id, option_routes). The plan.json file is updated immediately when this tool is called. After a substantive change, review whether the step's saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		humanInputUpdateParams,
-		createUpdateHumanInputStepExecutor(workspacePath, logger, readFile, writeFile, unlockLearningsFunc),
+		createUpdateHumanInputStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register update_human_input_step tool: %w", err)
@@ -5921,7 +5832,7 @@ func registerPlanModificationTools(
 		"delete_plan_steps",
 		"Delete steps from the plan by providing their IDs. Use the step's id field from the plan. The mutation is atomic: before anything is saved, the complete plan graph is validated. If another route or next_step_id targets a deleted step, the tool returns PLAN_GRAPH_INVALID with every blocking reference; update those references to an existing step or end, then retry. Any matching planning/step_config.json entries are removed only after the plan deletion succeeds.",
 		deleteParams,
-		createDeletePlanStepsExecutor(workspacePath, logger, readFile, writeFile, moveFile, unlockLearningsFunc),
+		createDeletePlanStepsExecutor(workspacePath, logger, readFile, writeFile, moveFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register delete_plan_steps tool: %w", err)
@@ -5970,7 +5881,7 @@ func registerPlanModificationTools(
 		"add_scripted_step",
 		"Add a deterministic scripted execution step. Use only for fixed API/SDK calls, CLI commands, known pagination, stable parsing/normalization/transforms, or mechanical persistence that share one source/auth/retry/output contract. The internal plan type is regular, but the backend always configures this step as declared_execution_mode=scripted. Use next_step_id to chain multiple scripts within one selected route and point the final script at the shared convergence step; omit it for legacy sequential execution. This tool does not create an LLM step and does not convert prose into code: author and test learnings/<step-id>/main.py before production. Use add_message_sequence_step for every conversational or judgment-heavy task, including one-turn work. Give the script an authoritative DB or explicit file output, freshness/provenance, fail-closed errors, idempotency where relevant, and deterministic validation. The plan and step config are updated immediately.",
 		regularParams,
-		createAddRegularStepExecutor(workspacePath, logger, readFile, writeFile, moveFile, unlockLearningsFunc),
+		createAddRegularStepExecutor(workspacePath, logger, readFile, writeFile, moveFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register add_scripted_step tool: %w", err)
@@ -5985,7 +5896,7 @@ func registerPlanModificationTools(
 		"add_message_sequence_step",
 		"Add a message_sequence step to the plan. Use it when one agentic step should consume persisted evidence, own a coherent reasoning outcome, and then validate, critique, or repair that work in the same conversation. Put the whole reasoning outcome in the opening description; add follow-up items only for decision-useful assurance, a real intermediate gate, new external input, or foreach iteration—not one item per routine subtask or tool call. Fixed API/SDK/CLI calls, data fetching, known pagination, stable parsing/normalization, and mechanical writes belong in upstream standalone regular scripted steps; the sequence reads their validated DB rows or artifacts. The top-level validation_schema is automatically enforced after the final work turn with same-conversation repair retries. As a todo_task predefined route, use message_sequence when the orchestrator should reuse the same specialist conversation for critique, test feedback, validation feedback, or follow-up work; restart is controlled at execution time with message_sequence_restart. Plain turns inherit step-level DB/KB/learnings permissions; kind or non-empty write_access can narrow one turn.",
 		messageSequenceParams,
-		createAddMessageSequenceStepExecutor(workspacePath, logger, readFile, writeFile, moveFile, unlockLearningsFunc),
+		createAddMessageSequenceStepExecutor(workspacePath, logger, readFile, writeFile, moveFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register add_message_sequence_step tool: %w", err)
@@ -6003,7 +5914,7 @@ func registerPlanModificationTools(
 		"add_human_input_step",
 		"Add a human input step to the plan. Use this when you need to ask a question to a human and block execution until they respond. This step has no LLM, no execution, no validation, and no learning - it simply asks a question and waits for human input. The response is saved to a JSON file and passed to the next step. Provide: id, title, question (required), response_type (text/yesno/multiple_choice), options (for multiple_choice), variable_name (optional), context_output (optional, defaults to step-{index}.json), next_step_id (required), if_yes_next_step_id/if_no_next_step_id (for yesno), option_routes (for multiple_choice), insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
 		humanInputParams,
-		createAddHumanInputStepExecutor(workspacePath, logger, readFile, writeFile, moveFile, unlockLearningsFunc),
+		createAddHumanInputStepExecutor(workspacePath, logger, readFile, writeFile, moveFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register add_human_input_step tool: %w", err)
@@ -6018,7 +5929,7 @@ func registerPlanModificationTools(
 		"add_todo_task_step",
 		"Add a todo task orchestration step to the plan. Use this when you need to manage a dynamic todo list with trackable tasks. The main orchestrator creates/assigns tasks, then delegates to predefined sub-agents (with learning and prevalidation) or a generic agent (workspace tools only, no learning). Predefined routes have MCP tool access and accumulate learnings. A conversational route sub_agent_step must be message_sequence; use regular only for an explicitly scripted deterministic route, or todo_task for one nested orchestration layer. The generic agent is for simple, ad-hoc tasks. Provide: id, title, todo_task_step (main orchestrator metadata), predefined_routes (optional, specialized sub-agents), enable_generic_agent (optional, default true), next_step_id, insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
 		todoTaskParams,
-		createAddTodoTaskStepExecutor(workspacePath, logger, readFile, writeFile, moveFile, unlockLearningsFunc),
+		createAddTodoTaskStepExecutor(workspacePath, logger, readFile, writeFile, moveFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register add_todo_task_step tool: %w", err)
@@ -6033,7 +5944,7 @@ func registerPlanModificationTools(
 		"add_routing_step",
 		"Add a deterministic routing step to the plan. Use this when the workflow must choose exactly one of multiple existing downstream steps. Routing has one mode only: read caller route_selections, the routing step's preseeded route_selection.json, route_source_file, a context_dependencies entry named route_selection.json, or default_route_id, then switch to the selected route. Do not set description or context_output on routing steps; if an agent/probe/judgment is needed, add a prior message_sequence step that writes route_selection.json and declare that file in the routing step's route_source_file or context_dependencies. Provide: id, title, routing_question (readability/compatibility only), routes (min 2 with route_id/route_name/condition/next_step_id), context_dependencies, optional default_route_id, optional route_source_file, insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
 		routingParams,
-		createAddRoutingStepExecutor(workspacePath, logger, readFile, writeFile, moveFile, unlockLearningsFunc),
+		createAddRoutingStepExecutor(workspacePath, logger, readFile, writeFile, moveFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register add_routing_step tool: %w", err)
@@ -6048,7 +5959,7 @@ func registerPlanModificationTools(
 		"update_routing_step",
 		"Update a deterministic routing step in the plan. Provide existing_step_id (required) and only include fields you want to change: title, routing_question, routes, default_route_id, route_source_file, context_dependencies, or clear_description=true for legacy migration. Do not set description or context_output; routing never executes an agent and never LLM-evaluates routing_question. The selected route must come from caller route_selections, route_selection.json, route_source_file, context_dependencies, or default_route_id. The plan.json file is updated immediately when this tool is called. After a substantive change, review whether saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		routingUpdateParams,
-		createUpdateRoutingStepExecutor(workspacePath, logger, readFile, writeFile, unlockLearningsFunc),
+		createUpdateRoutingStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register update_routing_step tool: %w", err)
@@ -6063,7 +5974,7 @@ func registerPlanModificationTools(
 		"add_branch_step",
 		"Add a deterministic branch step to the plan. Use this for a small in-flow next-step decision -- the workflow must choose exactly one of a few existing downstream steps. (Routing steps now represent a larger, major sub-workflow fork; use branch for a lightweight decision instead.) Branch has one mode only: read caller route_selections, the branch step's preseeded route_selection.json, route_source_file, a context_dependencies entry named route_selection.json, or default_route_id, then switch to the selected route. Do not set description or context_output on branch steps; if an agent/probe/judgment is needed, add a prior message_sequence step that writes route_selection.json and declare that file in the branch step's route_source_file or context_dependencies. Provide: id, title, branch_question (readability/compatibility only), routes (min 2 with route_id/route_name/condition/next_step_id), context_dependencies, optional default_route_id, optional route_source_file, insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
 		branchParams,
-		createAddBranchStepExecutor(workspacePath, logger, readFile, writeFile, moveFile, unlockLearningsFunc),
+		createAddBranchStepExecutor(workspacePath, logger, readFile, writeFile, moveFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register add_branch_step tool: %w", err)
@@ -6078,7 +5989,7 @@ func registerPlanModificationTools(
 		"update_branch_step",
 		"Update a deterministic branch step in the plan. Provide existing_step_id (required) and only include fields you want to change: title, branch_question, routes, default_route_id, route_source_file, context_dependencies, or clear_description=true for legacy migration. Do not set description or context_output; branch never executes an agent and never LLM-evaluates branch_question. The selected route must come from caller route_selections, route_selection.json, route_source_file, context_dependencies, or default_route_id. The plan.json file is updated immediately when this tool is called. After a substantive change, review whether saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		branchUpdateParams,
-		createUpdateBranchStepExecutor(workspacePath, logger, readFile, writeFile, unlockLearningsFunc),
+		createUpdateBranchStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register update_branch_step tool: %w", err)
@@ -6091,9 +6002,9 @@ func registerPlanModificationTools(
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"convert_routing_branch_step_type",
-		"Reclassify an existing routing step as branch, or an existing branch step as routing, in place. Both types share the exact same deterministic-switch shape (routes/default_route_id/route_source_file; only the human-readable question field's name differs) — this only relabels the step, it never deletes and recreates it, so the step's id is unchanged and its planning/step_config.json row (drift_review, execution_tier, etc.) stays continuous. Use this instead of manually deleting and re-adding a step to change its type — that approach loses step_config.json history for the deleted id. Provide existing_step_id and target_type (\"routing\" or \"branch\", must differ from the step's current type). The plan.json file is updated immediately when this tool is called.",
+		"Reclassify an existing routing step as branch, or an existing branch step as routing, in place. Both types share the exact same deterministic-switch shape (routes/default_route_id/route_source_file; only the human-readable question field's name differs) — this only relabels the step, it never deletes and recreates it, so the step's id is unchanged and its planning/step_config.json row (drift_review, execution_tier, etc.) stays continuous. Use this instead of manually deleting and re-adding a step to change its type — that approach loses step_config.json history for the deleted id. Provide existing_step_id, target_type (\"routing\" or \"branch\", must differ from the step's current type), and a one-sentence reason recorded in the plan changelog. The plan.json file is updated immediately when this tool is called.",
 		convertRoutingBranchParams,
-		createConvertRoutingBranchStepTypeExecutor(workspacePath, logger, readFile, writeFile, unlockLearningsFunc),
+		createConvertRoutingBranchStepTypeExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register convert_routing_branch_step_type tool: %w", err)
@@ -6108,7 +6019,7 @@ func registerPlanModificationTools(
 		"update_message_sequence_step",
 		"Update a message_sequence step in the plan. This also accepts a persisted legacy non-scripted regular step and atomically upgrades it to message_sequence, matching the compatibility runtime agents already see; declared scripted regular steps still require update_scripted_step. Provide existing_step_id and only the fields to change. Replacing items changes the configured queue; an existing runtime session will still resume unless explicitly restarted by execution controls. After a substantive change, review whether the step's saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		messageSequenceUpdateParams,
-		createUpdateMessageSequenceStepExecutor(workspacePath, logger, readFile, writeFile, unlockLearningsFunc),
+		createUpdateMessageSequenceStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register update_message_sequence_step tool: %w", err)
@@ -6126,7 +6037,7 @@ func registerPlanModificationTools(
 		"update_todo_task_step",
 		"Update an Orchestrator step (todo_task type) in the plan. Provide existing_step_id (required) to identify which step to update, and only include the fields you want to change (title, todo_task_step, predefined_routes, next_step_id). The plan.json file is updated immediately when this tool is called. After a substantive change, review whether the step's saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		todoTaskUpdateParams,
-		createUpdateTodoTaskStepExecutor(workspacePath, logger, readFile, writeFile, unlockLearningsFunc),
+		createUpdateTodoTaskStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register update_todo_task_step tool: %w", err)
@@ -6188,7 +6099,7 @@ func registerPlanModificationTools(
 		"update_validation_schema",
 		"Update the validation schema for an existing step in the plan. Provide existing_step_id (required) and validation_schema (required). The validation schema enables fast code-based pre-validation before LLM validation. The plan.json file is updated immediately when this tool is called.",
 		updateValidationSchemaParams,
-		createUpdateValidationSchemaExecutor(workspacePath, logger, readFile, writeFile, unlockLearningsFunc),
+		createUpdateValidationSchemaExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register update_validation_schema tool: %w", err)
@@ -6858,7 +6769,7 @@ func createDeleteTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 }
 
 // createUpdateValidationSchemaExecutor creates an executor function for update_validation_schema tool
-func createUpdateValidationSchemaExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
+func createUpdateValidationSchemaExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
@@ -6921,7 +6832,7 @@ func createUpdateValidationSchemaExecutor(workspacePath string, logger loggerv2.
 		fieldChanges := make([]PlanFieldChange, 0)
 
 		// Update the step
-		stepIndex, _, err := updateSingleStep(plan, partialUpdate, &fieldChanges)
+		_, _, err = updateSingleStep(plan, partialUpdate, &fieldChanges)
 		if err != nil {
 			return "", err
 		}
@@ -6948,15 +6859,6 @@ func createUpdateValidationSchemaExecutor(workspacePath string, logger loggerv2.
 			StepIDs: []string{updateData.ExistingStepID},
 			Changes: fieldChanges,
 		}, readFile, writeFile, logger)
-
-		// Unlock learnings for updated step
-		if unlockLearningsFunc != nil && stepIndex >= 0 {
-			if err := unlockLearningsFunc(ctx, updateData.ExistingStepID, stepIndex); err != nil {
-				logger.Warn(fmt.Sprintf("⚠️ Failed to unlock learnings for updated step %s: %v", updateData.ExistingStepID, err))
-			} else {
-				logger.Info(fmt.Sprintf("🔓 Unlocked learnings for updated step %s (plan was modified)", updateData.ExistingStepID))
-			}
-		}
 
 		logger.Info(fmt.Sprintf("✅ Updated validation schema for step '%s' in plan", updateData.ExistingStepID))
 		return fmt.Sprintf("Successfully updated validation schema for step '%s' in the plan", updateData.ExistingStepID), nil

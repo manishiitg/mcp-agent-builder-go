@@ -93,7 +93,7 @@ func TestDeletePlanStepsRejectsReferencedTargetWithoutWriting(t *testing.T) {
 		writes++
 		return nil
 	}
-	executor := createDeletePlanStepsExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil, nil)
+	executor := createDeletePlanStepsExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil)
 
 	_, err = executor(context.Background(), map[string]interface{}{
 		"deleted_step_ids": []interface{}{"target"},
@@ -147,7 +147,7 @@ func TestDeletePlanStepsFlagsWorkflowLevelDriftReview(t *testing.T) {
 		}
 		return nil
 	}
-	executor := createDeletePlanStepsExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil, nil)
+	executor := createDeletePlanStepsExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil)
 
 	if _, err := executor(context.Background(), map[string]interface{}{
 		"deleted_step_ids": []interface{}{"obsolete-step"},
@@ -215,7 +215,7 @@ func TestDeletePlanStepsRetriesWorkflowLevelFlagOnceOnTransientFailure(t *testin
 		}
 		return nil
 	}
-	executor := createDeletePlanStepsExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil, nil)
+	executor := createDeletePlanStepsExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil)
 
 	result, err := executor(context.Background(), map[string]interface{}{
 		"deleted_step_ids": []interface{}{"obsolete-step"},
@@ -270,7 +270,7 @@ func TestDeletePlanStepsSurfacesLoudWarningWhenWorkflowLevelFlagPersistentlyFail
 		}
 		return nil
 	}
-	executor := createDeletePlanStepsExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil, nil)
+	executor := createDeletePlanStepsExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil)
 
 	result, err := executor(context.Background(), map[string]interface{}{
 		"deleted_step_ids": []interface{}{"obsolete-step"},
@@ -395,7 +395,7 @@ func TestUpdateRoutingStepCanRepairPreviouslyDanglingGraph(t *testing.T) {
 		}
 		return nil
 	}
-	executor := createUpdateRoutingStepExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil)
+	executor := createUpdateRoutingStepExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile)
 
 	result, err := executor(context.Background(), map[string]interface{}{
 		"existing_step_id": "router",

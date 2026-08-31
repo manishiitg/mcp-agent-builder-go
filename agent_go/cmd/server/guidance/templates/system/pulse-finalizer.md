@@ -63,7 +63,16 @@ Run Backup, Publish, then Notify. Before and after each, call
    `notify_user(notification_kind="pulse_summary")` with only What Pulse did.
    Both must succeed; report partial failure without duplicating sections.
 
-Use rich `notify_user` fields; never read webhook secrets or post directly.
+Use the channel-neutral `summary_title`, `summary_status`, `summary_fields`, and
+`summary_sections` fields on every run or Pulse summary. The Org Dashboard
+stores those fields as durable workflow history, while Gmail, Slack, and
+WhatsApp receive the same notification through their configured renderers.
+Set `summary_route` to the exact top-level route represented by this run and
+its Pulse activity. Omit it only for genuinely workflow-wide Pulse work that
+is not attributable to one route; never guess a route from prose.
+Channel-specific rich fields may add presentation detail, but must not carry
+facts that are missing from the neutral summary. Never read webhook secrets or
+post directly.
 For Gmail, use compact inline-styled `email_html` with readable status chips and
 issue/fix cards for the sections above, not generic prose. Put takeaway first
 and evidence last. Stop after all three terminal statuses.

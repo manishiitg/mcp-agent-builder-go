@@ -20,14 +20,14 @@ For each dimension, **search the workspace** for references to the surface and r
 - **Evals** — search `evaluation/` for the step id / output path. An eval that reads the changed output must be updated so it still resolves and scores the right thing. (`read_skill(skills=[{"name":"builder-reference","path":"references/evaluation-plan.md"}])`)
 - **Report dashboard** — search `db/reports/index.html` and its `window.report.query` SQL for the db tables/columns and output fields. A query that reads changed data must be fixed. (`read_skill(skills=[{"name":"builder-reference","path":"references/reporting-policy.md"}])`)
 - **db** — read `db/README.md` (it already lists each table's writers + shape). If this step writes db and the shape changed, update the schema, the README contract, and any readers. (`read_skill(skills=[{"name":"builder-reference","path":"references/stores.md"}])`)
-- **Learnings** — the step's `learnings/{step-id}/` and `learnings/_global/SKILL.md` were generated against the old behavior. If behavior changed, clear `lock_learnings`/`lock_code` so they regenerate, and prune any now-wrong notes.
+- **Learnings** — the step's `learnings/{step-id}/` and `learnings/_global/SKILL.md` were generated against the old behavior. If behavior changed, reassess `learnings_access`, clear `lock_code` when saved code must regenerate, and prune any now-wrong notes.
 - **KB** — search `knowledgebase/notes/` for the step's topic. Notes describing the old behavior must be updated or flagged.
 
 It is tractable **because the contracts already exist** — `db/README.md` lists writers and shape, report HTML declares its queries, the eval plan declares scope, the plan holds the step handoffs. You are cross-linking what is already written, not inventing a dependency graph.
 
 ## 3. Reconcile or flag
 For each affected dependent:
-- **Fix it now** if the fix is clear and contained — update the consumer's schema, fix the report query, repair the eval source, update the db contract, clear a learning lock. (Back up first, or rely on the surrounding pass's backup.)
+- **Fix it now** if the fix is clear and contained — update the consumer's schema, fix the report query, repair the eval source, update the db contract, or change stale learning access. (Back up first, or rely on the surrounding pass's backup.)
 - **Flag an open finding** if the reconciliation needs judgment — a downstream step needs real redesign, a metric definition is now ambiguous. Record it through typed Pulse tools so it isn't lost.
 
 **Never leave a plan change with a silently broken dependent.**

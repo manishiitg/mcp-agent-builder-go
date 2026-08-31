@@ -33,6 +33,9 @@ func RegisterSessionNotificationDestination(sessionID string, dest *services.Not
 	if incoming.WorkflowName != "" {
 		current.WorkflowName = incoming.WorkflowName
 	}
+	if len(incoming.RouteSelections) > 0 {
+		current.RouteSelections = incoming.RouteSelections
+	}
 	if incoming.Slack != nil {
 		current.Slack = incoming.Slack
 	}

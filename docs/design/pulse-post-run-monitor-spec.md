@@ -574,7 +574,7 @@ Mark due when that backlog is non-empty, or when plan/config changes may have dr
 - evals
 - DB contracts
 - KB notes or step KB config
-- learnings or learning locks
+- learnings or learning-access drift
 - saved code artifacts
 - step prompts/configs
 
@@ -657,9 +657,9 @@ record by stable ID/path, but may not keep a second copy that can drift.
 Mark due on any of:
 
 - **Learnings**: plan or prompt changes affected step behavior;
-  `learning_objective` no longer matches the step; `lock_learnings` should be
-  cleared because guidance is stale; mature stable learnings should be locked
-  with evidence; a run discovered reusable HOW-to knowledge worth capturing;
+  `learning_objective` no longer matches the step; `learnings_access` should be
+  reduced to read because writes are stale/redundant or restored to read-write
+  because a run discovered reusable HOW-to knowledge worth capturing;
   selectors/API quirks changed; the complete skill package has no recorded
   purity baseline; or `SKILL.md` / any reference contains business facts, run
   results/current status, owner-value copies, current strategy, incident or
@@ -714,13 +714,15 @@ writers, consumers, lifecycle, and semantic owner. Reconcile all three outputs
 into the one Stores `ownership_manifest` before filing findings, so the same
 misplacement is not reported once per store.
 
-Recommend `lock_learnings` or `lock_knowledgebase` only after the relevant
-complete manifest is clean and the current plan still matches it. Learning
-locks are per step: shared `learnings/_global/` content alone is not evidence;
-use that step's effective objective, description hash, recent successful runs,
-and `.learning_metadata.json`. Recommend unlocking whenever the content or its
-owner contract has drifted. `lock_code` remains a separate, stricter executable
-stability decision.
+Recommend `learnings_access="read"` for mature or redundant contributors only
+after the relevant complete manifest is clean and the current plan still
+matches it. Decide per step from its effective objective, description hash,
+recent successful runs, and `.learning_metadata.json`; shared
+`learnings/_global/` content alone is insufficient. Restore read-write access
+when drift creates new reusable HOW. `lock_code` remains the separate, stricter
+executable stability decision. For KB, recommend changing only the mature/no-op
+contributor's `knowledgebase_access` to `read`; never freeze unrelated writers
+workflow-wide.
 
 Load `assumption-audit` for all three: reusable HOW must not preserve business
 policy, fixed strategy/architecture, or an unverified limitation as if it were

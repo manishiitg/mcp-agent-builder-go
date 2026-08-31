@@ -127,6 +127,7 @@ import { skillsApi } from '../api/skills'
 import type { Skill } from '../types/skills'
 import { chatHistorySupportsNativeResume, chatHistoryUsesTerminalRestore } from './PreviousChatHistoryPanel'
 import { getClipboardImageFiles } from './clipboardImages'
+import { shouldUsePastedTextAttachment } from '../utils/chatPasteBehavior'
 import { isMainAgentTerminal } from '../utils/terminalIdentity'
 
 const AUTO_NOTIFICATION_PREFIX = '[AUTO-NOTIFICATION]'
@@ -1866,8 +1867,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     return false
   }, [isMultiAgentMode, showWorkflowsOverview])
 
-  // If the user has already typed surrounding text, keep pasted content out of
-  // the textarea and insert a stable marker the message can refer to.
+  // Keep genuinely large pasted content out of the textarea and insert a stable
+  // marker the message can refer to. Ordinary text remains a normal inline paste.
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const pastedImageFiles = getClipboardImageFiles(e.clipboardData)
     if (pastedImageFiles.length > 0) {
@@ -1879,15 +1880,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const pasted = e.clipboardData?.getData('text') ?? ''
     if (!pasted) return
 
+    if (!shouldUsePastedTextAttachment(pasted)) return
+
     const textarea = e.currentTarget
     const start = textarea.selectionStart ?? inputText.length
     const end = textarea.selectionEnd ?? inputText.length
     const before = inputText.slice(0, start)
     const after = inputText.slice(end)
-    const textWithoutSelection = before + after
-
-    if (!textWithoutSelection.trim()) return
-
     e.preventDefault()
     const marker = addPastedAttachment(pasted)
     if (!marker) return

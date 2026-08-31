@@ -483,6 +483,33 @@ func convertRoutingBranchTestRoutes() []RoutingRoute {
 	}
 }
 
+// TestConvertRoutingBranchStepTypeSchemaPublishesReason prevents the tool's
+// public contract from drifting away from requireReason in its executor. The
+// mismatch previously made every conversion impossible: omitting reason
+// failed in the handler, while supplying it was rejected by schema validation.
+func TestConvertRoutingBranchStepTypeSchemaPublishesReason(t *testing.T) {
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+		Required   []string                   `json:"required"`
+	}
+	if err := json.Unmarshal([]byte(getConvertRoutingBranchStepTypeSchema()), &schema); err != nil {
+		t.Fatalf("decode conversion tool schema: %v", err)
+	}
+	if _, ok := schema.Properties["reason"]; !ok {
+		t.Fatal("conversion tool schema does not publish reason, but its executor requires it")
+	}
+	reasonRequired := false
+	for _, field := range schema.Required {
+		if field == "reason" {
+			reasonRequired = true
+			break
+		}
+	}
+	if !reasonRequired {
+		t.Fatal("conversion tool schema publishes reason but does not mark it required")
+	}
+}
+
 // convertRoutingBranchTestPlanFileIO returns readFile/writeFile stubs for
 // createConvertRoutingBranchStepTypeExecutor tests, following the same
 // lightweight (no HTTP server) pattern as
@@ -538,7 +565,7 @@ func TestConvertRoutingBranchStepTypeFromRoutingToBranch(t *testing.T) {
 		},
 	}}
 	readFile, writeFile, writtenPaths, writtenPlan := convertRoutingBranchTestPlanFileIO(t, plan)
-	executor := createConvertRoutingBranchStepTypeExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil)
+	executor := createConvertRoutingBranchStepTypeExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile)
 
 	result, err := executor(context.Background(), map[string]interface{}{
 		"existing_step_id": "decision-step",
@@ -593,7 +620,7 @@ func TestConvertRoutingBranchStepTypeFromBranchToRouting(t *testing.T) {
 		},
 	}}
 	readFile, writeFile, _, writtenPlan := convertRoutingBranchTestPlanFileIO(t, plan)
-	executor := createConvertRoutingBranchStepTypeExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil)
+	executor := createConvertRoutingBranchStepTypeExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile)
 
 	_, err := executor(context.Background(), map[string]interface{}{
 		"existing_step_id": "decision-step",
@@ -630,7 +657,7 @@ func TestConvertRoutingBranchStepTypeRejectsNoOpConversion(t *testing.T) {
 		},
 	}}
 	readFile, writeFile, _, _ := convertRoutingBranchTestPlanFileIO(t, plan)
-	executor := createConvertRoutingBranchStepTypeExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil)
+	executor := createConvertRoutingBranchStepTypeExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile)
 
 	_, err := executor(context.Background(), map[string]interface{}{
 		"existing_step_id": "decision-step",

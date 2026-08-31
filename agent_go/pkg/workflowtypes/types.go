@@ -78,7 +78,6 @@ type PresetLLMConfig struct {
 
 	// Feature toggles.
 	UseKnowledgebase           *bool  `json:"use_knowledgebase,omitempty"`
-	LockKnowledgebase          *bool  `json:"lock_knowledgebase,omitempty"`
 	KBShape                    string `json:"kb_shape,omitempty"` // "graph+notes" (default) | "notes-only"
 	EnableContextSummarization *bool  `json:"enable_context_summarization,omitempty"`
 	EnableContextEditing       *bool  `json:"enable_context_editing,omitempty"`
@@ -88,6 +87,7 @@ type PresetLLMConfig struct {
 	// Migration-only fields. NormalizePresetLLMConfig consumes and clears these
 	// when an older workflow is loaded, so they are never written again.
 	LegacyModelID           string          `json:"model_id,omitempty"`
+	LegacyLockKnowledgebase *bool           `json:"lock_knowledgebase,omitempty"`
 	LegacyPhaseLLM          *AgentLLMConfig `json:"phase_llm,omitempty"`
 	LegacyAutoImproveLLM    *AgentLLMConfig `json:"auto_improve_llm,omitempty"`
 	LegacyLLMAllocationMode string          `json:"llm_allocation_mode,omitempty"`
@@ -219,6 +219,14 @@ func NormalizePresetLLMConfig(config *PresetLLMConfig) bool {
 		config.LegacyPhaseLLM = nil
 		config.LegacyAutoImproveLLM = nil
 		config.LegacyLLMAllocationMode = ""
+		changed = true
+	}
+	// PLAT-265 retired the workflow-wide KB lock. KB writes are governed only
+	// by each step's knowledgebase_access + knowledgebase_contribution contract.
+	// Consume the old JSON field during manifest normalization so workflows do
+	// not keep advertising a setting that no longer has runtime meaning.
+	if config.LegacyLockKnowledgebase != nil {
+		config.LegacyLockKnowledgebase = nil
 		changed = true
 	}
 	return changed

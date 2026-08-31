@@ -100,6 +100,48 @@ func TestCheckReportQueryCompatibilityPassesWhenSchemaMatches(t *testing.T) {
 	}
 }
 
+func TestCheckReportQueryCompatibilityReleasesSuccessfulQueryRows(t *testing.T) {
+	ctx := context.Background()
+	dbPath := setupPlanDriftDBTest(t, "Workflow/drift-test")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE emails(id INTEGER PRIMARY KEY, status TEXT); INSERT INTO emails(status) VALUES ('pending')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	readFile := func(_ context.Context, path string) (string, error) {
+		if path == "Workflow/drift-test/db/reports/index.html" {
+			return `<script>
+				window.report.query('SELECT id FROM emails');
+				window.report.query('SELECT status FROM emails');
+			</script>`, nil
+		}
+		return "", os.ErrNotExist
+	}
+	if _, err := CheckReportQueryCompatibility(ctx, "Workflow/drift-test", readFile); err != nil {
+		t.Fatalf("CheckReportQueryCompatibility returned error: %v", err)
+	}
+
+	// A successful compatibility read must release every result set. The
+	// managed dependency audit writes its Pulse receipt immediately after this
+	// scan; an abandoned read transaction used to make that follow-up wait for
+	// the request timeout.
+	writeDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writeDB.Close()
+	if _, err := writeDB.Exec(`PRAGMA busy_timeout = 100`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeDB.Exec(`INSERT INTO emails(status) VALUES ('sent')`); err != nil {
+		t.Fatalf("report compatibility check retained a database read lock: %v", err)
+	}
+}
+
 func TestCheckReportQueryCompatibilityFailsWhenColumnDropped(t *testing.T) {
 	ctx := context.Background()
 	dbPath := setupPlanDriftDBTest(t, "Workflow/drift-test")

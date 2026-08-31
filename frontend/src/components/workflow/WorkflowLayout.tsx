@@ -97,6 +97,7 @@ import {
   type RunningWorkflowInfo,
 } from '../../services/api-types'
 import { findOrCreateWorkflowTab, isChatCompatiblePhase } from '../../utils/chatSubmitHelpers'
+import { reusableBlankWorkflowChatTabId } from './workflowChatTabConversion'
 import { hydrateTabEvents } from '../../utils/sessionRestore'
 // Inactive workflow tabs hydrate lazily and fall back to workflow-scoped chat history.
 
@@ -270,14 +271,29 @@ const WorkflowPreviousChatsPanel: React.FC<{
     if (
       !targetTab ||
       targetTab.metadata?.mode !== 'workflow' ||
+      targetTab.metadata?.isViewOnly === true ||
       (activePresetId && targetPresetId && targetPresetId !== activePresetId)
     ) {
-      targetTabId = await chatStore.createChatTab('Automation Builder', {
-        mode: 'workflow',
-        phaseId: 'workflow-builder',
-        phaseName: 'Automation Builder',
-        presetQueryId: activePresetId || undefined,
-      })
+      // Restore must target an interactive Chat tab. Reusing the currently
+      // active full-run/Schedule tab corrupts its presentation metadata and
+      // leaves the untouched Chat placeholder beside a fake "Workflow
+      // Builder" runtime tab.
+      const latestStore = useChatStore.getState()
+      const reusableTabId = reusableBlankWorkflowChatTabId(
+        latestStore.chatTabs,
+        latestStore.tabEvents,
+        activePresetId,
+      )
+      if (reusableTabId) {
+        targetTabId = reusableTabId
+      } else {
+        targetTabId = await latestStore.createChatTab('Automation Builder', {
+          mode: 'workflow',
+          phaseId: 'workflow-builder',
+          phaseName: 'Automation Builder',
+          presetQueryId: activePresetId || undefined,
+        })
+      }
       targetTab = useChatStore.getState().chatTabs[targetTabId]
     }
 

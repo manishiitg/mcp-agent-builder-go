@@ -98,8 +98,8 @@ Important current details:
 ### Learning metadata
 
 Runtime learning metadata is observational. It gives the workflow builder and
-review tools evidence for deciding whether a step's learning writes are still
-useful, but it does not mutate `lock_learnings`.
+review tools evidence for deciding whether a step's `learnings_access` should
+remain read-write, but it does not mutate that access.
 
 Current metadata logic in [`controller_learning_detection.go`](../../agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/controller_learning_detection.go):
 
@@ -108,15 +108,8 @@ Current metadata logic in [`controller_learning_detection.go`](../../agent_go/pk
 - if the hash differs, `description_hash_runs` resets to 1 and the stored hash is updated
 
 Editing the step description resets the description-hash run counter. This is
-review evidence only; runtime execution does not auto-lock or auto-unlock
-learning.
-
-### Manual lock lifecycle
-
-`lock_learnings` is owned by the builder/user. Set it when the workflow should
-keep reading the current global skill but stop accepting automatic SKILL.md
-writes from that step. Clear it explicitly after a material description change
-or when the builder/user wants that step to learn again.
+review evidence only; runtime execution does not automatically change learning
+access.
 
 ### Locking and disabling learning
 
@@ -127,7 +120,6 @@ The important current controls on `AgentConfigs`:
   - `"read-write"` — step reads AND contributes. Requires `learning_objective` to be non-empty.
   - `"none"` — step neither reads nor contributes. The true disable.
 - `learning_objective` (string) — the **extraction instruction** for the post-step learning agent. Required when access is `"read-write"`. No longer a gate.
-- `lock_learnings` (bool) — freezes the learning agent for this step even while access is `"read-write"`. Existing `SKILL.md` still flows into execution prompts. Runtime never auto-sets or auto-clears this; it is a builder/user decision.
 - `global_skill_objective` (workflow-level, not per-step) — describes what domain knowledge the global skill should accumulate.
 
 Auto-migration for legacy configs (runtime-only, no file rewrites): if `learnings_access` is unset, `learning_objective` non-empty infers `"read-write"`; empty infers `"read"`.
@@ -137,7 +129,7 @@ Recommended usage:
 - leave `learnings_access` unset (defaults to `"read"`) for most steps — they benefit from cross-step context.
 - set `learnings_access: "read-write"` + a non-empty `learning_objective` on steps that produce durable HOW-knowledge about the target system.
 - set `learnings_access: "none"` for steps that are truly throwaway or whose context would pollute the global skill (e.g. pure file moves, human-input steps — the latter is forced to `"none"` automatically).
-- set `lock_learnings: true` only when the builder/user intentionally decides the step should stop writing SKILL.md; include `review_notes` explaining why.
+- change a mature or redundant contributor to `learnings_access: "read"` so it still consumes shared guidance without running a write turn.
 
 ### Failure learning
 
@@ -203,9 +195,9 @@ Not every step uses every file. The important distinction is:
 When editing related workflow docs, keep these rules consistent:
 
 - describe learning as global-skill-first
-- gate read access and write contribution through `learnings_access` — `lock_learnings` is a freeze switch, not the enable/disable mechanism
+- gate both read access and write contribution through `learnings_access`
 - for scripted steps, describe `main.py` as the executable source of truth
-- description-hash metadata is review evidence only; runtime does not auto-lock or auto-unlock learnings
+- description-hash metadata is review evidence only; runtime does not automatically change learning access
 - leave validation details to the dedicated pre-validation docs
 
 ## Code references

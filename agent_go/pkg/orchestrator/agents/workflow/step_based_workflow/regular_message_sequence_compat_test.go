@@ -183,7 +183,7 @@ func TestUpdateMessageSequenceExecutorAtomicallyPersistsLegacyUpgrade(t *testing
 		}
 		return nil
 	}
-	executor := createUpdateMessageSequenceStepExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile, nil)
+	executor := createUpdateMessageSequenceStepExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile)
 
 	result, err := executor(context.Background(), map[string]interface{}{
 		"existing_step_id": "voice-latency-collector",

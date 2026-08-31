@@ -69,19 +69,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runStepReflectionTurn(
 	kbContribution := kbContributionForPrompt(stepConfig)
 	writesKB := kbAccessAllowsWrite(kbAccess) && strings.TrimSpace(kbContribution) != ""
 
-	// lock_learnings suppresses only the learnings half. A locked step can still
-	// route to KB and still report a defect — silencing those too was never the
-	// intent of a learnings freeze.
-	skipLearningsDueToLock := false
-	if writesLearnings {
-		skipLearningsDueToLock = hcpo.shouldSkipDirectLearningsDueToLock(ctx, stepConfig, stepIndex)
-		if skipLearningsDueToLock {
-			hcpo.recordWorkflowContinuationPhase(ctx, artifactStepID, artifactStepPath,
-				workflowContinuationOwnerStepExecution, workflowContinuationPhaseDirectLearning,
-				workflowContinuationStatusSkipped, "lock_learnings=true with existing _global content", executionAgent)
-		}
-	}
-	effectiveLearnings := writesLearnings && !skipLearningsDueToLock
+	effectiveLearnings := writesLearnings
 
 	baseWorkspace := hcpo.GetWorkspacePath()
 	globalLearningsPath := fmt.Sprintf("%s/learnings/%s", baseWorkspace, GlobalLearningID)

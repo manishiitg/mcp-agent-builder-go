@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	defaultRunRetentionCount = 3
+	defaultRunRetentionCount = 10
 	maxRunRetentionCount     = 50
 )
 
@@ -243,27 +243,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) workspaceFileExists(ctx context.Conte
 	}
 
 	return false
-}
-
-func (hcpo *StepBasedWorkflowOrchestrator) isStepLearningsFolderEmpty(ctx context.Context, stepID string, stepIndex int, stepPath string) (bool, error) {
-	// getLearningFolderPathByStepID returns a RELATIVE path — workspace functions auto-prepend workspacePath
-	stepLearningsPath := getLearningFolderPathByStepID("", stepID, stepPath, hcpo.isEvaluationMode)
-
-	// Use readStepLearningFiles to check for learning files (it already excludes metadata)
-	learningFiles, err := hcpo.readStepLearningFiles(ctx, stepLearningsPath)
-	if err != nil {
-		// If folder doesn't exist or can't be read, assume empty so selection falls back conservatively.
-		hcpo.GetLogger().Info(fmt.Sprintf("📁 Step %s learnings folder does not exist or cannot be read: %s (treating as empty for execution model selection)", stepID, stepLearningsPath))
-		return true, err
-	}
-
-	if len(learningFiles) == 0 {
-		hcpo.GetLogger().Info(fmt.Sprintf("📁 Step %s learnings folder has no learning files (only metadata or empty): %s", stepID, stepLearningsPath))
-		return true, nil
-	}
-
-	hcpo.GetLogger().Info(fmt.Sprintf("✅ Step %s learnings folder has %d learning file(s): %s", stepID, len(learningFiles), stepLearningsPath))
-	return false, nil
 }
 
 // listRunFolders lists existing run folder names

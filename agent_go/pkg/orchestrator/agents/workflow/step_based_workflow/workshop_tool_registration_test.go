@@ -77,6 +77,58 @@ func TestRegisterWorkshopChatToolsIncludesArtifactReviewMarker(t *testing.T) {
 	}
 }
 
+func TestUpdateWorkflowConfigDoesNotExposeRetiredKnowledgebaseLock(t *testing.T) {
+	agent := newWorkshopDefinitionDraft()
+	workspacePath := t.TempDir()
+	base := &orchestrator.BaseOrchestrator{}
+	base.SetWorkspacePath(workspacePath)
+	session := &WorkshopChatSession{
+		controller:   &StepBasedWorkflowOrchestrator{BaseOrchestrator: base},
+		StepRegistry: NewWorkshopStepRegistry(),
+		config:       &WorkshopConfig{WorkspacePath: workspacePath},
+	}
+
+	RegisterWorkshopChatTools(agent, session, workshopToolTestLogger{})
+	tool, ok := agent.tools["update_workflow_config"]
+	if !ok {
+		t.Fatal("actual workshop agent registry is missing update_workflow_config")
+	}
+	properties, ok := tool.InputSchema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("update_workflow_config properties have unexpected shape: %#v", tool.InputSchema["properties"])
+	}
+	if _, exists := properties["lock_knowledgebase"]; exists {
+		t.Fatal("retired workflow-wide lock_knowledgebase is still exposed to agents")
+	}
+}
+
+func TestUpdateStepConfigDoesNotExposeRetiredLearningLock(t *testing.T) {
+	agent := newWorkshopDefinitionDraft()
+	workspacePath := t.TempDir()
+	base := &orchestrator.BaseOrchestrator{}
+	base.SetWorkspacePath(workspacePath)
+	session := &WorkshopChatSession{
+		controller:   &StepBasedWorkflowOrchestrator{BaseOrchestrator: base},
+		StepRegistry: NewWorkshopStepRegistry(),
+		config:       &WorkshopConfig{WorkspacePath: workspacePath},
+	}
+
+	RegisterWorkshopChatTools(agent, session, workshopToolTestLogger{})
+	tool, ok := agent.tools["update_step_config"]
+	if !ok {
+		t.Fatal("actual workshop agent registry is missing update_step_config")
+	}
+	properties, ok := tool.InputSchema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("update_step_config properties have unexpected shape: %#v", tool.InputSchema["properties"])
+	}
+	for _, retired := range []string{"lock_learnings", "lock_learnings_reason"} {
+		if _, exists := properties[retired]; exists {
+			t.Fatalf("retired field %q is still exposed to agents", retired)
+		}
+	}
+}
+
 func TestBackgroundTaskGetsWorkshopMutationToolDefinitions(t *testing.T) {
 	workspacePath := t.TempDir()
 	base := &orchestrator.BaseOrchestrator{}

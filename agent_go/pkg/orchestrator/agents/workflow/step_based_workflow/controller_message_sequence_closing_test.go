@@ -290,26 +290,18 @@ func TestFormatMessageSequenceTurnLogResult(t *testing.T) {
 	}
 }
 
-func TestMessageSequenceClosingItemsHonorLockLearnings(t *testing.T) {
+func TestMessageSequenceClosingItemsHonorReadOnlyLearningsAccess(t *testing.T) {
 	hcpo := newMessageSequenceClosingTestOrchestrator(t)
-	previousCheck := directLearningsGlobalEmptyForLock
-	directLearningsGlobalEmptyForLock = func(_ *StepBasedWorkflowOrchestrator, _ context.Context) (bool, error) {
-		return false, nil
-	}
-	defer func() { directLearningsGlobalEmptyForLock = previousCheck }()
-
-	locked := true
 	step := &MessageSequencePlanStep{
 		CommonStepFields: CommonStepFields{ID: "seq", Description: "do work"},
 		AgentConfigs: &AgentConfigs{
-			LearningsAccess:   LearningsAccessReadWrite,
+			LearningsAccess:   LearningsAccessRead,
 			LearningObjective: "capture durable execution patterns",
-			LockLearnings:     &locked,
 		},
 	}
 
 	if got := hcpo.messageSequenceClosingItems(context.Background(), step, 0); len(got) != 0 {
-		t.Fatalf("locked existing _global should suppress synthetic learning item, got %+v", got)
+		t.Fatalf("read-only learning access should suppress synthetic learning item, got %+v", got)
 	}
 }
 

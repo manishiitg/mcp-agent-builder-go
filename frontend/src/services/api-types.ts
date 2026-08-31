@@ -3259,3 +3259,26 @@ export interface NotificationPreference {
   whatsapp_phone?: string
   whatsapp_disabled?: boolean
 }
+
+export interface OrgDashboardNotificationField {
+  label: string
+  value: string
+}
+
+export interface OrgDashboardNotificationSection {
+  heading: string
+  body: string
+}
+
+export interface OrgDashboardNotification {
+  id: string
+  workspace_path: string
+  kind: 'run_summary' | 'pulse_summary'
+  title?: string
+  status: 'neutral' | 'success' | 'warning' | 'danger'
+  route?: string
+  message: string
+  fields?: OrgDashboardNotificationField[]
+  sections?: OrgDashboardNotificationSection[]
+  created_at: string
+}

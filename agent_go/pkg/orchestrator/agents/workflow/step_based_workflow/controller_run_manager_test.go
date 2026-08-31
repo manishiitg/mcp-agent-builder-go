@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-func TestDefaultRunRetentionCountIsThree(t *testing.T) {
-	if defaultRunRetentionCount != 3 {
-		t.Fatalf("defaultRunRetentionCount = %d, want 3", defaultRunRetentionCount)
+func TestDefaultRunRetentionCountIsTen(t *testing.T) {
+	if defaultRunRetentionCount != 10 {
+		t.Fatalf("defaultRunRetentionCount = %d, want 10", defaultRunRetentionCount)
 	}
 }
 

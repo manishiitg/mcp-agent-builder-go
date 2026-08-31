@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	htmlstd "html"
+	"maps"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -118,6 +120,49 @@ func CreateHumanTools() []llmtypes.Tool {
 			"enum":        []string{"general", "run_summary", "pulse_summary"},
 			"description": "Classifies this notification so the backend can enforce its workflow-configured channel routing. Pulse finalizers use run_summary for the execution outcome and pulse_summary for Pulse review/fix activity. Use general for ordinary notifications.",
 		},
+		"summary_title": map[string]interface{}{
+			"type":        "string",
+			"maxLength":   150,
+			"description": "Channel-neutral title used by the Org Dashboard and as the default title for rich channel renderings. For run_summary and pulse_summary, set this instead of relying on a channel-specific title.",
+		},
+		"summary_status": map[string]interface{}{
+			"type":        "string",
+			"enum":        []string{"neutral", "success", "warning", "danger"},
+			"description": "Channel-neutral factual status used by the Org Dashboard: success only for healthy/completed outcomes, warning for incomplete or attention-needed work, danger for confirmed failure/critical state, otherwise neutral.",
+		},
+		"summary_route": map[string]interface{}{
+			"type":        "string",
+			"maxLength":   200,
+			"description": "Top-level workflow route represented by this run_summary or pulse_summary. Use the actual selected route ID/name for a route-scoped run; omit for workflow-wide activity. The backend fills this automatically when the schedule supplied a deterministic route selection.",
+		},
+		"summary_fields": map[string]interface{}{
+			"type":     "array",
+			"maxItems": 10,
+			"items": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"label": map[string]interface{}{"type": "string"},
+					"value": map[string]interface{}{"type": "string"},
+				},
+				"required":             []string{"label", "value"},
+				"additionalProperties": false,
+			},
+			"description": "Channel-neutral compact facts persisted for the Org Dashboard. Rich external renderers may reuse them.",
+		},
+		"summary_sections": map[string]interface{}{
+			"type":     "array",
+			"maxItems": 12,
+			"items": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"heading": map[string]interface{}{"type": "string"},
+					"body":    map[string]interface{}{"type": "string"},
+				},
+				"required":             []string{"heading", "body"},
+				"additionalProperties": false,
+			},
+			"description": "Channel-neutral ordered details persisted for the Org Dashboard. Use for fixes, blockers, decisions, evidence, and next actions.",
+		},
 	}
 	if gmailEnabled() {
 		notifyProps["email_subject"] = map[string]interface{}{
@@ -173,9 +218,10 @@ func CreateHumanTools() []llmtypes.Tool {
 // channelLabels maps connector Name() values to human-friendly labels used in
 // the dynamic notify_user description.
 var channelLabels = map[string]string{
-	"slack":    "Slack",
-	"whatsapp": "WhatsApp",
-	"gmail":    "Gmail (email)",
+	"slack":         "Slack",
+	"whatsapp":      "WhatsApp",
+	"gmail":         "Gmail (email)",
+	"org_dashboard": "Org Dashboard",
 }
 
 var sendRichSlackIncomingWebhook = services.SendRichSlackIncomingWebhook
@@ -185,7 +231,7 @@ var sendRichSlackIncomingWebhook = services.SendRichSlackIncomingWebhook
 // knows where its message will actually land. The always-on web UI connector is
 // not framed as an external channel.
 func buildNotifyDescription() string {
-	base := "Send a non-blocking notification to the human. Use this for FYIs, progress updates, alerts, and completion notices when you do not need to wait for a reply. If the workflow has a Slack Incoming Webhook configured, this tool automatically sends a backend-owned rich Block Kit card there in addition to enabled account-level channels; even a plain message_for_user call receives the safe rich default. For workflow, Pulse, Goal Advisor, and other structured summaries, set slack_title, factual slack_color, compact slack_fields, relevant slack_sections, and slack_footer by default. Never access a SECRET_* webhook variable, construct a webhook payload in shell, post with curl, disable notify_user to avoid duplication, or ask for the URL after an encrypted webhook reference is configured—the backend exclusively owns delivery. If you need the human to answer before continuing, use human_feedback instead. Returns a JSON delivery result — status (delivered|partial|failed|no_recipient|no_channels_configured) plus delivered/skipped/failed channel lists. Report it honestly to the user: do NOT claim the message was sent if status is failed or no_channels_configured."
+	base := "Send one non-blocking notification through the configured providers. Gmail, Slack, and WhatsApp are external delivery providers; Org Dashboard durably records run_summary and pulse_summary notifications for the current workflow. Use this for FYIs, progress updates, alerts, and completion notices when you do not need to wait for a reply. For workflow, Pulse, Goal Advisor, and other structured summaries, always set the channel-neutral summary_title, summary_status, summary_fields, and summary_sections, plus summary_route when the notification represents one top-level workflow route. Channel-specific rich fields may improve presentation but must not contain facts omitted from the neutral summary. If the workflow has a Slack Incoming Webhook configured, the backend also sends a backend-owned rich Block Kit card there. Never access a SECRET_* webhook variable, construct a webhook payload in shell, post with curl, disable notify_user to avoid duplication, or ask for the URL after an encrypted webhook reference is configured—the backend exclusively owns delivery. If you need the human to answer before continuing, use human_feedback instead. Returns a JSON delivery result — status (delivered|partial|failed|no_recipient|no_channels_configured) plus delivered/skipped/failed channel lists. Report it honestly to the user: do NOT claim an external message was sent when only Org Dashboard succeeded."
 
 	var labels []string
 	gmailOn := false
@@ -206,7 +252,7 @@ func buildNotifyDescription() string {
 	}
 
 	if len(labels) == 0 {
-		return base + " NOTE: No account-level channels (Slack bot/WhatsApp/Gmail) are currently enabled. The message still uses a workflow Slack webhook when one is configured; otherwise it appears only in the web UI."
+		return base + " NOTE: No notification providers are currently enabled. A configured workflow Slack webhook may still receive the message."
 	}
 	desc := base + " Currently enabled delivery channels: " + strings.Join(labels, ", ") + ". The message is delivered to all enabled channels — you do not choose which."
 	if gmailOn {
@@ -461,6 +507,24 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 	}
 	notificationKind, _ := args["notification_kind"].(string)
 	notificationKind = strings.ToLower(strings.TrimSpace(notificationKind))
+	if notificationKind == "" {
+		notificationKind = "general"
+	}
+	summary, err := notificationSummaryFromArgs(args, notificationKind, gc, slackContent)
+	if err != nil {
+		return "", err
+	}
+	if dest == nil {
+		dest = &services.NotificationDestination{}
+	}
+	if strings.TrimSpace(summary.Route) == "" {
+		summary.Route = notificationRouteFromSelections(dest.RouteSelections)
+	}
+	if dest.Content == nil {
+		dest.Content = &services.NotificationContent{}
+	}
+	dest.Content.Text = messageForUser
+	dest.Content.Summary = summary
 	// Durable per-workflow recipients for this summary kind. Applied only when
 	// the agent did not name its own, so an explicit email_to still wins for a
 	// one-off send. This must run after notification_kind is read, since the
@@ -541,6 +605,27 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 	}
 	b, _ := json.Marshal(result)
 	return string(b), nil
+}
+
+func notificationRouteFromSelections(selections map[string]string) string {
+	keys := make([]string, 0, len(selections))
+	for stepID, routeID := range selections {
+		if strings.TrimSpace(stepID) != "" && strings.TrimSpace(routeID) != "" {
+			keys = append(keys, stepID)
+		}
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Strings(keys)
+	if len(keys) == 1 {
+		return strings.TrimSpace(selections[keys[0]])
+	}
+	parts := make([]string, 0, len(keys))
+	for _, stepID := range keys {
+		parts = append(parts, strings.TrimSpace(stepID)+"="+strings.TrimSpace(selections[stepID]))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func summaryChannelsForKind(dest *services.NotificationDestination, kind string) []string {
@@ -664,6 +749,105 @@ func slackContentFromArgs(args map[string]interface{}) (services.SlackWebhookCon
 		}
 	}
 	return content, nil
+}
+
+func notificationSummaryFromArgs(
+	args map[string]interface{},
+	kind string,
+	gmail *services.GmailContent,
+	slack services.SlackWebhookContent,
+) (*services.NotificationSummary, error) {
+	title, _ := args["summary_title"].(string)
+	if strings.TrimSpace(title) == "" {
+		title = slack.Title
+	}
+	if strings.TrimSpace(title) == "" && gmail != nil {
+		title = gmail.Subject
+	}
+
+	status, _ := args["summary_status"].(string)
+	if strings.TrimSpace(status) == "" {
+		status = slack.Color
+	}
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch status {
+	case "neutral", "success", "warning", "danger":
+	case "":
+		status = "neutral"
+	default:
+		return nil, fmt.Errorf("summary_status must be neutral, success, warning, or danger")
+	}
+	route, _ := args["summary_route"].(string)
+
+	fields, err := notificationSummaryFieldsFromArg(args["summary_fields"])
+	if err != nil {
+		return nil, err
+	}
+	if len(fields) == 0 {
+		for _, field := range slack.Fields {
+			fields = append(fields, services.NotificationSummaryField{Label: field.Label, Value: field.Value})
+		}
+	}
+	sections, err := notificationSummarySectionsFromArg(args["summary_sections"])
+	if err != nil {
+		return nil, err
+	}
+	if len(sections) == 0 {
+		for _, section := range slack.Sections {
+			sections = append(sections, services.NotificationSummarySection{Heading: section.Heading, Body: section.Body})
+		}
+	}
+
+	return &services.NotificationSummary{
+		Kind:     strings.ToLower(strings.TrimSpace(kind)),
+		Title:    strings.TrimSpace(title),
+		Status:   status,
+		Route:    strings.TrimSpace(route),
+		Fields:   fields,
+		Sections: sections,
+	}, nil
+}
+
+func notificationSummaryFieldsFromArg(raw interface{}) ([]services.NotificationSummaryField, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("summary_fields must be an array")
+	}
+	fields := make([]services.NotificationSummaryField, 0, len(items))
+	for i, rawItem := range items {
+		item, ok := rawItem.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("summary_fields[%d] must be an object", i)
+		}
+		label, _ := item["label"].(string)
+		value, _ := item["value"].(string)
+		fields = append(fields, services.NotificationSummaryField{Label: strings.TrimSpace(label), Value: strings.TrimSpace(value)})
+	}
+	return fields, nil
+}
+
+func notificationSummarySectionsFromArg(raw interface{}) ([]services.NotificationSummarySection, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("summary_sections must be an array")
+	}
+	sections := make([]services.NotificationSummarySection, 0, len(items))
+	for i, rawItem := range items {
+		item, ok := rawItem.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("summary_sections[%d] must be an object", i)
+		}
+		heading, _ := item["heading"].(string)
+		body, _ := item["body"].(string)
+		sections = append(sections, services.NotificationSummarySection{Heading: strings.TrimSpace(heading), Body: strings.TrimSpace(body)})
+	}
+	return sections, nil
 }
 
 // handleHumanFeedback handles the human_feedback tool execution
@@ -809,6 +993,8 @@ func cloneNotificationDestination(dest *services.NotificationDestination) *servi
 	clone := &services.NotificationDestination{
 		UserID:                 dest.UserID,
 		WorkflowName:           dest.WorkflowName,
+		WorkspacePath:          dest.WorkspacePath,
+		RouteSelections:        maps.Clone(dest.RouteSelections),
 		ExcludeChannels:        append([]string(nil), dest.ExcludeChannels...),
 		RunSummaryChannels:     append([]string(nil), dest.RunSummaryChannels...),
 		PulseSummaryChannels:   append([]string(nil), dest.PulseSummaryChannels...),
@@ -878,6 +1064,7 @@ func addWorkflowIdentityToGmailContent(content *services.GmailContent, workflowN
 func notificationDestinationEmpty(dest *services.NotificationDestination) bool {
 	return dest == nil ||
 		(dest.UserID == "" &&
+			dest.WorkspacePath == "" &&
 			(dest.Slack == nil || dest.Slack.ChannelID == "") &&
 			(dest.SlackWebhook == nil || (dest.SlackWebhook.SecretName == "" && dest.SlackWebhook.URL == "")) &&
 			(dest.WhatsApp == nil || (dest.WhatsApp.ChannelID == "" && dest.WhatsApp.PhoneE164 == "")) &&

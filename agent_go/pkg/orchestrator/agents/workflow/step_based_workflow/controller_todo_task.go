@@ -103,8 +103,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 		// Unlike regular steps (which write learnings in a dedicated post-step turn),
 		// the orchestrator writes its stores directly via the folder guard — same as it
 		// does for knowledgebase/notes below. Grant learnings write when access is read-write
-		// and lock_learnings is not protecting existing _global content.
-		if learningsAccessForGuard == LearningsAccessReadWrite && !hcpo.shouldSkipDirectLearningsDueToLock(ctx, skillStepConfig, stepIndex) {
+		// and the step's single access mode permits writes.
+		if learningsAccessForGuard == LearningsAccessReadWrite {
 			writePaths = append(writePaths, globalLearningsPath)
 		}
 	}
@@ -570,7 +570,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runTodoTaskContributionTurns(ctx cont
 		return summarizeExecutionResultForNotification(result), nil
 	}
 
-	if shouldDirectWriteLearnings(cfg, step, hcpo.isEvaluationMode) && !hcpo.shouldSkipDirectLearningsDueToLock(ctx, cfg, stepIndex) {
+	if shouldDirectWriteLearnings(cfg, step, hcpo.isEvaluationMode) {
 		learningsSummary, reconcileErr = runTurn("learnings", hcpo.buildLearningsContributionTurn(step.GetID(), step.GetDescription(), strings.TrimSpace(cfg.LearningObjective), false))
 		if reconcileErr != nil {
 			return learningsSummary, knowledgebaseSummary, reconcileErr

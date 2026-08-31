@@ -7,6 +7,7 @@ import {
   reusableScheduleTabId,
   shouldCatchUpRunningWorkflowTranscript,
   shouldDisplayWorkflowTab,
+  workflowTabDisplayName,
   workflowRuntimeTabProjection,
 } from './workflowRuntimeTabProjection'
 
@@ -158,6 +159,34 @@ describe('workflowRuntimeTabProjection', () => {
       isScheduledRun: true,
       scheduledJobName: 'Daily execution',
     })
+  })
+})
+
+describe('workflowTabDisplayName', () => {
+  it('renders both current and persisted legacy Builder conversations as Chat', () => {
+    for (const name of ['Automation Builder', 'Workflow Builder']) {
+      expect(workflowTabDisplayName({
+        name,
+        sessionId: 'chat-session',
+        metadata: { mode: 'workflow', phaseId: 'workflow-builder' },
+      })).toBe('Chat')
+    }
+  })
+
+  it('preserves names for schedule and run lanes', () => {
+    expect(workflowTabDisplayName({
+      name: 'full-run [default / iteration-0]',
+      sessionId: 'schedule-cron--daily_1',
+      metadata: { mode: 'workflow', isScheduledRun: true },
+    })).toBe('full-run [default / iteration-0]')
+  })
+
+  it('repairs a persisted one-off Pulse tab whose old title was Workflow Builder', () => {
+    expect(workflowTabDisplayName({
+      name: 'Workflow Builder',
+      sessionId: 'schedule-manual--manual-p_1788000820583762000',
+      metadata: { mode: 'workflow', isViewOnly: true, isScheduledRun: true },
+    })).toBe('Manual Pulse')
   })
 })
 

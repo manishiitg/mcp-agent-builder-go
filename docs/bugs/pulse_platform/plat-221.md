@@ -231,3 +231,44 @@ Focused workspace-handler and workflow-orchestrator test suites passed during
 the review. The separate LinkedIn `PUL-3BD9F422` migration remains undesigned,
 as already recorded above; that workflow work is not evidence that the
 platform migration route itself is unreachable.
+
+## Main Builder session bypass follow-up (2026-08-31)
+
+A live RTS Latency Builder session exposed a gap in the policy above. Session
+`65043afa-d0d3-4d9a-af1e-eb3451afa4e6` successfully discovered and called
+`apply_workflow_db_migration`, but the tool correctly denied it because the
+long-lived main session had no `WORKFLOW_DB_ACCESS` capability. The model
+misreported that permission denial as "the schema migration service is
+unavailable" and then ran the migration directly with `sqlite3`, followed by
+a second direct `ALTER TABLE`. Both raw writes succeeded.
+
+This was not a migration-service failure. Two platform contracts had drifted:
+the main Workflow Builder guard was rebuilt in two `server.go` setup/restore
+paths with broad workflow-folder write access, but neither path called
+`configureWorkflowDBSession`; and the rendered `stores.md` guidance still
+explicitly told the Builder it could use `sqlite3 db/db.sqlite` directly and
+that FolderGuard allowed it. Consequently:
+
+- the dedicated migration tool saw `db_access=""` and failed closed;
+- raw `db.sqlite`, `db.sqlite-wal`, and `db.sqlite-shm` were not hard-blocked;
+- the direct migration bypassed the managed transaction and
+  `schema_migration_log` audit path.
+
+The fix exports one narrow `ConfigureManagedWorkflowDBSession` entry point and
+calls it immediately after both main Builder folder-guard resets. Normal
+Builder sessions receive managed read-write authority; read-only product users
+receive managed read authority. Both shapes hard-block raw SQLite plus WAL/SHM
+sidecars, while leaving `db/migrations/`, `db/README.md`, and `db/assets/`
+available. Schema evolution therefore has exactly one execution path again:
+author `db/migrations/<file>.sql`, then call
+`apply_workflow_db_migration(migration_file)`.
+
+The stale direct-SQLite Builder instruction is removed. The store contract now
+also says that a managed-tool permission denial is terminal for that action:
+report the exact missing capability instead of relabeling the service as
+unavailable or attempting a raw SQLite fallback.
+
+Regression coverage proves the broad Builder folder grant cannot read or write
+the database or either sidecar, adjacent DB artifacts remain writable, the
+planning write deny survives DB setup, read-only users stay fail-closed, and
+both workflow-session setup/restore branches install the boundary.

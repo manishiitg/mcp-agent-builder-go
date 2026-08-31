@@ -1887,7 +1887,7 @@ func (api *StreamingAPI) handleGetAllStepLearnings(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// Read step configs to get agent configs (use_code_execution_mode, lock_learnings, etc.)
+	// Read step configs to get execution-mode metadata.
 	stepConfigs, err := readStepConfigFromWorkspace(r.Context(), workspacePath)
 	if err != nil {
 		// Log warning but continue - step configs may not exist
@@ -1921,9 +1921,6 @@ func (api *StreamingAPI) handleGetAllStepLearnings(w http.ResponseWriter, r *htt
 			if agentConfigs.UseCodeExecutionMode != nil {
 				metadata["use_code_execution_mode"] = *agentConfigs.UseCodeExecutionMode
 			}
-			if agentConfigs.LockLearnings != nil {
-				metadata["lock_learnings"] = *agentConfigs.LockLearnings
-			}
 		}
 
 		learningsMap[stepID] = metadata
@@ -1932,12 +1929,6 @@ func (api *StreamingAPI) handleGetAllStepLearnings(w http.ResponseWriter, r *htt
 	// Check for global workflow-level learning metadata
 	globalMetadata, err := readLearningMetadataForStep(r.Context(), workspacePath, "_global")
 	if err == nil && globalMetadata != nil {
-		// Merge global lock status from step config (stored under "_global" key)
-		if agentConfigs, found := stepConfigMap["_global"]; found && agentConfigs != nil {
-			if agentConfigs.LockLearnings != nil {
-				globalMetadata["lock_learnings"] = *agentConfigs.LockLearnings
-			}
-		}
 		learningsMap["_global"] = globalMetadata
 	}
 
@@ -2579,6 +2570,10 @@ func (api *StreamingAPI) handleUpdateStepConfig(w http.ResponseWriter, r *http.R
 		http.Error(w, "step_id is required", http.StatusBadRequest)
 		return
 	}
+	if hasRetiredLearningLockField(req.AgentConfigs) {
+		http.Error(w, "lock_learnings and lock_learnings_reason are retired; use learnings_access=\"read\" to allow reads without writes", http.StatusBadRequest)
+		return
+	}
 
 	// Read step configs
 	configs, err := readStepConfigFromWorkspace(r.Context(), req.WorkspacePath)
@@ -2659,22 +2654,6 @@ func (api *StreamingAPI) handleUpdateStepConfig(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// If manually unlocking (lock_learnings = false), also clear auto-lock fields from metadata
-	if agentConfigs != nil && agentConfigs.LockLearnings != nil && !*agentConfigs.LockLearnings {
-		metadataPath := req.WorkspacePath + "/learnings/" + req.StepID + "/.learning_metadata.json"
-		if content, exists, err := readFileFromWorkspace(r.Context(), metadataPath); err == nil && exists {
-			var metadata map[string]interface{}
-			if err := json.Unmarshal([]byte(content), &metadata); err == nil {
-				metadata["auto_locked_at"] = ""
-				metadata["auto_lock_reason"] = ""
-				metadata["auto_lock_iteration"] = 0
-				if metadataJSON, err := json.MarshalIndent(metadata, "", "  "); err == nil {
-					_ = writeFileToWorkspace(r.Context(), metadataPath, string(metadataJSON))
-				}
-			}
-		}
-	}
-
 	// Return updated config
 	responseConfig := map[string]interface{}{}
 	if agentConfigs != nil {
@@ -2751,6 +2730,13 @@ func (api *StreamingAPI) handleBatchUpdateSteps(w http.ResponseWriter, r *http.R
 			errors = append(errors, map[string]interface{}{
 				"step_id": "",
 				"error":   "step_id is required",
+			})
+			continue
+		}
+		if hasRetiredLearningLockField(update.ConfigUpdates) {
+			errors = append(errors, map[string]interface{}{
+				"step_id": update.StepID,
+				"error":   "lock_learnings and lock_learnings_reason are retired; use learnings_access=\"read\" to allow reads without writes",
 			})
 			continue
 		}
@@ -2860,6 +2846,15 @@ func (api *StreamingAPI) handleBatchUpdateSteps(w http.ResponseWriter, r *http.R
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+func hasRetiredLearningLockField(config map[string]interface{}) bool {
+	if config == nil {
+		return false
+	}
+	_, hasLock := config["lock_learnings"]
+	_, hasReason := config["lock_learnings_reason"]
+	return hasLock || hasReason
 }
 
 // handleDeleteStep handles deleting a step from plan and config

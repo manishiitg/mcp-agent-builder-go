@@ -23,8 +23,7 @@ export interface AgentConfigs {
   validation_max_turns?: number;
   learning_max_turns?: number;
   orchestration_max_iterations?: number;
-  lock_learnings?: boolean;
-  lock_code?: boolean;                        // Freeze main.py against LLM rewrites; independent of lock_learnings
+  lock_code?: boolean;                        // Freeze main.py against LLM rewrites
   // DEPRECATED: backend removed these fields (replaced by learnings_access).
   // Kept on the interface only so legacy node-display code compiles; the backend
   // never reads them. New frontend code should consult learnings_access directly.

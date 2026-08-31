@@ -85,6 +85,7 @@ import type {
   PulseImpactResponse,
   PulseContextResponse,
   PulseEvalResultsResponse,
+  OrgDashboardNotification,
 } from './api-types'
 import type { PlanStep, AgentConfigs } from '../utils/stepConfigMatching'
 
@@ -2093,6 +2094,25 @@ export const agentApi = {
 
   getBuilderDoc: async (workspacePath: string, doc: 'soul' | 'card-health' | 'card-progress' | 'card-cost'): Promise<{ success: boolean; doc: string; path: string; exists: boolean; content: string; error?: string }> => {
     const response = await api.get('/api/workflow/builder-doc', { params: { workspace_path: workspacePath, doc } })
+    return response.data
+  },
+
+  getOrgDashboardNotifications: async (workspacePaths: string[], recentLimit = 10): Promise<{
+    success: boolean
+    workflows: Array<{
+      workspace_path: string
+      run_summary?: OrgDashboardNotification
+      pulse_summary?: OrgDashboardNotification
+      recent?: OrgDashboardNotification[]
+      error?: string
+    }>
+  }> => {
+    const response = await api.get('/api/org-dashboard/notifications', {
+      params: {
+        workspace_paths: workspacePaths.join(','),
+        recent_limit: recentLimit,
+      },
+    })
     return response.data
   },
   getPlanChangelog: async (workspacePath: string): Promise<import('./api-types').PlanChangelogResponse> => {

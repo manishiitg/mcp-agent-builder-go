@@ -66,7 +66,7 @@ func TestWorkflowArtifactPurityChecksOnlyChangedMutationFields(t *testing.T) {
 }
 
 func TestPlanMutationExecutorsEnforceWorkflowArtifactPurity(t *testing.T) {
-	add := createAddMessageSequenceStepExecutor("Workflow/demo", nil, nil, nil, nil, nil)
+	add := createAddMessageSequenceStepExecutor("Workflow/demo", nil, nil, nil, nil)
 	_, err := add(context.Background(), map[string]interface{}{
 		"reason":      "add a review step",
 		"id":          "review",
@@ -77,7 +77,7 @@ func TestPlanMutationExecutorsEnforceWorkflowArtifactPurity(t *testing.T) {
 		t.Fatalf("add error = %v, want artifact-purity rejection", err)
 	}
 
-	update := createUpdateMessageSequenceStepExecutor("Workflow/demo", nil, nil, nil, nil)
+	update := createUpdateMessageSequenceStepExecutor("Workflow/demo", nil, nil, nil)
 	_, err = update(context.Background(), map[string]interface{}{
 		"reason":           "refresh the step",
 		"existing_step_id": "review",

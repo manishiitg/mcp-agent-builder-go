@@ -50,8 +50,8 @@ func planDriftCandidateWorkspace(t *testing.T, workspacePath, planJSON, stepConf
 const twoStepPlan = `{"steps":[{"id":"step-a","type":"regular"},{"id":"step-b","type":"regular"}]}`
 
 const reviewedStepConfig = `{"steps":[
-  {"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
-  {"id":"step-b","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}}
+  {"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":3,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
+  {"id":"step-b","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":3,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}}
 ]}`
 
 func TestCollectPlanDriftCandidatesNilWhenNoPlan(t *testing.T) {
@@ -74,8 +74,8 @@ func TestCollectPlanDriftCandidatesNilWhenNoPlan(t *testing.T) {
 // per-step record can never carry this signal again.
 func TestCollectPlanDriftCandidatesSurfacesWorkflowLevelPendingAfterDeletion(t *testing.T) {
 	stepConfigWithFlaggedWorkflowLevel := `{"steps":[
-  {"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
-  {"id":"step-b","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
+  {"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":3,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
+  {"id":"step-b","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":3,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
   {"id":"__workflow_drift_review__","agent_configs":{"drift_review":{"needs_review":true}}}
 ]}`
 	planDriftCandidateWorkspace(t, "Workflow/drift-candidates", twoStepPlan, stepConfigWithFlaggedWorkflowLevel)
@@ -101,8 +101,8 @@ func TestCollectPlanDriftCandidatesSurfacesWorkflowLevelPendingAfterDeletion(t *
 // a real step, absence here means "nothing to review," not "due."
 func TestCollectPlanDriftCandidatesOmitsWorkflowLevelWhenReviewedClean(t *testing.T) {
 	stepConfigWithCleanWorkflowLevel := `{"steps":[
-  {"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
-  {"id":"step-b","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
+  {"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":3,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
+  {"id":"step-b","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":3,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
   {"id":"__workflow_drift_review__","agent_configs":{"drift_review":{"needs_review":false,"reviewed_at":"2026-08-02T00:00:00Z","checks":[{"check_id":"deleted_step_dependent_artifact_audit","status":"pass","evidence":"no dangling references found"}]}}}
 ]}`
 	planDriftCandidateWorkspace(t, "Workflow/drift-candidates", twoStepPlan, stepConfigWithCleanWorkflowLevel)
@@ -218,7 +218,7 @@ func TestCollectPlanDriftCandidatesErrorsOnMalformedStepConfig(t *testing.T) {
 // never been reviewed, exactly like one with a row but a null drift_review.
 // A missing config row must not be invisible to the scan.
 func TestCollectPlanDriftCandidatesIncludesStepsWithNoConfigRowAtAll(t *testing.T) {
-	stepConfig := `{"steps":[{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"already reviewed"}]}}}]}`
+	stepConfig := `{"steps":[{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","contract_version":3,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"already reviewed"}]}}}]}`
 	planDriftCandidateWorkspace(t, "Workflow/drift-candidates", twoStepPlan, stepConfig)
 	got, err := CollectPlanDriftCandidates(context.Background(), "Workflow/drift-candidates")
 	if err != nil {
@@ -247,7 +247,7 @@ func TestCollectPlanDriftCandidatesAllStepsPendingWhenNoStepConfigFileAtAll(t *t
 
 func TestCollectPlanDriftCandidatesListsUnreviewedStepsOnly(t *testing.T) {
 	stepConfig := `{"steps":[
-  {"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"already reviewed, must not reappear"}]}}},
+  {"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","contract_version":3,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"already reviewed, must not reappear"}]}}},
   {"id":"step-b"}
 ]}`
 	planDriftCandidateWorkspace(t, "Workflow/drift-candidates", twoStepPlan, stepConfig)
@@ -269,7 +269,7 @@ func TestCollectPlanDriftCandidatesListsUnreviewedStepsOnly(t *testing.T) {
 // only the flag drives due-ness.
 func TestCollectPlanDriftCandidatesIncludesFlaggedSteps(t *testing.T) {
 	stepConfig := `{"steps":[
-  {"id":"step-a","agent_configs":{"drift_review":{"needs_review":false,"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"clean, must not reappear"}]}}},
+  {"id":"step-a","agent_configs":{"drift_review":{"needs_review":false,"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","contract_version":3,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"clean, must not reappear"}]}}},
   {"id":"step-b","agent_configs":{"drift_review":{"needs_review":true,"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"stale after a later edit"}]}}}
 ]}`
 	planDriftCandidateWorkspace(t, "Workflow/drift-candidates", twoStepPlan, stepConfig)

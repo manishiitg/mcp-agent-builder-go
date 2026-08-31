@@ -159,6 +159,18 @@ func CheckReportQueryCompatibility(ctx context.Context, workspacePath string, re
 			failures = append(failures, fmt.Sprintf("%q -> %v", preview, err))
 			continue
 		}
+		// QueryContext returns an open result set even though this check only
+		// needs SQLite to prepare/execute the statement. Leaving it open keeps
+		// the read connection alive and can make the deferred db.Close wait
+		// until the caller's context expires, which previously made the managed
+		// plan-drift review time out on otherwise-valid reports.
+		if err := rows.Close(); err != nil {
+			preview := q
+			if len(preview) > 120 {
+				preview = preview[:120] + "..."
+			}
+			failures = append(failures, fmt.Sprintf("%q -> close result set: %v", preview, err))
+		}
 		// A successful *sql.Rows holds its connection checked out of the
 		// pool until Close() is called -- Rows was previously discarded
 		// (assigned to `_`) here, never closed. With openPlanDriftQueryOnlyDB's
@@ -173,7 +185,6 @@ func CheckReportQueryCompatibility(ctx context.Context, workspacePath string, re
 		// --max-time cancelled the request out from under it, every single
 		// time, regardless of how long that timeout was (proven at 10s,
 		// 45s, and 90s in isolation -- it never once completed on its own).
-		rows.Close()
 	}
 
 	if len(failures) == 0 {

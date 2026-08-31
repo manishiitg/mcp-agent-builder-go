@@ -137,7 +137,7 @@ BOUNDARIES
 
 1. Return a concrete recommended instruction and optional focus for the Pulse Fixer; there is no separate learning-maintenance tool.
 2. The reviewer is read-only everywhere. Its learning-content mutation scope recommendation is `learnings/_global/`; it may also recommend `update_step_config` changes for bad `learning_objective` / `learnings_access` settings and routed KB/DB follow-up through the matching Stores lens. Never recommend editing per-step `learnings/{step-id}/main.py` as content cleanup. Never edit or delete `learnings/_global/_freshness.json` — it is a code-owned freshness ledger written by the runtime; read it, do not touch it.
-3. If you discover stale per-step scripts, bad `learning_objective`, wrong `learnings_access`, or lock issues, record/recommend them for the parent Pulse Fixer or an explicit manual fix. Eval rubric, coverage, or scoring issues belong to `/improve-evaluation`, not here.
+3. If you discover stale per-step scripts, bad `learning_objective`, wrong `learnings_access`, or code-lock issues, record/recommend them for the parent Pulse Fixer or an explicit manual fix. Eval rubric, coverage, or scoring issues belong to `/improve-evaluation`, not here.
 4. Keep WHAT-the-workflow-discovered out of the entire skill package. User-supplied runtime context belongs in `knowledgebase/context/`; workflow-discovered subject-matter facts belong in `knowledgebase/notes/` or `db/db.sqlite`, not in either `SKILL.md` or its references.
 5. Enforce a lean index shape. `learnings/_global/SKILL.md` is an **index**: frontmatter, a short scope note, and links to focused files under `learnings/_global/references/`. Detailed selectors, API quirks, auth flows, file-format notes, retry patterns, and step-specific HOW guidance belong in reference files, not in the root `SKILL.md`. Keep it as lean as the content allows; there is no line quota to fill, and a mostly-links index of any length is healthier than a short one stuffed with detail.
 
@@ -146,7 +146,7 @@ BOUNDARIES
 READ FIRST
 
 1. Read `soul/soul.md` if present to understand the workflow objective and success criteria.
-2. Read `planning/plan.json` and `planning/step_config.json` if present. Use them to understand current steps, `learnings_access`, `learning_objective`, `lock_learnings`, and `lock_code` decisions.
+2. Read `planning/plan.json` and `planning/step_config.json` if present. Use them to understand current steps, `learnings_access`, `learning_objective`, and `lock_code` decisions.
 3. Read typed Pulse findings and review history. Carry unresolved learning/code findings, prior cleanup attempts, recent Pulse fixes or Goal Advisor actions, and recent plan changes into the instruction.
 4. Inventory the complete `learnings/_global/` tree. Read `SKILL.md` and every
    content-bearing Markdown reference for the purity manifest. For unusually

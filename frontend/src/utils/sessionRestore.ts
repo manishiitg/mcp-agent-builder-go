@@ -13,6 +13,7 @@ type RuntimeSessionState = {
   hasRunningBackgroundAgents?: boolean
   isSyntheticTurn?: boolean
   canSteer?: boolean
+  restoredEvents?: PollingEvent[]
 }
 
 function isForegroundStreaming(state: RuntimeSessionState): boolean {
@@ -381,6 +382,25 @@ function transcriptCarrierKey(event: PollingEvent): string | undefined {
   return content ? `${type}:${content}` : undefined
 }
 
+function filterDuplicateTranscriptEvents(
+  existingEvents: PollingEvent[],
+  incomingEvents: PollingEvent[],
+): PollingEvent[] {
+  const knownIDs = new Set(existingEvents.map(event => event.id).filter(Boolean))
+  const knownCarriers = new Set(existingEvents
+    .map(transcriptCarrierKey)
+    .filter((key): key is string => !!key))
+
+  return incomingEvents.filter((event) => {
+    if (event.id && knownIDs.has(event.id)) return false
+    const carrier = transcriptCarrierKey(event)
+    if (carrier && knownCarriers.has(carrier)) return false
+    if (event.id) knownIDs.add(event.id)
+    if (carrier) knownCarriers.add(carrier)
+    return true
+  })
+}
+
 function mergePersistedUIEvents(
   conversationEvents: PollingEvent[],
   persistedUIEvents: PollingEvent[],
@@ -517,6 +537,7 @@ async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?
     hasRunningBackgroundAgents: false,
     isSyntheticTurn: false,
     canSteer: false,
+    restoredEvents: events,
   }
 }
 
@@ -580,7 +601,10 @@ export async function hydrateTabEvents(
     // sessions: a browser reload may restore history from before the most
     // recent completed turn while the server still has those raw events.
     if (response.events.length > 0) {
-      chatStore.addTabEvents(sessionId, response.events)
+      const liveTail = filterDuplicateTranscriptEvents(restored.restoredEvents || [], response.events)
+      if (liveTail.length > 0) {
+        chatStore.addTabEvents(sessionId, liveTail)
+      }
       if (response.last_processed_index !== undefined) {
         chatStore.setTabLastEventIndex(sessionId, response.last_processed_index)
       }

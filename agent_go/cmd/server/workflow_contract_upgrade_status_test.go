@@ -39,9 +39,8 @@ func TestContractUpgradeStatusShowsWhatIsOwedAndTheActualInstruction(t *testing.
 
 	for _, want := range []string{
 		"Current: `1.0.20`",
-		"Pending migrations (12)",
+		"Pending migrations (11)",
 		"upgrade-current-artifact-contract",
-		"upgrade-learnings-lock-audit",
 		"upgrade-direct-html-reports",
 		"upgrade-schedule-execution-model",
 		"upgrade-dedicated-pulse-schedule",

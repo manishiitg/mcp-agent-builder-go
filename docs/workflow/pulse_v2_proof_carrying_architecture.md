@@ -3020,15 +3020,17 @@ exactness, references, and consumer behavior are checked. Behavioral changes
 that require a producing run remain `changed_unverified` with that run as the
 next boundary.
 
-### Lock policy
+### Learning-write policy
 
-`lock_learnings` and `lock_knowledgebase` are recommendations only after the
-complete relevant manifest is clean and current evidence confirms stability.
-Learning locks are decided per step from its effective objective, description
-hash, recent successful runs, and its own `.learning_metadata.json`; the shared
-`learnings/_global/` package alone cannot prove that a particular contributor
-should be locked. Drift clears the recommendation. `lock_code` remains a
-separate, stricter executable-stability decision.
+`learnings_access="read"` is recommended for mature or redundant contributors
+only after the complete relevant manifest is clean and current evidence confirms
+that further write turns add no reusable HOW. Decide per step from its effective
+objective, description hash, recent successful runs, and its own
+`.learning_metadata.json`; the shared `learnings/_global/` package alone cannot
+settle a particular contributor. Drift may justify restoring read-write access.
+`lock_code` remains a separate, stricter executable-stability decision. KB write ownership is
+step-based: reviewers make mature/no-op contributors read-only rather than
+freezing all writers across the workflow.
 
 ### Implementation status and validation
 

@@ -66,7 +66,6 @@ Both frontend and backend **read and write** only the object format with `steps`
         "llm_validation_mode": "skip",
         "learnings_access": "read-write",
         "learning_objective": "Capture target-system selectors, auth flow quirks, and session-expiry signals",
-        "lock_learnings": false,
         "enable_context_offloading": true,
         "enable_prerequisite_detection": true,
         "prerequisite_rules": [
@@ -191,7 +190,6 @@ content, err := json.MarshalIndent(file, "", "  ")
 |-------|------|---------|---------|
 | `learnings_access` | `"read"\|"read-write"\|"none"` | `"read"` (auto-migrated from `learning_objective` if unset) | Primary gate for the global learnings store. `"read"` — step sees `learnings/_global/SKILL.md` in its prompt; `"read-write"` — step also contributes (requires non-empty `learning_objective`); `"none"` — step neither reads nor contributes. Mirrors `knowledgebase_access`. |
 | `learning_objective` | `string` | `""` | Extraction instruction for the post-step learning agent — describes what patterns/selectors/recipes should land in `SKILL.md`. Required when `learnings_access="read-write"`; the validator rejects the combination of write access with an empty objective. |
-| `lock_learnings` | `boolean` | `false` (nil = unlocked) | Freeze SKILL.md writes for this step. Existing `SKILL.md` still flows into execution prompts, but no new writes. Runtime execution never auto-sets or auto-clears this field; it is a builder/user decision and should be paired with `review_notes`. |
 
 ### Execution Mode Configuration
 
