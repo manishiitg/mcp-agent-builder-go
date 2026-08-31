@@ -14,6 +14,30 @@ describe('PulseWorkspace information hierarchy', () => {
     const html = renderToStaticMarkup(
       <PulseWorkspace
         workspacePath="/workspace/example"
+        moduleStates={[
+          {
+            workspace_path: '/workspace/example',
+            module: 'technical_review',
+            last_pulse_run_id: 'pulse-1',
+            last_gate_decision: 'due',
+            last_reason: 'Inspect the current execution and plan contract.',
+          },
+          {
+            workspace_path: '/workspace/example',
+            module: 'strategic_review',
+            last_pulse_run_id: 'pulse-1',
+            last_gate_decision: 'skipped',
+            last_reason: 'The 21-day outcome window is not mature.',
+            next_check_at: '2026-09-09',
+          },
+          {
+            workspace_path: '/workspace/example',
+            module: 'plan_drift_review',
+            last_pulse_run_id: 'pulse-1',
+            last_gate_decision: 'due',
+            last_reason: 'The backend reports 27 canonical plan-drift candidates.',
+          },
+        ]}
         finalCommandStates={[]}
         reviewFocuses={[
           {
@@ -74,6 +98,14 @@ describe('PulseWorkspace information hierarchy', () => {
     expect(html).toContain('Next focus candidates:')
     expect(html).not.toContain('Focused review')
     expect(html).toContain('Feedback loops bias')
+    expect(html).toContain('Gate decision:')
+    expect(html).toContain('Due this run')
+    expect(html).toContain('Selected this run:')
+    expect(html).toContain('Inspect the current execution and plan contract.')
+    expect(html).toContain('The 21-day outcome window is not mature.')
+    expect(html).toContain('Next check Sep 9, 2026')
+    expect(html).toContain('None — the review module was skipped.')
+    expect(html).toContain('The backend reports 27 canonical plan-drift candidates.')
     expect(html).not.toContain('Model cost fitness')
     expect(html).not.toContain('Experiment impact')
     expect(html).not.toContain('PUL-3880D006')

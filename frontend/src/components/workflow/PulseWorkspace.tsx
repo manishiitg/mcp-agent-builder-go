@@ -12,6 +12,7 @@ import type {
   PulseFindingLifecycle,
   PulseImpactLedger,
   PulseContextRecord,
+  PulseModuleState,
   PulseReviewRecord,
   PulseReviewFocus,
 } from '../../services/api-types'
@@ -40,6 +41,17 @@ function formatDate(value?: string): string {
         hour: '2-digit',
         minute: '2-digit',
       })
+}
+
+function formatCheckBoundary(value?: string): string {
+  if (!value) return ''
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const date = new Date(`${value}T00:00:00`)
+    return Number.isNaN(date.getTime())
+      ? value
+      : date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  }
+  return formatDate(value)
 }
 
 function readable(value?: string): string {
@@ -101,12 +113,14 @@ const FOCUS_HINTS: Record<PulseFocus, string> = {
 
 export function PulseWorkspace({
   workspacePath,
+  moduleStates,
   finalCommandStates,
   reviewFocuses,
   reviewFocusSelections,
   statusError,
 }: {
   workspacePath: string
+  moduleStates: PulseModuleState[]
   finalCommandStates: PulseFinalCommandState[]
   reviewFocuses: PulseReviewFocus[]
   reviewFocusSelections: PulseReviewFocus[]
@@ -353,6 +367,13 @@ export function PulseWorkspace({
               ? [...new Set(deferredFocuses)].slice(0, 3)
               : upcomingFocuses.map((item) => item.focus_key)
             const moduleID = area.id
+            const moduleState = moduleStates.find((state) => (
+              normalizePulseWorkspaceModule(state.module) === area.id
+            ))
+            const gateDecision = (moduleState?.last_gate_decision || '').trim().toLowerCase()
+            const currentRunFocuses = moduleState?.last_pulse_run_id
+              ? reviewedFocuses.filter((item) => item.last_pulse_run_id === moduleState.last_pulse_run_id)
+              : []
             return (
               <button
                 key={area.id}
@@ -374,11 +395,21 @@ export function PulseWorkspace({
                       <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-muted-foreground">{area.description}</p>
                     </div>
                   </div>
-                  {actionable > 0 && (
-                    <span className="rounded-full border border-red-500/25 bg-red-500/5 px-2 py-0.5 text-[9px] font-semibold text-red-700 dark:text-red-300">
-                      {actionable} {strategic ? 'recommendations' : 'to fix'}
-                    </span>
-                  )}
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    {gateDecision && (
+                      <span className={`rounded-full border px-2 py-0.5 text-[9px] font-semibold ${gateDecision === 'due'
+                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                        : 'border-border bg-muted text-muted-foreground'
+                      }`}>
+                        {gateDecision === 'due' ? 'Due this run' : readable(gateDecision)}
+                      </span>
+                    )}
+                    {actionable > 0 && (
+                      <span className="rounded-full border border-red-500/25 bg-red-500/5 px-2 py-0.5 text-[9px] font-semibold text-red-700 dark:text-red-300">
+                        {actionable} {strategic ? 'recommendations' : 'to fix'}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
                   {strategic ? (
@@ -397,6 +428,35 @@ export function PulseWorkspace({
                     </>
                   )}
                 </div>
+                {moduleState && (gateDecision || moduleState.last_reason) && (
+                  <div className="mt-3 rounded-md border bg-muted/25 px-2.5 py-2 text-[10px] leading-4 text-muted-foreground">
+                    <div>
+                      <span className="font-medium text-foreground">Gate decision:</span>{' '}
+                      {gateDecision ? readable(gateDecision) : 'Recorded'}
+                      {moduleState.next_check_at && (
+                        <span> · Next check {formatCheckBoundary(moduleState.next_check_at)}</span>
+                      )}
+                      {!moduleState.next_check_at && moduleState.next_check_after_run_id && (
+                        <span> · Recheck after the named workflow run</span>
+                      )}
+                    </div>
+                    {moduleState.last_reason && (
+                      <p className="mt-0.5 line-clamp-3">{moduleState.last_reason}</p>
+                    )}
+                    {area.id !== 'plan_drift_review' && (
+                      <div className="mt-1">
+                        <span className="font-medium text-foreground">
+                          {gateDecision === 'skipped' ? 'Subcategories:' : 'Selected this run:'}
+                        </span>{' '}
+                        {gateDecision === 'skipped'
+                          ? 'None — the review module was skipped.'
+                          : currentRunFocuses.length > 0
+                            ? currentRunFocuses.map((item) => readable(item.focus_key)).join(', ')
+                            : 'Focus selection pending.'}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="mt-3 border-t pt-2 text-[10px] leading-4 text-muted-foreground">
                   <span className="font-medium text-foreground">Latest:</span>{' '}
                   <span className="line-clamp-2">
