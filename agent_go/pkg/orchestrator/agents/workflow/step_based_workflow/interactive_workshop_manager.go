@@ -2288,7 +2288,7 @@ The native `+"`api-bridge`"+` exposes `+"`execute_shell_command`"+`, `+"`diff_pa
 {{if eq .IsCodeExecutionMode "true"}}**Code execution mode:** Bridge-native tools: `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`agent_browser`"+`, `+"`get_api_spec`"+`, and intrinsic `+"`read_skill`"+` when skills are attached. All other workflow tools are available via the workflow API path — use `+"`get_api_spec(tool_name=\"...\")`"+` for their schemas. Do **not** hardcode raw HTTP requests.
 {{end}}
 
-This is the one-line-per-category map. For full signatures, parameters, when-to-use rules, and gotchas (especially Schedules and Secrets, which have multi-step flows), call **`+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}])`"+`**.
+This is the one-line-per-category map. For full signatures, parameters, when-to-use rules, and gotchas, call **`+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}])`"+`** — or, for the multi-step Schedules and Secrets flows specifically, `+"`references/schedules.md`"+` and `+"`references/secret-management.md`"+`.
 
 {{if or (eq .WorkshopMode "workshop") (eq .WorkshopMode "run")}}
 - **Step execution & inspection**: `+"`execute_step`"+`, `+"`query_step`"+`, `+"`send_step_message`"+`, `+"`debug_step`"+`, `+"`list_executions`"+`, `+"`stop_step`"+`, `+"`stop_all_executions`"+`, `+"`run_in_background`"+`, `+"`run_full_workflow`"+`. {{if eq .WorkshopMode "workshop"}}Workshop also exposes `+"`execute_step(..., fast_path_only=true)`"+` for scripted main.py fast-path testing.{{end}}
@@ -7441,7 +7441,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		// PLAT-262: skip create_schedule registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"create_schedule",
-		"Create a new cron schedule for this workflow. Workflow schedules use mode='workshop' with workshop_mode='run'. Messages are optional; when omitted, the scheduler asks Run mode to execute the full workflow. Continuous improvement, including Goal Advisor, is selected dynamically by Pulse after normal scheduled runs; do not create a separate optimizer schedule. For the full contract (collision/dependency policy design, when direct messages vs. route_selections is correct, resume_previous tradeoffs): read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}]).",
+		"Create a new cron schedule for this workflow. Workflow schedules use mode='workshop' with workshop_mode='run'. Messages are optional; when omitted, the scheduler asks Run mode to execute the full workflow. Continuous improvement, including Goal Advisor, is selected dynamically by Pulse after normal scheduled runs; do not create a separate optimizer schedule. For the full contract (collision/dependency policy design, when direct messages vs. route_selections is correct, resume_previous tradeoffs): read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/schedules.md\"}]).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -7612,7 +7612,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		// PLAT-262: skip create_calendar_schedule registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"create_calendar_schedule",
-		"Create a dated calendar schedule for this workflow, such as a full-month Instagram content calendar. Use this when the user provides specific dates/times instead of a repeating cron pattern. Workflow calendar schedules always run through the workshop builder path; omit mode or use mode='workshop'. For the full contract: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}]).",
+		"Create a dated calendar schedule for this workflow, such as a full-month Instagram content calendar. Use this when the user provides specific dates/times instead of a repeating cron pattern. Workflow calendar schedules always run through the workshop builder path; omit mode or use mode='workshop'. For the full contract: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/schedules.md\"}]).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -7700,7 +7700,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		// PLAT-262: skip update_schedule registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"update_schedule",
-		"Update an existing schedule. Only provided fields are changed; omitted fields keep their current values. For collision/dependency policy design and when direct messages vs. route_selections is correct: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}]).",
+		"Update an existing schedule. Only provided fields are changed; omitted fields keep their current values. For collision/dependency policy design and when direct messages vs. route_selections is correct: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/schedules.md\"}]).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
