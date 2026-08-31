@@ -469,10 +469,35 @@ Live on the target host, first deployed 2026-08-24:
   three services now log to `/srv/dominion/logs/{agent,workspace,gateway}.log`,
   continuously across releases.
 
-Known follow-up, not yet done:
+## Outstanding items (checklist)
 
-- Cloudflare SSL/TLS mode is not yet switched to Full (strict) — the DNS
-  record is currently unproxied (DNS-only), which is why certificate
-  issuance worked without any Cloudflare-side change. Flipping to proxied +
-  Full (strict) is optional, not blocking, and is the account owner's call
-  since it changes what protects this hostname.
+Kept here as the single place to check what's still open on this
+deployment, instead of scattered across incident write-ups above. Update
+this list — don't leave a fixed item unchecked, and don't let a new gap go
+undocumented elsewhere only.
+
+- [ ] **Cloudflare SSL/TLS mode not yet Full (strict).** The DNS record is
+      currently unproxied (DNS-only), which is why certificate issuance
+      worked without any Cloudflare-side change. Optional, not blocking —
+      the account owner's call, since it changes what protects this
+      hostname.
+- [ ] **No automated release script.** Every release today is a manual,
+      human-run sequence (build 5 binaries + frontend locally, `rsync`, swap
+      the `current` symlink, restart 3 services) — see
+      [`../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md`](../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md)'s
+      "Not yet automated" section. A `deploy-dominion.sh` mirroring
+      `deploy-rootless.sh` would make every item on that checklist — plus
+      the release-relative `logs/` symlink from this doc — impossible to
+      silently skip on a future release.
+- [ ] **`deliver-briefing` step reported `delivered: False status: failed`**
+      on the `tectonicusadaytrading` workflow's 2026-08-31 scheduled run
+      (`runs/iteration-0/default/execution/deliver-briefing/delivery_receipt.json`).
+      Found while checking logs for an unrelated report, not yet
+      root-caused — needs investigation on its own; may or may not be
+      related to today's other fixes.
+- [ ] **Video Studio likely has the same logging gap** as "Logs are
+      required, not automatic" above (`createServerLogger()` ignoring
+      `--log-file` is shared code, not Dominion-specific) — unconfirmed.
+      Check `video-studio-agent`'s systemd unit for `StandardOutput=`/
+      `StandardError=` and whether its `logs/` is release-relative or
+      symlinked to something persistent.
