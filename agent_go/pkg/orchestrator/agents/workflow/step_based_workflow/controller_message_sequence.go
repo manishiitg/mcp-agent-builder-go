@@ -365,6 +365,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 		} else if desc := strings.TrimSpace(sequenceStep.GetDescription()); desc != "" {
 			session.LastRuntimeContext = "Step description (opening instruction):\n" + desc
 		}
+		// Show the validation schema on the opening turn — the same way regular
+		// and todo_task steps already surface it proactively — so a
+		// message_sequence step doesn't have to guess the output shape and only
+		// learn it reactively after a failed pre-validation attempt.
+		session.LastRuntimeContext = appendMessageSequenceValidationSchema(session.LastRuntimeContext, sequenceStep.ValidationSchema)
 		source = "configured_queue"
 	}
 
@@ -452,12 +457,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 	}
 	_ = hcpo.saveMessageSequenceSession(ctx, sessionRelPath, session)
 	finalSummary := hcpo.summarizeMessageSequenceSession(session)
-	// The aggregated summary carries each item's CONCERNS: line prefixed with its
-	// item ID. File them durably here — this is the message-sequence equivalent of
-	// the regular step's composition point.
-	hcpo.recordStepConcerns(ctx, sequenceStep.GetID(), map[string]string{
-		ConcernPhaseMessageSequence: finalSummary,
-	})
+	// Item summaries stay in the retained message-sequence session. Pulse reads
+	// that evidence directly; do not parse prose into observations here.
 	if err := hcpo.saveFinalExecutionSummary(sequenceStep.GetID(), stepPath, finalSummary); err != nil {
 		hcpo.recordRunPersistenceError(context.Background(), sequenceStep.GetID(), err)
 	}
@@ -517,19 +518,17 @@ func (hcpo *StepBasedWorkflowOrchestrator) startMessageSequenceItemNotification(
 	if hcpo == nil || step == nil {
 		return "", "", nil, false
 	}
-	// The runtime's own final validation gate does not get an auto-notification.
-	// On the happy path it is a deterministic file/DB check in Go (RunPreValidation
-	// — no model turn, nothing the agent did not already report), yet announcing it
-	// cost a full synthetic LLM turn and put a second near-identical "step finished"
-	// message in the conversation for one step. A real failure is not lost: it
-	// propagates out of executeMessageSequenceItem, fails the sequence, and is
-	// reported by the step's own completion notification with the validation errors
-	// in its summary — and emitPreValidationCompletedEvent still feeds the UI the
-	// gate result either way. Author-declared prevalidation items keep their
-	// notifications; only the appended gate is silent.
-	if item.Synthetic {
-		return "", "", nil, false
-	}
+	// The runtime's own final validation gate used to skip its auto-notification:
+	// on the happy path it is a deterministic file/DB check in Go (RunPreValidation
+	// — no model turn, nothing the agent did not already report), and announcing
+	// it cost a full synthetic LLM turn plus a second near-identical "step
+	// finished" message for one step. Re-enabled: the builder wants to hear about
+	// a pre-validation failure as soon as it happens (so it can check whether a
+	// schedule/setup issue or a genuine mistake is to blame) rather than only
+	// after it eventually surfaces via the step's own completion notification —
+	// worth the extra turn/message on the failure path. Author-declared
+	// prevalidation items always got notifications; this just stops treating the
+	// appended gate item differently from them.
 	// Fail loud, not silent: a nil notifier means this execution path forgot to
 	// wire SetWorkshopExecutionNotifier, so the main agent gets NO notification
 	// for this message_sequence item. That used to be an invisible no-op (a whole
@@ -1063,7 +1062,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) getMessageSequenceRuntime(ctx context
 	}
 
 	agentName := fmt.Sprintf("message-sequence-%s", step.GetID())
-	agent, err := hcpo.createExecutionOnlyAgent(agentCtx, "execution_only", stepPath, agentName, step.AgentConfigs, step.GetID(), "", false)
+	agent, err := hcpo.createExecutionOnlyAgent(agentCtx, "execution_only", stepPath, agentName, step.AgentConfigs, step, step.GetID(), "", false)
 	if err != nil {
 		return nil, agentCtx, err
 	}
@@ -1202,16 +1201,21 @@ func requestedMessageSequenceItemWriteAccess(item MessageSequenceItem) (MessageS
 // silently read-only when the step itself is configured to write.
 func (hcpo *StepBasedWorkflowOrchestrator) resolveMessageSequenceItemWriteAccess(stepConfig *AgentConfigs, item MessageSequenceItem) MessageSequenceWriteAccess {
 	requested, hasItemOverride := requestedMessageSequenceItemWriteAccess(item)
+	var resolved MessageSequenceWriteAccess
 	if hasItemOverride {
-		return hcpo.constrainMessageSequenceWriteAccess(stepConfig, requested)
+		resolved = hcpo.constrainMessageSequenceWriteAccess(stepConfig, requested)
+	} else {
+		kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
+		resolved = MessageSequenceWriteAccess{
+			DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
+			Knowledgebase: kbAccessAllowsWrite(kbAccess),
+			Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
+		}
 	}
-
-	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	return MessageSequenceWriteAccess{
-		DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
-		Knowledgebase: kbAccessAllowsWrite(kbAccess),
-		Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
+	if hcpo.isEvaluationMode {
+		resolved.Learnings = false
 	}
+	return resolved
 }
 
 // messageSequenceStepFullWriteAccess is the step's maximal granted write scope
@@ -1221,11 +1225,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveMessageSequenceItemWriteAccess
 func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceStepFullWriteAccess(step *MessageSequencePlanStep) MessageSequenceWriteAccess {
 	stepConfig := getAgentConfigs(step)
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	return MessageSequenceWriteAccess{
+	resolved := MessageSequenceWriteAccess{
 		DB:            resolveDBAccess(stepConfig) == DBAccessReadWrite,
 		Knowledgebase: kbAccessAllowsWrite(kbAccess),
 		Learnings:     resolveLearningsAccess(stepConfig) == LearningsAccessReadWrite,
 	}
+	if hcpo.isEvaluationMode {
+		resolved.Learnings = false
+	}
+	return resolved
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) constrainMessageSequenceWriteAccess(stepConfig *AgentConfigs, requested MessageSequenceWriteAccess) MessageSequenceWriteAccess {
@@ -1272,6 +1280,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupMessageSequenceFolderGuard(stepP
 	}
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
 	learningsAccess := resolveLearningsAccess(stepConfig)
+	if hcpo.isEvaluationMode {
+		learningsAccess = LearningsAccessNone
+	}
 	// message_sequence agents use query_workflow_db/mutate_workflow_db, so
 	// db/db.sqlite itself stays off the filesystem grant: configureWorkflowDBSession
 	// blocks it for managed agents, and Landlock cannot represent a broad parent
@@ -1303,7 +1314,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupMessageSequenceFolderGuard(stepP
 		writePaths = append(writePaths, filepath.Join(baseWorkspacePath, LearningsFolderName, GlobalLearningID))
 	}
 	readPaths = appendAdditionalWorkflowReadPaths(readPaths, baseWorkspacePath, stepConfig)
-	readPaths = hcpo.appendCDPHostDownloadsReadPath(readPaths)
+	readPaths, writePaths = hcpo.appendCDPHostDownloadsPaths(readPaths, writePaths)
 	return common.DeduplicateStrings(readPaths), common.DeduplicateStrings(writePaths)
 }
 
@@ -1321,6 +1332,35 @@ func firstValidationFileName(schema *ValidationSchema) string {
 		}
 	}
 	return ""
+}
+
+// formatMessageSequenceValidationSchema renders a step's validation_schema for the
+// opening turn, matching the section regular and todo_task steps already render into
+// their system prompts (see execution_only_agent.go / todo_task_orchestrator_agent.go).
+// Returns "" when there is no schema or it fails to marshal.
+func formatMessageSequenceValidationSchema(schema *ValidationSchema) string {
+	if schema == nil {
+		return ""
+	}
+	schemaJSON, err := json.MarshalIndent(schema, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return "## Required Output (Pre-Validation Schema)\nYour output MUST match this structure (it may check files and/or the db):\n```json\n" + string(schemaJSON) + "\n```"
+}
+
+// appendMessageSequenceValidationSchema joins a rendered validation_schema section onto
+// an existing opening-turn runtime context (description and/or reentry instruction),
+// separated by a blank line. Returns runtimeContext unchanged when there is no schema.
+func appendMessageSequenceValidationSchema(runtimeContext string, schema *ValidationSchema) string {
+	schemaSection := formatMessageSequenceValidationSchema(schema)
+	if schemaSection == "" {
+		return runtimeContext
+	}
+	if runtimeContext == "" {
+		return schemaSection
+	}
+	return runtimeContext + "\n\n" + schemaSection
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) buildMessageSequenceTemplateVars(step *MessageSequencePlanStep, item MessageSequenceItem, stepIndex int, stepPath string, message string, readPaths []string, writePaths []string, writeAccess MessageSequenceWriteAccess) map[string]string {
@@ -1563,35 +1603,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveMessageSequenceSession(ctx contex
 
 func (hcpo *StepBasedWorkflowOrchestrator) summarizeMessageSequenceSession(session *messageSequenceSession) string {
 	completed := 0
-	var concerns []string
 	for _, entry := range session.Entries {
 		if entry.Status == "completed" {
 			completed++
 		}
-		for _, line := range strings.Split(entry.Summary, "\n") {
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(strings.ToUpper(line), "CONCERNS:") {
-				continue
-			}
-			concern := strings.TrimSpace(line[len("CONCERNS:"):])
-			if concern == "" {
-				continue
-			}
-			itemID := strings.TrimSpace(entry.ItemID)
-			if itemID == "" {
-				itemID = strings.TrimSpace(entry.EntryID)
-			}
-			if itemID != "" {
-				concern = fmt.Sprintf("%s: %s", itemID, concern)
-			}
-			concerns = append(concerns, concern)
-		}
 	}
-	summary := fmt.Sprintf("Message sequence %s completed: %d item(s) completed", session.StepID, completed)
-	if len(concerns) > 0 {
-		summary += "\nCONCERNS: " + strings.Join(concerns, "; ")
-	}
-	return summary
+	return fmt.Sprintf("Message sequence %s completed: %d item(s) completed", session.StepID, completed)
 }
 
 // messageSequenceHaltedBeforeItem reports why a message_sequence queue must not

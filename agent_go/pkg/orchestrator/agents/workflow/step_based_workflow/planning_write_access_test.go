@@ -2,6 +2,7 @@ package step_based_workflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -133,14 +134,17 @@ func TestWritePlanChangelogEntryUsesManagedFileAccess(t *testing.T) {
 
 	client := workspacepkg.NewClient("http://unused")
 	ctx := context.WithValue(context.Background(), common.ChatSessionIDKey, sessionID)
+	ctx = withPlanChangeOrigin(ctx, "workflow-builder")
 	wrote := false
+	var written string
 	err := writePlanChangelogEntry(
 		ctx,
 		workspacePath,
 		PlanChangelogEntry{Tool: "update_step_config", Reason: "test managed changelog write"},
 		func(context.Context, string) (string, error) { return "", errors.New("not found") },
-		func(writeCtx context.Context, path, _ string) error {
+		func(writeCtx context.Context, path, content string) error {
 			wrote = true
+			written = content
 			if path != changelogPath {
 				t.Fatalf("unexpected changelog path: %s", path)
 			}
@@ -154,7 +158,87 @@ func TestWritePlanChangelogEntryUsesManagedFileAccess(t *testing.T) {
 	if !wrote {
 		t.Fatal("typed changelog writer was not called")
 	}
+	var changelog PlanChangelog
+	if err := json.Unmarshal([]byte(written), &changelog); err != nil {
+		t.Fatalf("decode written changelog: %v", err)
+	}
+	if len(changelog.Entries) != 1 || changelog.Entries[0].ChangeID == "" {
+		t.Fatalf("missing stable change identity: %+v", changelog.Entries)
+	}
+	if changelog.Entries[0].Origin.Type != "user_chat" || changelog.Entries[0].Origin.SessionID != sessionID {
+		t.Fatalf("origin = %+v", changelog.Entries[0].Origin)
+	}
 	if err := client.ValidatePathWithContext(ctx, changelogPath, true); err == nil || !strings.Contains(err.Error(), "blocked for writes") {
 		t.Fatalf("changelog capability leaked into caller context: %v", err)
+	}
+}
+
+func TestParsePlanDependencySurfaceReviewsRequiresEverySurface(t *testing.T) {
+	complete := map[string]interface{}{}
+	for _, surface := range requiredPlanDependencySurfaces {
+		complete[surface] = map[string]interface{}{
+			"disposition": "already_compatible",
+			"evidence":    []interface{}{"checked the canonical consumer"},
+		}
+	}
+	got, err := parsePlanDependencySurfaceReviews(complete)
+	if err != nil || len(got) != len(requiredPlanDependencySurfaces) {
+		t.Fatalf("complete surface review rejected: reviews=%+v err=%v", got, err)
+	}
+	delete(complete, "reporting")
+	if _, err := parsePlanDependencySurfaceReviews(complete); err == nil || !strings.Contains(err.Error(), "reporting is required") {
+		t.Fatalf("missing reporting surface was accepted: %v", err)
+	}
+}
+
+func TestParsePlanDependencySurfaceReviewsRequiresIssueForUnresolvedSurface(t *testing.T) {
+	complete := map[string]interface{}{}
+	for _, surface := range requiredPlanDependencySurfaces {
+		complete[surface] = map[string]interface{}{
+			"disposition": "already_compatible",
+			"evidence":    []interface{}{"checked the canonical consumer"},
+		}
+	}
+	complete["reporting"] = map[string]interface{}{
+		"disposition": "broken",
+		"evidence":    []interface{}{"dashboard still reads the retired field"},
+	}
+	if _, err := parsePlanDependencySurfaceReviews(complete); err == nil || !strings.Contains(err.Error(), "durable Pulse issue") {
+		t.Fatalf("broken surface without lifecycle issue was accepted: %v", err)
+	}
+	complete["reporting"].(map[string]interface{})["issue_ids"] = []interface{}{"PUL-1234ABCD"}
+	got, err := parsePlanDependencySurfaceReviews(complete)
+	if err != nil || len(got["reporting"].IssueIDs) != 1 {
+		t.Fatalf("linked broken surface rejected: reviews=%+v err=%v", got, err)
+	}
+}
+
+func TestPulseChangeReferencesPreserveAttemptFindingAndHumanDecision(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	db, err := openRunConcernsDB(ctx, workspacePath, true)
+	if err != nil {
+		t.Fatalf("open concerns db: %v", err)
+	}
+	defer db.Close()
+	if err := ensurePulseFindingLifecycleSchema(ctx, db); err != nil {
+		t.Fatalf("ensure lifecycle schema: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_fix_attempts
+		(attempt_id,module,pulse_run_id,started_at) VALUES ('fix-1','technical_review','pulse-1','2026-08-28T00:00:00Z')`); err != nil {
+		t.Fatalf("insert attempt: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_fix_attempt_findings
+		(attempt_id,fingerprint,finding_id) VALUES ('fix-1','fp-1','PUL-1234ABCD')`); err != nil {
+		t.Fatalf("insert finding: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
+		(fingerprint,pulse_run_id,event_type,metadata_json,recorded_at)
+		VALUES ('fp-1','pulse-old','awaiting_user','{"human_input_id":"technical-decision-1"}','2026-08-27T00:00:00Z')`); err != nil {
+		t.Fatalf("insert decision event: %v", err)
+	}
+	issues, attemptID, humanInputID := pulseChangeReferences(ctx, workspacePath, "pulse-1")
+	if len(issues) != 1 || issues[0] != "PUL-1234ABCD" || attemptID != "fix-1" || humanInputID != "technical-decision-1" {
+		t.Fatalf("references = issues=%v attempt=%q human_input=%q", issues, attemptID, humanInputID)
 	}
 }

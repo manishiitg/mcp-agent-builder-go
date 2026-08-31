@@ -23,6 +23,9 @@ type PulseIssue struct {
 }
 
 func pulseIssueID(finding PulseFindingLifecycle) string {
+	if issueID := strings.ToUpper(strings.TrimSpace(finding.IssueID)); issueID != "" {
+		return issueID
+	}
 	fingerprint := strings.ToUpper(strings.TrimSpace(finding.Fingerprint))
 	if len(fingerprint) > 8 {
 		fingerprint = fingerprint[:8]

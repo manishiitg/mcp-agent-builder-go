@@ -171,10 +171,18 @@ func (iso *Isolator) executeIsolatedMountNamespace(ctx context.Context, command 
 		os.Remove(scriptPath)
 	}
 
-	// Execute using unshare (creates new mount namespace)
-	// -m: mount namespace
-	// --propagation private: don't propagate mounts to parent namespace
-	cmd := exec.CommandContext(ctx, "unshare", "-m", "--propagation", "private", "sh", scriptPath)
+	// Execute using unshare (creates new mount + user namespace).
+	// --mount: mount namespace, containing the bind mounts/tmpfs the script sets up.
+	// --user --map-root-user: enters a new user namespace mapped back to the
+	//   caller's own UID -- the standard unprivileged-mount-namespace pattern
+	//   (the same one rootless container runtimes use). Required: a plain
+	//   "-m" needs CAP_SYS_ADMIN in the CURRENT user namespace, which an
+	//   unprivileged service account never has, so mount/bind-mount inside
+	//   the script (both requiring CAP_SYS_ADMIN) would fail outright without
+	//   it -- this mirrors mountNamespaceAvailable()'s probe, which must test
+	//   the exact same privilege shape this actually uses.
+	// --propagation private: don't propagate mounts to parent namespace.
+	cmd := exec.CommandContext(ctx, "unshare", "--mount", "--user", "--map-root-user", "--propagation", "private", "sh", scriptPath)
 
 	// Set working directory for proper error messages
 	cmd.Dir = iso.WorkDir
@@ -300,6 +308,10 @@ func (iso *Isolator) generateSandboxProfile() string {
 			if !ok {
 				continue
 			}
+			// A sandbox `subpath` rule covers descendants but not the directory
+			// node itself. Grant the already-authorized root literally as well so
+			// callers can list it and use it as the parent of an allowed file.
+			sb.WriteString(fmt.Sprintf("  (literal \"%s\")\n", sandboxQuoted(fullPath)))
 			sb.WriteString(fmt.Sprintf("  (subpath \"%s\")\n", sandboxQuoted(fullPath)))
 		}
 		sb.WriteString(")\n\n")
@@ -314,6 +326,7 @@ func (iso *Isolator) generateSandboxProfile() string {
 			if !ok {
 				continue
 			}
+			sb.WriteString(fmt.Sprintf("  (literal \"%s\")\n", sandboxQuoted(fullPath)))
 			sb.WriteString(fmt.Sprintf("  (subpath \"%s\")\n", sandboxQuoted(fullPath)))
 		}
 		sb.WriteString(")\n\n")
@@ -472,6 +485,7 @@ func (iso *Isolator) generateStrictSandboxProfile() string {
 			if !ok {
 				continue
 			}
+			sb.WriteString(fmt.Sprintf("  (literal \"%s\")\n", sandboxQuoted(fullPath)))
 			sb.WriteString(fmt.Sprintf("  (subpath \"%s\")\n", sandboxQuoted(fullPath)))
 		}
 		sb.WriteString(")\n\n")
@@ -485,6 +499,7 @@ func (iso *Isolator) generateStrictSandboxProfile() string {
 			if !ok {
 				continue
 			}
+			sb.WriteString(fmt.Sprintf("  (literal \"%s\")\n", sandboxQuoted(fullPath)))
 			sb.WriteString(fmt.Sprintf("  (subpath \"%s\")\n", sandboxQuoted(fullPath)))
 		}
 		sb.WriteString(")\n\n")

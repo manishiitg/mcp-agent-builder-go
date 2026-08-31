@@ -2317,8 +2317,6 @@ func defaultCodingAgentResumeFlag(provider string) string {
 		return "--resume"
 	case "codex-cli":
 		return "resume"
-	case "agy-cli":
-		return "--conversation"
 	case "pi-cli":
 		return "--session-id"
 	default:

@@ -130,6 +130,12 @@ func runServer(cmd *cobra.Command, args []string) {
 		// Mutations are internal agent/backend operations and require the workspace
 		// service token that is deliberately absent from coding-CLI shells.
 		api.POST("/mutate", requireWorkspaceAPIToken(), handlers.MutateWorkflowDB)
+		// Report field updates are the narrow, structured write behind an HTML
+		// report's window.report.updateField(...) — same auth tier as /api/query
+		// (a normal browser session, not the workspace service token), but the
+		// handler itself validates table/column against the live schema and never
+		// accepts caller-supplied SQL, so it stays safe to expose to report JS.
+		api.POST("/report-field", handlers.UpdateReportField)
 		api.POST("/db/initialize", requireWorkspaceAPIToken(), handlers.InitializeWorkflowDB)
 
 		// CDP connectivity check (used by frontend to verify Chrome is reachable from container)

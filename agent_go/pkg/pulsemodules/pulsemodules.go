@@ -41,6 +41,7 @@ type Module struct {
 const (
 	TechnicalReviewID = "technical_review"
 	StrategicReviewID = "strategic_review"
+	PlanDriftReviewID = "plan_drift_review"
 
 	// Legacy review IDs are accepted only at persistence/read boundaries so
 	// existing workflow databases can be migrated into the canonical review
@@ -87,6 +88,21 @@ var All = []Module{
 			"strategy", "strategy_review", "plan_effectiveness", "advisor",
 			LegacyStrategyAuditorID, LegacyGoalAdvisorID,
 		},
+	},
+	{
+		// Plan Drift Review is event-triggered rather than time-cadenced: it is
+		// due whenever any step has no step_config.json drift_review record, or
+		// one flagged needs_review==true (flagged by the same hook that flags
+		// description_reviewed stale on any persisted plan-step field change),
+		// not on a fixed interval. Evidence from a prior review is preserved on
+		// the flag, not discarded. See validatePlanDriftRouting in
+		// pulse_worklist.go for the deterministic force-due enforcement,
+		// mirroring validateDeterministicIntakeRouting's treatment of
+		// technical_review.
+		ID:        PlanDriftReviewID,
+		Label:     "Plan drift review",
+		StepLabel: "plan-drift-review",
+		Aliases:   []string{"drift_review", "plan_drift"},
 	},
 }
 

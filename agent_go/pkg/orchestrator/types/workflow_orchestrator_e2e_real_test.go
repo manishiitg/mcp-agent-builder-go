@@ -259,7 +259,6 @@ func TestWorkflowE2ESingleRegularStepPiCLI(t *testing.T) {
 		t.Fatalf("NewWorkflowOrchestrator: %v", err)
 	}
 	wo.SetExecutionOptions(&stepworkflow.ExecutionOptions{
-		RunMode:           "use_same_run",
 		SelectedRunFolder: "iteration-0",
 		ExecutionStrategy: stepworkflow.ExecutionStrategyStartFromBeginningNoHuman,
 		EnabledGroupNames: []string{"default"},

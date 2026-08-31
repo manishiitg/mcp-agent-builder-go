@@ -4,6 +4,12 @@ This is the deployment contract for the isolated Dominion product at
 `trader.tectonicmarkets.com`. It deliberately does **not** reuse the legacy
 shared-host deployment described in `README.md`.
 
+Before standing up (or re-verifying) this deployment, run through
+[`../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md`](../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md)
+— every item on it was independently rediscovered as a live production
+incident on this exact deployment because nothing forced it to be checked
+up front. Don't repeat that.
+
 ## Deployment target
 
 | Item | Value |
@@ -196,6 +202,25 @@ verify:
 curl -fsSI https://trader.tectonicmarkets.com/login
 ```
 
+The site block must also include `encode zstd gzip`. Caddy does not compress
+responses by default -- a block with no `encode` directive silently ships
+the full, uncompressed frontend bundle (multiple MB) on every page load.
+This was missed on the original 2026-08-24 deploy and confirmed live
+2026-08-28 as the root cause of a real "the server is slow" report: the main
+JS bundle was transferring at its full ~3.7 MB instead of the ~1 MB gzip
+would produce. Fixed by adding the directive to only this site's block in
+the shared host's `/etc/caddy/Caddyfile` (root-only file; back it up before
+editing, `caddy validate` before `systemctl reload caddy`, and never touch
+the other unrelated sites' blocks in the same file). Verify against the real
+bundle, not just the small `/login` page (which compresses trivially either
+way and can look fine even when the real bundle isn't compressed):
+
+```bash
+curl -sS -H "Accept-Encoding: gzip" -D - -o /dev/null \
+  https://trader.tectonicmarkets.com/assets/index-<hash>.js
+# expect: content-encoding: gzip
+```
+
 By default the public site must show only Dominion and must not expose Video
 Studio, Finance, or unrelated server data. `AGENT_PRODUCTS=dominion` alone
 already guarantees this: it's process-wide and never registers Video
@@ -238,6 +263,150 @@ Live on the target host, first deployed 2026-08-24:
   unrestricted by design (see `agent_go/cmd/server/user_product_access.go`)
   — every user this deployment creates going forward needs an explicit
   entry to stay scoped the way this doc describes.
+- `/srv/dominion/home/Downloads` created 2026-08-25 — its absence broke the
+  shell sandbox's Folder Guard policy setup for every session
+  (`SANDBOX_UNAVAILABLE: ... stat /srv/dominion/home/Downloads: no such file
+  or directory`), silently blocking `execute_shell_command` (Dominion's only
+  path to its own custom tools) since the original 2026-08-24 deploy. Any
+  future dedicated-VM product needs this directory created alongside
+  `HOME=/srv/dominion/home` itself, not as an afterthought.
+- Scheduling ownership moved from local dev to this server, 2026-08-28: the
+  local instance's copy of `tectonicusadaytrading`'s 3 schedules were
+  disabled (`enabled: false` in its `workflow.json`) before a one-time
+  `rsync` of the workflow's working files (excluding `.git`) from local into
+  `/srv/dominion/data/docs/Workflow/tectonicusadaytrading/`, overwriting the
+  stale 2026-08-24 copy. The 3 schedules were then re-enabled on the
+  server's copy only. This server is now the sole source of scheduled runs
+  for this workflow — re-enabling them locally would cause duplicate paper
+  trades and duplicate market-data API usage against the same workflow.
+- `encode zstd gzip` added to this site's Caddy block, 2026-08-28 — see the
+  Verification section above. Missing since the original deploy; the main
+  JS bundle now transfers at ~1 MB instead of ~3.7 MB.
+- Gateway shared-password layer disabled, 2026-08-28: `GATEWAY_DISABLE_PASSWORD_GATE=true`
+  added to `/srv/dominion/.env`, with `deploy/aws-ec2/server/auth-gateway.go`
+  changed to make that an explicit per-deployment opt-out (default
+  unchanged everywhere else, including Video Studio). Decision: with real
+  per-user login (`manish`/`john`) already gating the app, the extra shared
+  password was pure friction, not additional real protection for this
+  deployment. Accepted trade-off: a handful of routes the agent API
+  intentionally leaves public for pre-login bootstrap (`/api/health`,
+  `/api/capabilities`, `/api/shared/*`, `/api/auth/*`) are now reachable
+  from the open internet without any password — they were already reachable
+  to anyone who cleared the shared password before, so this is a narrowing
+  of what the shared password protected, not new exposure of anything the
+  inner app didn't already intend to expose at that boundary. The gateway
+  still runs and still routes/serves the frontend/proxies `/api`, `/api/wp`,
+  `/ws` — only the password-session check is skipped.
+- Stale local absolute paths in synced workflow state, found and bulk-fixed
+  2026-08-28: the original local→server sync of `Workflow/tectonicusadaytrading/`
+  (see the scheduling-ownership entry above) carried over 221 `builder/`
+  conversation/session files whose `runtime.agent_session_handle.provider.working_dir`
+  still pointed at the local dev machine's absolute path
+  (`/Users/mipl/ai-work/mcp-agent-builder-go/workspace-docs/...`). Resuming
+  any of those native Claude Code sessions failed with `SANDBOX_UNAVAILABLE:
+  ... mkdir /Users: permission denied` (the launcher trying to `mkdir -p` a
+  path that only exists on the original dev machine). Bulk-corrected with a
+  literal string replace across `builder/` to the real server path
+  (`/srv/dominion/data/docs/Workflow/tectonicusadaytrading`). **Any future
+  full workflow-directory sync from a local/dev machine to a server must
+  repeat this check** — grep the synced tree for the source machine's own
+  absolute path before considering the sync complete; this class of bug is
+  silent until a native coding-agent session tries to resume.
+- Mount-namespace Landlock fallback was two stacked bugs, both fixed
+  2026-08-28/29 — a `SANDBOX_UNAVAILABLE: Landlock cannot represent this
+  Folder Guard policy and mount namespaces are unavailable: blocked-write
+  path overlaps writable path` kept recurring even after the first fix
+  landed, which is what exposed the second one:
+  1. **`kernel.apparmor_restrict_unprivileged_userns` disabled host-wide**
+     (`/etc/sysctl.d/60-dominion-userns.conf`, `sysctl -w`, persisted across
+     reboots). Ubuntu 24.04 defaults this to `1`, blocking unprivileged
+     user-namespace creation for any process without an explicit AppArmor
+     profile, independent of `kernel.unprivileged_userns_clone` (which can
+     show enabled while this still blocks it). Host-wide trade-off, chosen
+     over a narrower Dominion-only AppArmor profile grant for speed —
+     revisit if this shared VM ever needs the stricter posture back for an
+     unrelated tenant.
+  2. **The actual application-level bug, found after step 1 alone didn't
+     fix it**: `workspace/security/isolator.go`'s `executeIsolatedMountNamespace`
+     and `isolator_linux.go`'s `mountNamespaceAvailable` both ran a plain
+     `unshare -m` (mount namespace only, no `-U`/`--user`). That needs real
+     `CAP_SYS_ADMIN` in the *current* user namespace, which an unprivileged
+     service account never has — it fails with `Operation not permitted`
+     regardless of step 1's sysctl, confirmed by running the exact command
+     as `dominion` and reproducing the identical failure. This made the
+     fallback permanently non-functional for every rootless deployment,
+     silently — it always compiled and started, it just could never
+     actually execute anything. Fixed by adding `--user --map-root-user`
+     (the standard unprivileged-mount-namespace pattern rootless container
+     runtimes use), confirmed live against the exact overlap policy that
+     was failing. Both fixes were independently necessary: step 1 alone
+     doesn't help without step 2's corrected command, and step 2 alone
+     would still be blocked by step 1's AppArmor restriction on an
+     unconfined process.
+  
+  Why the fallback matters at all: Landlock's rule model is purely additive
+  (no allow-with-carve-out), so it rejects any Folder Guard policy that
+  needs one — concretely, "write access to a workflow folder except its
+  `planning/` subfolder", a real, intentional policy the generic AgentWorks
+  path requests that Dominion's own narrower profile never happened to
+  trigger. The fallback is what makes that policy shape work at all on
+  Linux.
+- `MCP_API_URL=http://127.0.0.1:21000` and `NATIVE_WORKSPACE=true` added to
+  `/srv/dominion/.env`, 2026-08-29. Without an explicit `MCP_API_URL`,
+  `GetCodeExecAPIURL()` falls through to `http://host.docker.internal:21000`
+  for custom-tool callbacks on any rootless (non-Docker) deployment —
+  discovered live when a workflow chat's tool calls stopped resolving.
+  See [`../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md`](../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md)
+  item 4 for the general form of this gap.
+- Foreground Claude Code turns could wedge for hours with the CLI itself
+  already done — two stacked bugs, found and fixed 2026-08-30:
+  1. **npm prefix misconfigured for the `dominion` service identity**:
+     `npm config get prefix` resolved to `/usr` (the system default) rather
+     than `/srv/dominion/tools`, because `/srv/dominion/.npmrc` was never
+     written — only `/srv/dominion/tools/bin` being ahead on `PATH` made
+     `claude` resolve correctly at all. Claude Code's own self-update then
+     tried to write to `/usr` on every invocation, failed on permissions,
+     and printed a persistent "✘ Auto-update failed: no write permission to
+     npm prefix · Run claude doctor" footer at the bottom of every tmux
+     pane. Fixed by writing `prefix=/srv/dominion/tools` to
+     `/srv/dominion/home/.npmrc` — **the actual `HOME` the systemd services
+     use (`Environment=HOME=/srv/dominion/home`), not an interactive SSH
+     login's own `$HOME`**; verify with
+     `HOME=/srv/dominion/home npm config get prefix`, not a bare
+     `npm config get prefix` over SSH, which checks the wrong file.
+  2. **`multi-llm-provider-go`'s tmux-pane completion scan didn't recognize
+     that footer line**: `claudecode_interactive_adapter.go`'s
+     `hasReadyInputPrompt` scans backward from the bottom of the pane for
+     the idle `❯` prompt, skipping known non-prompt "footer" lines via an
+     explicit allowlist (`isIgnorableClaudePromptFooterLine`). The
+     auto-update-failure banner sits below the real idle prompt and wasn't
+     on that allowlist, so the scan hit it first and reported "not ready" —
+     even though the CLI had already answered 8 seconds earlier. The
+     session showed no bug from the CLI's perspective at all; only the
+     completion watch never fired, so the platform never surfaced the
+     answer or freed the turn. Fixed by adding a
+     `strings.Contains(trimmed, "Auto-update failed")` match to that
+     allowlist (matched on the fixed substring, not the specific reason
+     after it, since npm can fail this self-update for other causes too —
+     network, disk — with the identical pane-boundary problem either way).
+     Both bugs had to be fixed together: bug 1 is what put the footer on
+     the pane in the first place, and fixing only bug 1 leaves any other
+     transient cause of that same footer (or of any future CLI footer line
+     not yet on the allowlist) able to reproduce bug 2's hang again.
+  As defense in depth against the general failure shape (an unrecognized
+  footer line permanently masking an idle prompt, of which this is the
+  second confirmed instance after the upgrade-notice case), the shared
+  library's disabled-by-default "stale pane backstop" is enabled for this
+  deployment only —
+  `CLAUDE_CODE_INTERACTIVE_STALE_PANE_BACKSTOP_SECONDS=7200` (2 hours) in
+  `/srv/dominion/.env`. Deliberately **not** flipped as the shared library's
+  global default: inferring turn completion from pane inactivity risks a
+  false-positive "done" on a legitimately long-running turn, and that
+  trade-off shouldn't be forced on every other product sharing this
+  library without their own opt-in. 2 hours is chosen to sit safely above
+  any real Dominion turn's expected duration while still bounding the
+  worst case far below the "hours, indefinitely" this incident actually
+  hit.
 
 Known follow-up, not yet done:
 

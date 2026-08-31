@@ -19,6 +19,12 @@ Apply these when writing or patching a step's `main.py`. Scripts must run identi
 - Every value written to output files MUST trace to a real MCP tool call, API response, or input file. No hardcoded rows, no invented records.
 - If the script writes output without making any external calls or reading real input, it will be rejected.
 
+**Deliberate refusal — fail-closed guards must exit code 2, not 1**
+- Any non-zero exit is treated as a bug by default: the failure is handed back to you as repair context so you fix the script. That is correct for a real error, but wrong for a guard that deliberately detected an unsafe condition (stale data, a write that would overwrite history it could not verify, a precondition that isn't met) and refused to proceed on purpose.
+- Use `sys.exit(2)` — not `sys.exit(1)` or any other code — for that second case. Exit code 2 is reserved and means "this refusal is terminal, do not attempt an agentic workaround." The step fails outright instead of falling back to a relearn turn, and the refusal is never handed to an agent as "here is an error, fix it."
+- Print the reason for the refusal to stdout before exiting — that text becomes the step's failure detail, so it must say plainly what condition was detected and why proceeding was unsafe.
+- Get this distinction right: `sys.exit(1)` on a guard that should be terminal lets an agentic retry read your own refusal, agree it was correct, and then perform the exact write the guard existed to prevent — which has happened live. `sys.exit(2)` on an ordinary bug wrongly aborts the step instead of letting the normal repair loop fix the script.
+
 **Logging**
 - `VERBOSE = os.environ.get('SCRIPT_VERBOSE', '') == '1'`. Guard debug prints with `if VERBOSE:`. Log state before and after each major action. Stdout is the ONLY debugging channel available to the fix loop.
 

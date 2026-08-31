@@ -8,6 +8,8 @@ import { useWorkflowStore } from '../../stores/useWorkflowStore'
 import { useGlobalPresetStore } from '../../stores/useGlobalPresetStore'
 import { convertObservedWorkflowTabToInteractive } from './workflowChatTabConversion'
 import { shouldDisplayWorkflowTab } from './workflowRuntimeTabProjection'
+import { useAuthStore } from '../../stores/useAuthStore'
+import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
 
 // ---------------------------------------------------------------------------
 // WorkflowTabItem — per-tab component with narrow store subscriptions
@@ -40,8 +42,9 @@ const WorkflowTabItem = React.memo<WorkflowTabItemProps>(({
   onMakeInteractive,
   onStop,
 }) => {
+  const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
   const displayName = tab.metadata?.phaseId === 'workflow-builder' && tab.name === 'Automation Builder'
-    ? 'Conversations'
+    ? 'Chat'
     : tab.name
 
   // Tabs are a product-level conversation switcher. Derive their small status
@@ -76,8 +79,12 @@ const WorkflowTabItem = React.memo<WorkflowTabItemProps>(({
       {/* Tab Name */}
       <span className="min-w-0 max-w-[14rem] truncate whitespace-nowrap">{displayName}</span>
 
-      {/* In-tab Stop — only while this tab is busy */}
-      {isBusy && tab.sessionId && (
+      {/* In-tab Stop — only while this tab is busy. Hidden (not just
+          disabled) for a read-only-access user: cosmetic only — stop_step/
+          stop_all_executions stay registered server-side in Run mode for
+          every session, this just avoids showing an action-looking control
+          on this account's own tab. See PLAT-262. */}
+      {isBusy && tab.sessionId && !isReadOnlyUser && (
         <button
           type="button"
           onClick={(e) => {
@@ -92,8 +99,13 @@ const WorkflowTabItem = React.memo<WorkflowTabItemProps>(({
         </button>
       )}
 
-      {/* Convert a read-only scheduled/bot run into an interactive Automation Builder chat */}
-      {tab.metadata?.isViewOnly && (tab.metadata?.isScheduledRun || tab.metadata?.isBotRun) && (
+      {/* Convert a read-only scheduled/bot run into an interactive Automation Builder chat.
+          Hidden for a read-only-access user (PLAT-262): the resulting session
+          would still be Run-mode-restricted server-side, but this button's
+          own label ("Interact in Automation Builder") promises full edit
+          capability the account doesn't have — same UX-confusion class as
+          the schedule panel's equivalent icon. */}
+      {tab.metadata?.isViewOnly && (tab.metadata?.isScheduledRun || tab.metadata?.isBotRun) && !isReadOnlyUser && (
         <button
           type="button"
           onClick={(e) => {

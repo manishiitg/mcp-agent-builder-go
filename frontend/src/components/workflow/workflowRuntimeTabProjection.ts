@@ -8,6 +8,16 @@ export interface WorkflowRuntimeTabProjection {
   autoActivate: boolean
 }
 
+const MANUAL_PULSE_SESSION_PREFIX = 'schedule-manual--manual-p_'
+
+/** The toolbar's one-off Pulse run uses the scheduler lane but is not a
+ * user-authored schedule. Its generated session id carries the reserved
+ * manual-pulse schedule prefix, which lets the tab distinguish it from the
+ * Workflow Builder child execution projected for the same session. */
+function isManualPulseSession(sessionId?: string | null): boolean {
+  return (sessionId || '').toLowerCase().startsWith(MANUAL_PULSE_SESSION_PREFIX)
+}
+
 /**
  * A runtime-projected tab can be discovered after its session has already
  * emitted events. Formatted mode needs an explicit history catch-up before its
@@ -136,7 +146,9 @@ export function workflowRuntimeTabProjection(
   if (external && !scheduled) return null
 
   if (scheduled) {
-    const scheduledJobName = running.title || running.preset_name || running.phase_name || 'Schedule'
+    const scheduledJobName = isManualPulseSession(running.session_id)
+      ? 'Manual Pulse'
+      : running.title || running.preset_name || running.phase_name || 'Schedule'
     return {
       // The tab label shows the actual schedule's name (e.g. "Daily
       // execution") rather than the generic "Schedule" -- with several

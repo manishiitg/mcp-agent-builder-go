@@ -317,7 +317,7 @@ type WorkshopChatSession struct {
 	hasRunningAgents      func() bool               // optional: server-level check for running background agents
 	cancelAllServerAgents func()                    // optional: cancel all running agents in server registry
 	listServerAgents      func() []ServerAgentInfo  // optional: list all agents from server registry
-	workshopModeOverride  string                    // frontend-selected workshop mode
+	workshopModeOverride  string                    // frontend-selected workshop mode; PLAT-262 forces this to "run" for a read-only identity, see workflow_phase_tools.go
 	recoveryOnce          sync.Once                 // starts durable continuation replay once server notifiers are wired
 	onStepCorrelationDone func(string)
 }
@@ -389,8 +389,8 @@ func workflowRunValidationVariableValues(ctx context.Context, session *WorkshopC
 
 func routeScopedValidationSteps(steps []PlanStep, variableValues map[string]string, humanInputs map[string]string, routeSelections map[string]string) []PlanStep {
 	for i, step := range steps {
-		routingStep, ok := step.(*RoutingPlanStep)
-		if !ok || len(routingStep.Routes) == 0 {
+		routingStep, ok := step.(routeSwitchStep)
+		if !ok || len(routingStep.GetRoutes()) == 0 {
 			continue
 		}
 		route := inferValidationRoute(routingStep, variableValues, humanInputs, routeSelections)
@@ -413,15 +413,16 @@ func routeScopedValidationSteps(steps []PlanStep, variableValues map[string]stri
 	return steps
 }
 
-func inferValidationRoute(step *RoutingPlanStep, variableValues map[string]string, humanInputs map[string]string, routeSelections map[string]string) *RoutingRoute {
+func inferValidationRoute(step routeSwitchStep, variableValues map[string]string, humanInputs map[string]string, routeSelections map[string]string) *RoutingRoute {
 	if step == nil {
 		return nil
 	}
+	routes := step.GetRoutes()
 	if routeSelections != nil {
 		if raw := strings.TrimSpace(routeSelections[step.GetID()]); raw != "" {
-			if routeID, err := resolveRouteSelectionValue(step.Routes, raw); err == nil {
-				for i := range step.Routes {
-					route := &step.Routes[i]
+			if routeID, err := resolveRouteSelectionValue(routes, raw); err == nil {
+				for i := range routes {
+					route := &routes[i]
 					if route.RouteID == routeID {
 						return route
 					}
@@ -432,26 +433,26 @@ func inferValidationRoute(step *RoutingPlanStep, variableValues map[string]strin
 	if humanInputs != nil {
 		if raw := strings.TrimSpace(humanInputs[step.GetID()]); raw != "" {
 			normalized := strings.ToLower(raw)
-			for i := range step.Routes {
-				route := &step.Routes[i]
+			for i := range routes {
+				route := &routes[i]
 				if strings.ToLower(route.RouteID) == normalized || strings.ToLower(route.RouteName) == normalized {
 					return route
 				}
 			}
 		}
 	}
-	if defaultRouteID := strings.TrimSpace(step.DefaultRouteID); defaultRouteID != "" {
-		if routeID, err := resolveRouteSelectionValue(step.Routes, defaultRouteID); err == nil {
-			for i := range step.Routes {
-				route := &step.Routes[i]
+	if defaultRouteID := strings.TrimSpace(step.GetDefaultRouteID()); defaultRouteID != "" {
+		if routeID, err := resolveRouteSelectionValue(routes, defaultRouteID); err == nil {
+			for i := range routes {
+				route := &routes[i]
 				if route.RouteID == routeID {
 					return route
 				}
 			}
 		}
 	}
-	for i := range step.Routes {
-		route := &step.Routes[i]
+	for i := range routes {
+		route := &routes[i]
 		condition := strings.ToLower(route.Condition)
 		for name, value := range variableValues {
 			if value == "" {
@@ -479,12 +480,12 @@ func planStepIndexByID(steps []PlanStep, stepID string) int {
 
 func routeSegmentEndIndex(steps []PlanStep, start int) int {
 	for i := start; i < len(steps); i++ {
-		routingStep, ok := steps[i].(*RoutingPlanStep)
-		if !ok || len(routingStep.Routes) == 0 {
+		routingStep, ok := steps[i].(routeSwitchStep)
+		if !ok || len(routingStep.GetRoutes()) == 0 {
 			continue
 		}
 		allEnd := true
-		for _, route := range routingStep.Routes {
+		for _, route := range routingStep.GetRoutes() {
 			if !strings.EqualFold(strings.TrimSpace(route.NextStepID), "end") {
 				allEnd = false
 				break
@@ -1313,7 +1314,7 @@ func RegisterRunFullEvaluationTool(
 			"required": []string{"group_name"},
 		},
 		func(ctx context.Context, args map[string]interface{}) (string, error) {
-			iteration := "iteration-0"
+			iteration := currentWorkflowRunFolder
 			groupName, _ := args["group_name"].(string)
 			if groupName == "" {
 				return "group_name is required — evaluation needs a specific group's execution folder (e.g., 'saurabh', 'xspaces')", nil
@@ -1969,8 +1970,8 @@ func RegisterRunFullWorkflowTool(
 							missingSteps = append(missingSteps, fmt.Sprintf("  - %s (id: %s, question: %q)", hiStep.GetTitle(), stepID, hiStep.Question))
 						}
 					}
-					if step.StepType() == StepTypeRouting {
-						if routingStep, ok := step.(*RoutingPlanStep); ok && routingStep.Description != "" {
+					if step.StepType() == StepTypeRouting || step.StepType() == StepTypeBranch {
+						if routingStep, ok := step.(routeSwitchStep); ok && routingStep.GetDescription() != "" {
 							legacyRoutingSteps = append(legacyRoutingSteps, fmt.Sprintf("  - %s (id: %s)", step.GetTitle(), step.GetID()))
 						}
 					}
@@ -1979,12 +1980,9 @@ func RegisterRunFullWorkflowTool(
 					return fmt.Sprintf("❌ Plan has human_input steps that require responses via human_inputs parameter. Missing:\n%s\n\nProvide human_inputs with a response for each step ID listed above.", strings.Join(missingSteps, "\n")), nil
 				}
 				if len(legacyRoutingSteps) > 0 {
-					return fmt.Sprintf("❌ Plan has routing steps with legacy descriptions. Routing is deterministic-only and routing steps no longer execute agents:\n%s\n\nMove each probe/judgment into a prior message_sequence step that writes route_selection.json, then clear the routing description and point the routing step at that file via route_source_file or context_dependencies.", strings.Join(legacyRoutingSteps, "\n")), nil
+					return fmt.Sprintf("❌ Plan has routing/branch steps with legacy descriptions. Both are deterministic-only and never execute agents:\n%s\n\nMove each probe/judgment into a prior message_sequence step that writes route_selection.json, then clear the description and point the step at that file via route_source_file or context_dependencies.", strings.Join(legacyRoutingSteps, "\n")), nil
 				}
 			}
-
-			// Iteration is always provided — reuse the folder (creates if doesn't exist)
-			runMode := "use_same_run"
 
 			execToken := workflowExecutionIDToken()
 			execID := fmt.Sprintf("workflow-full-%s", execToken)
@@ -2037,6 +2035,26 @@ func RegisterRunFullWorkflowTool(
 			} else if len(enabledGroupNames) > 0 {
 				workflowDisplayName = fmt.Sprintf("full-run [%s]", enabledGroupNames[0])
 			}
+			execMeta := map[string]string{
+				"workshop_mode":  "runner",
+				"execution_type": "full-workflow",
+			}
+			if disableEval {
+				execMeta["disable_eval"] = "true"
+			}
+			if iteration != "" {
+				execMeta["iteration"] = iteration
+			}
+			if len(enabledGroupNames) > 0 {
+				execMeta["group_name"] = enabledGroupNames[0]
+			}
+			if iteration != "" {
+				runFolder := iteration
+				if len(enabledGroupNames) > 0 {
+					runFolder = filepath.Join(iteration, enabledGroupNames[0])
+				}
+				execMeta["run_folder"] = runFolder
+			}
 			if session.executionNotifier != nil {
 				session.executionNotifier.OnExecutionStart(WorkshopExecutionStart{
 					ID:                execID,
@@ -2047,8 +2065,9 @@ func RegisterRunFullWorkflowTool(
 					// still registered so cancellation and HasRunningAgents()
 					// work, but declaring the kind keeps it out of the terminal
 					// rail instead of sitting there beside real agents.
-					Kind:   string(orchestrator_events.ExecutionKindFullRun),
-					Cancel: cancel,
+					Kind:     string(orchestrator_events.ExecutionKindFullRun),
+					Metadata: execMeta,
+					Cancel:   cancel,
 				})
 			}
 			execCtx = virtualtools.WithBackgroundAgentID(execCtx, execID)
@@ -2065,19 +2084,6 @@ func RegisterRunFullWorkflowTool(
 
 				var result string
 				var execErr error
-				execMeta := map[string]string{
-					"workshop_mode":  "runner",
-					"execution_type": "full-workflow",
-				}
-				if disableEval {
-					execMeta["disable_eval"] = "true"
-				}
-				if iteration != "" {
-					execMeta["iteration"] = iteration
-				}
-				if len(enabledGroupNames) > 0 {
-					execMeta["group_name"] = enabledGroupNames[0]
-				}
 				defer func() {
 					skipNotify := finalizeExecStatus(exec, execCtx, &result, &execErr)
 					if !skipNotify && session.executionNotifier != nil {
@@ -2160,7 +2166,6 @@ func RegisterRunFullWorkflowTool(
 
 				// Set execution options
 				execOpts := &ExecutionOptions{
-					RunMode:           runMode,
 					SelectedRunFolder: iteration,
 					ExecutionStrategy: strategy,
 					EnabledGroupNames: enabledGroupNames,

@@ -83,10 +83,6 @@ export interface LLMConfiguration {
     vertex?: string
     kimi?: string
     pi_cli?: string
-    minimax?: string
-    minimax_coding_plan?: string
-    elevenlabs?: string
-    deepgram?: string
     pi_provider_keys?: Record<string, string>
     azure?: {
       endpoint: string
@@ -157,13 +153,6 @@ export interface AgentQueryRequest {
   // Conversation JSON selected from /resume or a previous chat panel. The backend
   // can use its runtime metadata for native coding-agent resume.
   restored_conversation_path?: string
-  // Image generation configuration
-  enable_image_generation?: boolean
-  image_gen_config?: {
-    provider: string
-    model_id: string
-    api_key?: string
-  }
   // Auto-notification flag: when true, this is a background agent completion notification,
   // not a user-initiated message. Backend treats it as a synthetic turn (doesn't block user input).
   is_auto_notification?: boolean
@@ -259,10 +248,6 @@ export interface LLMDefaultsResponse {
   zai_config?: ExtendedLLMConfiguration
   kimi_config?: ExtendedLLMConfiguration
   pi_cli_config?: ExtendedLLMConfiguration
-  minimax_config?: ExtendedLLMConfiguration
-  minimax_coding_plan_config?: ExtendedLLMConfiguration
-  elevenlabs_config?: ExtendedLLMConfiguration
-  deepgram_config?: ExtendedLLMConfiguration
   available_models: {
     bedrock: string[]
     openrouter?: string[]
@@ -273,10 +258,6 @@ export interface LLMDefaultsResponse {
     'z-ai'?: string[]
     kimi?: string[]
     'pi-cli'?: string[]
-    minimax?: string[]
-    'minimax-coding-plan'?: string[]
-    elevenlabs?: string[]
-    deepgram?: string[]
   }
   provider_capabilities?: Partial<Record<LLMProvider, string[]>>
   supported_providers?: LLMProvider[]
@@ -396,7 +377,7 @@ export interface ReportHumanInputApplyContract {
 export interface ReportHumanInput {
   id: string
   workspace_path: string
-  source: 'pulse' | 'technical_review' | 'strategic_review' | 'engineering_review' | 'ops_review' | 'strategy_auditor' | 'goal_advisor' | string
+  source: 'pulse' | 'technical_review' | 'strategic_review' | 'plan_drift_review' | 'engineering_review' | 'ops_review' | 'strategy_auditor' | 'goal_advisor' | string
   priority: 'low' | 'medium' | 'high' | string
   question: string
   context?: string
@@ -489,6 +470,7 @@ export interface PulseReviewFocus {
   review_count?: number
   route_review_count?: number
   deferred_focuses?: string[]
+  issue_ids?: string[]
 }
 
 export interface PulseLoopClosureFinding {
@@ -618,6 +600,27 @@ export interface PulseContextResponse {
   error?: string
 }
 
+export interface EvalResultRecord {
+  run_folder: string
+  step_id: string
+  title?: string
+  description?: string
+  score: number
+  max_score: number
+  score_captured: boolean
+  reasoning: string
+  evidence: string
+  skipped: boolean
+  generated_at: string
+  historical?: boolean
+}
+
+export interface PulseEvalResultsResponse {
+  success: boolean
+  results: EvalResultRecord[]
+  error?: string
+}
+
 export interface PulseFindingVerification {
   check: string
   verdict: 'passed' | 'failed' | 'inconclusive' | string
@@ -628,7 +631,6 @@ export interface PulseFindingVerification {
 }
 
 export interface PulseFixFindingRef {
-  fingerprint: string
   finding_id: string
   disposition?: string
   summary?: string
@@ -710,7 +712,6 @@ export interface PulseFindingLifecycle {
    * `issue` has been accepted into Pulse's repair lifecycle.
    */
   kind?: 'issue' | 'observation'
-  fingerprint: string
   finding_id?: string
   module?: string
   step_id: string
@@ -1842,7 +1843,6 @@ export interface CreateRunFolderResponse {
 // Execution options for frontend-controlled execution
 // Note: AgentLLMConfig is already defined above (line ~462)
 export interface ExecutionOptions {
-  run_mode: 'use_same_run' | 'create_new_runs_always';
   selected_run_folder?: string;
   execution_strategy: string;
   resume_from_step?: number;  // 1-based step number (for top-level steps)
@@ -2047,6 +2047,7 @@ export interface StepExecutionLogs {
   parent_step_title?: string;
   route_id?: string;
   success_criteria?: string;
+  execution_tier?: string; // Configured tier pin from step_config.json ("high"|"medium"|"low"); empty when the step uses adaptive tiering
   context_output?: string;  // Expected output filename
   learning_objective?: string;
   learnings_access?: string;
@@ -3071,9 +3072,31 @@ export interface WorkflowManifest {
   run_retention_count?: number
   pulse?: WorkflowPulseConfig
   backup?: WorkflowBackupConfig
+  folder_access?: WorkflowFolderGrant[]
+  folder_access_requests?: WorkflowFolderAccessRequest[]
+}
+
+export interface WorkflowFolderGrant {
+  id: string
+  alias: string
+  path: string
+  access: 'read_only' | 'read_write'
+  reason?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface WorkflowFolderAccessRequest {
+  id: string
+  alias: string
+  requested_path?: string
+  access: 'read_only' | 'read_write'
+  reason: string
+  requested_at: string
 }
 
 export interface WorkflowPulseConfig {
+  enabled?: boolean
   advisor_specialization?: WorkflowAdvisorSpecialization
 }
 
@@ -3110,7 +3133,6 @@ export interface WorkflowNotificationConfig {
 }
 
 export interface WorkflowExecutionDefaults {
-  always_use_same_run: boolean
   // Global step overrides (replaces step_override.json)
   disable_learning?: boolean
   disable_parallel_tool_execution?: boolean
@@ -3176,6 +3198,7 @@ export interface UpdateWorkflowManifestRequest {
   schedules?: WorkflowScheduleEntry[]
   workshop_mode?: string // Standalone patch — avoids zeroing out other execution_defaults fields
   run_retention_count?: number
+  pulse_enabled?: boolean
   run_notification_instructions?: string
   pulse_notification_instructions?: string
   run_notification_channels?: string[]
@@ -3185,6 +3208,8 @@ export interface UpdateWorkflowManifestRequest {
   run_notification_recipients?: string[]
   pulse_notification_recipients?: string[]
   notification_instructions?: string
+  folder_access?: WorkflowFolderGrant[]
+  folder_access_requests?: WorkflowFolderAccessRequest[]
 }
 
 export interface DuplicateWorkflowManifestRequest {

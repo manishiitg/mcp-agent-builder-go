@@ -11,6 +11,7 @@ import {
 } from '../../utils/reportHumanInputFormatting'
 import { delegateReportHumanInputActionToChat, sendReportHumanInputQuestionToChat } from '../../utils/reportHumanInputChat'
 import { useContainerSizeTier } from './reportWidgets/tableHelpers'
+import { PlainMarkdown } from '../ui/PlainMarkdown'
 import { WORKFLOW_LOG_REFRESH_EVENT } from './workflowEvents'
 
 type ReportHumanInputDraft = {
@@ -33,6 +34,7 @@ function keepPreviousInputsWhenUnchanged(
 function sourceLabel(source?: string): string {
   if (source && ['technical_review', 'engineering_review', 'ops_review'].includes(source)) return 'Technical Review'
   if (source && ['strategic_review', 'strategy_auditor', 'goal_advisor'].includes(source)) return 'Strategic Review'
+  if (source === 'plan_drift_review') return 'Plan Drift Review'
   return 'Pulse'
 }
 
@@ -81,7 +83,7 @@ function HumanInputContext({ value }: { value: string }) {
           {section.label && (
             <div className="mb-0.5 font-semibold text-foreground">{section.label}</div>
           )}
-          {section.body && <p className="whitespace-pre-line">{section.body}</p>}
+          {section.body && <PlainMarkdown content={section.body} />}
           {section.items.length > 0 && (
             <ol className="mt-1.5 list-decimal space-y-1.5 pl-4 marker:font-semibold marker:text-cyan-300">
               {section.items.map((item, itemIndex) => <li key={itemIndex} className="pl-1">{item}</li>)}

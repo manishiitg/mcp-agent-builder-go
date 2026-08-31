@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -50,6 +51,9 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractFinalizerOwnedScheduleVersion,
 		workflowContractReportActivitySectionVersion,
 		workflowContractReportActivityTabVersion,
+		workflowContractPulseLifecycleReconciliationVersion,
+		workflowContractPulseBacklogTriageVersion,
+		workflowContractPulseActionableBacklogVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -149,23 +153,19 @@ until index.html has passed validation. Do not run the workflow. If a source is
 missing or the consolidation is ambiguous, report the blocker and do not stamp.
 Otherwise call set_workflow_contract_version(version="1.0.23") and stop.`
 
-const upgradeDedicatedPulseSchedule = `WORKFLOW CONTRACT UPGRADE: DEDICATED PULSE REVIEW SCHEDULE.
+const upgradeDedicatedPulseSchedule = `WORKFLOW CONTRACT UPGRADE: POST-RUN PULSE ENABLEMENT.
 
-Recurring Pulse is represented only by an enabled pulse_review_only schedule;
-that schedule is the single source of truth for enablement and cadence.
-Normal workflow schedules never run Gate/Review+Fix inline. Legacy
-post_run_monitor and post_run_monitor_mode fields are obsolete and ignored;
-remove them if present. If recurring Pulse was enabled previously and no
-pulse_review_only schedule exists, create one at a cadence justified by the
-enabled run schedules and retained run history. Do not add group_names,
-route_selections, or messages to that review schedule.
+Recurring Pulse is represented by workflow.json pulse.enabled. It has no
+independent cron: after each normal scheduled workflow run, Pulse Gate decides
+whether Review+Fix work is due for that run's evidence. Legacy post_run_monitor,
+post_run_monitor_mode, and pulse_review_only schedules are obsolete.
 
-Read the raw workflow.json before changing anything so a legacy
-post_run_monitor=true can be distinguished from an absent/false field. If it
-was true and no dedicated schedule exists, create the schedule. If it was
-false/absent and no dedicated schedule exists, do not enable Pulse. Calling
-set_workflow_contract_version rewrites the manifest through the current schema
-and removes the retired fields.
+Read the raw workflow.json before changing anything. Preserve prior enablement:
+if post_run_monitor was true or an enabled pulse_review_only schedule exists,
+set pulse.enabled=true. Otherwise leave Pulse disabled. Remove every
+pulse_review_only schedule; do not change any normal workflow schedule.
+Calling set_workflow_contract_version rewrites the manifest through the current
+schema and removes the retired fields.
 
 Do not run the workflow. Call set_workflow_contract_version(version="1.0.27") and stop.`
 
@@ -225,7 +225,7 @@ retained schedule message. For a route-backed schedule, route_selections own
 what workflow work runs; messages are optional follow-ups only.
 
 The platform owns normal run finalization: backup, execution-report publish,
-and run notification. The enabled pulse_review_only schedule owns Pulse Gate,
+run notification, and—when pulse.enabled is true—the post-run Pulse Gate,
 Review, and Fixer. Remove a normal schedule message when it merely tells the
 agent to do any of the following after selected work completes: routine
 evaluation, generic completion reporting, backup/status.json updates, Git
@@ -301,6 +301,34 @@ If the report already uses tab-based navigation and the activity section is alre
 
 Call validate_report_html after editing; repair every error. Do not run the workflow. If the required source data is ambiguous or does not exist yet, report the blocker and do not stamp. Otherwise call set_workflow_contract_version(version="1.0.31") and stop.`
 
+const upgradePulseLifecycleReconciliation = `WORKFLOW CONTRACT UPGRADE: PULSE CLOSE-ON-APPLIED LIFECYCLE.
+
+Do only this platform data migration. Call record_pulse_migration_reconciliation(workspace_path={{WORKSPACE_PATH}}, scope="lifecycle") once. It closes every still-active issue where a Fixer recorded changed files, regardless of its former verification/wait state; it moves legacy waiting-without-a-fix rows back to the active issue register, retires merged aliases, and preserves every attempt and event. It does not change the plan, schedules, workflow instructions, or human/platform-owned issues.
+
+Read the returned counts. Then call get_pulse_state(workspace_path={{WORKSPACE_PATH}}, view="backlog", detail="compact") to confirm the resulting issue register is readable. Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.32") and stop.`
+
+const upgradePulseBacklogTriage = `WORKFLOW CONTRACT UPGRADE: PULSE BACKLOG TRIAGE.
+
+Do only this platform data migration. Call record_pulse_migration_reconciliation(workspace_path={{WORKSPACE_PATH}}, scope="lifecycle") once. It applies the close-on-applied rule and returns legacy unfixed waits to the active register. Then call get_pulse_state(workspace_path={{WORKSPACE_PATH}}, view="backlog", detail="compact") and confirm it is readable. Do not infer that free-text claims such as "passed" close an issue: only typed terminal lifecycle evidence may close automatically. The later bounded Technical Review triages the remaining ambiguous roots.
+
+Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.33") and stop.`
+
+const upgradePulseActionableBacklog = `WORKFLOW CONTRACT UPGRADE: PULSE ACTIONABLE BACKLOG.
+
+Do only this platform data migration. Call record_pulse_migration_reconciliation(workspace_path={{WORKSPACE_PATH}}, scope="actionable_backlog") once. It applies the close-on-applied lifecycle rule, retires historical free-text observations that were never promoted into typed canonical Pulse issues, and moves typed platform/harness findings out of this workflow's repair queue. It preserves all records, decisions, evidence waits, and platform history.
+
+Read the returned counts. Then call get_pulse_state(workspace_path={{WORKSPACE_PATH}}, view="backlog", detail="compact") and confirm the canonical issue register is readable. Pulse's workflow-owned repair target is only the returned actionable_workflow_issues count: do not treat platform issues, human decisions, evidence waits, or retired observations as repair debt. Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.34") and stop.`
+
+const workflowUpgradeWorkspacePathPlaceholder = "{{WORKSPACE_PATH}}"
+
+func bindWorkflowUpgradeWorkspacePath(query, workspacePath string) string {
+	workspacePath = strings.TrimSpace(workspacePath)
+	if workspacePath == "" {
+		return query
+	}
+	return strings.ReplaceAll(query, workflowUpgradeWorkspacePathPlaceholder, strconv.Quote(workspacePath))
+}
+
 // workflowVersionUpgradePlan keeps the retired HTML presentation migrations
 // retired, but preserves the independent behavioral/data migrations older
 // workflows still need. They are deliberately grouped into bounded,
@@ -356,6 +384,15 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	}
 	if rank < 30 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractReportActivityTabVersion, label: "upgrade-report-activity-tab", query: upgradeReportActivityTab})
+	}
+	if rank < 31 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractPulseLifecycleReconciliationVersion, label: "upgrade-pulse-lifecycle-reconciliation", query: upgradePulseLifecycleReconciliation})
+	}
+	if rank < 32 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractPulseBacklogTriageVersion, label: "upgrade-pulse-backlog-triage", query: upgradePulseBacklogTriage})
+	}
+	if rank < 33 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractPulseActionableBacklogVersion, label: "upgrade-pulse-actionable-backlog", query: upgradePulseActionableBacklog})
 	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse

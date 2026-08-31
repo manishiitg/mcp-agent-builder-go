@@ -32,28 +32,52 @@ const (
 // is intentionally not a Pulse issue: the reviewer decides whether the fact
 // matters, is a known/recovered failure, or warrants a durable finding.
 type Finding struct {
-	Kind      string `json:"kind"`
-	Severity  string `json:"severity"`
-	Subject   string `json:"subject"`
-	Detail    string `json:"detail"`
-	Evidence  string `json:"evidence"`
-	RunFolder string `json:"run_folder,omitempty"`
-	StepID    string `json:"step_id,omitempty"`
-	Artifact  string `json:"artifact,omitempty"`
+	Kind       string `json:"kind"`
+	Severity   string `json:"severity"`
+	Subject    string `json:"subject"`
+	Detail     string `json:"detail"`
+	Evidence   string `json:"evidence"`
+	ObservedAt string `json:"observed_at,omitempty"`
+	RunFolder  string `json:"run_folder,omitempty"`
+	StepID     string `json:"step_id,omitempty"`
+	Artifact   string `json:"artifact,omitempty"`
 }
 
 type Result struct {
-	Detector        string    `json:"detector"`
-	DetectorVersion string    `json:"detector_version"`
-	ObservedAt      string    `json:"observed_at"`
-	CoverageStatus  string    `json:"coverage_status"`
-	CoverageReason  string    `json:"coverage_reason,omitempty"`
-	RunsInspected   int       `json:"runs_inspected"`
-	Findings        []Finding `json:"findings"`
+	Detector        string        `json:"detector"`
+	DetectorVersion string        `json:"detector_version"`
+	ObservedAt      string        `json:"observed_at"`
+	CoverageStatus  string        `json:"coverage_status"`
+	CoverageReason  string        `json:"coverage_reason,omitempty"`
+	RunsInspected   int           `json:"runs_inspected"`
+	Findings        []Finding     `json:"findings"`
+	RunIndex        *RunIndex     `json:"run_index,omitempty"`
+	RunIdentities   []RunIdentity `json:"run_identities,omitempty"`
 }
 
 type runMetadata struct {
-	Status string `json:"status"`
+	Status            string `json:"status"`
+	ExecutionID       string `json:"execution_id"`
+	PlanRevision      string `json:"plan_revision"`
+	ActiveSlotAtStart string `json:"active_slot_at_start"`
+}
+
+type RunIndex struct {
+	Version               int      `json:"version"`
+	ActiveIteration       string   `json:"active_iteration"`
+	RetainedIterations    []string `json:"retained_iterations"`
+	LastTransition        string   `json:"last_transition"`
+	FullRunPolicy         string   `json:"full_run_policy"`
+	PartialGroupRunPolicy string   `json:"partial_group_policy"`
+	UpdatedAt             string   `json:"updated_at"`
+}
+
+type RunIdentity struct {
+	RunFolder        string `json:"run_folder"`
+	LifecycleRole    string `json:"lifecycle_role"`
+	ExecutionID      string `json:"execution_id,omitempty"`
+	PlanRevision     string `json:"plan_revision"`
+	ProvenanceStatus string `json:"provenance_status"`
 }
 
 type timingArtifact struct {
@@ -107,8 +131,20 @@ func CheckRuntime(workspacePath string, now time.Time) Result {
 	} else {
 		result.CoverageStatus = CoverageVerified
 	}
+	if index, indexErr := loadRunIndex(runsRoot); indexErr == nil {
+		result.RunIndex = index
+	} else {
+		result.CoverageStatus = CoveragePartial
+		result.CoverageReason = appendReason(result.CoverageReason, "run identity index unavailable: "+indexErr.Error())
+	}
 	for _, run := range candidates {
 		result.RunsInspected++
+		if identity, identityErr := inspectRunIdentity(run, result.RunIndex); identityErr == nil {
+			result.RunIdentities = append(result.RunIdentities, identity)
+		} else {
+			result.CoverageStatus = CoveragePartial
+			result.CoverageReason = appendReason(result.CoverageReason, fmt.Sprintf("%s identity: %v", run.rel, identityErr))
+		}
 		findings, err := inspectRun(run)
 		if err != nil {
 			result.CoverageStatus = CoveragePartial
@@ -124,6 +160,59 @@ func CheckRuntime(workspacePath string, now time.Time) Result {
 		return result.Findings[i].Artifact < result.Findings[j].Artifact
 	})
 	return result
+}
+
+func loadRunIndex(runsRoot string) (*RunIndex, error) {
+	raw, err := os.ReadFile(filepath.Join(runsRoot, "run_index.json"))
+	if err != nil {
+		return nil, err
+	}
+	var index RunIndex
+	if err := json.Unmarshal(raw, &index); err != nil {
+		return nil, err
+	}
+	if index.Version <= 0 || strings.TrimSpace(index.ActiveIteration) == "" {
+		return nil, fmt.Errorf("missing version or active_iteration")
+	}
+	return &index, nil
+}
+
+func inspectRunIdentity(run runCandidate, index *RunIndex) (RunIdentity, error) {
+	raw, err := os.ReadFile(filepath.Join(run.dir, "run_metadata.json"))
+	if err != nil {
+		return RunIdentity{}, err
+	}
+	var metadata runMetadata
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return RunIdentity{}, err
+	}
+	topLevel := strings.Split(filepath.ToSlash(run.rel), "/")[0]
+	role := "unknown"
+	if index != nil {
+		if topLevel == index.ActiveIteration {
+			role = "active"
+		} else {
+			for _, retained := range index.RetainedIterations {
+				if topLevel == retained {
+					role = "retained"
+					break
+				}
+			}
+		}
+	}
+	planRevision := strings.TrimSpace(metadata.PlanRevision)
+	status := "verified"
+	if strings.TrimSpace(metadata.ExecutionID) == "" || planRevision == "" {
+		status = "unknown_legacy"
+	}
+	if planRevision == "" {
+		planRevision = "unknown_legacy"
+	}
+	return RunIdentity{
+		RunFolder: run.rel, LifecycleRole: role,
+		ExecutionID: strings.TrimSpace(metadata.ExecutionID), PlanRevision: planRevision,
+		ProvenanceStatus: status,
+	}, nil
 }
 
 func resolveRunsRoot(workspacePath string) (string, error) {
@@ -194,12 +283,13 @@ func inspectRun(run runCandidate) ([]Finding, error) {
 		return nil, fmt.Errorf("decode run_metadata.json: %w", err)
 	}
 	status := strings.ToLower(strings.TrimSpace(metadata.Status))
+	observedAt := run.modTime.UTC().Format(time.RFC3339Nano)
 	var findings []Finding
 	if status != "" && status != "completed" && status != "success" {
 		findings = append(findings, Finding{
 			Kind: "run_not_completed", Severity: severityHigh, Subject: "Run did not complete",
 			Detail:   "The retained run has an explicit non-success terminal/runtime status.",
-			Evidence: fmt.Sprintf("run_metadata.status=%q", metadata.Status), RunFolder: run.rel, Artifact: "run_metadata.json",
+			Evidence: fmt.Sprintf("run_metadata.status=%q", metadata.Status), ObservedAt: observedAt, RunFolder: run.rel, Artifact: "run_metadata.json",
 		})
 	}
 	if status != "completed" && status != "success" {
@@ -228,9 +318,10 @@ func inspectRun(run runCandidate) ([]Finding, error) {
 		if timing.LLM.ErroredCount > 0 || timing.LLM.CanceledCount > 0 || timing.Tools.ErroredCount > 0 {
 			findings = append(findings, Finding{
 				Kind: "runtime_status_disagreement", Severity: severityHigh, StepID: timing.StepID, RunFolder: run.rel, Artifact: artifact,
-				Subject:  "Completed run contains failed child calls",
-				Detail:   "The outer run is completed, but its timing receipt records an errored or canceled LLM/tool call.",
-				Evidence: fmt.Sprintf("llm.errored_count=%d; llm.canceled_count=%d; tools.errored_count=%d", timing.LLM.ErroredCount, timing.LLM.CanceledCount, timing.Tools.ErroredCount),
+				Subject:    "Completed run contains failed child calls",
+				Detail:     "The outer run is completed, but its timing receipt records an errored or canceled LLM/tool call.",
+				Evidence:   fmt.Sprintf("llm.errored_count=%d; llm.canceled_count=%d; tools.errored_count=%d", timing.LLM.ErroredCount, timing.LLM.CanceledCount, timing.Tools.ErroredCount),
+				ObservedAt: observedAt,
 			})
 		}
 		for _, call := range timing.Tools.Calls {
@@ -239,9 +330,10 @@ func inspectRun(run runCandidate) ([]Finding, error) {
 			}
 			findings = append(findings, Finding{
 				Kind: "tool_success_with_structured_failure", Severity: severityHigh, StepID: timing.StepID, RunFolder: run.rel, Artifact: artifact,
-				Subject:  "Successful tool call contains structured failure",
-				Detail:   "The tool-call status is success but its structured result reports a failure.",
-				Evidence: fmt.Sprintf("tool=%q; status=%q; result contains isError=true or non-zero exit_code", call.ToolName, call.Status),
+				Subject:    "Successful tool call contains structured failure",
+				Detail:     "The tool-call status is success but its structured result reports a failure.",
+				Evidence:   fmt.Sprintf("tool=%q; status=%q; result contains isError=true or non-zero exit_code", call.ToolName, call.Status),
+				ObservedAt: observedAt,
 			})
 		}
 		return nil

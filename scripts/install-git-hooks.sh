@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Install Git Hooks for Gitleaks Secret Scanning and Golangci-lint
+# Install Git Hooks for Gitleaks Secret Scanning
 # This script sets up pre-commit hooks to automatically scan for secrets and run linting
 
 set -e
 
-echo "🔒 Setting up pre-commit hooks (Gitleaks + Golangci-lint)..."
+echo "🔒 Setting up pre-commit hooks (Gitleaks secret scanning)..."
 
 # Colors for output
 RED='\033[0;31m'
@@ -66,7 +66,7 @@ cat > .git/hooks/pre-commit << 'HOOKEOF'
 #!/bin/bash
 
 # Pre-commit Hook
-# Scans staged files for secrets, sensitive data, and runs golangci-lint
+# Scans staged files for secrets and sensitive data
 
 set -e
 
@@ -148,116 +148,16 @@ if [ -x "$REPO_ROOT_FOR_DRIFT/scripts/check-schema-drift.sh" ]; then
     fi
 fi
 
-# Run golangci-lint on Go files
-echo -e "${BLUE}🔍 Running golangci-lint...${NC}"
-
-# Add GOPATH/bin to PATH early so golangci-lint can be found
-if [ -d "$(go env GOPATH)/bin" ]; then
-    export PATH="$PATH:$(go env GOPATH)/bin"
-fi
-
-# Check if golangci-lint is available
-GOLANGCI_LINT_CMD=""
-if command -v golangci-lint &> /dev/null; then
-    GOLANGCI_LINT_CMD="golangci-lint"
-elif [ -f "$(go env GOPATH)/bin/golangci-lint" ]; then
-    GOLANGCI_LINT_CMD="$(go env GOPATH)/bin/golangci-lint"
-else
-    echo -e "${YELLOW}⚠️  golangci-lint not found. Skipping lint check.${NC}"
-    echo "Run 'cd agent_go && make install-linter' to install golangci-lint."
-    exit 0
-fi
-
-# Change to agent_go directory and run lint
-cd agent_go 2>/dev/null || {
-    echo -e "${YELLOW}⚠️  agent_go directory not found. Skipping lint check.${NC}"
-    exit 0
-}
-
-# Run linter - show output directly to terminal
+# golangci-lint + go build (agent_go/workspace) + frontend build were removed
+# from this hook — CI (desktop-release.yml's commit-artifact job) already
+# rebuilds everything on every push to main, so re-running the full lint/
+# build locally on every commit was pure duplicated latency, not an extra
+# safety net. Run them yourself before committing if you want the earlier
+# signal (`cd agent_go && golangci-lint run ./... && go build ./...`,
+# `cd frontend && npm run build`).
 echo ""
-set +e
-LINT_OUTPUT_FULL=$($GOLANGCI_LINT_CMD run ./... 2>&1)
-LINT_EXIT=$?
-LINT_OUTPUT=$(echo "$LINT_OUTPUT_FULL" | grep -v -E "(tool_output_folder|tool_output/|cache/|bin/)")
-echo "$LINT_OUTPUT"
-set -e
-
-# Frontend build check — only runs if any staged file is under frontend/
-REPO_ROOT="$(git rev-parse --show-toplevel)"
-FRONTEND_CHANGES=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^frontend/' || true)
-if [ -n "$FRONTEND_CHANGES" ]; then
-    echo ""
-    echo -e "${BLUE}🏗️  Building frontend (staged frontend changes detected)...${NC}"
-    if [ ! -d "$REPO_ROOT/frontend/node_modules" ]; then
-        echo -e "${RED}❌ frontend/node_modules missing — run 'npm install' in frontend/ before committing.${NC}"
-        exit 1
-    fi
-    if ! (cd "$REPO_ROOT/frontend" && npm run build >/tmp/frontend-build.log 2>&1); then
-        echo -e "${RED}❌ Frontend build failed! Commit blocked.${NC}"
-        echo ""
-        tail -60 /tmp/frontend-build.log
-        echo ""
-        echo "Full log: /tmp/frontend-build.log"
-        exit 1
-    fi
-    echo -e "${GREEN}✅ Frontend build successful.${NC}"
-    cd "$REPO_ROOT/agent_go"
-fi
-
-if [ $LINT_EXIT -eq 0 ]; then
-    echo ""
-    echo -e "${GREEN}✅ Linting passed.${NC}"
-    cd "$(git rev-parse --show-toplevel)"
-    echo -e "${BLUE}🏗️  Building agent_go...${NC}"
-    if ! (cd agent_go && go build ./...); then
-        echo -e "${RED}❌ Build failed! Commit blocked.${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}✅ Build successful.${NC}"
-    if [ -d "workspace" ] && [ -f "workspace/go.mod" ]; then
-        echo -e "${BLUE}🏗️  Building workspace...${NC}"
-        if ! (cd workspace && go build ./...); then
-            echo -e "${RED}❌ Workspace build failed! Commit blocked.${NC}"
-            exit 1
-        fi
-        echo -e "${GREEN}✅ Workspace build successful.${NC}"
-    fi
-    echo ""
-    echo -e "${GREEN}✅ All pre-commit checks passed. Proceeding with commit.${NC}"
-    exit 0
-else
-    ISSUE_COUNT=$(echo "$LINT_OUTPUT" | grep -E "issues:" | grep -oE "[0-9]+ issues" | grep -oE "[0-9]+" || echo "0")
-    CRITICAL_ISSUES=$(echo "$LINT_OUTPUT" | grep -E "G201|G202|G204|G304" | grep -v "_test.go" | grep -v "/testing/" | wc -l | tr -d ' ')
-    UNUSED_ISSUES=$(echo "$LINT_OUTPUT" | grep -E "is unused \(unused\)" | wc -l | tr -d ' ')
-    INEFFASSIGN_ISSUES=$(echo "$LINT_OUTPUT" | grep -E "\(ineffassign\)" | wc -l | tr -d ' ')
-
-    if [ "$CRITICAL_ISSUES" -gt 0 ]; then
-        echo ""
-        echo -e "${RED}❌ Critical security issues detected ($CRITICAL_ISSUES critical)! Commit blocked.${NC}"
-        echo "$LINT_OUTPUT" | grep -E "G201|G202|G204|G304" | head -10
-        exit 1
-    elif [ "$UNUSED_ISSUES" -gt 0 ]; then
-        echo ""
-        echo -e "${RED}❌ Unused code detected ($UNUSED_ISSUES unused functions/variables/types)! Commit blocked.${NC}"
-        echo "$LINT_OUTPUT" | grep -E "is unused \(unused\)" | head -20
-        exit 1
-    elif [ "$INEFFASSIGN_ISSUES" -gt 0 ]; then
-        echo ""
-        echo -e "${RED}❌ Ineffectual assignments detected ($INEFFASSIGN_ISSUES ineffassign issues)! Commit blocked.${NC}"
-        echo "$LINT_OUTPUT" | grep -E "\(ineffassign\)" | head -20
-        exit 1
-    elif [ "$ISSUE_COUNT" -gt 200 ]; then
-        echo ""
-        echo -e "${RED}❌ Too many linting issues ($ISSUE_COUNT)! Commit blocked.${NC}"
-        exit 1
-    else
-        echo ""
-        echo -e "${YELLOW}⚠️  Linting found $ISSUE_COUNT issues (non-blocking).${NC}"
-        echo -e "${YELLOW}Proceeding with commit...${NC}"
-        exit 0
-    fi
-fi
+echo -e "${GREEN}✅ All pre-commit checks passed. Proceeding with commit.${NC}"
+exit 0
 HOOKEOF
 
 # Make the pre-commit hook executable
@@ -329,13 +229,13 @@ echo ""
 echo -e "${GREEN}🎉 Pre-commit hooks installed successfully!${NC}"
 echo ""
 echo -e "${BLUE}What happens now:${NC}"
-echo "  • Every commit will be automatically scanned for secrets (gitleaks)"
-echo "  • Every commit will run golangci-lint on Go code"
-echo "  • Every commit will run go build on agent_go and workspace"
-echo "  • Commits touching frontend/ will run 'npm run build' (tsc -b && vite build) and block on failure"
-echo "  • Errors from tool_output_folder, cache, and bin are automatically filtered"
-echo "  • Commits with secrets, critical linting issues, or build failures will be blocked"
+echo "  • Every commit will be automatically scanned for secrets (gitleaks) and sensitive file patterns"
+echo "  • Commits with secrets or sensitive files will be blocked"
 echo "  • You'll get clear error messages if issues are detected"
+echo "  • golangci-lint / go build / frontend build are NOT run on commit anymore — CI (desktop-release.yml)"
+echo "    already rebuilds everything on every push to main, so this hook stays fast. Run them yourself"
+echo "    before committing if you want that signal early: 'cd agent_go && golangci-lint run ./... && go build ./...',"
+echo "    'cd frontend && npm run build'"
 echo ""
 echo -e "${BLUE}Manual scanning:${NC}"
 echo "  • Run './scripts/scan-secrets.sh' to scan the entire repository"
@@ -347,4 +247,4 @@ echo "  • Edit '.gitleaks.toml' to customize secret detection rules"
 echo "  • Edit 'agent_go/.golangci.yml' to customize linting rules"
 echo "  • See 'agent_go/SECURITY.md' for security best practices"
 echo ""
-echo -e "${GREEN}Your repository is now protected against accidental secret commits and linting issues! 🔒${NC}"
+echo -e "${GREEN}Your repository is now protected against accidental secret commits! 🔒${NC}"

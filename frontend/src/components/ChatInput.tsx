@@ -1,6 +1,7 @@
 import { routeForQueuedMessage, splitQueuedMessages } from '../utils/queuedMessageDelivery'
 import { resolvePiModelGroup } from '../utils/llmDisplay'
 import React, { useRef, useCallback, useMemo, useState, useEffect, useLayoutEffect } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useShallow } from 'zustand/react/shallow'
 
 const DBG = '[skill-popup]'
@@ -114,7 +115,7 @@ import SkillImportDialog from './skills/SkillImportDialog'
 import { MCPConfigPopup } from './MCPConfigPopup'
 import MCPDetailsModal from './MCPDetailsModal'
 import LLMConfigurationModal from './LLMConfigurationModal'
-import type { PlannerFile, LLMProvider, ChatHistorySession } from '../services/api-types'
+import type { PlannerFile, LLMProvider, ChatHistorySession, TerminalSnapshot } from '../services/api-types'
 import type { LLMOption } from '../types/llm'
 import { useAppStore, useMCPStore, useLLMStore, useChatStore } from '../stores'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
@@ -126,6 +127,7 @@ import { skillsApi } from '../api/skills'
 import type { Skill } from '../types/skills'
 import { chatHistorySupportsNativeResume, chatHistoryUsesTerminalRestore } from './PreviousChatHistoryPanel'
 import { getClipboardImageFiles } from './clipboardImages'
+import { isMainAgentTerminal } from '../utils/terminalIdentity'
 
 const AUTO_NOTIFICATION_PREFIX = '[AUTO-NOTIFICATION]'
 const FALLBACK_CODING_AGENT_PROVIDERS = new Set(['claude-code', 'codex-cli', 'cursor-cli', 'pi-cli'])
@@ -1300,6 +1302,29 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     return (entry?.integration_kind === 'coding_agent' && !entry.deprecated) || FALLBACK_CODING_AGENT_PROVIDERS.has(provider)
   }, [primaryLLM?.provider, effectiveProviderForSteer, providerManifest])
 
+  // The terminal snapshot already carries the coding CLI's structured status
+  // line. Surface it next to the model in the composer so a user can see plan
+  // usage (for example "5h 11% · 7d 22%") without opening the terminal.
+  const { data: chatInputTerminalStatus } = useQuery({
+    queryKey: ['chat-input-statusline', tabSessionId],
+    queryFn: () => agentApi.listTerminals(tabSessionId!, 'none'),
+    enabled: !hideRuntimeStatus && !isProductSurface && mainAgentIsTmuxCLI && !!tabSessionId,
+    staleTime: 1_000,
+    retry: false,
+    refetchInterval: (query) => {
+      const mainTerminal = query.state.data?.terminals?.find(isMainAgentTerminal)
+      return isTurnInFlight || mainTerminal?.active ? 3_000 : false
+    },
+  })
+  const chatInputStatusExtras = useMemo(() => {
+    const mainTerminal: TerminalSnapshot | undefined = chatInputTerminalStatus?.terminals?.find(isMainAgentTerminal)
+    const rawExtras = mainTerminal?.status?.status_meta?.status_extras
+    return Array.isArray(rawExtras)
+      ? rawExtras.filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+      : []
+  }, [chatInputTerminalStatus?.terminals])
+  const chatInputStatusLine = chatInputStatusExtras.join(' · ')
+
   // Use the exact same authoritative activity classification as the global
   // monitor. A retained tmux session is intentionally "idle" there; merely
   // keeping its process alive must never make this spinner claim the agent is
@@ -1341,6 +1366,26 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     primaryLLM?.model,
     primaryLLM?.provider,
   ])
+
+  // mainAgentRuntimeStatus reads activeSession from activeSessionsCache, a
+  // 30s-TTL cache that nothing polls on a timer inside the workflow-builder
+  // view (only the main chat view's GlobalActivityMonitor does, every 5s).
+  // The tab strip's own busy dot reads chatTabs[tabId].isStreaming /
+  // .hasRunningBgAgents directly -- live, event-driven -- so left alone this
+  // composer chip can visibly lag it: still showing "running" up to 30s
+  // after a background agent/step actually finished (reported live: the
+  // composer's spinner kept going after the tab strip had already gone
+  // idle). Force a refresh right when the live signal transitions instead
+  // of waiting on the cache's own TTL.
+  const liveTabBusy = (activeTab?.isStreaming ?? false) || (activeTab?.hasRunningBgAgents ?? false)
+  const lastLiveTabBusyRef = useRef(liveTabBusy)
+  useEffect(() => {
+    if (lastLiveTabBusyRef.current === liveTabBusy) return
+    lastLiveTabBusyRef.current = liveTabBusy
+    useChatStore.getState().getActiveSessions(true).catch(error => {
+      console.warn('[ChatInput] Failed to refresh active sessions after live busy-state change', error)
+    })
+  }, [liveTabBusy])
 
   // Preset folder selection
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -2495,11 +2540,19 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     if (routeLiveInputToCLI) {
       if (hasSubmitTarget) {
         const submittedTabId = activeTabId || undefined
+        const submittedDraft = {
+          inputText,
+          pastedAttachments: chatPastedAttachments,
+        }
         setLiveMessageDelivery({
           status: 'sending',
           message: query,
           provider: effectiveProviderForSteer || undefined,
         })
+        // Live-input acknowledgement can lag while the retained CLI wakes up.
+        // The conversation adds an optimistic user row immediately, so release
+        // the composer now instead of leaving the submitted text looking stuck.
+        clearInputState()
         let accepted: boolean | void
         try {
           accepted = await onSubmit(query, {
@@ -2511,6 +2564,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
           accepted = false
         }
         if (accepted === false) {
+          // Do not overwrite text the user began typing while delivery was in
+          // flight, and do not restore a draft into a tab they navigated away
+          // from. Otherwise put the original text/attachments back for retry.
+          if (submittedTabId && inputOwnerTabIdRef.current === submittedTabId && !latestQueryToSubmitRef.current.trim()) {
+            setLocalInputText(submittedDraft.inputText)
+            setTabConfig(submittedTabId, submittedDraft)
+          }
           setLiveMessageDelivery({
             status: 'failed',
             message: query,
@@ -2519,16 +2579,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
           })
           scheduleLiveMessageDeliveryClear()
           return
-        }
-        // Do not erase text typed while this asynchronous send was in flight.
-        if (shouldClearAcceptedChatDraft({
-          accepted,
-          submittedTabId,
-          currentTabId: inputOwnerTabIdRef.current,
-          submittedMessage: query,
-          currentMessage: latestQueryToSubmitRef.current,
-        })) {
-          clearInputState()
         }
         setLiveMessageDelivery({
           status: 'sent_to_cli',
@@ -2941,10 +2991,17 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       return `${agentProfileWorkspace.replace(/\/$/, '')}/uploads`
     }
     if (selectedModeCategory === 'workflow') {
-      return workspaceActiveFolder || 'Workflow'
+      // activeWorkflowWorkspacePath resolves the workflow this chat tab is
+      // actually scoped to. workspaceActiveFolder is the file browser's own
+      // navigation state -- a separate piece of state that can be empty or
+      // pointed elsewhere while the chat itself is scoped to a workflow, which
+      // silently dropped pasted screenshots into the shared Workflow/ root
+      // instead of the workflow's own folder (confirmed live: a pasted image
+      // from the confida-login chat landed at Workflow/pasted-image-*.png).
+      return activeWorkflowWorkspacePath || workspaceActiveFolder || 'Workflow'
     }
     return 'Chats'
-  }, [agentProfileWorkspace, selectedModeCategory, workspaceActiveFolder])
+  }, [activeWorkflowWorkspacePath, agentProfileWorkspace, selectedModeCategory, workspaceActiveFolder])
 
   const uploadFilesToChat = useCallback(async (files: File[]) => {
     if (files.length === 0 || isUploadingFiles) {
@@ -3277,10 +3334,20 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
               ? isProductSurface ? 'Message saved' : 'Saved to queue'
               : isProductSurface ? 'Could not send the message' : 'Could not submit live input'
     : ''
-  // The project chat already echoes an accepted message in the conversation.
-  // Do not leave an extra success banner in the composer; only transient send
-  // and failure states need a separate signal here.
-  const showLiveDelivery = Boolean(liveMessageDelivery && (!isProductSurface || liveMessageDelivery.status === 'sending' || liveMessageDelivery.status === 'failed'))
+  // The chat history already echoes an accepted message as its own bubble
+  // once delivery reaches 'sent_to_cli' or 'next_turn_started' (see
+  // ChatArea's submitQueryImmediately, which appends an optimistic user
+  // message event for exactly those two statuses, on every surface, not
+  // just product chat). Live submissions now receive that same optimistic
+  // bubble before their acknowledgement arrives, so the sending indicator is
+  // status-only rather than a second copy of the message. Queued/local-save
+  // states never get a bubble, so they still need the banner as the only
+  // signal; failed submissions retain their message preview for retry context.
+  const showLiveDelivery = Boolean(liveMessageDelivery && (
+    liveMessageDelivery.status === 'sending' ||
+    liveMessageDelivery.status === 'failed' ||
+    (!isProductSurface && liveMessageDelivery.status !== 'sent_to_cli' && liveMessageDelivery.status !== 'next_turn_started')
+  ))
   const liveDeliveryClass = liveMessageDelivery?.status === 'failed'
     ? 'text-amber-600 dark:text-amber-300'
     : liveMessageDelivery?.status === 'sending'
@@ -3508,7 +3575,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                   <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />
                 )}
                 <span className="shrink-0 font-medium">{liveDeliveryText}</span>
-                {!isProductSurface && <span className="min-w-0 truncate opacity-75">
+                {!isProductSurface && liveMessageDelivery.status !== 'sending' && <span className="min-w-0 truncate opacity-75">
                   {liveDeliveryPreview(liveMessageDelivery.message)}
                 </span>}
                 {!isProductSurface && liveMessageDelivery.detail && (
@@ -3624,6 +3691,23 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     <TooltipContent side="top">
                       <p>{mainAgentRuntimeStatus.label} — {mainAgentRuntimeStatus.activityLabel}</p>
                     </TooltipContent>
+                  </Tooltip>
+                )}
+                {chatInputStatusLine && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div
+                        data-testid="chat-input-statusline"
+                        className="flex h-7 max-w-[220px] items-center rounded-md border border-lime-400/20 bg-lime-400/5 px-1.5 font-mono text-[10px] text-lime-200/90"
+                        role="status"
+                        aria-label={`Provider status: ${chatInputStatusLine}`}
+                      >
+                        <span className="truncate">{chatInputStatusLine}</span>
+                      </div>
+                    </TooltipTrigger>
+                      <TooltipContent side="top">
+                        <p>Runtime status · {chatInputStatusLine}</p>
+                      </TooltipContent>
                   </Tooltip>
                 )}
                 {mainTerminalAvailable && activeTabId && !isProductSurface && (

@@ -22,6 +22,7 @@ var evaluationPlanEditableFields = []string{
 	"max_score",
 	"applies_to_routes",
 	"validation_schema",
+	"pre_validation",
 	"db_write",
 }
 
@@ -75,6 +76,23 @@ func UpdateEvaluationPlanStep(
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
 		return "", fmt.Errorf("cannot set %s; editable fields are %s", strings.Join(unknown, ", "), strings.Join(evaluationPlanEditableFields, ", "))
+	}
+
+	// validation_schema/pre_validation are accepted here as raw decoded JSON
+	// (see the function doc for why this tool edits the map, not a struct),
+	// which meant they never passed through the same schema validators every
+	// other schema-writing tool in this file does -- PLAT-236 found this only
+	// after the exact unsatisfiable value_type/pattern shape it fixed
+	// elsewhere could still be authored through this specific tool
+	// untouched. Validate both by round-tripping through ValidationSchema.
+	for _, field := range []string{"validation_schema", "pre_validation"} {
+		raw, ok := updates[field]
+		if !ok {
+			continue
+		}
+		if err := validateSchemaLikeUpdateField(field, raw); err != nil {
+			return "", err
+		}
 	}
 
 	path := strings.Trim(strings.TrimSpace(workspacePath), "/") + "/" + evaluationPlanRelPath
@@ -179,6 +197,35 @@ func UpdateEvaluationPlanStep(
 	return fmt.Sprintf("Updated evaluation step %q (%s) and recorded it in planning/changelog.", stepID, strings.Join(changed, ", ")), nil
 }
 
+// validateSchemaLikeUpdateField round-trips a raw decoded validation_schema
+// or pre_validation value through the shared ValidationSchema struct so it
+// gets the same write-time checks every other schema-writing tool applies:
+// regex pattern validity, JSONPath syntax, array_length consistency, and
+// value_type/pattern compatibility (PLAT-236).
+func validateSchemaLikeUpdateField(field string, raw interface{}) error {
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", field, err)
+	}
+	var schema ValidationSchema
+	if err := json.Unmarshal(encoded, &schema); err != nil {
+		return fmt.Errorf("%s does not match the expected schema shape: %w", field, err)
+	}
+	if err := validateRegexPatternsInSchema(&schema); err != nil {
+		return fmt.Errorf("%s has invalid regex patterns: %w", field, err)
+	}
+	if err := validateJSONPathSyntax(&schema); err != nil {
+		return fmt.Errorf("%s has invalid JSONPath syntax: %w", field, err)
+	}
+	if err := validateArrayLengthConsistencyChecks(&schema); err != nil {
+		return fmt.Errorf("%s has invalid array_length consistency checks: %w", field, err)
+	}
+	if err := validateValueTypePatternCompatibility(&schema); err != nil {
+		return fmt.Errorf("%s has an invalid schema: %w", field, err)
+	}
+	return nil
+}
+
 // jsonEqual compares two decoded JSON values so an update that sets a field to
 // what it already holds is not recorded as a change.
 func jsonEqual(a, b interface{}) bool {
@@ -203,7 +250,8 @@ func getUpdateEvaluationPlanSchema() string {
     "context_dependencies": {"type": "array", "items": {"type": "string"}},
     "max_score": {"type": "integer", "description": "Score scale for this step. Steps without one cannot be compared run to run."},
     "db_write": {"type": "boolean"},
-    "validation_schema": {"type": "object", "description": "Pre-validation schema for this step's output."},
+    "validation_schema": {"type": "object", "description": "Validation schema for this step's OWN OUTPUT, checked after it runs."},
+    "pre_validation": {"type": "object", "description": "Files required to exist BEFORE this step runs, e.g. {\"files\":[{\"file_name\":\"...\",\"must_exist\":true}]}. Distinct from validation_schema, which checks this step's own output afterward. Gate route/producer alignment against this together with applies_to_routes so a step's evidence requirement never outlives the route that actually produces it."},
     "applies_to_routes": {
       "type": "array",
       "description": "Gate this step to specific routes chosen by a routing step. Omit to run it on every route.",

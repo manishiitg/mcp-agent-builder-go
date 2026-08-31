@@ -630,6 +630,80 @@ func TestApplyAgentGeneratedDiffFallbackDoesNotRecommendAnArbitraryTiedNearMatch
 	}
 }
 
+// TestCountContentLines locks down the two edge cases plain
+// len(strings.Split(content, "\n")) gets wrong: an empty file is 0 lines
+// (not 1), and a trailing newline must not count as an extra blank line.
+// Getting this wrong made verifyDiffApplied reject a legitimate single-line
+// file-creation diff as corrupted (see TestDiffPatchCreationWithControllingTTY).
+func TestCountContentLines(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    int
+	}{
+		{"empty file", "", 0},
+		{"one line, no trailing newline", "hello", 1},
+		{"one line, with trailing newline", "hello\n", 1},
+		{"three lines, with trailing newline", "a\nb\nc\n", 3},
+		{"three lines, no trailing newline", "a\nb\nc", 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := countContentLines(tt.content); got != tt.want {
+				t.Errorf("countContentLines(%q) = %d, want %d", tt.content, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestVerifyDiffAppliedCatchesSilentPartialApply reproduces the shape of the
+// confida-login live finding: a two-hunk patch where the first hunk (net +1
+// line) applied correctly, but the second hunk's own changes were silently
+// dropped and an unrelated trailing line was deleted too (net -1) — so the
+// file's real net change (0) does not match what the diff's own +/- lines
+// claim (+1). The specific internal mechanism that produced this isn't
+// reproducible on demand (see PLAT-19x); this test proves the safety net
+// catches the failure SHAPE regardless of which internal path caused it.
+func TestVerifyDiffAppliedCatchesSilentPartialApply(t *testing.T) {
+	original := "line1\nline2\nline3\n"
+	diff := "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,4 @@\n line1\n+added-line\n line2\n line3\n"
+	// Simulates the corrupted result: the addition landed, but an unrelated
+	// trailing line was silently dropped, so the net change is 0, not +1.
+	corruptedResult := "line1\nadded-line\nline2\n"
+
+	err := verifyDiffApplied(original, diff, corruptedResult)
+	if err == nil {
+		t.Fatal("expected verifyDiffApplied to reject a result whose line-count change does not match the diff's claim")
+	}
+	if !strings.Contains(err.Error(), "unexpected line-count change") {
+		t.Errorf("error should name the mismatch, got: %v", err)
+	}
+}
+
+// TestVerifyDiffAppliedAcceptsACorrectApply guards against false positives:
+// a normal, correctly-applied multi-hunk patch must pass verification.
+func TestVerifyDiffAppliedAcceptsACorrectApply(t *testing.T) {
+	original := "line1\nline2\nline3\nline4\nline5\n"
+	diff := "--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,3 @@\n line1\n+added-line\n line2\n@@ -4,2 +5,2 @@\n-line4\n+changed-line4\n line5\n"
+	correctResult := "line1\nadded-line\nline2\nline3\nchanged-line4\nline5\n"
+
+	if err := verifyDiffApplied(original, diff, correctResult); err != nil {
+		t.Fatalf("verifyDiffApplied rejected a correctly-applied patch: %v", err)
+	}
+}
+
+// TestDiffClaimedLineDeltaCountsBodyLinesNotHeaders proves the delta is
+// computed from the actual +/- body lines, not the (sometimes wrong,
+// LLM-supplied) @@ header counts — the same signal correctAgentGeneratedDiff
+// already trusts over the header.
+func TestDiffClaimedLineDeltaCountsBodyLinesNotHeaders(t *testing.T) {
+	// Header claims +1,+1 (net 0) but the body has one addition, no removals.
+	diff := "--- a/f.txt\n+++ b/f.txt\n@@ -1,1 +1,1 @@\n line1\n+added-line\n"
+	if got := diffClaimedLineDelta(diff); got != 1 {
+		t.Fatalf("diffClaimedLineDelta = %d, want 1 (from the body's +/- lines, ignoring the header)", got)
+	}
+}
+
 func TestApplyAgentGeneratedDiffFallbackOmitsHintWhenFileIsShorterThanTheHunk(t *testing.T) {
 	currentContent := "only one line"
 	diffContent := "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n line a\n line b\n line c\n"
@@ -640,5 +714,125 @@ func TestApplyAgentGeneratedDiffFallbackOmitsHintWhenFileIsShorterThanTheHunk(t 
 	}
 	if strings.Contains(err.Error(), "Closest match:") {
 		t.Fatalf("hint claims a closest match that cannot exist: %v", err)
+	}
+}
+
+// PLAT-201: harness:tool:diff_patch_workspace_file:unicode-context-mismatch
+// theorized "silent normalization or transport-level mangling of non-ASCII
+// characters" between the read path and the diff-apply path. Neither
+// applyDiffPatchFlexible nor its fallback matcher do any Unicode folding --
+// context comparison is a plain strings.TrimSpace + == check -- so this
+// proves the apply path itself does not mangle anything: byte-exact
+// Unicode context always applies, and ASCII-folded context (em dash -> "-",
+// curly quotes -> straight quotes, arrow -> "->") is correctly rejected as a
+// genuine mismatch, not silently corrupted. The real-world failure this
+// finding reproduced -- a large hand-copied hunk failing while a
+// difflib-generated diff from the same file succeeded -- is consistent with
+// an agent silently ASCII-folding punctuation while retyping text, a known
+// LLM generation habit, not a platform bug.
+func TestApplyDiffPatchDoesNotMangleUnicodePunctuation(t *testing.T) {
+	original := "Line one\n" +
+		"The system uses a request—response cycle\n" +
+		"Flow: input → output → done\n" +
+		"She said “ok” and left\n" +
+		"Line five\n"
+
+	t.Run("byte-exact unicode context applies cleanly", func(t *testing.T) {
+		diff := "--- a/notes.md\n+++ b/notes.md\n@@ -1,5 +1,5 @@\n" +
+			" Line one\n" +
+			" The system uses a request—response cycle\n" +
+			"-Flow: input → output → done\n" +
+			"+Flow: input → output → DONE\n" +
+			" She said “ok” and left\n" +
+			" Line five\n"
+		out, err := ApplyDiffPatchDirect(original, diff)
+		if err != nil {
+			t.Fatalf("byte-exact unicode context should apply cleanly, got: %v", err)
+		}
+		if !strings.Contains(out, "Flow: input → output → DONE") {
+			t.Fatalf("patch did not apply the expected change:\n%s", out)
+		}
+	})
+
+	t.Run("ascii-folded context is rejected as a mismatch, not silently applied", func(t *testing.T) {
+		// Same logical edit, but every non-ASCII punctuation mark has been
+		// folded to its ASCII look-alike -- exactly what an LLM commonly
+		// does when regenerating text by hand instead of copying it exactly.
+		diff := "--- a/notes.md\n+++ b/notes.md\n@@ -1,5 +1,5 @@\n" +
+			" Line one\n" +
+			" The system uses a request-response cycle\n" +
+			"-Flow: input -> output -> done\n" +
+			"+Flow: input -> output -> DONE\n" +
+			" She said \"ok\" and left\n" +
+			" Line five\n"
+		out, err := ApplyDiffPatchDirect(original, diff)
+		if err == nil {
+			t.Fatalf("ASCII-folded (non-byte-exact) context should be rejected as a mismatch, got success with output=%q", out)
+		}
+		if !strings.Contains(err.Error(), "could not find matching context lines") {
+			t.Fatalf("expected a context-mismatch error, got: %v", err)
+		}
+	})
+}
+
+// PLAT-202: harness:diff_patch_workspace_file (2026-08-23, a JSON registry
+// file) reported the same failure class PLAT-192 later fixed for a
+// different file: applied:true while hunk 2 of a two-hunk diff silently
+// failed to update its target scalar fields AND deleted an unrelated
+// trailing context line ("title") with no replacement. This predates
+// PLAT-192's own harness finding by about a day and matches its description
+// almost exactly -- the same underlying bug class, observed twice.
+//
+// This does not re-derive the internal mechanism (PLAT-192 already
+// documented that as unconfirmed); it reproduces the INCIDENT'S OWN
+// reported before/after content directly and confirms PLAT-192's
+// verifyDiffApplied safety net -- already shipped -- catches this exact
+// shape: the diff claims a net +1 line delta (one covers[] append, one
+// 4-for-4 scalar replacement), but the reported broken result only changed
+// by +0 (scalars left stale, title line vanished).
+func TestVerifyDiffAppliedCatchesTheReportedJSONRegistryIncidentShape(t *testing.T) {
+	original := `      "covers": [
+        "existing-thing"
+      ],
+      "last_updated": "2026-08-06T12:30:25Z",
+      "last_updated_by": "old-agent",
+      "section_count": 19,
+      "size_bytes": 15588,
+      "title": "page-playbook-detail"
+`
+	diff := "--- a/_index.json\n+++ b/_index.json\n" +
+		"@@ -1,7 +1,8 @@\n" +
+		"       \"covers\": [\n" +
+		"         \"existing-thing\",\n" +
+		"+        \"new-thing\"\n" +
+		"       ],\n" +
+		"-      \"last_updated\": \"2026-08-06T12:30:25Z\",\n" +
+		"-      \"last_updated_by\": \"old-agent\",\n" +
+		"-      \"section_count\": 19,\n" +
+		"-      \"size_bytes\": 15588,\n" +
+		"+      \"last_updated\": \"2026-08-23T09:19:02Z\",\n" +
+		"+      \"last_updated_by\": \"new-agent\",\n" +
+		"+      \"section_count\": 20,\n" +
+		"+      \"size_bytes\": 16783,\n" +
+		"       \"title\": \"page-playbook-detail\"\n"
+
+	// As reported: the covers[] append applied, but the scalar fields were
+	// left at their OLD values and the trailing title line was dropped with
+	// no replacement.
+	reportedBrokenResult := `      "covers": [
+        "existing-thing",
+        "new-thing"
+      ],
+      "last_updated": "2026-08-06T12:30:25Z",
+      "last_updated_by": "old-agent",
+      "section_count": 19,
+      "size_bytes": 15588,
+`
+	err := verifyDiffApplied(original, diff, reportedBrokenResult)
+	if err == nil {
+		t.Fatal("verifyDiffApplied did not catch the reported silent-partial-apply shape")
+	}
+	if !strings.Contains(err.Error(), "unexpected line-count change") {
+		t.Fatalf("expected the line-count-mismatch error, got: %v", err)
 	}
 }

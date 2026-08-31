@@ -4,7 +4,6 @@ import { pulseFindingPresentation, pulseFindingProgress } from './pulseFindingPr
 
 function finding(overrides: Partial<PulseFindingLifecycle>): PulseFindingLifecycle {
   return {
-    fingerprint: 'fp',
     finding_id: 'PUL-1',
     phase: 'review',
     step_id: 'workflow_review',
@@ -80,5 +79,38 @@ describe('pulse finding action lanes', () => {
       queue: 'needs_action', label: 'Verification failed',
     })
     expect(pulseFindingProgress(record).find((step) => step.label === 'Verified')?.state).not.toBe('done')
+  })
+
+  it('does not present a recurrence after an applied fix as a new issue', () => {
+    const record = finding({
+      status: 'open',
+      seen_count: 2,
+      fix_attempts: [{
+        attempt_id: 'attempt-1',
+        module: 'technical_review',
+        pulse_run_id: 'pulse-1',
+        summary: 'Applied the plan repair.',
+        status: 'completed',
+        intended_files: ['planning/plan.json'],
+        changed_files: ['planning/plan.json'],
+        before_refs: [],
+        after_refs: [],
+        findings: [],
+        started_at: '2026-08-28T10:00:00Z',
+        completed_at: '2026-08-28T10:01:00Z',
+      }],
+      events: [{
+        event_type: 'reopened',
+        summary: 'The same concern was observed on a later workflow run.',
+        recorded_at: '2026-08-29T10:00:00Z',
+      }],
+    })
+
+    expect(pulseFindingPresentation(record)).toMatchObject({
+      queue: 'needs_action', label: 'Reopened after fix',
+    })
+    expect(pulseFindingProgress(record).at(-1)).toMatchObject({
+      label: 'Reopened', state: 'current',
+    })
   })
 })

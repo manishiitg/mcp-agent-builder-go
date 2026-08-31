@@ -140,6 +140,44 @@ func (api *StreamingAPI) handleSSEStream(w http.ResponseWriter, r *http.Request)
 			}
 			sinceIndex = result.LastProcessedIndex
 			flusher.Flush()
+		} else if !result.Exists {
+			// The in-memory EventStore has no record of this session at all —
+			// almost always because the process restarted and this ring
+			// buffer is memory-only (the durable transcript on disk is
+			// unaffected). A reconnecting EventSource (native browser
+			// auto-reconnect, or our own client's since=/Last-Event-ID) is
+			// still asking for events after its old, now-meaningless index.
+			//
+			// Two things go wrong if we silently do nothing here, confirmed
+			// live on Dominion 2026-08-31 (a chat answer was fully generated
+			// and persisted, but never appeared in an already-open tab until
+			// a manual refresh):
+			//  1. The client is never told to resync, so it just sits there
+			//     believing it's caught up.
+			//  2. Below, `sinceIndex` (and the event loop's `lastIndex`) stays
+			//     pinned to the stale, large pre-restart value. The fresh
+			//     store numbers new events starting near 1 again, so every
+			//     genuinely-new event's index is `<= lastIndex` and gets
+			//     silently discarded by the "already covered by backfill"
+			//     guard in the event loop below — permanently, for the life
+			//     of this connection.
+			//
+			// Sending an explicit LastProcessedIndex: -1 reuses the exact
+			// sentinel the REST-polling path already sends in this same
+			// situation (see getSessionStatusString / polling.go), which the
+			// frontend already knows how to treat as "resync me". Resetting
+			// sinceIndex here fixes problem 2 for the rest of this
+			// connection's lifetime.
+			msg := sseEventMessage{
+				Events:             []events.Event{},
+				SessionStatus:      sessionStatus,
+				LastProcessedIndex: -1,
+			}
+			if err := writeSSEEvent(w, "event", -1, msg); err != nil {
+				return
+			}
+			sinceIndex = -1
+			flusher.Flush()
 		}
 	}
 

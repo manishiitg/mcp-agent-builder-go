@@ -178,6 +178,72 @@ Downloads folder, which is read-only to the agent.
   mode, sessions are intentionally remapped to one per port; isolation comes
   from workflow-owned labeled tabs plus the per-port select-and-act lock.
 
+## `wait` for a fixed delay takes a bare number, not a `--ms` flag
+
+To pause for a fixed duration (e.g. human-pacing between actions), pass the
+millisecond count as a **bare positional argument** —
+`browser("wait", ["1800"])` — not `--ms 1800`. `--ms` is not a real flag on
+this tool at all; passing it does not error out or get ignored cleanly, it
+makes the call fall through to a different, unrelated wait mode that then
+fails with a misleading `Wait timed out after 25000ms` after a fixed ~25
+second internal ceiling — regardless of the number that was supposed to
+follow `--ms`. This has been directly reproduced: `wait --ms 1800` times out
+after 25000ms; `wait 1800` (bare) returns `Done` in ~1.8s, exactly as
+requested.
+
+If a wait call times out after ~25000ms even though a short delay was
+intended, check the call for `--ms` first before assuming the browser or
+target page is unresponsive — it usually means the flag form was used by
+mistake. The tool's other wait modes take a selector, or one of
+`--url <pattern>`, `--load <state>`, `--fn <expression>`, `--text <text>`,
+`--download [path]` — a bare number is specifically the fixed-delay form.
+
+## A click response proves the command completed, not that the target's state changed
+
+`agent_browser click`'s `success` field means the click *command* completed
+successfully — it does not itself prove the click event was genuinely
+delivered to the page or that anything changed as a result. On
+toggle-style controls (like, follow, and similar state-flip buttons), a
+successful click command can return `success=true` while the live DOM's
+`aria-label`/`data-testid` on that exact element never changes: the target
+still reads unliked/not-following after the call returns. Never treat a
+click response alone as proof a toggle action landed, especially before
+writing a durable receipt for a real public action.
+
+Verify and recover with the same recipe five independent findings converged
+on:
+
+1. Dispatch the click.
+2. Wait for the settle delay, then take a *fresh* scoped read of the same
+   control — a new `snapshot`/`get` of the surrounding region, not a
+   reused `@eN` reference from before the click. Refs go stale after every
+   interaction (see "Common mistakes" below); reusing one here would read
+   pre-click state and look like a false pass. On these controls,
+   `data-testid` is itself part of the state — X swaps a like button's
+   `data-testid` between `"like"` and `"unlike"` as the component re-renders
+   — so it cannot double as the stable selector used to re-find the
+   element; locate it in the fresh snapshot by its stable characteristics
+   (position/role/surrounding text), then read both its current
+   `aria-label` and `data-testid` and check they now hold the expected
+   post-action values.
+3. If unchanged, retry once with a scoped DOM click targeting that same
+   located element directly (not a fresh top-level click, and not a
+   selector built from the pre-click `data-testid`, which may no longer
+   identify anything if the action partially landed), then verify again
+   with another fresh read.
+4. If still unchanged, do not record success. Persist the attempt as failed
+   with the observed before/after state — do not fabricate a landed action
+   from a command-success response alone. A concurrent rate limit (HTTP 429
+   / X `code:88` on the account-settings diagnostic) is one real cause and
+   is itself worth recording, not silently retried away.
+
+This is the current mitigation, not a claim that no platform-side fix could
+ever exist: `agent_browser` is a third-party CLI with no vendored source in
+this platform, so there is no click-mechanism internals to patch today, but
+the owned wrapper around it could eventually offer an opt-in click-and-verify
+operation that takes a caller-supplied postcondition. Until that exists, this
+verify/recover recipe is the available mitigation.
+
 ## Common mistakes
 
 - Calling `open` with `["tab", "t1", url]` in CDP — `open` is URL-only.

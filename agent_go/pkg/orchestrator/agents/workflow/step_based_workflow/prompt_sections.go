@@ -78,7 +78,7 @@ Use the managed database tool only; never open ` + "`db.sqlite`" + ` with shell 
 - Query with ` + "`sql: \"SELECT ... WHERE key = ?\", params: [\"value\"]`" + `. Use ` + "`max_rows`" + ` when a result may exceed the default limit.
 - In HTTP/code-execution mode, keep SQL in a shell variable and JSON-encode it with ` + "`jq -n --arg sql \"$sql\" '{sql:$sql}'`" + `; never place SQL containing single quotes (including ` + "`'$.field'`" + `) inside an outer single-quoted JSON literal, because the shell strips the inner quotes.
 - This session is read-only: do not call ` + "`mutate_workflow_db`" + `.
-- Read ` + "`db/README.md`" + ` before relying on a table's business meaning.`
+- A table's schema alone does not explain its business meaning (writer ownership, upsert rule, what a column is for). If ` + "`db/README.md`" + ` is readable in this session, read it for that context first; not every session's Folder Guard grants it, so fall back to ` + "`query_workflow_db`" + ` with ` + "`action: \"describe\"`" + ` to inspect the table's actual columns directly when it is not.`
 	}
 	return `## Workflow database
 
@@ -88,7 +88,7 @@ Use the managed database tools only; never open ` + "`db.sqlite`" + ` with shell
 - Use ` + "`mutate_workflow_db`" + ` for transactional INSERT/UPDATE/DELETE operations: one change uses ` + "`sql`" + ` + ` + "`params`" + `; related changes use ` + "`statements: [{sql, params}, ...]`" + ` as one atomic batch.
 - In HTTP/code-execution mode, keep SQL in a shell variable and JSON-encode it with ` + "`jq -n --arg sql \"$sql\" '{sql:$sql}'`" + `; never place SQL containing single quotes (including ` + "`'$.field'`" + `) inside an outer single-quoted JSON literal, because the shell strips the inner quotes.
 - Prefer primary-key upserts. Never drop, recreate, or wholesale replace tables.
-- Read ` + "`db/README.md`" + ` before relying on a table's business meaning.`
+- A table's schema alone does not explain its business meaning (writer ownership, upsert rule, what a column is for). If ` + "`db/README.md`" + ` is readable in this session, read it for that context first; not every session's Folder Guard grants it, so fall back to ` + "`query_workflow_db`" + ` with ` + "`action: \"describe\"`" + ` to inspect the table's actual columns directly when it is not.`
 }
 
 // BuildCodeExecutionSection returns the code execution mode instructions.

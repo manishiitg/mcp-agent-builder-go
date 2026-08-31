@@ -27,16 +27,17 @@ var pulseConsolidatedToolNames = []string{
 	"record_pulse_worklist",
 	"record_pulse_result",
 	"record_pulse_impact",
-	"record_pulse_fast_request",
-	"get_pulse_review_focus_agenda",
 	"record_pulse_review_focus",
 }
 
 var pulseReviewerWriteToolNames = []string{
 	"record_pulse_finding",
-	"record_pulse_verification",
-	"complete_pulse_review",
 	"merge_pulse_issues",
+	// Lets a manual, non-Gate-scheduled review (e.g. /review-artifact-drift's
+	// Part 1) establish its own due claim for exactly the module it is about
+	// to persist a record_pulse_result for -- record_pulse_result's write is
+	// due-gated on a Gate-recorded worklist row a manual invocation never has.
+	"record_pulse_module_due",
 }
 
 // pulseRemovedToolNames must never reappear. Each was folded into one of the
@@ -49,6 +50,14 @@ var pulseRemovedToolNames = []string{
 	"start_pulse_fix_attempt",
 	"mark_pulse_module_result",
 	"mark_pulse_final_command_result",
+	// Folded into get_pulse_state(view="focus_agenda") -- read-only, and
+	// already fit get_pulse_state's existing one-tool-many-views shape.
+	"get_pulse_review_focus_agenda",
+	// Folded into record_pulse_migration_reconciliation(scope=...) --
+	// actionable_backlog already called lifecycle as its own first step, so
+	// they were never two independent capabilities.
+	"record_pulse_lifecycle_reconciliation",
+	"record_pulse_actionable_backlog_reconciliation",
 }
 
 func TestPulseToolSurfaceIncludesTypedReviewerWrites(t *testing.T) {
@@ -99,7 +108,10 @@ func TestPulseToolSurfaceIncludesTypedReviewerWrites(t *testing.T) {
 	// writes, and resolve_run_concern. merge_pulse_issues is intentionally the
 	// one semantic maintenance verb: calling it record_* would conceal that it
 	// retires duplicate queue entries while preserving their history.
-	expected := map[string]bool{"resolve_run_concern": true}
+	expected := map[string]bool{
+		"resolve_run_concern":                   true,
+		"record_pulse_migration_reconciliation": true,
+	}
 	for _, name := range pulseConsolidatedToolNames {
 		expected[name] = true
 	}
@@ -120,12 +132,53 @@ func TestPulseToolSurfaceIncludesTypedReviewerWrites(t *testing.T) {
 	// derive a name instead of guessing one. The two explicit semantic actions
 	// are documented by name in the returned tool index.
 	for name := range registered {
-		if name == "resolve_run_concern" || name == "complete_pulse_review" || name == "merge_pulse_issues" {
+		if name == "resolve_run_concern" || name == "merge_pulse_issues" {
 			continue
 		}
 		if !strings.HasPrefix(name, "get_pulse_") && !strings.HasPrefix(name, "record_pulse_") {
 			t.Errorf("Pulse tool %q breaks the verb rule: reads are get_pulse_*, writes are record_pulse_*", name)
 		}
+	}
+}
+
+// record_pulse_migration_reconciliation folded two tools
+// (record_pulse_lifecycle_reconciliation, record_pulse_actionable_backlog_reconciliation)
+// into one with a scope argument, since actionable_backlog already called
+// lifecycle as its own first step -- they were never two independent
+// capabilities. Both scopes must still dispatch to their real underlying
+// migration, and an invalid scope must reject clearly rather than silently
+// pick one.
+func TestRecordPulseMigrationReconciliationDispatchesByScope(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	const workspacePath = "Workflow/migration-scope-test"
+	_, executors, _ := createPulseWorklistTools()
+	reconcile := executors["record_pulse_migration_reconciliation"].(func(context.Context, map[string]interface{}) (string, error))
+	ctx := context.Background()
+
+	lifecycleRaw, err := reconcile(ctx, map[string]interface{}{"workspace_path": workspacePath, "scope": "lifecycle"})
+	if err != nil {
+		t.Fatalf("scope=lifecycle: %v", err)
+	}
+	var lifecycleResult step_based_workflow.PulseLifecycleReconciliation
+	if err := json.Unmarshal([]byte(lifecycleRaw), &lifecycleResult); err != nil {
+		t.Fatalf("scope=lifecycle did not return a PulseLifecycleReconciliation payload: %v (raw=%s)", err, lifecycleRaw)
+	}
+
+	backlogRaw, err := reconcile(ctx, map[string]interface{}{"workspace_path": workspacePath, "scope": "actionable_backlog"})
+	if err != nil {
+		t.Fatalf("scope=actionable_backlog: %v", err)
+	}
+	var backlogResult step_based_workflow.PulseActionableBacklogReconciliation
+	if err := json.Unmarshal([]byte(backlogRaw), &backlogResult); err != nil {
+		t.Fatalf("scope=actionable_backlog did not return a PulseActionableBacklogReconciliation payload: %v (raw=%s)", err, backlogRaw)
+	}
+
+	if _, err := reconcile(ctx, map[string]interface{}{"workspace_path": workspacePath, "scope": "bogus"}); err == nil {
+		t.Fatal("an invalid scope must be rejected, not silently default to one migration")
+	}
+	if _, err := reconcile(ctx, map[string]interface{}{"workspace_path": workspacePath}); err == nil {
+		t.Fatal("a missing scope must be rejected")
 	}
 }
 
@@ -169,7 +222,7 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 
 	// view="backlog" — what get_pulse_finding_backlog returned.
 	if _, err := step_based_workflow.RecordRunConcerns(
-		ctx, workspacePath, "pulse-view", "", pulseModuleWorkflowReview,
+		ctx, workspacePath, "pulse-view", "", pulseModuleTechnicalReview,
 		step_based_workflow.ConcernPhaseReview, "CONCERNS: the collector writes a null column",
 	); err != nil {
 		t.Fatalf("file concern: %v", err)
@@ -200,7 +253,7 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 	if _, err := execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "view": "backlog", "module": "bugs",
 	}); err == nil || !strings.Contains(err.Error(), "is not a valid Pulse module") ||
-		!strings.Contains(err.Error(), pulseModuleWorkflowReview) {
+		!strings.Contains(err.Error(), pulseModuleTechnicalReview) {
 		t.Fatalf(`view="backlog" module rejection must name the closed set: %v`, err)
 	}
 
@@ -208,13 +261,13 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 	// loaded from the lifecycle backlog, never from persisted reviewer prose.
 	const reviewRunID = "2026-08-01T00-00-00.000Z_surface"
 	if err := step_based_workflow.CompletePulseReview(
-		ctx, workspacePath, []string{pulseModuleWorkflowReview}, reviewRunID, "pulse-view", "Clean.", "completed",
+		ctx, workspacePath, []string{pulseModuleTechnicalReview}, reviewRunID, "pulse-view", "Clean.", "completed",
 	); err != nil {
 		t.Fatalf("record review: %v", err)
 	}
 	raw, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "view": "review",
-		"review_run_id": reviewRunID, "module": pulseModuleWorkflowReview,
+		"review_run_id": reviewRunID, "module": pulseModuleTechnicalReview,
 	})
 	if err != nil {
 		t.Fatalf(`get_pulse_state(view="review"): %v`, err)
@@ -240,7 +293,7 @@ func TestGetPulseStateViewsReturnWhatTheirPredecessorsReturned(t *testing.T) {
 	// caller looking for a different id — the identity was validated just above.
 	_, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "view": "review",
-		"review_run_id": "2026-08-01T00-00-00.000Z_missing", "module": pulseModuleWorkflowReview,
+		"review_run_id": "2026-08-01T00-00-00.000Z_missing", "module": pulseModuleTechnicalReview,
 	})
 	if err == nil {
 		t.Fatal("missing review returned no error")
@@ -288,7 +341,7 @@ func TestRecordPulseResultCoversBothFormerResultTypes(t *testing.T) {
 
 	if _, err := recordPulseWorklist(context.Background(), workspacePath, pulseRunID,
 		completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-			pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "A review is required."},
+			pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "A review is required."},
 		})); err != nil {
 		t.Fatalf("record worklist: %v", err)
 	}
@@ -302,7 +355,7 @@ func TestRecordPulseResultCoversBothFormerResultTypes(t *testing.T) {
 	// Module form — what mark_pulse_module_result recorded.
 	raw, err := execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
-		"module": pulseModuleWorkflowReview, "result": "done",
+		"module": pulseModuleTechnicalReview, "result": "done",
 		"reason": "No finding required a change.",
 	})
 	if err != nil {
@@ -317,7 +370,7 @@ func TestRecordPulseResultCoversBothFormerResultTypes(t *testing.T) {
 	}
 	recorded := false
 	for _, state := range states {
-		if state.Module == pulseModuleWorkflowReview {
+		if state.Module == pulseModuleTechnicalReview {
 			recorded = state.LastResult == "done"
 		}
 	}
@@ -385,15 +438,15 @@ func TestRecordPulseResultRejectionsNameBothTargets(t *testing.T) {
 
 	_, err := execute(ctx, clone(nil))
 	assertRejectionContains(t, err, "exactly one of module or command",
-		"module=missing", "command=missing", pulseModuleWorkflowReview, pulseFinalCommandBackup)
+		"module=missing", "command=missing", pulseModuleTechnicalReview, pulseFinalCommandBackup)
 
 	_, err = execute(ctx, clone(map[string]interface{}{
-		"module": pulseModuleWorkflowReview, "command": pulseFinalCommandBackup,
+		"module": pulseModuleTechnicalReview, "command": pulseFinalCommandBackup,
 	}))
 	assertRejectionContains(t, err, "exactly one of module or command", "module=set", "command=set")
 
 	// Each target still enforces its own result set, and says which one applies.
-	_, err = execute(ctx, clone(map[string]interface{}{"module": pulseModuleWorkflowReview, "result": "running"}))
+	_, err = execute(ctx, clone(map[string]interface{}{"module": pulseModuleTechnicalReview, "result": "running"}))
 	assertRejectionContains(t, err, `result "running" is not valid`, "changed", "skipped")
 
 	_, err = execute(ctx, clone(map[string]interface{}{"command": pulseFinalCommandBackup, "result": "changed"}))

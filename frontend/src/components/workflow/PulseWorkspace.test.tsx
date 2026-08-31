@@ -10,13 +10,35 @@ vi.mock('../../services/api', () => ({
 import { PulseWorkspace } from './PulseWorkspace'
 
 describe('PulseWorkspace information hierarchy', () => {
-  it('leads with outcomes and ownership, leaving reviewer mechanics for later', () => {
+  it('leads with work areas, leaving reviewer mechanics for later', () => {
     const html = renderToStaticMarkup(
       <PulseWorkspace
         workspacePath="/workspace/example"
-        monitorOn
+        moduleStates={[
+          {
+            workspace_path: '/workspace/example',
+            module: 'technical_review',
+            last_pulse_run_id: 'pulse-1',
+            last_gate_decision: 'due',
+            last_reason: 'Inspect the current execution and plan contract.',
+          },
+          {
+            workspace_path: '/workspace/example',
+            module: 'strategic_review',
+            last_pulse_run_id: 'pulse-1',
+            last_gate_decision: 'skipped',
+            last_reason: 'The 21-day outcome window is not mature.',
+            next_check_at: '2026-09-09',
+          },
+          {
+            workspace_path: '/workspace/example',
+            module: 'plan_drift_review',
+            last_pulse_run_id: 'pulse-1',
+            last_gate_decision: 'due',
+            last_reason: 'The backend reports 27 canonical plan-drift candidates.',
+          },
+        ]}
         finalCommandStates={[]}
-        gateMode={null}
         reviewFocuses={[
           {
             workspace_path: '/workspace/example',
@@ -51,35 +73,41 @@ describe('PulseWorkspace information hierarchy', () => {
             review_count: 1,
           },
         ]}
-        statusLoading={false}
         statusError={null}
-        onRefresh={() => undefined}
-        onRunFocus={async () => undefined}
       />,
     )
 
-    const latestOutcome = html.indexOf('Latest outcome')
     const workAreas = html.indexOf('Work areas')
     const issues = html.indexOf('Issues and follow-through')
-    const impact = html.indexOf('Impact over time')
 
-    expect(latestOutcome).toBeGreaterThan(-1)
-    expect(workAreas).toBeGreaterThan(latestOutcome)
+    expect(html).not.toContain('Pulse work queued')
+    expect(html).not.toContain('Latest outcome')
+    expect(workAreas).toBeGreaterThan(-1)
     expect(issues).toBeGreaterThan(workAreas)
-    expect(impact).toBeGreaterThan(issues)
+    expect(html).not.toContain('Impact over time')
+    expect(html).not.toContain('aria-label="Evaluation results"')
     expect(html).not.toContain('Pulse activity')
     expect(html).not.toContain('Recent fixes and follow-through')
     expect(html).toContain('Technical review')
     expect(html).toContain('Strategic review')
+    expect(html).toContain('Plan drift review')
     expect(html).toContain('Last focuses:')
     expect(html).toContain('Execution health')
     expect(html).toContain('Plan orchestration integrity')
     expect(html).toContain('Daily-execution/large-route')
     expect(html).toContain('Next focus candidates:')
-    expect(html).toContain('Focused review')
+    expect(html).not.toContain('Focused review')
     expect(html).toContain('Feedback loops bias')
-    expect(html).toContain('Model cost fitness')
-    expect(html).toContain('Experiment impact')
+    expect(html).toContain('Gate decision:')
+    expect(html).toContain('Due this run')
+    expect(html).toContain('Selected this run:')
+    expect(html).toContain('Inspect the current execution and plan contract.')
+    expect(html).toContain('The 21-day outcome window is not mature.')
+    expect(html).toContain('Next check Sep 9, 2026')
+    expect(html).toContain('None — the review module was skipped.')
+    expect(html).toContain('The backend reports 27 canonical plan-drift candidates.')
+    expect(html).not.toContain('Model cost fitness')
+    expect(html).not.toContain('Experiment impact')
     expect(html).not.toContain('PUL-3880D006')
     expect(html).not.toContain('Latest judgment')
     expect(html).not.toContain('Review history')

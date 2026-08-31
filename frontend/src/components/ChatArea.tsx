@@ -4,7 +4,6 @@ import { useRenderLogger, useMemoLogger } from '../utils/renderLogger'
 import { chatSubmissionLane } from '../utils/promiseLane'
 import {
   liveInputSubmissionCoordinator,
-  shouldAppendOptimisticLiveInputMessage,
   shouldRefreshSessionEventStream,
   shouldUseRetainedLiveInput,
 } from '../utils/liveInputSubmission'
@@ -16,7 +15,7 @@ import type { AgentMode } from '../stores/types'
 import { ChatInput } from './ChatInput'
 import { TerminalEventTranscript } from './TerminalEventTranscript'
 import { MainAgentTerminal } from './MainAgentTerminal'
-import { WorkflowModeHandler, type WorkflowModeHandlerRef, signalPlanModified } from './workflow'
+import { WorkflowModeHandler, type WorkflowModeHandlerRef } from './workflow'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { useAppStore, useLLMStore, useMCPStore, useChatStore, useGlobalPresetStore } from '../stores'
@@ -979,6 +978,55 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     const timer = window.setTimeout(() => setResumeGaveUp(true), RESUME_SETTLE_MS)
     return () => window.clearTimeout(timer)
   }, [activeTabHasRestoredConversation, hasConversationContent, activeTabStreaming, activeSessionId])
+  // Read-only run view give-up TIMER. isReadOnlyRunView (a scheduled/bot run
+  // tab) forces resolveChatSurface to 'restoring' unconditionally while empty,
+  // by design (a read-only run must never bounce to the previous-chats
+  // landing panel — the "schedule-bounce" fix). But that means a tab whose
+  // session the backend no longer knows about (its in-memory event store was
+  // wiped by a server restart, or openScheduledRunInChat's own fetch failed
+  // and was silently swallowed) spins forever with no escape. This timer only
+  // flips a display flag consumed below to swap the spinner for an explicit
+  // "couldn't load" message with a retry action; it never changes
+  // resolveChatSurface's returned surface or its landing-avoidance guarantee.
+  const [readOnlyRunViewGaveUp, setReadOnlyRunViewGaveUp] = useState(false)
+  useEffect(() => {
+    if (!isReadOnlyRunView || displayEvents.length > 0 || activeTabStreaming) {
+      setReadOnlyRunViewGaveUp(false)
+      return
+    }
+    setReadOnlyRunViewGaveUp(false)
+    const timer = window.setTimeout(() => setReadOnlyRunViewGaveUp(true), RESUME_SETTLE_MS)
+    return () => window.clearTimeout(timer)
+  }, [isReadOnlyRunView, displayEvents.length, activeTabStreaming, activeSessionId])
+  // Manual retry for the give-up message above: re-fetch this session's
+  // events the same way openScheduledRunInChat does on first open. If the
+  // session really is gone, this comes back empty and the give-up timer
+  // above simply re-arms and fires again — an honest "still not there".
+  const retryReadOnlyRunView = useCallback(async () => {
+    const sessionId = activeSessionId
+    const tabId = activeTab?.tabId
+    if (!sessionId || !tabId) return
+    setReadOnlyRunViewGaveUp(false)
+    try {
+      const response = await agentApi.getRecentSessionEvents(sessionId)
+      const chatStore = useChatStore.getState()
+      if (response.events.length > 0) {
+        chatStore.setTabEvents(sessionId, response.events)
+      }
+      if (response.last_processed_index !== undefined) {
+        chatStore.setTabLastEventIndex(sessionId, response.last_processed_index)
+      }
+      if (response.has_more !== undefined) {
+        chatStore.setTabHasMoreOlderEvents(sessionId, response.has_more)
+      }
+      const isDone = response.session_status === 'completed' || response.session_status === 'stopped'
+      const isError = response.session_status === 'error'
+      chatStore.setTabCompleted(tabId, isDone)
+      chatStore.setTabStreaming(tabId, !isDone && !isError && response.session_status === 'running')
+    } catch {
+      // Leave it to the give-up timer to re-fire; nothing else to do here.
+    }
+  }, [activeSessionId, activeTab?.tabId])
   // resumePending — SYNCHRONOUS (derived in render, NOT an effect-set state). This
   // is the regression fix: on a Resume click restoredConversationPath is set
   // synchronously (setTabConfig), so this is already true on the FIRST render →
@@ -1538,6 +1586,40 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       } else {
         setLastEventIndex(newLastEventIndex)
       }
+    } else if (response.last_processed_index === -1) {
+      // -1 is the backend's explicit "this session is not in my in-memory
+      // event store" signal (polling.go: !exists -> LastProcessedIndex: -1;
+      // sse.go sends the same sentinel on a reconnect that hits an empty,
+      // post-restart store). The store is in-memory only, so a server
+      // restart wipes every live session's event log; a tab left open
+      // across that restart keeps polling/streaming with its pre-restart
+      // since= cursor forever, which the fresh process's own (much shorter)
+      // post-restart event log can never reach -- events silently stop
+      // arriving, with no visible error, indefinitely. Only reset when we
+      // previously tracked real progress (index > 0): a genuinely brand-new,
+      // never-polled session legitimately gets -1 on its first poll too, and
+      // resetting an already-0 index would be a no-op anyway.
+      const priorIndex = tab
+        ? getTabLastEventIndex(actualSessionId)
+        : lastEventIndexRef.current
+      if (priorIndex > 0) {
+        logger.warn('ChatArea', `Backend has no record of session ${actualSessionId} (likely a server restart) after prior progress at index ${priorIndex}; resetting cursor and reloading from the durable transcript`)
+        if (tab) {
+          setTabLastEventIndex(actualSessionId, 0)
+        } else {
+          setLastEventIndex(0)
+        }
+        // Zeroing the cursor only stops future events from being silently
+        // dropped going forward -- it does nothing to recover whatever was
+        // generated while this tab's connection was stale (the in-memory
+        // store is wiped by a restart, but the durable transcript on disk
+        // is not). Re-run the same durable-history restore a fresh page
+        // load already uses (sessionRestore.ts) so an already-open tab
+        // self-heals instead of requiring a manual refresh. Confirmed live
+        // on Dominion 2026-08-31: a fully-generated, persisted chat answer
+        // never appeared in an open tab until it was manually reloaded.
+        void restoreSession(actualSessionId, { source: 'sse-reset-resync', skipConfigRestore: true })
+      }
     }
 
     if (response.events.length === 0) return
@@ -1610,20 +1692,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         const correlationId = innerData?.correlation_id ?? innerData?.delegation_id ?? agentEvent?.correlation_id ?? agentEvent?.delegation_id
         if (correlationId && typeof correlationId === 'string') {
           chatStore.clearDelegationStreamingText(correlationId)
-        }
-      }
-
-      // Auto-refresh plan canvas when a plan modification tool completes
-      if (event.type === 'tool_call_end') {
-        const toolName = (innerData?.tool_name ?? agentEvent?.tool_name ?? '') as string
-        const isPlanModTool = toolName.startsWith('update_') && (
-          toolName.includes('step') || toolName.includes('validation') || toolName.includes('success_criteria')
-        )
-        const isAddTool = toolName.startsWith('add_') && toolName.includes('step')
-        const isDeleteTool = toolName === 'delete_plan_steps'
-        if (isPlanModTool || isAddTool || isDeleteTool) {
-          console.log('[PLAN REFRESH] Plan modification detected via tool:', toolName)
-          signalPlanModified()
         }
       }
 
@@ -1848,7 +1916,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       addTabEvents(actualSessionId, newEvents)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getTabEvents, setTabLastEventIndex, setLastEventIndex, addTabEvents, setIsStreaming, setIsCompleted, setHasActiveChat, selectedModeCategory])
+  }, [getTabEvents, getTabLastEventIndex, setTabLastEventIndex, setLastEventIndex, addTabEvents, setIsStreaming, setIsCompleted, setHasActiveChat, selectedModeCategory])
 
   // Handle an incoming SSE event message: ignore global streaming display events,
   // then process non-streaming events inline.
@@ -1895,8 +1963,18 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
   // Handle SSE status-only messages (no events, just session status updates)
   const handleSSEStatus = useCallback((msg: SSEStatusMessage, sid: string) => {
+    // last_processed_index is required on SSEEventMessage but a status-only
+    // tick carries no cursor information at all -- it must NOT be -1, which
+    // processEventsResponse treats as "the backend has no record of this
+    // session, resync" (see the reset branch below). This is a real,
+    // distinct signal now sent by the backend's SSE handler on an actual
+    // detected restart; the backend also sends status ticks every 2s for
+    // every open tab regardless, so reusing -1 here made that reset branch
+    // fire on a ~2s cadence for every healthy session, not just a genuine
+    // restart. -2 is a plain "no cursor info" placeholder: it doesn't match
+    // either the `>= 0` (real progress) or `=== -1` (resync) branch below.
     handleSSEMessage(
-      { events: [], ...msg, last_processed_index: -1 } as SSEEventMessage,
+      { events: [], ...msg, last_processed_index: -2 } as SSEEventMessage,
       sid
     )
   }, [handleSSEMessage])
@@ -2020,40 +2098,17 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         ? getTabLastEventIndex(effectiveSessionId)
         : lastEventIndexRef.current
 
-      // CRITICAL: Detect sentinel value (9999) which means "all events processed" but not an actual index
-      // If lastEventIndex is 9999 or higher, check stored events to get the actual last index
+      // Event cursors belong to the backend's raw event store, not the rendered
+      // transcript. A restored conversation includes synthesized history rows,
+      // so its length (or an old sentinel) can be ahead of a newly attached
+      // CLI stream and make every fresh tool/result event look already seen.
+      // Restart from the backend's safe forward cursor instead of guessing.
       if (rawLastEventIndex >= 9999) {
-        const storedEvents = getTabEvents(effectiveSessionId)
-        if (storedEvents && storedEvents.length > 0) {
-          const actualLastIndex = storedEvents.length - 1
-          rawLastEventIndex = actualLastIndex
-          // Update the stored index to the correct value
-          if (currentTab) {
-            setTabLastEventIndex(effectiveSessionId, actualLastIndex)
-          } else {
-            setLastEventIndex(actualLastIndex)
-          }
+        rawLastEventIndex = 0
+        if (currentTab) {
+          setTabLastEventIndex(effectiveSessionId, 0)
         } else {
-          // No stored events, but sentinel value - reset to 0 to start fresh
-          rawLastEventIndex = 0
-          if (currentTab) {
-            setTabLastEventIndex(effectiveSessionId, 0)
-          } else {
-            setLastEventIndex(0)
-          }
-        }
-      } else if (rawLastEventIndex === -1) {
-        // Safety check: if index is -1 but we have events, use the event count
-        // This prevents re-fetching from 0 if index state was lost but events exist
-        const storedEvents = getTabEvents(effectiveSessionId)
-        if (storedEvents && storedEvents.length > 0) {
-          const actualLastIndex = storedEvents.length - 1
-          rawLastEventIndex = actualLastIndex
-          logger.debug('ChatArea', `Recovered lastEventIndex ${actualLastIndex} for session ${effectiveSessionId}`)
-
-          if (currentTab) {
-            setTabLastEventIndex(effectiveSessionId, actualLastIndex)
-          }
+          setLastEventIndex(0)
         }
       }
 
@@ -2530,28 +2585,35 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       hasSession: Boolean(tabSessionId),
       hasOneShotContext,
     })
+    // A retained CLI delivery can take a few seconds to acknowledge while the
+    // provider wakes its pane. Put the user's message in the conversation
+    // before awaiting that acknowledgement so the composer is immediately
+    // ready for the next message. Keep its event ID so a later full-turn
+    // fallback reuses this row instead of echoing it a second time.
+    let optimisticLiveInputEventID = ''
     if (useRetainedLiveInput) {
+      const existingEvents = chatStore.getTabEvents(tabSessionId)
+      const latestTimestampMs = existingEvents.reduce((latest, event) => {
+        const ts = getEventTimestampMs(event)
+        return ts === null ? latest : Math.max(latest, ts)
+      }, 0)
+      const optimisticTimestampMs = Math.max(Date.now(), latestTimestampMs + 1)
+      const optimisticUserMessage = createUserMessageEvent(
+        trimmedQuery,
+        undefined,
+        new Date(optimisticTimestampMs).toISOString(),
+        tabSessionId,
+      )
+      optimisticLiveInputEventID = optimisticUserMessage.id
+      // This is a human-visible action rather than a high-volume SSE event;
+      // bypass the store's micro-batch so it appears in the current frame.
+      chatStore._addTabEventsImmediate(tabSessionId, [optimisticUserMessage])
+      chatStore.setAutoScroll(true)
+      setTimeout(() => { scrollToBottom('smooth') }, 50)
+
       try {
         const response = await agentApi.sendLiveInput(tabSessionId, trimmedQuery)
         if (response.delivery_status === 'sent_to_cli' || response.delivery_status === 'next_turn_started') {
-          const existingEvents = chatStore.getTabEvents(tabSessionId)
-          const indexedEvents = existingEvents.filter(event => typeof event.event_index === 'number')
-          const nextEventIndex = indexedEvents.length > 0
-            ? indexedEvents.reduce((maxIndex, event) => Math.max(maxIndex, event.event_index as number), -1) + 1
-            : undefined
-          const latestTimestampMs = existingEvents.reduce((latest, event) => {
-            const ts = getEventTimestampMs(event)
-            return ts === null ? latest : Math.max(latest, ts)
-          }, 0)
-          const optimisticTimestampMs = Math.max(Date.now(), latestTimestampMs + 1)
-          if (shouldAppendOptimisticLiveInputMessage(existingEvents, response.message_id)) {
-            chatStore.addTabEvents(tabSessionId, [createUserMessageEvent(
-              trimmedQuery,
-              nextEventIndex,
-              new Date(optimisticTimestampMs).toISOString(),
-              tabSessionId,
-            )])
-          }
           chatStore.setAutoScroll(true)
           chatStore.setIsCompleted(false)
           chatStore.setIsStreaming(true)
@@ -2718,13 +2780,18 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       return ts === null ? latest : Math.max(latest, ts)
     }, 0)
     const optimisticTimestampMs = Math.max(Date.now(), latestExistingTimestampMs + 1)
-    const optimisticUserMessage = createUserMessageEvent(
-      displayQueryWithContext,
-      nextEventIndex,
-      new Date(optimisticTimestampMs).toISOString(),
-      tabSessionId,
+    const alreadyHasLiveInputRow = Boolean(optimisticLiveInputEventID) && existingSessionEvents.some(
+      event => event.id === optimisticLiveInputEventID,
     )
-    chatStore.addTabEvents(tabSessionId, [optimisticUserMessage])
+    if (!alreadyHasLiveInputRow) {
+      const optimisticUserMessage = createUserMessageEvent(
+        displayQueryWithContext,
+        nextEventIndex,
+        new Date(optimisticTimestampMs).toISOString(),
+        tabSessionId,
+      )
+      chatStore.addTabEvents(tabSessionId, [optimisticUserMessage])
+    }
 
     // File context is one-shot: it belongs to the message being submitted, not
     // the whole conversation. The request payload below already captured it.
@@ -3242,6 +3309,10 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     if (targetTab) {
       activateTab(targetTab.tabId)
       chatStore.resetTabChat(targetTab.tabId, rotatedConversation?.session_id)
+      // The reset tab is blank on purpose. Without this, the workflow landing
+      // panel's own "nothing else is happening — reopen the last conversation"
+      // effect would see the same blank state and immediately undo New Chat.
+      chatStore.setTabMetadata(targetTab.tabId, { skipWorkflowAutoRestore: true })
       if (rotatedConversation) {
         chatStore.setTabMetadata(targetTab.tabId, {
           agentProfileConversationId: rotatedConversation.conversation_id,
@@ -3455,8 +3526,26 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             onPresetSelected={handleWorkflowPresetSelected}
             onWorkflowPhaseChange={setCurrentWorkflowPhase}
           >
-            {/* restoring — reconnectWorkflowTabs is replaying events. */}
-            {visibleWorkflowSurface === 'restoring' && (
+            {/* restoring — reconnectWorkflowTabs is replaying events. A
+                read-only run view (scheduled/bot run) that never receives
+                content — its session is gone from the backend's in-memory
+                event store, or the fetch itself failed — has no other escape
+                from 'restoring' (see readOnlyRunViewGaveUp above), so past
+                the give-up timeout show an explicit message instead of
+                spinning forever. */}
+            {visibleWorkflowSurface === 'restoring' && isReadOnlyRunView && readOnlyRunViewGaveUp && (
+              <div className="flex flex-col items-center justify-center py-12 gap-2 text-center px-4">
+                <p className="text-sm text-gray-500 dark:text-gray-400">Couldn't load this run's session data — it may no longer be available.</p>
+                <button
+                  type="button"
+                  className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                  onClick={() => { void retryReadOnlyRunView() }}
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+            {visibleWorkflowSurface === 'restoring' && !(isReadOnlyRunView && readOnlyRunViewGaveUp) && (
               <div className="flex flex-col items-center justify-center py-12 gap-3">
                 <div className="w-6 h-6 border-2 border-gray-300 dark:border-gray-600 border-t-blue-600 dark:border-t-blue-400 rounded-full animate-spin"></div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Restoring previous session...</p>

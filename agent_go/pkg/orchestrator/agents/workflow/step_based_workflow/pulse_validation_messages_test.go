@@ -145,14 +145,14 @@ func TestFindingDispositionRejectionsNameTheContractTheyEnforce(t *testing.T) {
 			want: []string{"passed=0, failed=0, inconclusive=1", "changed_unverified"},
 		},
 		{
-			name: "changed_unverified verdict shortfall reports the observed counts",
+			name: "changed_unverified rejects a failed immediate check",
 			disposition: PulseFindingDisposition{
 				Fingerprint: "fp-1", FindingID: "PUL-1",
 				Disposition: FindingDispositionChangedUnverified, Summary: "Applied.",
 				ChangedFiles: []string{"a.json"}, NextCheck: "next scheduled run",
-				Verification: []PulseFindingVerification{{Check: "ran", Verdict: VerificationPassed}},
+				Verification: []PulseFindingVerification{{Check: "ran", Verdict: VerificationFailed}},
 			},
-			want: []string{"passed=1, failed=0, inconclusive=0", "inconclusive", "fixed_verified"},
+			want: []string{"passed=0, failed=1, inconclusive=0", "failed immediate check", "Use failed"},
 		},
 		{
 			name: "verified_no_change verdict shortfall reports the observed counts",
@@ -496,14 +496,13 @@ func TestFindingDispositionCombinesAllViolationsInOneRejection(t *testing.T) {
 		Fingerprint: "fp-1",
 		FindingID:   "PUL-MULTI",
 		Disposition: FindingDispositionChangedUnverified,
-		// Summary omitted, changed_files omitted, next_check omitted, and the
-		// verification carries an invalid verdict — four independent problems.
+		// Summary and changed_files are omitted, and the verification carries an
+		// invalid verdict — three independent problems.
 		Verification: []PulseFindingVerification{{Check: "some check", Verdict: "maybe"}},
 	})
 	assertContainsAll(t, err, []string{
 		"requires summary",
 		"changed_unverified requires changed_files",
-		"changed_unverified requires next_check",
 		`invalid verdict "maybe"`,
 	})
 	if got := strings.Count(err.Error(), "\n1)"); got != 1 {

@@ -89,7 +89,7 @@ func TestEngineeringReviewAndPulseFixerAreSeparateCommands(t *testing.T) {
 		t.Fatal("engineering-review guidance is not registered")
 	}
 	if _, ok := allKinds["pulse-fixer"]; !ok {
-		t.Fatal("independent pulse-fixer guidance is not registered")
+		t.Fatal("pulse-fixer guidance is not registered")
 	}
 }
 
@@ -184,17 +184,18 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 			"Do not launch `/goal-advisor` automatically",
 		},
 		"engineering-review": {
-			"TECHNICAL REVIEW",
+			"TECHNICAL REVIEW PHASE",
 			"continuing Workflow Builder conversation",
 			`"name":"workflow-commands","path":"references/ops-review.md"`,
 			"Standalone Operations Review",
 			"Own the review yourself",
 			"link it to an existing issue, promote it with evidence, or reject it",
 			"Do not apply repairs",
-			"run `/pulse-fixer` next",
+			"same retained Review+Fix task may later",
 		},
 		"pulse-fixer": {
-			"INDEPENDENT PULSE FIXER",
+			"PULSE FIX PHASE",
+			"backend-unlocked later message",
 			"Do not rerun Technical Review",
 			"Workflow observations are evidence",
 			"bounded canonical **repair batch**",
@@ -227,7 +228,7 @@ func TestManualPulseCommandsKeepRunSetupReviewAndFixBoundariesSeparate(t *testin
 	}
 }
 
-func TestStandaloneOpsReviewRunsDirectlyAndRequiresTypedCompletion(t *testing.T) {
+func TestStandaloneOpsReviewRunsDirectlyAndRequiresTerminalModuleResult(t *testing.T) {
 	raw, err := os.ReadFile("templates/review/ops-review.md")
 	if err != nil {
 		t.Fatalf("read ops-review template: %v", err)
@@ -236,13 +237,11 @@ func TestStandaloneOpsReviewRunsDirectlyAndRequiresTypedCompletion(t *testing.T)
 	for _, want := range []string{
 		"Perform the review in this current background agent",
 		"record_pulse_finding",
-		"record_pulse_verification",
 		`source="technical_review"`,
 		`human_input_id`,
 		"Never emit `decision_required` without this question",
-		"complete_pulse_review",
-		"modules=[\"technical_review\"]",
-		"returning prose without it leaves",
+		"record_pulse_result",
+		"module=technical_review",
 		"Execution-health diagnosis",
 		"repeated context reconstruction",
 		"ops-decision-execution-efficiency-",
@@ -256,7 +255,7 @@ func TestStandaloneOpsReviewRunsDirectlyAndRequiresTypedCompletion(t *testing.T)
 	}
 }
 
-func TestStandaloneStrategyAuditRunsDirectlyAndRequiresTypedCompletion(t *testing.T) {
+func TestStandaloneStrategyAuditRunsDirectlyAndRequiresTerminalModuleResult(t *testing.T) {
 	raw, err := os.ReadFile("templates/review/strategy-auditor.md")
 	if err != nil {
 		t.Fatalf("read strategy-auditor template: %v", err)
@@ -265,10 +264,8 @@ func TestStandaloneStrategyAuditRunsDirectlyAndRequiresTypedCompletion(t *testin
 	for _, want := range []string{
 		"Perform the review in this current background agent",
 		"record_pulse_finding",
-		"record_pulse_verification",
-		"complete_pulse_review",
-		"modules=[\"strategic_review\"]",
-		"returning prose without it leaves",
+		"record_pulse_result",
+		"module=strategic_review",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("standalone strategy audit missing direct typed-completion contract %q", want)
@@ -319,6 +316,39 @@ func TestEvaluationPlanGuidanceAcceptsSourceGroundedValidEmptyResults(t *testing
 		"Empty is not automatically missing",
 		"source-grounded legitimate zero-cardinality state",
 		"fabricated or silently missing data still fails closed",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("evaluation guidance missing %q\n\nGuidance:\n%s", want, guidance)
+		}
+	}
+}
+
+func TestEvaluationPlanGuidanceCoversOutcomeBasedDurableJudgmentSteps(t *testing.T) {
+	guidance, err := renderFromRegistry("evaluation-plan", tmplData{}, referenceKinds)
+	if err != nil {
+		t.Fatalf("render evaluation-plan: %v", err)
+	}
+	for _, want := range []string{
+		"Self-claimed resolution is not human judgment",
+		"a rolling rate over the last N outcomes",
+		"says nothing about recall",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("evaluation guidance missing %q\n\nGuidance:\n%s", want, guidance)
+		}
+	}
+}
+
+func TestEvaluationPlanGuidanceAnchorsSubjectiveRatingScales(t *testing.T) {
+	guidance, err := renderFromRegistry("evaluation-plan", tmplData{}, referenceKinds)
+	if err != nil {
+		t.Fatalf("render evaluation-plan: %v", err)
+	}
+	for _, want := range []string{
+		"Write what every point on the scale looks like, not just the ends",
+		"Extract the facts first, judge second",
+		"leniency drift",
+		"Subjective does not mean lower rigor",
 	} {
 		if !strings.Contains(guidance, want) {
 			t.Fatalf("evaluation guidance missing %q\n\nGuidance:\n%s", want, guidance)
@@ -490,7 +520,6 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"Never silently rebase or broaden",
 		"only passed post-change proof",
 		"changed_unverified",
-		"awaiting_next_valid_run",
 		"owns review selection",
 		"READ-ONLY REVIEW",
 		"main Pulse agent owns the Review+Fix turn",
@@ -574,7 +603,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"a successful write alone is not proof",
 		"mtime alone",
 		"changed_unverified",
-		"awaiting_next_valid_run",
+		"later normal run",
 	} {
 		if !strings.Contains(fixVerify, want) {
 			t.Fatalf("fix-verification missing %q", want)
@@ -712,7 +741,7 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 		"activity and outcomes diverge",
 		"Missing telemetry is",
 		"Never make one reviewer due merely because another reviewer",
-		"Select **at most two** due modules",
+		"Select **at most two** due modules, chosen agentically",
 		"Strategic Review combines the former Strategy Auditor and Goal Advisor",
 		"Strategic Review for business usefulness or strategic headroom",
 		"opportunity phase runs only when",
@@ -912,13 +941,6 @@ func TestPulseRunsEveryDueReviewerAndWritesAttributedResults(t *testing.T) {
 // template, not by grepping stale expectations.
 func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) {
 	cases := map[string][]string{
-		"review-artifact-drift": {
-			"read-only audit checklist",
-			"run_in_background",
-			"Never launch another reviewer",
-			"Pulse Fixer",
-			"mark_changelog_artifact_reviewed",
-		},
 		"improve-learnings": {
 			"ENGINEERING REVIEW — STORES HEALTH / LEARNINGS LENS",
 			"generic read-only reviewer",
@@ -990,6 +1012,43 @@ func TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff(t *testing.T) 
 	}
 }
 
+// TestReviewArtifactDriftSharesPlanDriftReviewMechanismAndStaysReadOnlyElsewhere
+// covers PLAT-258's slash/scheduled parity gap: /review-artifact-drift used to
+// be a fully separate, fully read-only checklist that only READ
+// plan_drift_review's precomputed evidence and deferred to it, never actually
+// running its collector/repair contract/completion writer itself. It is now a
+// two-part contract: Part 1 dispatches the real plan_drift_review procedure
+// (shared candidate collector, repair authority, completion writer), Part 2
+// remains the original read-only checklist for everything plan_drift_review
+// does not cover.
+func TestReviewArtifactDriftSharesPlanDriftReviewMechanismAndStaysReadOnlyElsewhere(t *testing.T) {
+	rendered, err := renderFromRegistry("review-artifact-drift", tmplData{}, allKinds)
+	if err != nil {
+		t.Fatalf("render review-artifact-drift: %v", err)
+	}
+	for _, want := range []string{
+		// Part 1: genuinely dispatches the shared mechanism, not just a read.
+		`get_pulse_state(view="module")`,
+		"plan_drift_candidates",
+		"__workflow_drift_review__",
+		`read_skill(skills=[{"name":"builder-reference","path":"references/plan-drift-review.md"}])`,
+		"real repair authority, identical to `plan_drift_review`'s",
+		"record_plan_drift_review",
+		`record_pulse_result`,
+		`module="plan_drift_review"`,
+		// Part 2: unchanged read-only checklist, own completion writer.
+		"stays strictly read-only",
+		"Part 2 — the read-only checklist",
+		"run_in_background",
+		"Never launch another reviewer",
+		"mark_changelog_artifact_reviewed",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("review-artifact-drift missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
 // review-code is gone (see the removal note above TestReviewImproveLogMigrationIsExtracted's
 // former location); "builder/improve.html" is gone from every remaining
 // specialist's own handoff text too, confirmed by rendering each one, since
@@ -1034,7 +1093,7 @@ func TestStandalonePulseReviewCommandsUsePersistedReviewerPipeline(t *testing.T)
 	for kind, module := range map[string]string{
 		"ops-review":            "technical_review",
 		"strategy-auditor":      "strategic_review",
-		"review-artifact-drift": "artifact_review",
+		"review-artifact-drift": "technical_review",
 	} {
 		rendered, err := renderFromRegistry(kind, tmplData{}, allKinds)
 		if err != nil {
@@ -1051,17 +1110,15 @@ func TestStandalonePulseReviewCommandsUsePersistedReviewerPipeline(t *testing.T)
 				"do the review directly in this agent",
 				"typed Pulse finding, verification",
 				`module=technical_review`,
-				"complete_pulse_review",
+				"record_pulse_result",
 			}
 		} else if kind == "strategy-auditor" {
 			wants = []string{
 				"perform the review directly",
 				"typed Pulse finding",
 				`module=strategic_review`,
-				"complete_pulse_review",
+				"record_pulse_result",
 			}
-		} else {
-			wants = append(wants, "Do not pass `pulse_run_id` or `review_run_id`", "call_generic_agent")
 		}
 		for _, want := range wants {
 			if !strings.Contains(rendered, want) {
@@ -1241,7 +1298,7 @@ func TestDeterministicFetchersFeedLargeAgenticProcessors(t *testing.T) {
 				"Consume deterministic evidence; do not fetch it conversationally",
 			},
 		},
-		"regular": {
+		"scripted": {
 			registry: referenceKinds,
 			wants: []string{
 				"Declare these steps `scripted` from initial design",

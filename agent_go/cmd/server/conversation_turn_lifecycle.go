@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -283,6 +284,11 @@ func (api *StreamingAPI) conversationTurnTreeSnapshot(rootExecutionID string) co
 // and what a discard-on-unreachable-session would cause too.
 const continuationHandoffGrace = 2 * time.Minute
 
+const (
+	durableWorkflowFailureProbeDelay    = 30 * time.Second
+	durableWorkflowFailureProbeInterval = 5 * time.Second
+)
+
 // withinContinuationHandoffGrace reports whether a terminal child finished
 // recently enough that its continuation may still legitimately be in flight.
 //
@@ -294,6 +300,79 @@ func withinContinuationHandoffGrace(snapshot BackgroundAgentSnapshot, now time.T
 		return true
 	}
 	return now.Sub(*snapshot.CompletedAt) < continuationHandoffGrace
+}
+
+// durableFailedWorkflowDescendant checks the run's own terminal record when a
+// scheduled conversation turn is still being held open by a linked full-run
+// container. The durable workflow result is more authoritative than an
+// in-memory completion callback that may never arrive. Only explicit failure is
+// actionable here: a successful full run may still legitimately need its
+// completion notification to resume the main agent for follow-up work.
+func (api *StreamingAPI) durableFailedWorkflowDescendant(ctx context.Context, rootExecutionID string) (string, string, bool) {
+	if api == nil || strings.TrimSpace(rootExecutionID) == "" {
+		return "", "", false
+	}
+
+	api.trackedWorkflowExecutionsMux.RLock()
+	root := cloneTrackedExecution(api.trackedWorkflowExecutions[rootExecutionID])
+	executions := make(map[string]*TrackedWorkflowExecution)
+	if root != nil {
+		for id, execution := range api.trackedWorkflowExecutions {
+			if execution != nil && execution.SessionID == root.SessionID {
+				executions[id] = cloneTrackedExecution(execution)
+			}
+		}
+	}
+	api.trackedWorkflowExecutionsMux.RUnlock()
+	if root == nil {
+		return "", "", false
+	}
+
+	children := make(map[string][]string)
+	for id, execution := range executions {
+		if id == rootExecutionID {
+			continue
+		}
+		if parentID := trackedExecutionParentID(execution); parentID != "" {
+			children[parentID] = append(children[parentID], id)
+		}
+	}
+	seen := map[string]bool{rootExecutionID: true}
+	queue := []string{rootExecutionID}
+	for len(queue) > 0 {
+		parentID := queue[0]
+		queue = queue[1:]
+		for _, childID := range children[parentID] {
+			if seen[childID] {
+				continue
+			}
+			seen[childID] = true
+			queue = append(queue, childID)
+			execution := executions[childID]
+			if execution == nil || execution.Status != trackedExecutionStatusRunning {
+				continue
+			}
+			executionType := normalizeTrackedExecutionKind(execution.Metadata["execution_type"])
+			if normalizeTrackedExecutionKind(execution.Kind) != normalizeTrackedExecutionKind(string(orchestratorevents.ExecutionKindFullRun)) && executionType != "full_workflow" {
+				continue
+			}
+			runFolder := strings.TrimSpace(execution.RunFolder)
+			if runFolder == "" {
+				runFolder = strings.TrimSpace(execution.Metadata["run_folder"])
+			}
+			workspacePath := strings.TrimSpace(execution.WorkspacePath)
+			if workspacePath == "" || runFolder == "" {
+				continue
+			}
+			metadataPath := filepath.Join(workspacePath, "runs", runFolder, "run_metadata.json")
+			metadata, err := readRunMetadata(ctx, metadataPath)
+			if err != nil || metadata == nil || !strings.EqualFold(strings.TrimSpace(metadata.Status), "failed") {
+				continue
+			}
+			return childID, runFolder, true
+		}
+	}
+	return "", "", false
 }
 
 // waitForConversationTurnTree is the single completion waiter for scheduled
@@ -318,6 +397,7 @@ func (api *StreamingAPI) waitForConversationTurnTree(ctx context.Context, sessio
 	defer ticker.Stop()
 	waitStartedAt := time.Now()
 	lastProgressAt := waitStartedAt
+	lastDurableFailureProbeAt := time.Time{}
 	rootMissingSince := waitStartedAt
 	check := func() (bool, error) {
 		state := api.conversationTurnTreeSnapshot(rootExecutionID)
@@ -329,6 +409,14 @@ func (api *StreamingAPI) waitForConversationTurnTree(ctx context.Context, sessio
 		}
 		if state.LastProgressAt.After(lastProgressAt) {
 			lastProgressAt = state.LastProgressAt
+		}
+		if state.RootStatus == trackedExecutionStatusCompleted && state.RunningChildren > 0 &&
+			time.Since(lastProgressAt) >= durableWorkflowFailureProbeDelay &&
+			(lastDurableFailureProbeAt.IsZero() || time.Since(lastDurableFailureProbeAt) >= durableWorkflowFailureProbeInterval) {
+			lastDurableFailureProbeAt = time.Now()
+			if childID, runFolder, failed := api.durableFailedWorkflowDescendant(ctx, rootExecutionID); failed {
+				return true, fmt.Errorf("%w: linked workflow execution %s run %s recorded status failed", errWorkshopSessionFailed, childID, runFolder)
+			}
 		}
 		if state.terminal() {
 			switch state.RootStatus {

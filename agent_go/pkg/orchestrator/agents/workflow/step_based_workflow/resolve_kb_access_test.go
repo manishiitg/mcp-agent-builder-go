@@ -1,6 +1,9 @@
 package step_based_workflow
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // PLAT-055 / K. Unset knowledgebase_access used to silently resolve to
 // KBAccessNone regardless of whether a contribution was already staged — a
@@ -15,6 +18,15 @@ func TestResolveKnowledgebaseAccessDefaultsToReadWhenUnset(t *testing.T) {
 	got := resolveKnowledgebaseAccess(&AgentConfigs{}, true)
 	if got != KBAccessRead {
 		t.Fatalf("unset access = %q, want %q (same baseline learnings already grants everyone)", got, KBAccessRead)
+	}
+}
+
+func TestKnowledgebaseAccessBuilderDescriptionMatchesRuntimeDefault(t *testing.T) {
+	if !strings.Contains(knowledgebaseAccessDescription, "Defaults to 'read'") {
+		t.Fatalf("Builder description does not state the runtime default: %q", knowledgebaseAccessDescription)
+	}
+	if strings.Contains(knowledgebaseAccessDescription, "Defaults to 'none'") || strings.Contains(knowledgebaseAccessDescription, "opt-in per step") {
+		t.Fatalf("Builder description retains the retired opt-in contract: %q", knowledgebaseAccessDescription)
 	}
 }
 

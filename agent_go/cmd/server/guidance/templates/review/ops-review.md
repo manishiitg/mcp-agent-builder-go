@@ -5,7 +5,7 @@ operations-oriented default focus. You are the **Standalone Technical
 Review**; do the review directly in this agent rather
 than dispatching another reviewer. The review is read-only with respect to
 workflow artifacts and configuration, while typed Pulse finding, verification,
-and terminal-review receipts are required. It owns cost,
+and one terminal module result are required. It owns cost,
 timing, LLM selection, tool calling, runtime operations, setup, and plan-design
 hygiene. Do not change models, tiers, fallbacks, schedules, notification
 recipients, backup, publish, or credentials in this command.{{if .Focus}}
@@ -18,7 +18,7 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    `read_skill(skills=[{"name":"builder-reference","path":"references/llm-selection.md"}])`.
    Work from these references yourself. Findings are persisted through typed
    Pulse tools; do not create a Markdown or HTML review artifact.
-   Read `get_pulse_review_focus_agenda(module="technical_review", route_scope=<relevant route>)`, perform a
+   Read `get_pulse_state(view="focus_agenda", module="technical_review", route_scope=<relevant route>)`, perform a
    lightweight scan for critical regressions, matured verification, answered
    decisions, plan routes, and retained run selectors, then select the smallest
    sufficient route-aware technical focus set. A small route may need one;
@@ -40,8 +40,8 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
    `run_in_background`, launch another reviewer, publish,
    notify, or run the workflow; you must not edit files or config. Read only the matching LLM/Ops/open-finding
    evidence needed for this review. Record each evidence-backed finding with
-   `record_pulse_finding` and each matured verification with
-   `record_pulse_verification` as soon as its judgment is established. A real
+   `record_pulse_finding`, reusing the existing `issue_id` whenever the issue
+   text and history describe the same root cause. A real
    operator decision is typed lifecycle state, not a workflow mutation: create
    it through `create_human_input_request` as described below.
 4. Require the reviewer to check all of the following agentically:
@@ -132,6 +132,39 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
      approval boundary, failure behavior, and reuse (especially draft-only
      versus publish routes). Artifact Review owns topology drift; record an Ops
      finding only for measured cost, latency, or runtime impact.
+   - **A schedule with no recent runs is not evidence of a scheduler defect
+     by itself.** `get_schedule_runs` returns both actual runs AND any recent
+     occurrences the scheduler deliberately did not run (global pause, another
+     schedule already owning the workflow, a queued dependency), each with its
+     real reason — call it and read that list before concluding a schedule
+     "silently skipped" or theorizing about a missing misfire-recovery
+     mechanism. Live case: four Technical Review passes across three weeks
+     built an increasingly detailed theory that the platform scheduler has "no
+     durable missed-slot recovery" — the scheduler was in fact evaluating and
+     correctly skipping every single occurrence on time, the whole gap was one
+     multi-day global pause, and the answer was sitting in this same tool the
+     whole time, unread. Only escalate a scheduler-code finding once this list
+     is checked and does not explain the gap.
+   - **A null `lcp_ms` on a shared-CDP browser is not evidence of a capture
+     bug by itself.** CDP mode connects every concurrent workflow session to
+     one real, shared Chrome instance. Largest Contentful Paint is withheld
+     by the browser's own spec-mandated behavior whenever
+     `document.visibilityState` is not `"visible"` at capture time — no
+     page-side script or web-vitals library can work around that. Live-tested
+     directly: `agent_browser`'s own tab-switch command does correctly bring
+     the target tab to the foreground when used in isolation, so a null
+     reading is not the tool silently failing to switch. The gap is
+     concurrency: another session sharing the same CDP port can switch its
+     own tab to the foreground between this session's switch and its actual
+     capture, and creating a dedicated labeled tab does not prevent that race
+     — it only fixes tab *identity* (PLAT-181's concern), not tab
+     *foreground*. Treat a null `lcp_ms` under concurrent CDP sharing as a
+     known, structural limitation of the current shared-browser architecture
+     (see PLAT-181 for the sibling ownership-collision issue on the same
+     root cause), not a new platform bug to keep re-filing every cycle. A
+     real fix requires giving performance-sensitive steps a dedicated,
+     non-shared CDP browser instance — a deliberately out-of-scope
+     architecture change, not a quick patch.
    - **Reflection yield.** `reflection:<step-id>` is attributed separately from
      `execution_only:<step-id>` in the cost ledger, and `reflection-timing.json`
      sits beside the execution timing files. **A single reflection turn that
@@ -165,13 +198,59 @@ context.
 
 When the report crosses a triage boundary (a step over 20k characters, 30% or
 more of described steps over 5k, or 10k or more repeated description
-characters), assess whether the workflow has accumulated shared database,
-browser, validation, or policy prose that belongs in a versioned reference or
-deterministic script. If so, file **one canonical workflow-level finding**,
-not one finding per large step. Its evidence must name the measured totals and
-the exact affected steps; its recommendation must name the proposed ownership
-split: step-specific decision contract, shared reference, validation schema,
-or script.
+characters), read the flagged steps' full descriptions yourself — the tool
+only measures size and exact-text duplication, it has no sense of content
+quality, so this reading is where the actual judgment happens. For each
+flagged step, ask two separate questions, since either can be true without
+the other:
+
+- **Wrong home.** Does the description carry durable HOW-to-operate
+  knowledge (selectors, API quirks, timing, auth flows) that belongs in
+  `learnings/_global/SKILL.md`; business/domain facts that belong in the
+  knowledgebase; produced data that belongs in `db/db.sqlite`; or shared
+  database, browser, validation, or policy prose duplicated elsewhere that
+  belongs in a versioned reference or deterministic script? A step should
+  reference that store (per its `learnings_access`/`knowledgebase_access`),
+  not restate its contents.
+- **Not concise.** Independent of duplication or wrong-home content, is the
+  step's own instruction itself wordier than the judgment it asks for
+  requires — restating context the model doesn't need, hedging with
+  redundant qualifiers, or spelling out a procedure that could be stated as
+  a precise, unambiguous outcome instead? A step can be long because its
+  task is genuinely complex (safety-critical judgment, adaptive research,
+  browser/UI work) without being imprecise; the question is whether the
+  same precision survives a tighter rewrite, not whether it can be made
+  short.
+
+Apply a third question to `validation_schema`, not only to steps that
+crossed the description-size triage boundary — a schema can be
+over-specified even when its description is short, and `validation_schema`
+now renders into the executing agent's prompt on every attempt (not only on
+retry), so its size is a live prompt cost, not just an authoring artifact.
+`get_plan_prompt_health` gives no schema-size signal, so run a cheap
+`jq`-style scan of `planning/plan.json` for schemas with an unusually high
+check count relative to the step's actual output, then read only those
+schemas in full — this stays a lightweight scan, not a full-plan read:
+
+- **Over-specified schema.** Is every `json_checks`/`files`/`db` entry
+  load-bearing — does it catch a real failure a downstream step, evaluator,
+  or user actually depends on — or does it re-check structure the model
+  gets right by construction, assert on free-form/optional content where
+  cosmetic variation isn't actually wrong, or simply mirror the entire
+  output document field-by-field? A schema this large is not automatically
+  wrong (a genuinely multi-file, multi-field contract earns its size), but
+  each check should survive "what real failure does this catch" — if the
+  honest answer is "none, it's just thorough," that check is bloat and a
+  source of spurious retries, not rigor.
+
+File **one canonical workflow-level finding**, not one finding per large
+step. Its evidence must name the measured totals and the exact affected
+steps, and say which of the three questions above applies to each one (they
+are not the same defect and can call for different fixes). Its
+recommendation must name the proposed fix per step: which store it should
+move to and what the step should reference instead, a tighter rewrite that
+preserves the same precision, or — when the size is genuinely earned by the
+task — no change.
 
 A migration spanning several steps, shared references, public-action behavior,
 or output ownership is `decision_required`: create a stable
@@ -261,12 +340,12 @@ may use `fixer_handoff` instead.
    `record_pulse_review_focus(module="technical_review", ...)` once per focus
    actually investigated, including `route_scope`, selection reason, evidence,
    and deferred focuses,
-   then call
-   `complete_pulse_review` exactly once with `modules=["technical_review"]`, a
-   non-empty evidence-grounded verdict, and the truthful terminal status. This
-   typed receipt is the completion boundary: returning prose without it leaves
-   the background execution incomplete. Do not apply recommendations in this
-   read-only command; creating and linking a durable decision is allowed.
+   then call `record_pulse_result` exactly once with
+   `module="technical_review"`, `result="done"`, a concise evidence-grounded
+   reason, and its evidence. That module result is the completion boundary;
+   returning prose without it leaves the background work incomplete. Do not
+   apply recommendations in this read-only command; creating and linking a
+   durable decision is allowed.
 
 Include reflection-turn cost as a first-class cost line. Each contributing step
 runs one post-completion reflection turn, and it is not free: a measured Social

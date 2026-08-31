@@ -75,13 +75,29 @@ export function pulseFindingDisposition(finding: PulseFindingLifecycle): string 
     if (typeof disposition === 'string' && disposition.trim()) return disposition.trim()
   }
   for (const attempt of finding.fix_attempts) {
+    const issueID = finding.issue?.id || finding.finding_id
     const reference = attempt.findings?.find((candidate) => (
-      candidate.fingerprint === finding.fingerprint
-      || (finding.finding_id && candidate.finding_id === finding.finding_id)
+      issueID && candidate.finding_id === issueID
     ))
     if (reference?.disposition?.trim()) return reference.disposition.trim()
   }
   return ''
+}
+
+/**
+ * A repair can be recorded, then a later ordinary workflow run can show that
+ * the same problem still exists. Keep that history visible: presenting the
+ * finding as merely "New" discards the most useful part of its lifecycle.
+ */
+function hasRecordedAppliedFix(finding: PulseFindingLifecycle): boolean {
+  const disposition = pulseFindingDisposition(finding)
+  return finding.fix_attempts.some((attempt) => attempt.changed_files.length > 0)
+    || finding.events.some((event) => event.event_type === 'fix_applied')
+    || ['changed_unverified', 'fixed_verified'].includes(disposition)
+}
+
+function reopenedAfterAppliedFix(finding: PulseFindingLifecycle): boolean {
+  return finding.status === 'open' && hasRecordedAppliedFix(finding)
 }
 
 function closedLabel(finding: PulseFindingLifecycle): string {
@@ -184,6 +200,15 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
     }
   }
 
+  if (reopenedAfterAppliedFix(finding)) {
+    return {
+      label: 'Reopened after fix',
+      queue: 'needs_action',
+      tone: 'danger',
+      nextAction: 'New workflow evidence appeared after the recorded repair. Pulse must compare that run with the repair, then either repair again or record why this is a distinct issue.',
+    }
+  }
+
   if (finding.status === 'acknowledged') {
     const reason = acknowledgedReason(finding)
     if (reason === 'awaiting_user') {
@@ -282,10 +307,20 @@ export function pulseFindingProgress(finding: PulseFindingLifecycle): PulseFindi
     || presentation.queue === 'blocked'
     || presentation.queue === 'platform'
     || presentation.queue === 'resolved'
-  const fixApplied = finding.fix_attempts.some((attempt) => attempt.changed_files.length > 0)
-    || ['changed_unverified', 'fixed_verified'].includes(disposition)
+  const fixApplied = hasRecordedAppliedFix(finding)
   const verified = latestVerification(finding)?.verdict === 'passed'
     || ['fixed_verified', 'verified_no_change'].includes(disposition)
+  if (reopenedAfterAppliedFix(finding)) {
+    const flags = [true, diagnosed, fixApplied, verified, false]
+    const labels = ['Found', 'Diagnosed', 'Fix applied', 'Verified', 'Reopened']
+    return labels.map((label, index) => ({
+      label,
+      // Reopened is the current condition, even when an earlier verification
+      // stage is absent. Otherwise the UI implies that it is merely waiting
+      // for a first verification rather than needing the repair reconsidered.
+      state: flags[index] ? 'done' : index === labels.length - 1 ? 'current' : 'pending',
+    }))
+  }
   const closed = presentation.queue === 'resolved'
   const flags = [true, diagnosed, fixApplied, verified, closed]
   const labels = ['Found', 'Diagnosed', 'Fix applied', 'Verified', 'Closed']

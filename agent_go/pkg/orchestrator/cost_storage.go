@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"log"
 	"path/filepath"
 	"strings"
 	"time"
@@ -173,7 +174,10 @@ func buildModelTokenUsage(modelTokenData *ModelTokenData) *ModelTokenUsage {
 	// context editing during the actual API transfer — is
 	// mcpagent/agent.go's contextWindowUsageKnown-gated path (2026-08-10,
 	// commit 0ebd5c8) and is untouched by this change.
-	inputCost, outputCost, reasoningCost, cacheCost, totalCost, _ := calculatePricingFromModelData(modelTokenData)
+	inputCost, outputCost, reasoningCost, cacheCost, totalCost, _, pricingFound := calculatePricingFromModelData(modelTokenData)
+	if !pricingFound {
+		log.Printf("[COST] no rate card for provider=%q model=%q — recording as unpriced, not $0", modelTokenData.Provider, modelTokenData.ModelID)
+	}
 
 	return &ModelTokenUsage{
 		Provider:          modelTokenData.Provider,
@@ -199,6 +203,7 @@ func buildModelTokenUsage(modelTokenData *ModelTokenData) *ModelTokenUsage {
 		CacheReadCost:     modelTokenData.CacheReadCost,
 		CacheWriteCost:    modelTokenData.CacheWriteCost,
 		TotalCost:         totalCost,
+		Unpriced:          !pricingFound,
 	}
 }
 
@@ -226,7 +231,7 @@ func EnsureModelTokenUsagePricing(modelID string, usage *ModelTokenUsage) {
 	}
 
 	modelTokenData := buildModelTokenDataFromUsage(modelID, usage)
-	inputCost, outputCost, reasoningCost, cacheCost, totalCost, _ := calculatePricingFromModelData(modelTokenData)
+	inputCost, outputCost, reasoningCost, cacheCost, totalCost, _, pricingFound := calculatePricingFromModelData(modelTokenData)
 
 	if inputCost > 0 || outputCost > 0 || reasoningCost > 0 || cacheCost > 0 || totalCost > 0 {
 		usage.PricingModelID = modelID
@@ -239,6 +244,10 @@ func EnsureModelTokenUsagePricing(modelID string, usage *ModelTokenUsage) {
 		usage.CacheWriteCost = modelTokenData.CacheWriteCost
 		usage.TotalCost = totalCost
 	}
+	if !pricingFound {
+		log.Printf("[COST] no rate card for provider=%q model=%q — leaving usage recorded as unpriced, not $0", usage.Provider, modelID)
+	}
+	usage.Unpriced = !pricingFound
 
 	// PLAT-072/B: no longer backfilled here — see buildModelTokenUsage.
 }

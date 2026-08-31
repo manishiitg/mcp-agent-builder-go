@@ -156,6 +156,33 @@ func TestLoadAttachableHandlesEmptySelection(t *testing.T) {
 	}
 }
 
+func TestWithAgentBrowserCapability(t *testing.T) {
+	t.Run("adds built-in skill when browser tool is present", func(t *testing.T) {
+		selected := []string{"pdf-extract"}
+		got := WithAgentBrowserCapability(selected, true)
+		if strings.Join(got, ",") != "pdf-extract,agent-browser" {
+			t.Fatalf("unexpected skills: %v", got)
+		}
+		if len(selected) != 1 {
+			t.Fatalf("persisted selection was mutated: %v", selected)
+		}
+	})
+
+	t.Run("does not duplicate explicit selection", func(t *testing.T) {
+		got := WithAgentBrowserCapability([]string{"agent-browser", "pdf-extract"}, true)
+		if strings.Join(got, ",") != "agent-browser,pdf-extract" {
+			t.Fatalf("unexpected skills: %v", got)
+		}
+	})
+
+	t.Run("leaves skills unchanged without browser tool", func(t *testing.T) {
+		got := WithAgentBrowserCapability([]string{"pdf-extract"}, false)
+		if strings.Join(got, ",") != "pdf-extract" {
+			t.Fatalf("unexpected skills: %v", got)
+		}
+	})
+}
+
 func TestLazySkillBody(t *testing.T) {
 	t.Run("small body injected whole", func(t *testing.T) {
 		body := strings.Repeat("line\n", 100)

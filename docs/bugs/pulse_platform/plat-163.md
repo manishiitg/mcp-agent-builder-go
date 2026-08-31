@@ -2,6 +2,12 @@
 
 # PLAT-163 — Pulse technical and strategic reviews need durable focus rotation, one canonical technical identity, and visible coverage history
 
+> **2026-08-28 sequencing update:** PLAT-199 replaces the fresh independent
+> Technical Fixer with a later receipt-gated message in the retained technical
+> sequence. Focus selection and the terminal review receipt remain reviewer
+> facts; repair mutation and outcome remain a distinct post-receipt phase.
+> Strategic Review stays separate and read-only.
+
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |

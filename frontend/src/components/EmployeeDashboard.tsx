@@ -79,10 +79,16 @@ interface KBNotesIndex {
   last_updated_by?: { step?: string; run?: string }
 }
 
+type KBFileFreshness = {
+  lastConfirmedAt: string
+  lastAction: string
+}
+
 interface KnowledgebaseState {
   loading: boolean
   error: string | null
   index: KBNotesIndex | null
+  fileFreshness: Record<string, KBFileFreshness>
   bodies: Record<string, string | null>
   expanded: Set<string>
 }
@@ -161,6 +167,7 @@ const EMPTY_KNOWLEDGEBASE_STATE: KnowledgebaseState = {
   loading: false,
   error: null,
   index: null,
+  fileFreshness: {},
   bodies: {},
   expanded: new Set<string>(),
 }
@@ -307,6 +314,31 @@ const normalizeKBIndex = (raw: unknown): KBNotesIndex | null => {
     .sort((a, b) => a.id.localeCompare(b.id))
 
   return { topics }
+}
+
+const parseKBFileFreshness = (raw: unknown): Record<string, KBFileFreshness> => {
+  if (!raw || typeof raw !== 'object') return {}
+  const items = (raw as { items?: unknown }).items
+  if (!items || typeof items !== 'object') return {}
+
+  return Object.fromEntries(
+    Object.entries(items as Record<string, unknown>).flatMap(([path, value]) => {
+      if (!value || typeof value !== 'object') return []
+      const entry = value as { last_confirmed_at?: unknown; last_action?: unknown }
+      const lastConfirmedAt = typeof entry.last_confirmed_at === 'string' ? entry.last_confirmed_at : ''
+      if (!lastConfirmedAt) return []
+      return [[path, {
+        lastConfirmedAt,
+        lastAction: typeof entry.last_action === 'string' ? entry.last_action : '',
+      }]]
+    }),
+  )
+}
+
+const formatFreshnessDate = (timestamp: string): string => {
+  const date = new Date(timestamp)
+  if (!Number.isFinite(date.getTime())) return 'Fresh'
+  return `Fresh ${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
 }
 
 const readWorkspaceText = async (filepath: string): Promise<string | null> => {
@@ -927,10 +959,12 @@ export const EmployeeDashboard: React.FC = () => {
       } catch {
         index = await buildKnowledgebaseIndexFromFiles(workspacePath)
       }
+      const rawFreshness = await readWorkspaceJSON<unknown>(`${workspacePath}/knowledgebase/_freshness.json`)
       setKnowledgebaseState({
         loading: false,
         error: null,
         index,
+        fileFreshness: parseKBFileFreshness(rawFreshness),
         bodies: {},
         expanded: new Set<string>(),
       })
@@ -1677,6 +1711,7 @@ export const EmployeeDashboard: React.FC = () => {
                           const isOpenTopic = knowledgebaseState.expanded.has(topic.id)
                           const body = knowledgebaseState.bodies[topic.id]
                           const isMarkdownFile = topic.file.toLowerCase().endsWith('.md')
+                          const freshness = knowledgebaseState.fileFreshness[topic.file]
                           return (
                             <div key={topic.id} className="overflow-hidden rounded-xl border border-border bg-card">
                               <button
@@ -1692,6 +1727,14 @@ export const EmployeeDashboard: React.FC = () => {
                                 <FileText className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
                                 <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{topic.id}</span>
                                 <span className="hidden font-mono text-xs text-muted-foreground sm:inline">{topic.file}</span>
+                                {freshness && (
+                                  <span
+                                    className="shrink-0 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700 dark:text-emerald-300"
+                                    title={`Last ${freshness.lastAction || 'confirmed'}: ${new Date(freshness.lastConfirmedAt).toLocaleString()}`}
+                                  >
+                                    {formatFreshnessDate(freshness.lastConfirmedAt)}
+                                  </span>
+                                )}
                                 {typeof topic.section_count === 'number' && (
                                   <span className="text-xs text-muted-foreground">{topic.section_count} section{topic.section_count === 1 ? '' : 's'}</span>
                                 )}

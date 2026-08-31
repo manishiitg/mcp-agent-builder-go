@@ -75,9 +75,8 @@ func BuildStepReflectionTurn(in StepReflectionTurnInput) string {
 	// No store to write to means no turn. Emitting one purely for the concern
 	// outlet would add an LLM call to every step that contributes nothing —
 	// including every step in a lock_learnings workflow, where the old code
-	// correctly emitted nothing at all. record_run_concern is available during
-	// main execution regardless, so a step with no contribution can still report
-	// a defect while it is doing the work that revealed it.
+	// correctly emitted nothing at all. Pulse reviews retained execution output
+	// and deterministic receipts directly after the run.
 	if !learnings && !kb {
 		return ""
 	}
@@ -101,12 +100,12 @@ func BuildStepReflectionTurn(in StepReflectionTurnInput) string {
 	b.WriteString("| Reusable execution technique — selectors, timings, auth flows, API quirks, retry/recovery patterns | learnings |\n")
 	b.WriteString("| Measurements, counts, run results, current status | the database (you already wrote these during the step) |\n")
 	b.WriteString("| Durable business/domain narrative | knowledgebase |\n")
-	b.WriteString("| A defect, contradiction, or platform problem | `record_run_concern` |\n")
+	b.WriteString("| A defect, contradiction, or platform problem | retain concrete evidence in the step result; Pulse Technical Review evaluates it |\n")
 	b.WriteString("| An owner constraint value (cap, limit, threshold) | nowhere — it lives in `soul/soul.md` and is injected every run |\n\n")
 
 	b.WriteString("**The test that settles most cases: if it will be wrong in a month, it is not a learning.** ")
 	b.WriteString("`this API needs region us-east-1` stays true. `spend is ~$50/day` and `3 items are stale` do not.\n\n")
-	b.WriteString("**Learnings is not a fallback.** If something belongs to another store, put it there or raise it as a concern. ")
+	b.WriteString("**Learnings is not a fallback.** If something belongs to another store, put it there. ")
 	b.WriteString("Do not write it into learnings because it seemed easier to reach — that is how these files fill with incident narratives and stale numbers that later runs then trust.\n\n")
 
 	if len(in.DBTableNames) > 0 {
@@ -116,13 +115,8 @@ func BuildStepReflectionTurn(in StepReflectionTurnInput) string {
 		b.WriteString("If your observation belongs in one of them it is already recorded — name the table, never paste its values here. A number copied out of the database is stale the moment the next run writes.\n\n")
 	}
 
-	// ---- Concern outlet. ----
-	b.WriteString("### Reporting a problem\n\n")
-	b.WriteString("Call `record_run_concern` when this run showed something wrong: a tool or harness that misbehaved, an artifact contract that contradicts itself, ")
-	b.WriteString("a step description that conflicts with a binding constraint, two stores that state the same fact differently, or a path/table/field the description names that does not exist. ")
-	b.WriteString("It takes real fields — severity, classification, impact, evidence, reproduction — so file the whole finding there rather than compressing it into prose somewhere else. ")
-	b.WriteString("Your step identity is supplied by the runtime; you do not pass it.\n\n")
-	b.WriteString("Use it for consequential, unresolved run evidence — not routine progress, and not something the workflow simply has not learned yet.\n\n")
+	// Pulse Technical Review independently evaluates retained output and runtime
+	// receipts. Reflection does not file observations or infer issue identity.
 
 	if learnings {
 		b.WriteString(buildReflectionLearningsSection(in, skillPath, referencesPath))
@@ -134,10 +128,10 @@ func BuildStepReflectionTurn(in StepReflectionTurnInput) string {
 	b.WriteString("### Closing\n\n")
 	b.WriteString("- This is your only reflection turn for this step; there is no second pass.\n")
 	if learnings {
-		b.WriteString("- If there is genuinely nothing new worth capturing, do **not** force an edit. Say so briefly and why. A concern still applies on a no-op turn.\n")
+		b.WriteString("- If there is genuinely nothing new worth capturing, do **not** force an edit. Say so briefly and why.\n")
 		b.WriteString("- If you changed files, end with exactly one line: `Learnings updated: files changed: <comma-separated list>`.\n")
 	}
-	b.WriteString("- Available tools: `execute_shell_command` for read-only inspection (`cat`, `ls`, `find`, `wc`), `query_workflow_db` for reads, `diff_patch_workspace_file` for writes, and `record_run_concern`.\n")
+	b.WriteString("- Available tools: `execute_shell_command` for read-only inspection (`cat`, `ls`, `find`, `wc`), `query_workflow_db` for reads, and `diff_patch_workspace_file` for writes.\n")
 
 	return b.String()
 }

@@ -1,5 +1,6 @@
 export const REPORT_PREVIEW_PREFERENCE_KEY = 'workflow_report_preview_preference'
 export const REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT = 'workflow-report-preview-preference-changed'
+export const WORKFLOW_SPLIT_PREFERENCE_KEY = 'workflow_workspace_split_ratio'
 
 export type ReportPreviewDevice = 'mobile' | 'tablet' | 'desktop'
 export const DEFAULT_REPORT_PREVIEW_DEVICE: ReportPreviewDevice = 'tablet'
@@ -39,4 +40,28 @@ export function writeReportPreviewPreference(
 
 export function openWorkflowInDefaultPreview(scopeId?: string | null): void {
   writeReportPreviewPreference(scopeId, DEFAULT_REPORT_PREVIEW_DEVICE)
+}
+
+function workflowSplitPreferenceKey(scopeId?: string | null, device?: ReportPreviewDevice): string {
+  const scope = scopeId ? `${WORKFLOW_SPLIT_PREFERENCE_KEY}:${scopeId}` : WORKFLOW_SPLIT_PREFERENCE_KEY
+  return device ? `${scope}:${device}` : scope
+}
+
+export function readWorkflowSplitPreference(scopeId?: string | null, device?: ReportPreviewDevice): number | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const value = Number.parseFloat(window.localStorage.getItem(workflowSplitPreferenceKey(scopeId, device)) || '')
+    return Number.isFinite(value) && value >= 0.15 && value <= 0.85 ? value : null
+  } catch {
+    return null
+  }
+}
+
+export function writeWorkflowSplitPreference(scopeId: string | null | undefined, ratio: number, device?: ReportPreviewDevice): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(workflowSplitPreferenceKey(scopeId, device), String(Math.max(0.15, Math.min(0.85, ratio))))
+  } catch {
+    // UI preference only.
+  }
 }

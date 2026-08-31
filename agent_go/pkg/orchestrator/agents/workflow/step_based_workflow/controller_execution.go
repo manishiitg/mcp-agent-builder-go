@@ -135,15 +135,12 @@ const (
 	KBAccessRead      = "read"
 	KBAccessWrite     = "write"
 	KBAccessNone      = "none"
+
+	knowledgebaseAccessDescription = "Access mode for this step against knowledgebase/ (per-topic notes/ + notes/_index.json registry). Defaults to 'read' so steps can consume shared context; use 'none' to opt out. 'write' / 'read-write' may contribute: the step agent writes notes/ inline with diff_patch_workspace_file and closes with a self-review turn against its knowledgebase_contribution. Granting write without a knowledgebase_contribution results in no KB writes at all."
 )
 
 // resolveKnowledgebaseAccess resolves the effective KB access mode for a step.
 //
-// Policy: KB access is opt-in per step. Default is "none" — a step only gets KB read
-// or write when knowledgebase_access is explicitly set on its step_config.json entry.
-// The preset-level UseKnowledgebase flag is a prerequisite (when off, all steps are
-// forced to "none" regardless of explicit setting); it controls whether knowledgebase/
-// exists at all, not whether any given step can touch it.
 // resolveKnowledgebaseAccess returns the effective knowledgebase_access for a
 // step. Explicit value wins. Unset mirrors resolveLearningsAccess's already-safe
 // default pattern rather than introducing a new one: read by default (every
@@ -1372,7 +1369,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 	if sessionID := hcpo.GetMCPSessionID(); sessionID != "" && !isSubAgent {
 		narrowAgentCfg := getAgentConfigs(step)
 		narrowKBAccess := resolveKnowledgebaseAccess(narrowAgentCfg, hcpo.UseKnowledgebase())
-		narrowLearningsAccess := resolveLearningsAccess(narrowAgentCfg)
+		narrowLearningsAccess := resolveExecutionLearningsAccess(narrowAgentCfg, step, hcpo.isEvaluationMode)
 		narrowRead, narrowWrite := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, narrowKBAccess, narrowLearningsAccess, resolveDBAccess(narrowAgentCfg), narrowAgentCfg)
 		var prevRead, prevWrite []string
 		if prevCfg := common.GetSessionShellConfig(sessionID); prevCfg != nil {
@@ -1380,11 +1377,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			prevWrite = prevCfg.WritePaths
 		}
 		common.SetSessionFolderGuard(sessionID, narrowRead, narrowWrite)
-		hcpo.grantSessionCDPHostDownloadsReadOnly(sessionID)
+		hcpo.grantSessionCDPHostDownloadsReadWrite(sessionID)
 		hcpo.GetLogger().Info(fmt.Sprintf("🔒 [FOLDER_GUARD_STEP] Narrowed session %s for step %s: read=%v write=%v", sessionID, step.GetID(), narrowRead, narrowWrite))
 		defer func() {
 			common.SetSessionFolderGuard(sessionID, prevRead, prevWrite)
-			hcpo.grantSessionCDPHostDownloadsReadOnly(sessionID)
+			hcpo.grantSessionCDPHostDownloadsReadWrite(sessionID)
 			hcpo.GetLogger().Info(fmt.Sprintf("🔓 [FOLDER_GUARD_STEP] Restored session %s after step %s", sessionID, step.GetID()))
 		}()
 	}
@@ -1495,7 +1492,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 		}
 
 		// Get folder guard paths for template (so agent knows exact paths it can access)
-		learningsAccess := resolveLearningsAccess(agentConfigs)
+		learningsAccess := resolveExecutionLearningsAccess(agentConfigs, step, hcpo.isEvaluationMode)
 		evaluationDBWrite := false
 		if evalStep, ok := step.(*EvaluationStep); ok {
 			evaluationDBWrite = evalStep.DBWrite
@@ -1517,6 +1514,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 		docsRoot := GetPromptDocsRoot()
 		toAbsPath := func(path string) string {
 			if path == "" || docsRoot == "" {
+				return path
+			}
+			if filepath.IsAbs(path) {
 				return path
 			}
 			return filepath.Join(docsRoot, path)
@@ -1561,6 +1561,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			}
 		}
 		kbNotesPathForPrompt := toAbsPath(filepath.Join(getKnowledgebasePath(hcpo.GetWorkspacePath()), KBNotesFolderName))
+		scriptedEnv := hcpo.snapshotWorkspaceEnv()
+		if scriptedEnv == nil {
+			scriptedEnv = make(map[string]string)
+		}
+		_, _, _, folderEnv := appendWorkflowFolderAccess(hcpo.GetWorkspacePath(), nil, nil)
+		for key, value := range folderEnv {
+			scriptedEnv[key] = value
+		}
 
 		templateVars := map[string]string{
 			"StepTitle":                 stepTitleForPrompt,
@@ -1591,7 +1599,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			"ScriptedPriorScript":       learnCodePriorScript,
 			"ScriptedPriorError":        learnCodePriorError,
 			"ScriptedInputArgs":         learnCodeInputArgsForPrompt,
-			"ScriptedEnvVarNames":       buildScriptedEnvVarNamesForPrompt(isScriptedMode, hcpo.snapshotWorkspaceEnv()),
+			"ScriptedEnvVarNames":       buildScriptedEnvVarNamesForPrompt(isScriptedMode, scriptedEnv),
 			"ScriptedVarMapping":        buildScriptedVarMappingForPrompt(isCodeExecutionMode || isScriptedMode, hcpo.variablesManifest),
 			"GroupName":                 hcpo.currentGroupName,
 		}
@@ -1723,6 +1731,20 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 					"scripted step %q could not run: the workspace refused to start main.py, so it produced no output and its behavior is untested by this run. "+
 						"This is a harness/infrastructure failure, not a fault in the script — do not modify main.py in response to it. Underlying error: %s",
 					step.GetID(), scriptedDecision.HarnessError)
+			}
+			// The script deliberately exited ScriptedTerminalRefusalExitCode: a
+			// fail-closed guard correctly detected an unsafe condition and
+			// refused to proceed. This must fail the step outright rather than
+			// fall through to the LLM relearn path — handing an agent "here is
+			// a refusal, fix it" is exactly how the refusal gets overridden
+			// instead of respected. See ScriptedTerminalRefusalExitCode's own
+			// doc comment for the live incident that established this.
+			if scriptedDecision.TerminalRefusal {
+				return "", updatedContextFiles, fmt.Errorf(
+					"scripted step %q deliberately refused to proceed (exit code %d): its own protective logic detected an unsafe condition and stopped. "+
+						"This is the script working correctly, not a bug — do NOT modify main.py or attempt the write it refused. "+
+						"Investigate and resolve the underlying condition the script detected before retrying. Refusal detail: %s",
+					step.GetID(), ScriptedTerminalRefusalExitCode, scriptedDecision.TerminalRefusalReason)
 			}
 			learnCodePriorScript = scriptedDecision.PriorScript
 			learnCodePriorError = scriptedDecision.PriorError
@@ -1862,6 +1884,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 			}
 
 			// Retry loop: Execute with validation feedback, reusing the same learning history
+			// Fires an [AUTO-NOTIFICATION] into the builder chat on the FIRST
+			// pre-validation failure for this step this run — before retries
+			// are exhausted — so the builder can assess and intervene while
+			// the step is still retrying, rather than only learning about it
+			// once the whole step eventually fails outright. Deliberately
+			// once-per-step, not once-per-attempt: firing on every attempt
+			// would spam the chat for a step that recovers on retry 2.
+			preValidationNotifiedThisStep := false
 			for retryAttempt := 1; retryAttempt <= maxRetryAttempts; retryAttempt++ {
 				// Check for context cancellation before retry attempt
 				select {
@@ -1964,7 +1994,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 					// Pass stepPath to createExecutionOnlyAgent so nested sub-agent folders resolve correctly.
 					// For learnings / metadata selection, use the concrete step ID so sub-agents align with their own learnings folder.
 					// allSteps is already []PlanStepInterface - no conversion needed
-					executionAgent, err = hcpo.createExecutionOnlyAgent(executionAgentCtx, "execution_only", stepPath, executionAgentName, agentConfigs, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
+					executionAgent, err = hcpo.createExecutionOnlyAgent(executionAgentCtx, "execution_only", stepPath, executionAgentName, agentConfigs, step, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
 					if err != nil {
 						return "", updatedContextFiles, fmt.Errorf("failed to create execution-only agent for step %d: %w", stepIndex+1, err)
 					}
@@ -2293,7 +2323,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 						// Force Tier 1 (High) for repair agents — they need to fix a failure,
 						// so they should use at least the same tier as the original execution.
 						repairCtx := context.WithValue(ctx, WorkshopTierOverrideKey, int(TierHigh))
-						repairAgent, repairErr := hcpo.createExecutionOnlyAgent(repairCtx, "execution_only", stepPath, repairAgentName, agentConfigs, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
+						repairAgent, repairErr := hcpo.createExecutionOnlyAgent(repairCtx, "execution_only", stepPath, repairAgentName, agentConfigs, step, step.GetID(), getExecutionArtifactFolderOverride(execCtx), evaluationDBWrite)
 						if repairErr != nil {
 							hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ [scripted] failed to create repair agent for step %d fix %d: %v", stepIndex+1, fixIter+1, repairErr))
 							break
@@ -2474,6 +2504,33 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 				// Build validation response based on pre-validation results
 				if !preValidationResults.OverallPass {
 					hcpo.GetLogger().Warn(fmt.Sprintf("Pre-validation failed for step %d - rejecting", stepIndex+1))
+					// One [AUTO-NOTIFICATION] per step per run, on the FIRST
+					// failure only (see preValidationNotifiedThisStep above the
+					// retry loop) -- not the same case as
+					// completeMessageSequenceItemNotification's deliberately
+					// silent per-ITEM prevalidation gate (controller_message_
+					// sequence.go): that one fires up to once per item and the
+					// step's own eventual completion notification already
+					// covers it. This is the step's overall gate, fires at
+					// most once total, and specifically exists so the builder
+					// hears about a real structural problem while the step is
+					// still burning retries -- not only after all of them are
+					// exhausted.
+					if !preValidationNotifiedThisStep && hcpo.workshopExecutionNotifier != nil {
+						preValidationNotifiedThisStep = true
+						notifyID := fmt.Sprintf("prevalidation-warn-%s-%d", step.GetID(), time.Now().UnixNano())
+						notifyName := fmt.Sprintf("Pre-validation check: %s", step.GetTitle())
+						hcpo.workshopExecutionNotifier.OnExecutionStart(WorkshopExecutionStart{
+							ID:                notifyID,
+							ParentExecutionID: currentWorkshopParentExecutionID(ctx),
+							Name:              notifyName,
+							Kind:              "prevalidation_warning",
+							Metadata:          map[string]string{"step_id": step.GetID(), "step_path": stepPath},
+						})
+						hcpo.workshopExecutionNotifier.OnExecutionComplete(notifyID, notifyName, formatWorkspaceResults(preValidationResults),
+							map[string]string{"step_id": step.GetID(), "step_path": stepPath},
+							fmt.Errorf("pre-validation failed on attempt %d/%d — will retry unless attempts are exhausted", retryAttempt, maxRetryAttempts))
+					}
 					validationResponse = &ValidationResponse{
 						IsSuccessCriteriaMet: false,
 						ExecutionStatus:      "FAILED",
@@ -2507,17 +2564,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 							hcpo.GetLogger().Info(fmt.Sprintf("🧠 Reflection completed for step %d (history=%d turns)", stepIndex+1, len(executionConversationHistory)))
 						}
 					}
-					// File any CONCERNS: lines durably BEFORE the summaries are joined.
-					// Phase attribution is free here and nowhere else — once they are
-					// concatenated there is no way to tell a contradiction found while
-					// reflecting from one raised by the task itself. Since PLAT-055
-					// merged the KB and learnings turns, reflection files under the
-					// learnings phase; kb-review remains a valid phase for historical
-					// rows and for concerns raised through record_run_concern.
-					hcpo.recordStepConcerns(ctx, step.GetID(), map[string]string{
-						ConcernPhaseExecution: mainExecutionSummary,
-						ConcernPhaseLearnings: directLearningsSummary,
-					})
+					// Step summaries are retained run evidence. Pulse reviews that
+					// evidence directly; the runtime must not scrape prose into the
+					// Pulse observation store or attempt text-based deduplication.
 
 					if combinedSummary := buildDirectModeCompletionSummary(mainExecutionSummary, "", directLearningsSummary); combinedSummary != "" {
 						executionResult = combinedSummary
@@ -2939,10 +2988,40 @@ func isTodoTaskStep(step PlanStepInterface) bool {
 	return ok
 }
 
-// isRoutingStep returns true if the step is a routing step (N-way LLM-based routing)
+// isRoutingStep returns true if the step is a deterministic N-way switch --
+// either a routing step (now the "route"/major-fork concept) or a branch
+// step (the small in-flow decision). Both share the exact same executor and
+// deterministic-only behavior (no learnings, no agent execution); see
+// routeSwitchStep in planning_agent.go and PLAT-259.
 func isRoutingStep(step PlanStepInterface) bool {
-	_, ok := step.(*RoutingPlanStep)
-	return ok
+	switch step.(type) {
+	case *RoutingPlanStep, *BranchPlanStep:
+		return true
+	default:
+		return false
+	}
+}
+
+// nextStepIDForSelectedRoute resolves where execution continues after a
+// routing/branch step's route has been selected -- the ID it returns becomes
+// the next step in the run. Empty for anything that isn't a routeSwitchStep,
+// or a route_id that doesn't match any of the step's routes. Extracted as a
+// standalone function (was inline in the execution loop) specifically so it
+// has direct test coverage for both RoutingPlanStep and BranchPlanStep,
+// after an independent review found the inline version only ever
+// type-asserted *RoutingPlanStep and silently left a branch step's target
+// empty. See PLAT-259.
+func nextStepIDForSelectedRoute(step PlanStepInterface, selectedRouteID string) string {
+	routingStep, ok := step.(routeSwitchStep)
+	if !ok {
+		return ""
+	}
+	for _, route := range routingStep.GetRoutes() {
+		if route.RouteID == selectedRouteID {
+			return route.NextStepID
+		}
+	}
+	return ""
 }
 
 func isMessageSequenceStep(step PlanStepInterface) bool {
@@ -3064,6 +3143,8 @@ func getAgentConfigs(step PlanStepInterface) *AgentConfigs {
 	case *EvaluationStep:
 		return s.AgentConfigs
 	case *RoutingPlanStep:
+		return s.AgentConfigs
+	case *BranchPlanStep:
 		return s.AgentConfigs
 	case *MessageSequencePlanStep:
 		return s.AgentConfigs
@@ -3302,15 +3383,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			}
 
 			// Find next step based on selected route
-			var nextStepID string
-			if routingStep, ok := step.(*RoutingPlanStep); ok {
-				for _, route := range routingStep.Routes {
-					if route.RouteID == selectedRouteID {
-						nextStepID = route.NextStepID
-						break
-					}
-				}
-			}
+			nextStepID := nextStepIDForSelectedRoute(step, selectedRouteID)
 
 			// Track routing evaluations to prevent infinite loops
 			if progress.RoutingEvaluationCounts == nil {

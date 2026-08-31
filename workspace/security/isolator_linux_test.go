@@ -1,0 +1,188 @@
+//go:build linux
+
+package security
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestLandlockPolicySupportsExternalReadOnlyAndReadWriteFolders(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	readOnlyRoot := t.TempDir()
+	readWriteRoot := t.TempDir()
+
+	isolator := &Isolator{
+		BaseDir:           workspaceRoot,
+		WorkDir:           workspaceRoot,
+		ReadPaths:         []string{workspaceRoot, readOnlyRoot, readWriteRoot},
+		WritePaths:        []string{workspaceRoot, readWriteRoot},
+		BlockedWritePaths: []string{readOnlyRoot},
+	}
+
+	policy, err := isolator.landlockPolicy()
+	if err != nil {
+		t.Fatalf("landlockPolicy() rejected explicit external folder grants: %v", err)
+	}
+
+	contains := func(paths []string, want string) bool {
+		want = canonicalPath(want)
+		for _, path := range paths {
+			if path == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !contains(policy.ReadPaths, readOnlyRoot) {
+		t.Error("read-only external folder is missing from Landlock read grants")
+	}
+	if contains(policy.WritePaths, readOnlyRoot) {
+		t.Error("read-only external folder unexpectedly received a Landlock write grant")
+	}
+	if !contains(policy.ReadPaths, readWriteRoot) || !contains(policy.WritePaths, readWriteRoot) {
+		t.Error("read-write external folder must receive both Landlock read and write grants")
+	}
+}
+
+func TestLandlockEnforcesExternalFolderAccess(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	readOnlyRoot := t.TempDir()
+	readWriteRoot := t.TempDir()
+	readOnlyFile := filepath.Join(readOnlyRoot, "source.txt")
+	if err := os.WriteFile(readOnlyFile, []byte("external-folder-readable"), 0644); err != nil {
+		t.Fatalf("seed read-only folder: %v", err)
+	}
+
+	isolator := &Isolator{
+		BaseDir:           workspaceRoot,
+		WorkDir:           workspaceRoot,
+		ReadPaths:         []string{workspaceRoot, readOnlyRoot, readWriteRoot},
+		WritePaths:        []string{workspaceRoot, readWriteRoot},
+		BlockedWritePaths: []string{readOnlyRoot},
+	}
+
+	command := fmt.Sprintf(
+		"test \"$(cat %q)\" = external-folder-readable && "+
+			"if echo denied > %q 2>/dev/null; then exit 41; fi && "+
+			"echo allowed > %q",
+		readOnlyFile,
+		filepath.Join(readOnlyRoot, "denied.txt"),
+		filepath.Join(readWriteRoot, "allowed.txt"),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if abi, err := landlockABI(); err != nil || abi < 1 {
+		t.Skipf("Landlock is unavailable in this Linux environment: ABI=%d err=%v", abi, err)
+	}
+	policy, err := isolator.landlockPolicy()
+	if err != nil {
+		t.Fatalf("landlockPolicy() failed: %v", err)
+	}
+	cmd, cleanup, err := isolator.landlockCommand(ctx, policy, command, nil)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "SANDBOX_UNAVAILABLE") {
+			t.Skipf("Landlock launcher is unavailable in this environment: %v", err)
+		}
+		t.Fatalf("landlockCommand() failed: %v", err)
+	}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("external folder policy was not enforced: %v\noutput: %s", err, output)
+	}
+
+	if _, err := os.Stat(filepath.Join(readOnlyRoot, "denied.txt")); !os.IsNotExist(err) {
+		t.Errorf("read-only external folder accepted a write; stat error = %v", err)
+	}
+	contents, err := os.ReadFile(filepath.Join(readWriteRoot, "allowed.txt"))
+	if err != nil {
+		t.Fatalf("read-write external folder rejected a write: %v", err)
+	}
+	if strings.TrimSpace(string(contents)) != "allowed" {
+		t.Fatalf("read-write external folder content = %q, want allowed", contents)
+	}
+}
+
+// TestMountNamespaceFallbackEnforcesLandlockRejectedOverlapPolicy is the
+// proper, repeatable server-side reproduction of the live incident on the
+// Dominion Hetzner deployment 2026-08-28/29 -- run this directly on any
+// Linux deployment host to verify the fix instead of hand-crafting a curl
+// request against a running service:
+//
+//	cd workspace && go test ./security/... -run TestMountNamespaceFallbackEnforcesLandlockRejectedOverlapPolicy -v
+//
+// Exercises the exact policy shape that broke: write access to a folder
+// except one of its own subfolders (BlockedWritePaths nested inside
+// WritePaths). Landlock's purely-additive rule model cannot express that
+// carve-out and correctly refuses it (landlockPolicy() returning
+// "blocked-write path overlaps writable path" is Landlock behaving
+// correctly, not a bug); the real check is whether ExecuteIsolated's
+// end-to-end dispatch still falls through to the mount-namespace fallback
+// and that fallback actually enforces the policy -- writes inside the
+// granted folder succeed, writes inside its blocked-write subfolder fail.
+// Skips (not fails) when Landlock is unavailable in this environment (e.g.
+// inside an already-namespaced CI runner) or the overlap isn't rejected,
+// since neither means this fix regressed -- it means this run's
+// environment can't exercise the fallback path at all.
+func TestMountNamespaceFallbackEnforcesLandlockRejectedOverlapPolicy(t *testing.T) {
+	root := t.TempDir()
+	writableDir := filepath.Join(root, "workflow")
+	blockedSubdir := filepath.Join(writableDir, "planning")
+	for _, dir := range []string{writableDir, blockedSubdir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	isolator := &Isolator{
+		ReadPaths:         []string{writableDir},
+		WritePaths:        []string{writableDir},
+		BlockedWritePaths: []string{blockedSubdir},
+		WorkDir:           writableDir,
+		// BaseDir must be set explicitly: the mount-namespace backend's
+		// script bind-mounts getBaseDir() to preserve the original
+		// workspace, and its unset default (/app/workspace-docs, the
+		// containerized-deployment path) does not exist on this test host.
+		BaseDir: root,
+	}
+
+	if _, err := isolator.landlockPolicy(); err == nil {
+		t.Skip("this environment's Landlock did not reject the overlap policy (e.g. already namespaced) -- cannot exercise the fallback path here")
+	} else if !strings.Contains(err.Error(), "overlaps writable path") {
+		t.Fatalf("landlockPolicy() error = %v, want the overlap rejection", err)
+	}
+
+	command := fmt.Sprintf(
+		"echo top-level-ok > %q && if echo denied > %q 2>/dev/null; then exit 41; fi",
+		filepath.Join(writableDir, "ok.txt"),
+		filepath.Join(blockedSubdir, "denied.txt"),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd, cleanup, err := isolator.ExecuteIsolated(ctx, "sh", []string{"-c", command})
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		t.Skipf("ExecuteIsolated could not select any backend in this environment (%v) -- not what this fix changes; run on the actual deployment host to verify it", err)
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mount-namespace fallback did not enforce the policy correctly: %v\noutput: %s", err, output)
+	}
+	if _, statErr := os.Stat(filepath.Join(writableDir, "ok.txt")); statErr != nil {
+		t.Errorf("write to the granted folder should have succeeded: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(blockedSubdir, "denied.txt")); statErr == nil {
+		t.Error("SECURITY VIOLATION: write to the blocked-write subfolder succeeded")
+	}
+}

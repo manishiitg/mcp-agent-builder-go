@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -138,6 +139,8 @@ func TestWorkshopExecutionWithoutExplicitParentAttachesToActiveQueryRoot(t *test
 		Name: "full-run",
 		Metadata: map[string]string{
 			"suppress_auto_notification": "true",
+			"execution_type":             "full-workflow",
+			"run_folder":                 "iteration-0/default",
 		},
 	})
 
@@ -152,6 +155,9 @@ func TestWorkshopExecutionWithoutExplicitParentAttachesToActiveQueryRoot(t *test
 	if got := trackedExecutionParentID(tracked); got != "query-root" {
 		t.Fatalf("tracked parent = %q, want query-root", got)
 	}
+	if tracked.RunFolder != "iteration-0/default" || tracked.Metadata["execution_type"] != "full-workflow" {
+		t.Fatalf("tracked start metadata = %+v, run_folder=%q", tracked.Metadata, tracked.RunFolder)
+	}
 
 	api.completeTrackedExecution("query-root", trackedExecutionStatusCompleted, "", nil)
 	if state := api.conversationTurnTreeSnapshot("query-root"); state.RunningChildren != 1 || state.terminal() {
@@ -163,5 +169,44 @@ func TestWorkshopExecutionWithoutExplicitParentAttachesToActiveQueryRoot(t *test
 	}, nil)
 	if state := api.conversationTurnTreeSnapshot("query-root"); !state.terminal() {
 		t.Fatalf("query tree should finish after workshop child: %+v", state)
+	}
+}
+
+func TestDurableFailedWorkflowDescendantOverridesMissingCompletionCallback(t *testing.T) {
+	const (
+		workspacePath = "Workflow/salesoutreach"
+		runFolder     = "iteration-0/dubai-real-estate"
+	)
+	workspace := &mockWorkspaceAPI{files: map[string]string{
+		workspacePath + "/runs/" + runFolder + "/run_metadata.json": `{"status":"failed","completed_at":"2026-08-27T10:44:12Z"}`,
+	}}
+	server := httptest.NewServer(workspace)
+	defer server.Close()
+	t.Setenv("WORKSPACE_API_URL", server.URL)
+
+	api := lifecycleTestAPI()
+	now := time.Now().UTC()
+	rootDone := now.Add(time.Second)
+	api.trackedWorkflowExecutions["root"] = &TrackedWorkflowExecution{
+		ExecutionID: "root", SessionID: "schedule", Status: trackedExecutionStatusCompleted,
+		StartedAt: now, CompletedAt: &rootDone,
+	}
+	api.trackedWorkflowExecutions["full-run"] = &TrackedWorkflowExecution{
+		ExecutionID: "full-run", SessionID: "schedule", WorkspacePath: workspacePath,
+		Kind: string(orchestratorevents.ExecutionKindFullRun), RunFolder: runFolder,
+		Status: trackedExecutionStatusRunning, StartedAt: now,
+		Metadata: map[string]string{"parent_execution_id": "root", "execution_type": "full-workflow", "run_folder": runFolder},
+	}
+
+	childID, gotRunFolder, failed := api.durableFailedWorkflowDescendant(context.Background(), "root")
+	if !failed || childID != "full-run" || gotRunFolder != runFolder {
+		t.Fatalf("durable failure = child=%q run=%q failed=%t", childID, gotRunFolder, failed)
+	}
+
+	workspace.mu.Lock()
+	workspace.files[workspacePath+"/runs/"+runFolder+"/run_metadata.json"] = `{"status":"completed","completed_at":"2026-08-27T10:44:12Z"}`
+	workspace.mu.Unlock()
+	if childID, gotRunFolder, failed := api.durableFailedWorkflowDescendant(context.Background(), "root"); failed {
+		t.Fatalf("successful durable run was treated as failure: child=%q run=%q", childID, gotRunFolder)
 	}
 }

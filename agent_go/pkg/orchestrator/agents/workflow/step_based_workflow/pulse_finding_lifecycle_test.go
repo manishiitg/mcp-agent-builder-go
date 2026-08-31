@@ -134,7 +134,7 @@ func TestPulseFindingLifecycleClosesOnlyWithVerifiedFixAndReopensOnRecurrence(t 
 	}
 }
 
-func TestPulseFindingLifecycleKeepsUnverifiedChangeOpenAndFailedProofReopens(t *testing.T) {
+func TestPulseFindingLifecycleClosesAppliedChangeAndRecurrenceReopens(t *testing.T) {
 	ctx := context.Background()
 	workspacePath := concernsWorkspace(t)
 	module := "eval_health"
@@ -157,31 +157,20 @@ func TestPulseFindingLifecycleKeepsUnverifiedChangeOpenAndFailedProofReopens(t *
 	if err != nil {
 		t.Fatalf("load awaiting lifecycle: %v", err)
 	}
-	if len(lifecycles) != 1 || lifecycles[0].Status != ConcernStatusAwaitingVerification {
-		t.Fatalf("unverified change was incorrectly closed: %+v", lifecycles)
+	if len(lifecycles) != 1 || lifecycles[0].Status != ConcernStatusResolved {
+		t.Fatalf("applied change did not close its issue: %+v", lifecycles)
 	}
 
-	recordFindingDispositions(t, workspacePath, module, pulseRunID, []PulseFindingDisposition{{
-		Fingerprint: concern.Fingerprint,
-		FindingID:   "EVAL-1",
-		Disposition: FindingDispositionFailed,
-		Summary:     "The next producing run still returned the stale outcome.",
-		Verification: []PulseFindingVerification{{
-			Check:    "new outcome appears in a producing run",
-			Verdict:  VerificationFailed,
-			Expected: "new outcome",
-			Observed: "stale outcome",
-		}},
-	}})
+	if _, err := RecordRunConcerns(ctx, workspacePath, "normal-run-2", "", module,
+		ConcernPhaseReview, "CONCERNS: evaluation uses a stale outcome"); err != nil {
+		t.Fatalf("record recurrence: %v", err)
+	}
 	lifecycles, err = LoadPulseFindingLifecycles(ctx, workspacePath, module, 10)
 	if err != nil {
-		t.Fatalf("reload failed lifecycle: %v", err)
+		t.Fatalf("reload recurring lifecycle: %v", err)
 	}
-	if lifecycles[0].Status != ConcernStatusOpen {
-		t.Fatalf("failed verification did not reopen finding: %+v", lifecycles[0])
-	}
-	if !strings.Contains(lifecycles[0].ResolutionNote, "stale outcome") {
-		t.Fatalf("failed evidence summary missing: %+v", lifecycles[0])
+	if lifecycles[0].Status != ConcernStatusOpen || lifecycles[0].SeenCount != 2 {
+		t.Fatalf("normal recurrence did not reopen applied fix: %+v", lifecycles[0])
 	}
 }
 
@@ -205,6 +194,9 @@ func TestPulseFindingIssueIDUpdatesOneRootCauseAndMergePreservesDuplicateHistory
 	}
 	if !strings.HasPrefix(first.IssueID, "PUL-") {
 		t.Fatalf("public issue identity=%q, want PUL id", first.IssueID)
+	}
+	if first.IssueID == "PUL-"+strings.ToUpper(first.Fingerprint[:8]) {
+		t.Fatalf("public issue identity must be stored, not derived from its legacy fingerprint: %+v", first)
 	}
 	if _, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
 		IssueID: first.IssueID, Concern: "row-level failures vanish before the summary is calculated", Module: module,
@@ -239,6 +231,7 @@ func TestPulseFindingIssueIDUpdatesOneRootCauseAndMergePreservesDuplicateHistory
 	if err != nil || len(findings) != 2 {
 		t.Fatalf("load merged lifecycle: findings=%+v err=%v", findings, err)
 	}
+	foundDuplicate := false
 	for _, finding := range findings {
 		if NewPulseIssue(finding).ID != second.IssueID {
 			continue
@@ -246,9 +239,32 @@ func TestPulseFindingIssueIDUpdatesOneRootCauseAndMergePreservesDuplicateHistory
 		if finding.Status != ConcernStatusResolved || finding.Details == nil || finding.Details.MergedIntoIssueID != first.IssueID {
 			t.Fatalf("duplicate was not retired with its history linked: %+v", finding)
 		}
-		return
+		foundDuplicate = true
 	}
-	t.Fatalf("merged duplicate %s not found", second.IssueID)
+	if !foundDuplicate {
+		t.Fatalf("merged duplicate %s not found", second.IssueID)
+	}
+
+	if _, err := RecordRunConcerns(ctx, workspacePath, "pulse-4", "", module, ConcernPhaseReview,
+		"CONCERNS: summary hides the same failed collector rows"); err != nil {
+		t.Fatalf("record merged-alias recurrence: %v", err)
+	}
+	findings, err = LoadPulseFindingLifecycles(ctx, workspacePath, module, -1)
+	if err != nil || len(findings) != 2 {
+		t.Fatalf("reload alias recurrence: findings=%+v err=%v", findings, err)
+	}
+	for _, finding := range findings {
+		switch NewPulseIssue(finding).ID {
+		case first.IssueID:
+			if finding.Status != ConcernStatusOpen || finding.SeenCount != 3 {
+				t.Fatalf("alias recurrence did not reopen canonical issue: %+v", finding)
+			}
+		case second.IssueID:
+			if finding.Status != ConcernStatusResolved {
+				t.Fatalf("retired alias reopened instead of canonical issue: %+v", finding)
+			}
+		}
+	}
 }
 
 func TestPulseFindingIssueIDUpdateReloadsExistingStepFindingAcrossReviewerModule(t *testing.T) {
@@ -294,6 +310,333 @@ func TestPulseFindingIssueIDUpdateReloadsExistingStepFindingAcrossReviewerModule
 	}
 	if findings[0].Details == nil || findings[0].Details.Summary != "Evaluator source-of-truth is inconsistent." {
 		t.Fatalf("typed evidence was not attached to existing step finding: %+v", findings[0])
+	}
+}
+
+// TestRecordPulseReviewFindingUsesExplicitStepIDForNewFinding reproduces a
+// real gap: a brand-new finding's StepID silently defaulted to the module
+// name (e.g. "plan_drift_review") because no agent-facing input ever carried
+// the actual plan step it was about, which meant a caller that requires real
+// step attribution — plan_drift_review's own verifyStepDriftCheckFindingsExist,
+// which checks a fail-status check's linked finding is filed against the
+// exact step under review — could never match a legitimately filed finding.
+func TestRecordPulseReviewFindingUsesExplicitStepIDForNewFinding(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+
+	record, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "Report SQL references a column dropped from the live schema.",
+		Module:  pulsemodules.PlanDriftReviewID,
+		StepID:  "scan-linkedin-feed-for-job-posts",
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:        "workflow_issue",
+			Classification:   "correctness_bug",
+			Severity:         "medium",
+			Summary:          "db/reports/index.html queries a column that no longer exists.",
+			Impact:           "The report silently fails to render this section.",
+			Evidence:         []string{"db/reports/index.html"},
+			RecommendedRoute: "fixer_handoff",
+		},
+	})
+	if err != nil {
+		t.Fatalf("record new finding with explicit step_id: %v", err)
+	}
+
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("load new finding: findings=%+v err=%v", findings, err)
+	}
+	if findings[0].StepID != "scan-linkedin-feed-for-job-posts" {
+		t.Fatalf("new finding StepID = %q, want the explicit step_id, not the module name", findings[0].StepID)
+	}
+	if got := NewPulseIssue(findings[0]).ID; got != record.IssueID {
+		t.Fatalf("issue id mismatch: got %q, record reported %q", got, record.IssueID)
+	}
+}
+
+// TestRecordPulseReviewFindingFallsBackToModuleWhenStepIDOmitted preserves
+// the pre-existing behavior for a genuinely module-wide finding that is not
+// about one specific step.
+func TestRecordPulseReviewFindingFallsBackToModuleWhenStepIDOmitted(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+
+	if _, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "Cost ledger totals diverge from the raw usage log workflow-wide.",
+		Module:  pulsemodules.TechnicalReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:      "workflow_issue",
+			Classification: "correctness_bug",
+			Severity:       "medium",
+			Summary:        "Cost totals do not reconcile.",
+			Impact:         "Cost reporting is unreliable workflow-wide.",
+			Evidence:       []string{"db/db.sqlite"},
+		},
+	}); err != nil {
+		t.Fatalf("record module-wide finding: %v", err)
+	}
+
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("load module-wide finding: findings=%+v err=%v", findings, err)
+	}
+	if findings[0].StepID != pulsemodules.TechnicalReviewID {
+		t.Fatalf("module-wide finding StepID = %q, want the module name as before", findings[0].StepID)
+	}
+}
+
+// TestRecordPulseReviewFindingUpgradesLegacyModuleStepIDOnReuse reproduces a
+// dead end the earlier step_id fix introduced: reusing an existing issue
+// whose StepID is a canonical module name (the pre-step_id-argument fallback,
+// or a genuinely module-wide finding) permanently preserved that placeholder
+// even when a later call supplied a real step_id, because the SQL
+// ON CONFLICT write path never applied the incoming step_id on a fingerprint
+// match at all. That made a legacy or module-wide issue impossible to ever
+// attribute to a real step through the normal "reuse the same issue_id for
+// the same semantic root cause" path callers are told to follow — exactly
+// the scenario plan_drift_review's own verifyStepDriftCheckFindingsExist
+// needs to succeed for.
+func TestRecordPulseReviewFindingUpgradesLegacyModuleStepIDOnReuse(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+
+	// A finding filed with no step_id — StepID falls back to the module name,
+	// simulating both a pre-fix legacy row and a genuinely module-wide finding.
+	first, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "Report SQL references a column dropped from the live schema.",
+		Module:  pulsemodules.PlanDriftReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:      "workflow_issue",
+			Classification: "correctness_bug",
+			Severity:       "medium",
+			Summary:        "db/reports/index.html queries a column that no longer exists.",
+			Impact:         "The report silently fails to render this section.",
+			Evidence:       []string{"db/reports/index.html"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("record legacy finding: %v", err)
+	}
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("load legacy finding: findings=%+v err=%v", findings, err)
+	}
+	if findings[0].StepID != pulsemodules.PlanDriftReviewID {
+		t.Fatalf("legacy finding StepID = %q, want the module-name placeholder", findings[0].StepID)
+	}
+
+	// A later review reuses the same issue for the same root cause, now
+	// supplying the real step_id per plan-drift-review.md's guidance.
+	if _, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
+		IssueID: first.IssueID,
+		StepID:  "scan-linkedin-feed-for-job-posts",
+		Concern: "Report SQL still references the dropped column.",
+		Module:  pulsemodules.PlanDriftReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:      "workflow_issue",
+			Classification: "correctness_bug",
+			Severity:       "medium",
+			Summary:        "db/reports/index.html queries a column that no longer exists.",
+			Impact:         "The report silently fails to render this section.",
+			Evidence:       []string{"db/reports/index.html"},
+		},
+	}); err != nil {
+		t.Fatalf("reuse legacy finding with explicit step_id: %v", err)
+	}
+
+	findings, err = LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("reload upgraded finding: findings=%+v err=%v", findings, err)
+	}
+	if findings[0].StepID != "scan-linkedin-feed-for-job-posts" {
+		t.Fatalf("upgraded finding StepID = %q, want the real step id from the reuse call", findings[0].StepID)
+	}
+
+	// A THIRD call, now omitting step_id again, must not regress the real
+	// attribution back to a placeholder — a real step identity never moves.
+	if _, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-3", "review-3", PulseReviewFindingInput{
+		IssueID: first.IssueID,
+		Concern: "Report SQL still references the dropped column, confirmed a third time.",
+		Module:  pulsemodules.PlanDriftReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:      "workflow_issue",
+			Classification: "correctness_bug",
+			Severity:       "medium",
+			Summary:        "db/reports/index.html queries a column that no longer exists.",
+			Impact:         "The report silently fails to render this section.",
+			Evidence:       []string{"db/reports/index.html"},
+		},
+	}); err != nil {
+		t.Fatalf("reconfirm finding without step_id: %v", err)
+	}
+	findings, err = LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("reload reconfirmed finding: findings=%+v err=%v", findings, err)
+	}
+	if findings[0].StepID != "scan-linkedin-feed-for-job-posts" {
+		t.Fatalf("real step attribution regressed to %q after a step_id-omitting reuse", findings[0].StepID)
+	}
+}
+
+// TestDifferentModulesSharingATargetKeyDoNotCollide reproduces Sales
+// Outreach PUL-1E38F625: technical_review and strategic_review independently
+// filed unrelated findings that happened to name the same target_key (a
+// workflow-local location reference, not a deliberately shared identity).
+// Before the fix, the second write silently reused the first module's
+// fingerprint via record_pulse_finding's target_key-based dedup and
+// overwrote its content -- the reload showed strategic_review's original
+// finding replaced by technical_review's, with no error or warning.
+func TestDifferentModulesSharingATargetKeyDoNotCollide(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	const sharedTargetKey = "planning/plan.json:step-prepare-linkedin-engagement"
+
+	strategic, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "Engagement cadence escalates faster than the strategy calls for.",
+		Module:  pulsemodules.StrategicReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:        IssueKindWorkflow,
+			TargetKey:        sharedTargetKey,
+			RecommendedRoute: pulseFindingRouteFixerHandoff,
+			Classification:   "strategy_drift",
+			Severity:         "medium",
+			Summary:          "Cadence escalation outruns the approved strategy.",
+			Impact:           "Outreach frequency drifts from the plan without a review checkpoint.",
+			Evidence:         []string{"planning/plan.json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("file strategic_review finding: %v", err)
+	}
+
+	technical, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
+		Concern: "The step's tool allowlist is missing a masking capability it needs.",
+		Module:  pulsemodules.TechnicalReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind:      IssueKindWorkflow,
+			TargetKey:      sharedTargetKey,
+			Classification: "correctness_bug",
+			Severity:       "high",
+			Summary:        "Masking-architecture gap in the engagement step.",
+			Impact:         "PII can reach an unmasked tool call.",
+			Evidence:       []string{"planning/step_config.json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("file technical_review finding: %v", err)
+	}
+
+	if strategic.IssueID == technical.IssueID {
+		t.Fatalf("two unrelated findings from different modules collapsed onto one issue id %q", strategic.IssueID)
+	}
+	if strategic.Fingerprint == technical.Fingerprint {
+		t.Fatalf("two unrelated findings from different modules collapsed onto one fingerprint %q", strategic.Fingerprint)
+	}
+
+	findings, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 2 {
+		t.Fatalf("load both findings: findings=%+v err=%v", findings, err)
+	}
+	byIssueID := map[string]PulseFindingLifecycle{}
+	for _, finding := range findings {
+		byIssueID[NewPulseIssue(finding).ID] = finding
+	}
+	strategicFinding, ok := byIssueID[strategic.IssueID]
+	if !ok || strategicFinding.Details == nil || strategicFinding.Details.Summary != "Cadence escalation outruns the approved strategy." {
+		t.Fatalf("strategic_review finding content missing or overwritten: %+v", strategicFinding)
+	}
+	if strategicFinding.StepID != pulsemodules.StrategicReviewID {
+		t.Fatalf("strategic_review finding module attribution changed: %+v", strategicFinding)
+	}
+	technicalFinding, ok := byIssueID[technical.IssueID]
+	if !ok || technicalFinding.Details == nil || technicalFinding.Details.Summary != "Masking-architecture gap in the engagement step." {
+		t.Fatalf("technical_review finding content missing or overwritten: %+v", technicalFinding)
+	}
+	if technicalFinding.StepID != pulsemodules.TechnicalReviewID {
+		t.Fatalf("technical_review finding module attribution changed: %+v", technicalFinding)
+	}
+}
+
+// TestSameModuleTargetKeyStillDedupsAcrossPulseRuns proves the fix did not
+// turn target_key dedup into "always new issue": the SAME module reporting
+// the SAME target_key across two different Pulse runs must still converge on
+// one issue, not create a duplicate per run.
+func TestSameModuleTargetKeyStillDedupsAcrossPulseRuns(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	const targetKey = "planning/plan.json:step-collect-signals"
+
+	first, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "The collect-signals step lacks a bounded retry budget.",
+		Module:  pulsemodules.TechnicalReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: IssueKindWorkflow, TargetKey: targetKey,
+			Classification: "reliability_bug", Severity: "medium",
+			Summary: "Unbounded retry loop.", Impact: "A flaky source can stall the run indefinitely.",
+			Evidence: []string{"planning/plan.json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("first technical_review finding: %v", err)
+	}
+	second, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
+		Concern: "Confirmed again: the collect-signals step still has no retry budget.",
+		Module:  pulsemodules.TechnicalReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: IssueKindWorkflow, TargetKey: targetKey,
+			Classification: "reliability_bug", Severity: "medium",
+			Summary: "Unbounded retry loop, still present.", Impact: "A flaky source can stall the run indefinitely.",
+			Evidence: []string{"planning/plan.json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("second technical_review finding: %v", err)
+	}
+	if first.IssueID != second.IssueID {
+		t.Fatalf("same module/target_key across runs produced two issues: %q vs %q", first.IssueID, second.IssueID)
+	}
+}
+
+// TestHarnessIssueTargetKeyStillDedupsAcrossModules protects the deliberately
+// preserved module-agnostic behavior for harness_issue findings: this is a
+// shared platform identity, and the module-scoping fix for PUL-1E38F625 must
+// not narrow it.
+func TestHarnessIssueTargetKeyStillDedupsAcrossModules(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	const targetKey = "harness:agent_browser:tab-acquisition"
+
+	first, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "agent_browser network reads the wrong tab under shared CDP.",
+		Module:  pulsemodules.TechnicalReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: IssueKindHarness, TargetKey: targetKey,
+			Classification: "correctness_bug", Severity: "high",
+			Summary: "Wrong tab under shared CDP.", Impact: "Network capture is attributed to the wrong tab.",
+			Evidence:     []string{"agent_go/pkg/browser/browser_tools.go"},
+			Reproduction: PulseFindingReproduction{Safe: true, Expected: "Correct tab", Observed: "Wrong tab"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("first harness finding: %v", err)
+	}
+	second, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-2", "review-2", PulseReviewFindingInput{
+		Concern: "Independently confirmed: agent_browser network targets the wrong tab.",
+		Module:  pulsemodules.StrategicReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: IssueKindHarness, TargetKey: targetKey,
+			RecommendedRoute: pulseFindingRouteFixerHandoff,
+			Classification:   "correctness_bug", Severity: "high",
+			Summary: "Wrong tab under shared CDP, reconfirmed.", Impact: "Network capture is attributed to the wrong tab.",
+			Evidence:     []string{"agent_go/pkg/browser/browser_tools.go"},
+			Reproduction: PulseFindingReproduction{Safe: true, Expected: "Correct tab", Observed: "Wrong tab"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("second harness finding: %v", err)
+	}
+	if first.IssueID != second.IssueID {
+		t.Fatalf("harness_issue target_key dedup across modules regressed: %q vs %q", first.IssueID, second.IssueID)
 	}
 }
 
@@ -996,8 +1339,9 @@ func TestAdvisorAwaitingUserRequiresOwnedDecision(t *testing.T) {
 // ship because the digest step had not executed since 2026-07-29. blocked
 // absorbed them because changed_unverified demands a fix attempt with changed
 // files, and nothing was fixed. Reading those as blockers points the operator at
-// decisions that do not exist.
-func TestAwaitingRunSeparatesWaitingFromBlocked(t *testing.T) {
+// decisions that do not exist. The legacy disposition stays accepted for old
+// review payloads, but it is returned to the active issue register.
+func TestAwaitingRunCompatibilityMapsToActiveIssue(t *testing.T) {
 	base := PulseFindingDisposition{
 		Fingerprint: "fp", FindingID: "SEC-1",
 		Disposition: FindingDispositionAwaitingRun,
@@ -1025,13 +1369,13 @@ func TestAwaitingRunSeparatesWaitingFromBlocked(t *testing.T) {
 		t.Fatalf("a genuine wait-for-data finding was rejected: %v", err)
 	}
 
-	// It must not land in the acknowledged bucket that blocked and awaiting_user
-	// share, or the UI cannot tell them apart.
+	// A future run is not a closure gate. Compatibility input must create an
+	// active issue rather than another invisible waiting bucket.
 	status, event, _ := lifecycleStatusForDisposition(FindingDispositionAwaitingRun)
-	if status != ConcernStatusAwaitingRun || status == ConcernStatusAcknowledged {
-		t.Fatalf("awaiting_run mapped to status %q; it must be distinguishable from blocked", status)
+	if status != ConcernStatusOpen {
+		t.Fatalf("awaiting_run compatibility mapped to status %q, want %q", status, ConcernStatusOpen)
 	}
-	if event != "awaiting_run" {
+	if event != "reopened_for_review" {
 		t.Fatalf("awaiting_run event = %q", event)
 	}
 }
@@ -1055,17 +1399,7 @@ func TestQueuedForEngineeringSeparatesDeferredWorkFromBlocked(t *testing.T) {
 	}
 }
 
-// TestVerificationCanCloseAnAttemptFromAnEarlierRun covers the flow the
-// lifecycle mandates and used to block.
-//
-// changed_unverified exists so a fix whose proof needs a future run is recorded
-// now and verified later — fix-verification, post-run-monitor and the Fixer
-// contract all say to record it with reason awaiting_next_valid_run. Requiring
-// the attempt to belong to the closing run made that impossible: the evidence
-// arrives a run later, and the disposition carrying it was rejected as
-// belonging to a previous Pulse run. social-media hit this on 2026-08-01 and
-// preserved the unresolved state rather than forcing a second write.
-func TestVerificationCanCloseAnAttemptFromAnEarlierRun(t *testing.T) {
+func TestAppliedFixNeedsNoLaterVerificationAttempt(t *testing.T) {
 	ctx := context.Background()
 	workspacePath := concernsWorkspace(t)
 	module := "bug_review"
@@ -1085,47 +1419,157 @@ func TestVerificationCanCloseAnAttemptFromAnEarlierRun(t *testing.T) {
 	if err != nil || len(opened) != 1 || len(opened[0].Attempts) != 1 {
 		t.Fatalf("changed_unverified did not open exactly one attempt: %+v err=%v", opened, err)
 	}
-	attemptID := opened[0].Attempts[0].AttemptID
+	if opened[0].Status != ConcernStatusResolved || opened[0].Attempts[0].Status != "applied" {
+		t.Fatalf("applied repair retained a verification backlog: %+v", opened[0])
+	}
+}
 
-	// Run 2 has the evidence and closes the same attempt, without naming it.
+func TestLegacyAppliedFixVerificationBacklogMigratesClosed(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	module := "bug_review"
+	concern := filedReviewConcern(t, workspacePath, "pulse-1", module, "collector writes a null column")
+	recordFindingDispositions(t, workspacePath, module, "pulse-1", []PulseFindingDisposition{{
+		Fingerprint: concern.Fingerprint, FindingID: "BUG-1",
+		Disposition: FindingDispositionChangedUnverified, Summary: "Applied.",
+		ChangedFiles: []string{"planning/plan.json"},
+	}})
+
 	db, err := openRunConcernsDB(ctx, workspacePath, false)
 	if err != nil || db == nil {
 		t.Fatalf("open db: %v", err)
 	}
 	defer db.Close()
-	if err := RecordPulseFindingDispositionsTx(ctx, db, module, "pulse-2", []PulseFindingDisposition{{
-		Fingerprint: concern.Fingerprint, FindingID: "BUG-1",
-		Disposition: FindingDispositionFixedVerified, Summary: "Next run produced a non-null column.",
-		ChangedFiles: []string{"planning/plan.json"},
-		Verification: []PulseFindingVerification{{Check: "consumer read", Verdict: VerificationPassed}},
-	}}, ""); err != nil {
-		t.Fatalf("a later run could not verify its own module's earlier attempt: %v", err)
+	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET status=? WHERE fingerprint=?`, ConcernStatusAwaitingRun, concern.Fingerprint); err != nil {
+		t.Fatalf("restore legacy concern state: %v", err)
 	}
-	closed, err := LoadPulseFindingLifecycles(ctx, workspacePath, module, 10)
-	if err != nil || len(closed) != 1 || len(closed[0].Attempts) != 1 ||
-		closed[0].Attempts[0].AttemptID != attemptID {
-		t.Fatalf("the later run invented a second attempt instead of settling %q: %+v err=%v", attemptID, closed, err)
+	if _, err := db.ExecContext(ctx, `UPDATE pulse_fix_attempts SET status=?`, ConcernStatusAwaitingVerification); err != nil {
+		t.Fatalf("restore legacy attempt state: %v", err)
 	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db before explicit reconciliation: %v", err)
+	}
+	reconciled, err := ReconcilePulseFindingLifecycle(ctx, workspacePath)
+	if err != nil {
+		t.Fatalf("run explicit lifecycle reconciliation: %v", err)
+	}
+	if reconciled.AppliedClosures != 1 || reconciled.ClosedIssues == 0 {
+		t.Fatalf("reconciliation result=%+v, want the legacy applied fix closed", reconciled)
+	}
+	db, err = openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("reopen reconciled db: %v", err)
+	}
+	defer db.Close()
 
-	// Another module still cannot close it, even naming the attempt directly.
-	if err := RecordPulseFindingDispositionsTx(ctx, db, "strategy_auditor", "pulse-2", []PulseFindingDisposition{{
-		Fingerprint: concern.Fingerprint, FindingID: "BUG-1", AttemptID: attemptID,
-		Disposition: FindingDispositionVerifiedNoChange, Summary: "Not mine to close.",
-		Verification: []PulseFindingVerification{{Check: "x", Verdict: VerificationPassed}},
-	}}, ""); err == nil || !strings.Contains(err.Error(), "belongs to module") {
-		t.Fatalf("another module closed an attempt it did not make: %v", err)
+	var concernStatus, attemptStatus string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM run_concerns WHERE fingerprint=?`, concern.Fingerprint).Scan(&concernStatus); err != nil {
+		t.Fatalf("read migrated concern: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT status FROM pulse_fix_attempts LIMIT 1`).Scan(&attemptStatus); err != nil {
+		t.Fatalf("read migrated attempt: %v", err)
+	}
+	if concernStatus != ConcernStatusResolved || attemptStatus != "applied" {
+		t.Fatalf("legacy applied fix remained active: concern=%q attempt=%q", concernStatus, attemptStatus)
 	}
 }
 
-// TestChangedUnverifiedMustNameWhatWillSettleIt makes the verification loop
-// closable.
-//
-// A fix awaiting proof is only verifiable if the next reviewer can tell whether
-// the evidence has arrived. Without a named boundary it cannot, so it re-attempts
-// the fix instead of checking it — rtslatency carried a finding at seen_count 4,
-// still awaiting_verification, repaired again on every pass because nothing ever
-// checked the run that had since produced its evidence.
-func TestChangedUnverifiedMustNameWhatWillSettleIt(t *testing.T) {
+func TestLegacyUnfixedWaitReturnsToActiveRegister(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	concern := filedReviewConcern(t, workspacePath, "pulse-1", "bug_review", "collector output is incomplete")
+
+	db, err := openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET status=? WHERE fingerprint=?`, ConcernStatusAwaitingRun, concern.Fingerprint); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reconciled, err := ReconcilePulseFindingLifecycle(ctx, workspacePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.ReopenedWaitingIssues != 1 {
+		t.Fatalf("reconciliation=%+v, want one unfixed wait reopened", reconciled)
+	}
+	db, err = openRunConcernsDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer db.Close()
+	var status string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM run_concerns WHERE fingerprint=?`, concern.Fingerprint).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != ConcernStatusOpen {
+		t.Fatalf("unfixed wait status=%q, want %q", status, ConcernStatusOpen)
+	}
+}
+
+func TestActionableBacklogReconciliationRetiresUntypedAndHandsOffPlatform(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := concernsWorkspace(t)
+	if _, err := RecordRunConcerns(ctx, workspacePath, "run-1", "", "collect", ConcernPhaseExecution,
+		"CONCERNS: historical collector note without reviewer promotion"); err != nil {
+		t.Fatalf("record legacy observation: %v", err)
+	}
+	if _, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "workflow validation rejects valid data", Module: pulsemodules.TechnicalReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: IssueKindWorkflow, Classification: "correctness_bug", Severity: "high",
+			Summary: "A workflow validation boundary rejects valid data.", Impact: "The workflow cannot complete valid runs.",
+			Evidence: []string{"runs/iteration-1/result.json"},
+		},
+	}); err != nil {
+		t.Fatalf("record workflow finding: %v", err)
+	}
+	if _, err := RecordPulseReviewFinding(ctx, workspacePath, "pulse-1", "review-1", PulseReviewFindingInput{
+		Concern: "shared tool permission is unavailable", Module: pulsemodules.TechnicalReviewID,
+		PulseFindingDetails: PulseFindingDetails{
+			IssueKind: IssueKindHarness, TargetKey: "platform:tool-permission", Classification: "platform_permission", Severity: "high",
+			Summary: "The shared runtime blocks a required tool.", Impact: "No workflow plan edit can grant the permission.",
+			Evidence:     []string{"runs/iteration-1/result.json"},
+			Reproduction: PulseFindingReproduction{Safe: true, Expected: "tool is available", Observed: "permission denied"},
+		},
+	}); err != nil {
+		t.Fatalf("record harness finding: %v", err)
+	}
+
+	result, err := ReconcilePulseActionableBacklog(ctx, workspacePath)
+	if err != nil {
+		t.Fatalf("reconcile actionable backlog: %v", err)
+	}
+	if result.RetiredLegacyObservations != 1 || result.PlatformHandoffs != 1 || result.ActionableWorkflowIssues != 1 {
+		t.Fatalf("unexpected reconciliation result: %+v", result)
+	}
+	if count, err := CountPulseActionableWorkflowIssues(ctx, workspacePath); err != nil || count != 1 {
+		t.Fatalf("actionable workflow count=%d err=%v, want 1", count, err)
+	}
+	lifecycles, err := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil {
+		t.Fatalf("load reconciled lifecycles: %v", err)
+	}
+	var retiredLegacy, platformHandoff bool
+	for _, finding := range lifecycles {
+		if strings.Contains(finding.Text, "historical collector") {
+			retiredLegacy = finding.Status == ConcernStatusRejected
+		}
+		if finding.Details != nil && finding.Details.IssueKind == IssueKindHarness {
+			platformHandoff = finding.Status == ConcernStatusExternalActionRequired
+		}
+	}
+	if !retiredLegacy || !platformHandoff {
+		t.Fatalf("legacy/platform records were not projected out of repair debt: %+v", lifecycles)
+	}
+}
+
+func TestChangedUnverifiedClosesWithoutSeparateVerificationBoundary(t *testing.T) {
 	base := PulseFindingDisposition{
 		Fingerprint: "fp", FindingID: "BUG-1",
 		Disposition:  FindingDispositionChangedUnverified,
@@ -1134,15 +1578,8 @@ func TestChangedUnverifiedMustNameWhatWillSettleIt(t *testing.T) {
 		Verification: []PulseFindingVerification{{Check: "consumer read", Verdict: VerificationInconclusive}},
 	}
 
-	if err := validateFindingDisposition(base); err == nil ||
-		!strings.Contains(err.Error(), "requires next_check") {
-		t.Fatalf("a fix awaiting proof was accepted with nothing naming what would settle it: %v", err)
-	}
-
-	settled := base
-	settled.NextCheck = "next dev collection run writes latency_daily_metrics"
-	if err := validateFindingDisposition(settled); err != nil {
-		t.Fatalf("a fix naming its evidence boundary was rejected: %v", err)
+	if err := validateFindingDisposition(base); err != nil {
+		t.Fatalf("an applied fix was incorrectly forced into a verification queue: %v", err)
 	}
 }
 

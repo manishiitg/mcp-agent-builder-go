@@ -164,6 +164,11 @@ func (api *StreamingAPI) registerAgentProfileWorkflowTools(
 		return nil
 	}
 
+	// PLAT-262: this path hardcodes "run" workshop mode below, which is now
+	// the single gate for mutating tools/prompt/skills (see
+	// interactive_workshop_manager.go) — no separate access-level thread
+	// needed here, this session gets the same reduced tool set as any other
+	// Run-mode session automatically.
 	runtimeWorkspacePath := agentProfileRuntimeWorkspace(userID, publicWorkspacePath)
 	const runFolder = "iteration-0"
 	// A browser tab/session can be reused after switching products or projects.
@@ -188,7 +193,6 @@ func (api *StreamingAPI) registerAgentProfileWorkflowTools(
 		syntheticReq := req
 		syntheticReq.SelectedFolder = runtimeWorkspacePath
 		syntheticReq.ExecutionOptions = &ExecutionOptions{
-			RunMode:           "use_same_run",
 			SelectedRunFolder: runFolder,
 			ExecutionStrategy: "start_from_beginning_no_human",
 			WorkshopMode:      "run",

@@ -132,7 +132,7 @@ func TestOversizedSnapshotReturnsTruncatedHeadWithIncompletenessBanner(t *testin
 
 	short := "- button Submit"
 	output := short
-	handled, err := e.handleOversizedSnapshot(&output, false)
+	handled, err := e.handleOversizedSnapshot(context.Background(), &output, false)
 	if err != nil || handled {
 		t.Fatalf("small snapshot: handled=%v err=%v, want handled=false err=nil", handled, err)
 	}
@@ -142,13 +142,20 @@ func TestOversizedSnapshotReturnsTruncatedHeadWithIncompletenessBanner(t *testin
 
 	large := strings.Repeat("x", maxInlineSnapshotOutputRunes+100)
 	output = large
-	handled, err = e.handleOversizedSnapshot(&output, false)
+	handled, err = e.handleOversizedSnapshot(context.Background(), &output, false)
 	if err != nil || !handled {
 		t.Fatalf("large snapshot: handled=%v err=%v, want handled=true err=nil", handled, err)
 	}
 	for _, want := range []string{
 		"SNAPSHOT_TRUNCATED", "THIS TREE IS INCOMPLETE", "do NOT record it as absent",
-		"--selector", "--depth", fullSnapshotFlag,
+		"--selector", "--compact", "--interactive", "--depth", fullSnapshotFlag,
+		// PLAT-200: --depth only shrinks a deeply nested tree, not a wide/flat
+		// one -- live-reproduced (a 500-sibling flat page returned a
+		// byte-identical snapshot at --depth 2 vs. unlimited). The guidance
+		// must warn the agent instead of listing --depth as an equal-weight
+		// option, or it burns a retry on a no-op exactly as the confida-login
+		// harness finding observed (byte-identical 30365-rune retries).
+		"WIDE/FLAT page", "byte-identical result and", "only helps if the head below looks deeply nested, not wide",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("truncated snapshot missing %q:\n%s", want, output[:min(len(output), 600)])
@@ -160,12 +167,74 @@ func TestOversizedSnapshotReturnsTruncatedHeadWithIncompletenessBanner(t *testin
 	}
 }
 
+// PLAT-200: the default truncated path used to discard the full tree with no
+// way to recover it short of a second, full-cost snapshot call. When the
+// caller has wired a spiller (which it only does after confirming, via the
+// session's own granted folder guard, that the target is readable back --
+// see workspace_browser_tools.go), the banner must point at the real saved
+// path instead of only offering a re-run.
+func TestOversizedSnapshotUsesConfiguredSpillerWhenAvailable(t *testing.T) {
+	large := strings.Repeat("z", maxInlineSnapshotOutputRunes+100)
+
+	t.Run("spiller succeeds", func(t *testing.T) {
+		var gotContent string
+		e := &Executor{
+			SpillOversized: func(ctx context.Context, content string) (string, error) {
+				gotContent = content
+				return "Workflow/testing/tool_output_folder/agent_browser_snapshot_123.txt", nil
+			},
+		}
+		output := large
+		handled, err := e.handleOversizedSnapshot(context.Background(), &output, false)
+		if err != nil || !handled {
+			t.Fatalf("handled=%v err=%v, want handled=true err=nil", handled, err)
+		}
+		if gotContent != large {
+			t.Fatalf("spiller did not receive the full untruncated tree (got %d chars, want %d)", len(gotContent), len(large))
+		}
+		if !strings.Contains(output, "Workflow/testing/tool_output_folder/agent_browser_snapshot_123.txt") {
+			t.Fatalf("truncated snapshot did not surface the spilled path:\n%s", output[:min(len(output), 600)])
+		}
+		if !strings.Contains(output, "execute_shell_command") || !strings.Contains(output, "sed -n '1,240p'") {
+			t.Fatalf("truncated snapshot did not advertise the available chunked-read recovery command:\n%s", output[:min(len(output), 600)])
+		}
+	})
+
+	t.Run("no spiller configured falls back to the re-run option, no crash", func(t *testing.T) {
+		e := &Executor{}
+		output := large
+		handled, err := e.handleOversizedSnapshot(context.Background(), &output, false)
+		if err != nil || !handled {
+			t.Fatalf("handled=%v err=%v, want handled=true err=nil", handled, err)
+		}
+		if !strings.Contains(output, fullSnapshotFlag) {
+			t.Fatalf("missing fallback re-run option when no spiller is configured:\n%s", output[:min(len(output), 600)])
+		}
+	})
+
+	t.Run("spiller error falls back to the re-run option, error is not propagated", func(t *testing.T) {
+		e := &Executor{
+			SpillOversized: func(ctx context.Context, content string) (string, error) {
+				return "", errors.New("write denied: session has no tool_output_folder grant")
+			},
+		}
+		output := large
+		handled, err := e.handleOversizedSnapshot(context.Background(), &output, false)
+		if err != nil || !handled {
+			t.Fatalf("handled=%v err=%v, want handled=true err=nil (a spill failure must not fail the whole call)", handled, err)
+		}
+		if !strings.Contains(output, fullSnapshotFlag) {
+			t.Fatalf("missing fallback re-run option when the spiller errors:\n%s", output[:min(len(output), 600)])
+		}
+	})
+}
+
 // --full-snapshot is the agent's explicit opt-in to pay the context cost.
 func TestFullSnapshotFlagReturnsWholeTreeAndIsStrippedFromCLIArgs(t *testing.T) {
 	e := &Executor{}
 	large := strings.Repeat("y", maxInlineSnapshotOutputRunes+100)
 	output := large
-	handled, err := e.handleOversizedSnapshot(&output, true)
+	handled, err := e.handleOversizedSnapshot(context.Background(), &output, true)
 	if err != nil || !handled {
 		t.Fatalf("handled=%v err=%v, want handled=true err=nil", handled, err)
 	}

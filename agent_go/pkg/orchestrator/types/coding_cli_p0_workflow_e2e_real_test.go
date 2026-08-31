@@ -264,7 +264,7 @@ func runCodingCLIWorkflowP0(t *testing.T, provider codingCLIP0Provider) {
 		t.Fatalf("NewWorkflowOrchestrator: %v", err)
 	}
 	wo.SetExecutionOptions(&stepworkflow.ExecutionOptions{
-		RunMode: "use_same_run", SelectedRunFolder: "iteration-0",
+		SelectedRunFolder: "iteration-0",
 		ExecutionStrategy: stepworkflow.ExecutionStrategyStartFromBeginningNoHuman,
 		EnabledGroupNames: []string{"default"},
 	})

@@ -4,6 +4,7 @@ import { CheckCircle, XCircle, Loader2, Plus, RefreshCw, Route } from 'lucide-re
 import type { RoutingStepNodeData } from '../hooks/usePlanToFlow'
 import type { ChangeType } from '../hooks/usePlanData'
 import { getExecutionModeVisuals } from './executionModeVisuals'
+import { routeColorForIndex } from '../routeColors'
 
 interface RoutingStepNodeProps {
   data: RoutingStepNodeData
@@ -40,6 +41,10 @@ const statusIcons: Record<string, ReactElement | null> = {
 
 export const RoutingStepNode = memo(({ data, selected }: RoutingStepNodeProps) => {
   const { title, routing_question, routes, status, stepIndex, changeType, isOrphan } = data
+  // Reused as-is for both routing (the "route"/major-fork concept) and
+  // branch (the small in-flow decision, PLAT-259) -- only the untitled-step
+  // fallback label needs to say which one this actually is.
+  const fallbackLabel = data.step?.type === 'branch' ? `Branch ${stepIndex + 1}` : `Routing ${stepIndex + 1}`
   const executionMode = data.step?.agent_configs?.declared_execution_mode
   const executionModeReason = data.step?.agent_configs?.declared_execution_mode_reason
   const executionModeVisuals = getExecutionModeVisuals(executionMode, executionModeReason)
@@ -96,16 +101,11 @@ export const RoutingStepNode = memo(({ data, selected }: RoutingStepNodeProps) =
               )}
             </div>
             <div className="text-xs font-semibold text-gray-900 dark:text-white truncate">
-              {title || `Routing ${stepIndex + 1}`}
+              {title || fallbackLabel}
             </div>
             {statusIcon}
           </div>
 
-          <div className="flex shrink-0 items-center gap-1.5">
-            <span className="text-[10px] font-medium text-gray-500 dark:text-gray-400">
-              Step {stepIndex + 1}
-            </span>
-          </div>
         </div>
 
         {/* Routing question */}
@@ -127,6 +127,7 @@ export const RoutingStepNode = memo(({ data, selected }: RoutingStepNodeProps) =
             </div>
             {routes.map((route, index) => {
               const isSelectedRoute = selectedRouteId === route.route_id
+              const routeColor = routeColorForIndex(index)
               return (
                 <div
                   key={route.route_id}
@@ -135,13 +136,11 @@ export const RoutingStepNode = memo(({ data, selected }: RoutingStepNodeProps) =
                       ? 'border-teal-300 bg-teal-50 dark:border-teal-500/70 dark:bg-teal-500/15'
                       : 'border-slate-200 bg-slate-50 dark:border-slate-700/80 dark:bg-slate-800/70'
                   }`}
-                  title={route.condition || route.route_name || route.route_id}
                 >
-                  <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-bold ${
-                    isSelectedRoute
-                      ? 'bg-teal-700 text-white dark:bg-teal-400 dark:text-teal-950'
-                      : 'bg-teal-600 text-white dark:bg-teal-500/80 dark:text-teal-50'
-                  }`}>
+                  <span
+                    className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+                    style={{ backgroundColor: routeColor }}
+                  >
                     {isSelectedRoute ? <CheckCircle className="h-3 w-3" /> : index + 1}
                   </span>
                   <div className="min-w-0">
@@ -152,11 +151,6 @@ export const RoutingStepNode = memo(({ data, selected }: RoutingStepNodeProps) =
                     }`}>
                       {route.route_name || route.route_id}
                     </div>
-                    {route.condition && (
-                      <div className="line-clamp-1 text-[10px] text-slate-500 dark:text-slate-400">
-                        {route.condition}
-                      </div>
-                    )}
                   </div>
                 </div>
               )
@@ -171,14 +165,15 @@ export const RoutingStepNode = memo(({ data, selected }: RoutingStepNodeProps) =
         const handleOffset = routes.length > 1
           ? (idx / (routes.length - 1)) * 80 + 10 // Spread from 10% to 90%
           : 50
+        const routeColor = routeColorForIndex(idx)
         return (
           <Handle
             key={`route-${route.route_id}`}
             type="source"
             position={Position.Bottom}
             id={`route-${route.route_id}`}
-            className={`!w-3 !h-3 ${modeHandleColor} !border-2 !border-white dark:!border-gray-900`}
-            style={{ left: `${handleOffset}%` }}
+            className="!w-3 !h-3 !border-2 !border-white dark:!border-gray-900"
+            style={{ left: `${handleOffset}%`, backgroundColor: routeColor }}
           />
         )
       })}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -25,7 +26,7 @@ const WorkflowManifestSchemaVersion = 1
 // contract version. Unlike schema_version, this gates agent-run workflow
 // upgrades: Pulse can add version-specific messages and stamp this value only
 // after the workflow has been checked or migrated.
-const WorkflowContractCurrentVersion = "1.0.31"
+const WorkflowContractCurrentVersion = "1.0.34"
 
 const workflowContractInitialVersion = "1.0.0"
 const workflowContractMessageSequenceCodeVersion = "1.0.10"
@@ -49,24 +50,29 @@ const workflowContractSchedulePromptContractVersion = "1.0.28"
 const workflowContractFinalizerOwnedScheduleVersion = "1.0.29"
 const workflowContractReportActivitySectionVersion = "1.0.30"
 const workflowContractReportActivityTabVersion = "1.0.31"
+const workflowContractPulseLifecycleReconciliationVersion = "1.0.32"
+const workflowContractPulseBacklogTriageVersion = "1.0.33"
+const workflowContractPulseActionableBacklogVersion = "1.0.34"
 
 const (
-	DefaultRunRetentionCount = 5
+	DefaultRunRetentionCount = 3
 	MaxRunRetentionCount     = 50
 )
 
 // WorkflowManifest is the top-level workflow.json structure that lives in each workspace.
 type WorkflowManifest struct {
-	SchemaVersion     int                       `json:"schema_version"`
-	ID                string                    `json:"id"`
-	Version           string                    `json:"version,omitempty"`
-	Label             string                    `json:"label"`
-	Capabilities      WorkflowCapabilities      `json:"capabilities"`
-	ExecutionDefs     WorkflowExecutionDefaults `json:"execution_defaults"`
-	Schedules         []WorkflowSchedule        `json:"schedules"`
-	CreatedAt         string                    `json:"created_at,omitempty"`
-	UpdatedAt         string                    `json:"updated_at,omitempty"`
-	RunRetentionCount *int                      `json:"run_retention_count,omitempty"`
+	SchemaVersion        int                                         `json:"schema_version"`
+	ID                   string                                      `json:"id"`
+	Version              string                                      `json:"version,omitempty"`
+	Label                string                                      `json:"label"`
+	Capabilities         WorkflowCapabilities                        `json:"capabilities"`
+	ExecutionDefs        WorkflowExecutionDefaults                   `json:"execution_defaults"`
+	Schedules            []WorkflowSchedule                          `json:"schedules"`
+	CreatedAt            string                                      `json:"created_at,omitempty"`
+	UpdatedAt            string                                      `json:"updated_at,omitempty"`
+	RunRetentionCount    *int                                        `json:"run_retention_count,omitempty"`
+	FolderAccess         []workflowtypes.WorkflowFolderGrant         `json:"folder_access,omitempty"`
+	FolderAccessRequests []workflowtypes.WorkflowFolderAccessRequest `json:"folder_access_requests,omitempty"`
 
 	// Auto-improvement framework fields. See docs/workflow/auto_improvement_framework.md.
 	//
@@ -114,6 +120,9 @@ type WorkflowManifest struct {
 }
 
 type WorkflowPulseConfig struct {
+	// Enabled runs Pulse Gate after each normal scheduled workflow run. Pulse
+	// does not own a separate recurring cron; the completed run is its trigger.
+	Enabled               bool                           `json:"enabled,omitempty"`
 	AdvisorSpecialization *WorkflowAdvisorSpecialization `json:"advisor_specialization,omitempty"`
 }
 
@@ -125,10 +134,8 @@ type WorkflowAdvisorSpecialization struct {
 	UpdatedAt       string `json:"updated_at,omitempty"`
 }
 
-// HasEnabledPulseReviewSchedule reports whether recurring Pulse is configured.
-// The schedule is the single source of truth: normal workflow schedules never
-// run Gate/Review+Fix inline, while the dedicated schedule reviews accumulated
-// evidence on its own cadence.
+// HasEnabledPulseReviewSchedule recognizes the retired dedicated-schedule
+// representation long enough to migrate existing workflow manifests.
 func (m *WorkflowManifest) HasEnabledPulseReviewSchedule() bool {
 	if m == nil {
 		return false
@@ -139,6 +146,47 @@ func (m *WorkflowManifest) HasEnabledPulseReviewSchedule() bool {
 		}
 	}
 	return false
+}
+
+// PulseEnabled reports whether post-run Pulse is enabled. Older manifests used
+// an enabled pulse_review_only schedule as the toggle; retain that as a read
+// compatibility signal while the next UI save removes the obsolete schedule.
+func (m *WorkflowManifest) PulseEnabled() bool {
+	if m == nil {
+		return false
+	}
+	if m.Pulse != nil && m.Pulse.Enabled {
+		return true
+	}
+	return m.HasEnabledPulseReviewSchedule()
+}
+
+// MigrateLegacyPulseSchedule folds the retired dedicated Pulse schedule into
+// pulse.enabled and removes it from the normal schedule list.
+func (m *WorkflowManifest) MigrateLegacyPulseSchedule() bool {
+	if m == nil {
+		return false
+	}
+	found := false
+	enabled := false
+	schedules := make([]WorkflowSchedule, 0, len(m.Schedules))
+	for _, schedule := range m.Schedules {
+		if schedule.PulseReviewOnly {
+			found = true
+			enabled = enabled || schedule.Enabled
+			continue
+		}
+		schedules = append(schedules, schedule)
+	}
+	if !found {
+		return false
+	}
+	if m.Pulse == nil {
+		m.Pulse = &WorkflowPulseConfig{}
+	}
+	m.Pulse.Enabled = m.Pulse.Enabled || enabled
+	m.Schedules = schedules
+	return true
 }
 
 type WorkflowBackupConfig struct {
@@ -285,9 +333,9 @@ func (c *WorkflowNotificationConfig) EffectivePulseSummaryInstructions() string 
 	return strings.TrimSpace(c.Instructions)
 }
 
-// WorkflowExecutionDefaults stores toolbar-level defaults for workflow execution.
+// WorkflowExecutionDefaults stores workflow-wide execution settings. Run-folder
+// selection is intentionally absent: full runs always use the current slot.
 type WorkflowExecutionDefaults struct {
-	AlwaysUseSameRun bool `json:"always_use_same_run"`
 	// Global step overrides (replaces step_override.json)
 	DisableLearning              *bool    `json:"disable_learning,omitempty"`
 	DisableParallelToolExecution *bool    `json:"disable_parallel_tool_execution,omitempty"`
@@ -429,6 +477,83 @@ func ValidateManifest(m *WorkflowManifest) error {
 			return fmt.Errorf("run_retention_count must be between 1 and %d", MaxRunRetentionCount)
 		}
 	}
+	seenFolderGrantIDs := make(map[string]struct{}, len(m.FolderAccess))
+	seenFolderGrantAliases := make(map[string]struct{}, len(m.FolderAccess))
+	seenFolderGrantEnvKeys := make(map[string]struct{}, len(m.FolderAccess))
+	for i, grant := range m.FolderAccess {
+		grant.ID = strings.TrimSpace(grant.ID)
+		grant.Alias = strings.TrimSpace(grant.Alias)
+		grant.Path = strings.TrimSpace(grant.Path)
+		grant.Access = strings.TrimSpace(grant.Access)
+		if grant.ID == "" {
+			return fmt.Errorf("folder_access[%d].id is required", i)
+		}
+		if _, exists := seenFolderGrantIDs[grant.ID]; exists {
+			return fmt.Errorf("duplicate folder_access id %q", grant.ID)
+		}
+		seenFolderGrantIDs[grant.ID] = struct{}{}
+		if !validWorkflowFolderAlias(grant.Alias) {
+			return fmt.Errorf("folder_access[%d].alias must start with a letter or number and contain only letters, numbers, hyphens, or underscores", i)
+		}
+		aliasKey := strings.ToLower(grant.Alias)
+		if _, exists := seenFolderGrantAliases[aliasKey]; exists {
+			return fmt.Errorf("duplicate folder_access alias %q", grant.Alias)
+		}
+		seenFolderGrantAliases[aliasKey] = struct{}{}
+		envKey := workflowFolderAliasEnvKey(grant.Alias)
+		if _, exists := seenFolderGrantEnvKeys[envKey]; exists {
+			return fmt.Errorf("folder_access[%d].alias collides with another attached-folder environment key", i)
+		}
+		seenFolderGrantEnvKeys[envKey] = struct{}{}
+		if !filepath.IsAbs(grant.Path) {
+			return fmt.Errorf("folder_access[%d].path must be absolute", i)
+		}
+		if strings.ContainsRune(grant.Path, '\x00') {
+			return fmt.Errorf("folder_access[%d].path contains a NUL byte", i)
+		}
+		cleanPath := filepath.Clean(grant.Path)
+		if cleanPath == filepath.VolumeName(cleanPath)+string(filepath.Separator) {
+			return fmt.Errorf("folder_access[%d].path cannot be a filesystem root", i)
+		}
+		switch grant.Access {
+		case workflowtypes.FolderAccessReadOnly, workflowtypes.FolderAccessReadWrite:
+		default:
+			return fmt.Errorf("folder_access[%d].access must be read_only or read_write", i)
+		}
+	}
+	seenFolderRequestIDs := make(map[string]struct{}, len(m.FolderAccessRequests))
+	for i, request := range m.FolderAccessRequests {
+		if strings.TrimSpace(request.ID) == "" {
+			return fmt.Errorf("folder_access_requests[%d].id is required", i)
+		}
+		if _, exists := seenFolderRequestIDs[request.ID]; exists {
+			return fmt.Errorf("duplicate folder_access request id %q", request.ID)
+		}
+		seenFolderRequestIDs[request.ID] = struct{}{}
+		if !validWorkflowFolderAlias(strings.TrimSpace(request.Alias)) {
+			return fmt.Errorf("folder_access_requests[%d].alias is invalid", i)
+		}
+		switch strings.TrimSpace(request.Access) {
+		case workflowtypes.FolderAccessReadOnly, workflowtypes.FolderAccessReadWrite:
+		default:
+			return fmt.Errorf("folder_access_requests[%d].access must be read_only or read_write", i)
+		}
+		if strings.TrimSpace(request.Reason) == "" {
+			return fmt.Errorf("folder_access_requests[%d].reason is required", i)
+		}
+		if request.RequestedPath != "" {
+			if strings.ContainsRune(request.RequestedPath, '\x00') {
+				return fmt.Errorf("folder_access_requests[%d].requested_path contains a NUL byte", i)
+			}
+			if !filepath.IsAbs(request.RequestedPath) {
+				return fmt.Errorf("folder_access_requests[%d].requested_path must be absolute", i)
+			}
+			cleanPath := filepath.Clean(request.RequestedPath)
+			if cleanPath == filepath.VolumeName(cleanPath)+string(filepath.Separator) {
+				return fmt.Errorf("folder_access_requests[%d].requested_path cannot be a filesystem root", i)
+			}
+		}
+	}
 	if m.Pulse != nil && m.Pulse.AdvisorSpecialization != nil {
 		specialization := m.Pulse.AdvisorSpecialization
 		if specialization.Version < 1 {
@@ -550,6 +675,31 @@ func ValidateManifest(m *WorkflowManifest) error {
 		}
 	}
 	return nil
+}
+
+func validWorkflowFolderAlias(alias string) bool {
+	if alias == "" || len(alias) > 64 {
+		return false
+	}
+	for i, r := range alias {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || (i > 0 && (r == '-' || r == '_')) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func workflowFolderAliasEnvKey(alias string) string {
+	var builder strings.Builder
+	for _, r := range strings.ToUpper(strings.TrimSpace(alias)) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+		} else {
+			builder.WriteByte('_')
+		}
+	}
+	return builder.String()
 }
 
 func normalizeScheduleGroupNames(groupNames []string) []string {

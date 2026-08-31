@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
+  addTabEvents: vi.fn(),
   setTabEvents: vi.fn(),
   setTabLastEventIndex: vi.fn(),
   setTabHasMoreOlderEvents: vi.fn(),
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../stores/useChatStore', () => ({
   useChatStore: {
     getState: () => ({
+      addTabEvents: mocks.addTabEvents,
       setTabEvents: mocks.setTabEvents,
       setTabLastEventIndex: mocks.setTabLastEventIndex,
       setTabHasMoreOlderEvents: mocks.setTabHasMoreOlderEvents,
@@ -88,10 +90,30 @@ describe('hydrateTabEvents restored chat fallback', () => {
         }),
       ]),
     )
-    expect(mocks.setTabLastEventIndex).toHaveBeenCalledWith('restored-session', 4)
+    expect(mocks.setTabLastEventIndex).toHaveBeenCalledWith('restored-session', -1)
     expect(mocks.setTabHasMoreOlderEvents).toHaveBeenCalledWith('restored-session', false)
     expect(mocks.setTabHistoryPagination).toHaveBeenCalledWith('restored-session', null)
     expect(mocks.getRecentSessionEvents).toHaveBeenCalledWith('restored-session')
+  })
+
+  it('keeps the in-memory live tail when durable history is older', async () => {
+    const liveTail = { id: 'latest-codex-answer', type: 'unified_completion' }
+    mocks.getRecentSessionEvents.mockResolvedValue({
+      events: [liveTail],
+      session_status: 'completed',
+      last_processed_index: 7,
+      has_more: false,
+    })
+    mocks.getChatHistoryResumeConversation.mockResolvedValue({
+      session_id: 'active-codex-session',
+      conversation_history: [{ Role: 'human', Parts: [{ Text: 'Older prompt' }] }],
+    })
+
+    await hydrateTabEvents('active-codex-session', { workspacePath: '/workspace/workflow' })
+
+    expect(mocks.setTabEvents).toHaveBeenCalledWith('active-codex-session', expect.any(Array))
+    expect(mocks.addTabEvents).toHaveBeenCalledWith('active-codex-session', [liveTail])
+    expect(mocks.setTabLastEventIndex).toHaveBeenLastCalledWith('active-codex-session', 7)
   })
 
   it('keeps every meaningful assistant update from one tool-heavy turn', () => {

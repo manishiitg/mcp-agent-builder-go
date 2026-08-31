@@ -2,6 +2,7 @@ package step_based_workflow
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -35,6 +36,7 @@ import (
 
 const runConcernsSchema = `CREATE TABLE IF NOT EXISTS run_concerns (
 	fingerprint TEXT PRIMARY KEY,
+	issue_id TEXT NOT NULL DEFAULT '',
 	step_id TEXT NOT NULL DEFAULT '',
 	phase TEXT NOT NULL DEFAULT '',
 	group_name TEXT NOT NULL DEFAULT '',
@@ -84,7 +86,8 @@ const concernLinePrefix = "CONCERNS:"
 
 // RunConcern is one deduplicated concern with its recurrence history.
 type RunConcern struct {
-	Fingerprint    string `json:"fingerprint"`
+	Fingerprint    string `json:"-"`
+	IssueID        string `json:"issue_id"`
 	StepID         string `json:"step_id"`
 	Phase          string `json:"phase"`
 	GroupName      string `json:"group_name,omitempty"`
@@ -100,15 +103,40 @@ type RunConcern struct {
 	ResolutionNote string `json:"resolution_note,omitempty"`
 }
 
+// newPulseIssueID creates the durable public address for a newly discovered
+// concern. It must never be derived from the concern wording: wording changes
+// are reviewed semantically and may reopen or merge an existing issue, while
+// the issue ID itself remains stable.
+func newPulseIssueID() string {
+	var bytes [4]byte
+	if _, err := rand.Read(bytes[:]); err == nil {
+		return fmt.Sprintf("PUL-%X", bytes)
+	}
+	// crypto/rand failure is exceptionally rare. The timestamp fallback keeps
+	// recording concerns available rather than making a completed step fail.
+	return fmt.Sprintf("PUL-%X", time.Now().UTC().UnixNano())
+}
+
 // ParseConcernLines pulls the `CONCERNS:` payloads out of a summary blob.
 //
 // The marker is matched case-insensitively at the start of a trimmed line, which
 // is the shape the prompts ask for and the shape the message-sequence aggregator
 // already assumed. Everything after the prefix on that line is the concern.
+//
+// PLAT-211: a legacy review/advisor summary can render the marker as a
+// Markdown inline-code span -- "`CONCERNS: foo`" instead of a bare
+// "CONCERNS: foo" line. That backtick is real content the model wrote, not
+// whitespace strings.TrimSpace touches, so the bare prefix check silently
+// dropped it: no error, no warning, the review still recorded as completed,
+// and the finding just never reached run_concerns at all. Confirmed live on
+// HDFC-Personal-Accounts: six such findings vanished with no trace until a
+// later stage's fingerprint lookup came up empty. stripMarkdownCodeSpan
+// removes one matching pair of backtick-run delimiters wrapping the WHOLE
+// line before the prefix check runs.
 func ParseConcernLines(summary string) []string {
 	var out []string
 	for _, line := range strings.Split(summary, "\n") {
-		trimmed := strings.TrimSpace(line)
+		trimmed := stripMarkdownCodeSpan(strings.TrimSpace(line))
 		if !strings.HasPrefix(strings.ToUpper(trimmed), concernLinePrefix) {
 			continue
 		}
@@ -120,6 +148,35 @@ func ParseConcernLines(summary string) []string {
 		out = append(out, body)
 	}
 	return out
+}
+
+// stripMarkdownCodeSpan removes a single matching pair of backtick-run
+// delimiters that wrap an ENTIRE line, e.g. "`CONCERNS: foo`" -> "CONCERNS: foo".
+// Markdown inline code spans open and close with the same run length of one
+// or more backticks (a longer run lets the span contain a shorter run of
+// backticks as literal text). Only a matching open/close run at the very
+// start and end of the line is stripped, so a line that merely mentions a
+// backtick mid-sentence, or opens a span it never closes, is left untouched.
+func stripMarkdownCodeSpan(line string) string {
+	if !strings.HasPrefix(line, "`") {
+		return line
+	}
+	openLen := 0
+	for openLen < len(line) && line[openLen] == '`' {
+		openLen++
+	}
+	closeDelim := strings.Repeat("`", openLen)
+	if len(line) < openLen*2 || !strings.HasSuffix(line, closeDelim) {
+		return line
+	}
+	inner := line[openLen : len(line)-openLen]
+	if strings.Contains(inner, closeDelim) {
+		// The delimiter recurs inside the span -- not actually the closing
+		// fence for THIS span (e.g. "`a` CONCERNS: `b`" is two spans, not one
+		// wrapping the whole line). Leave it alone rather than guess.
+		return line
+	}
+	return strings.TrimSpace(inner)
 }
 
 // concernFingerprint identifies "the same concern raised again".
@@ -219,6 +276,11 @@ func RecordRunConcerns(ctx context.Context, workspacePath, runFolder, groupName,
 	}
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	fingerprints := pulseFindingFingerprintsByConcern(summary, stepID)
+	for concern, fingerprint := range fingerprints {
+		if canonical := canonicalFingerprintForMergedIssue(ctx, db, fingerprint); canonical != "" {
+			fingerprints[concern] = canonical
+		}
+	}
 	recorded, err := recordRunConcernLinesAtWithFingerprints(
 		ctx, db, runFolder, groupName, stepID, phase, lines,
 		observedAt, fingerprints,
@@ -247,6 +309,7 @@ func recordRunConcernLinesAtWithFingerprints(
 	}
 	recorded := 0
 	for _, text := range lines {
+		issueID := newPulseIssueID()
 		normalizedText := strings.ToLower(strings.Join(strings.Fields(text), " "))
 		fp := fingerprints[normalizedText]
 		if phase == ConcernPhasePreValidation {
@@ -259,9 +322,29 @@ func recordRunConcernLinesAtWithFingerprints(
 				fp = historical
 			}
 		}
+		if canonical := canonicalFingerprintForMergedIssue(ctx, db, fp); canonical != "" {
+			fp = canonical
+		}
 		previousStatus := ""
-		if err := db.QueryRowContext(ctx, `SELECT status FROM run_concerns WHERE fingerprint=?`, fp).Scan(&previousStatus); err != nil && err != sql.ErrNoRows {
+		previousStepID := ""
+		if err := db.QueryRowContext(ctx, `SELECT status, step_id FROM run_concerns WHERE fingerprint=?`, fp).Scan(&previousStatus, &previousStepID); err != nil && err != sql.ErrNoRows {
 			return recorded, err
+		}
+		// A recurring write's step_id may only UPGRADE a placeholder to a real
+		// attribution, never move an already-real one. Before per-caller
+		// step_id arguments existed, every finding's row got a canonical
+		// module name (e.g. "plan_drift_review") as its step_id fallback; that
+		// is not a real step identity, and a legacy or module-wide row stuck
+		// with one would otherwise be a permanent dead end for any caller that
+		// needs exact-step attribution (e.g. plan_drift_review's own
+		// verifyStepDriftCheckFindingsExist) — even though reusing the same
+		// fingerprint/issue for the same semantic root cause is exactly what
+		// callers are told to do. A previousStepID that is NOT a canonical
+		// module name is already real and must never silently move to a
+		// different step just because a later call passes a different one.
+		finalStepID := stepID
+		if previousStepID != "" && !pulsemodules.IsValid(previousStepID) {
+			finalStepID = previousStepID
 		}
 		// A concern that recurs after being marked resolved reopens: the fix did
 		// not hold, and that is strictly more important than the original report.
@@ -276,9 +359,10 @@ func recordRunConcernLinesAtWithFingerprints(
 		// observed against", so a recurrence must not overwrite it with a newer
 		// revision — that would erase exactly the signal a staleness sweep reads.
 		_, err := db.ExecContext(ctx, `INSERT INTO run_concerns
-			(fingerprint, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status, first_seen_platform_version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+			(fingerprint, issue_id, step_id, phase, group_name, text, first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status, first_seen_platform_version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 			ON CONFLICT(fingerprint) DO UPDATE SET
+				step_id = excluded.step_id,
 				text = excluded.text,
 				phase = excluded.phase,
 				group_name = excluded.group_name,
@@ -289,7 +373,7 @@ func recordRunConcernLinesAtWithFingerprints(
 					ELSE 1
 				END,
 				status = CASE WHEN run_concerns.status IN (?, ?, ?) THEN ? ELSE run_concerns.status END`,
-			fp, stepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen, PlatformVersion(),
+			fp, issueID, finalStepID, phase, groupName, text, runFolder, observedAt, runFolder, observedAt, ConcernStatusOpen, PlatformVersion(),
 			ConcernStatusResolved, ConcernStatusAwaitingVerification, ConcernStatusAwaitingRun, ConcernStatusOpen)
 		if err != nil {
 			return recorded, err
@@ -318,6 +402,27 @@ func recordRunConcernLinesAtWithFingerprints(
 	return recorded, nil
 }
 
+// canonicalFingerprintForMergedIssue keeps retired semantic aliases retired.
+// Merge history stores the canonical public issue_id; a later workflow
+// occurrence of the old symptom must append to and reopen the canonical issue,
+// not recreate the duplicate queue item.
+func canonicalFingerprintForMergedIssue(ctx context.Context, db pulseFindingLifecycleDB, fingerprint string) string {
+	var issueID string
+	err := db.QueryRowContext(ctx, `SELECT COALESCE(json_extract(detail_json, '$.merged_into_issue_id'), '')
+		FROM pulse_finding_details WHERE fingerprint=?`, fingerprint).Scan(&issueID)
+	if err != nil || strings.TrimSpace(issueID) == "" {
+		return ""
+	}
+	var canonical string
+	err = db.QueryRowContext(ctx, `SELECT fingerprint FROM run_concerns
+		WHERE upper(issue_id)=upper(?)
+		ORDER BY first_seen_at ASC LIMIT 1`, strings.TrimSpace(issueID)).Scan(&canonical)
+	if err != nil || canonical == fingerprint {
+		return ""
+	}
+	return canonical
+}
+
 // LoadOpenRunConcerns returns concerns still needing Pulse attention. A negative
 // limit returns the complete active backlog; zero preserves the bounded default
 // for callers that only need a preview.
@@ -334,7 +439,7 @@ func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) (
 	// any one of them recurred. Prevalidation is already one root concern per
 	// step; this clustering remains useful for distinct execution/review concerns
 	// that share a step and should be read together.
-	query := `SELECT c.fingerprint, c.step_id, c.phase, c.group_name, c.text,
+	query := `SELECT c.fingerprint, c.issue_id, c.step_id, c.phase, c.group_name, c.text,
 			c.first_seen_run, c.first_seen_at, c.last_seen_run, c.last_seen_at, c.seen_count, c.status
 		FROM run_concerns c
 		JOIN (
@@ -367,7 +472,7 @@ func LoadOpenRunConcerns(ctx context.Context, workspacePath string, limit int) (
 	var out []RunConcern
 	for rows.Next() {
 		var c RunConcern
-		if err := rows.Scan(&c.Fingerprint, &c.StepID, &c.Phase, &c.GroupName, &c.Text,
+		if err := rows.Scan(&c.Fingerprint, &c.IssueID, &c.StepID, &c.Phase, &c.GroupName, &c.Text,
 			&c.FirstSeenRun, &c.FirstSeenAt, &c.LastSeenRun, &c.LastSeenAt, &c.SeenCount, &c.Status); err != nil {
 			return nil, err
 		}
@@ -386,7 +491,7 @@ func LoadExternallyOwnedRunConcerns(ctx context.Context, workspacePath string) (
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT fingerprint, step_id, phase, group_name, text,
+	rows, err := db.QueryContext(ctx, `SELECT fingerprint, issue_id, step_id, phase, group_name, text,
 			first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status,
 			resolved_at, resolved_by, resolution_note
 		FROM run_concerns
@@ -403,7 +508,7 @@ func LoadExternallyOwnedRunConcerns(ctx context.Context, workspacePath string) (
 	for rows.Next() {
 		var concern RunConcern
 		if err := rows.Scan(
-			&concern.Fingerprint, &concern.StepID, &concern.Phase, &concern.GroupName,
+			&concern.Fingerprint, &concern.IssueID, &concern.StepID, &concern.Phase, &concern.GroupName,
 			&concern.Text, &concern.FirstSeenRun, &concern.FirstSeenAt,
 			&concern.LastSeenRun, &concern.LastSeenAt, &concern.SeenCount,
 			&concern.Status, &concern.ResolvedAt, &concern.ResolvedBy,
@@ -449,38 +554,6 @@ func ResolveRunConcern(ctx context.Context, workspacePath, fingerprint, status, 
 	return nil
 }
 
-// recordStepConcerns files concerns from each named phase summary.
-//
-// Best-effort on purpose: a step that completed its work must never be failed by
-// a bookkeeping write. A failure here is logged and the run continues — the
-// concern still appears inline in the completion summary either way, so the
-// worst case is losing recurrence tracking for one occurrence, not the report.
-func (hcpo *StepBasedWorkflowOrchestrator) recordStepConcerns(ctx context.Context, stepID string, summariesByPhase map[string]string) error {
-	workspacePath := strings.TrimSpace(hcpo.GetWorkspacePath())
-	if workspacePath == "" {
-		return nil
-	}
-	var recordErrors []string
-	for phase, summary := range summariesByPhase {
-		if strings.TrimSpace(summary) == "" {
-			continue
-		}
-		n, err := RecordRunConcerns(ctx, workspacePath, hcpo.selectedRunFolder, hcpo.currentGroupName, stepID, phase, summary)
-		if err != nil {
-			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to record %s concerns for step %s: %v", phase, stepID, err))
-			recordErrors = append(recordErrors, phase+": "+err.Error())
-			continue
-		}
-		if n > 0 {
-			hcpo.GetLogger().Info(fmt.Sprintf("📌 Recorded %d %s concern(s) for step %s", n, phase, stepID))
-		}
-	}
-	if len(recordErrors) > 0 {
-		return fmt.Errorf("record concerns for %s: %s", stepID, strings.Join(recordErrors, "; "))
-	}
-	return nil
-}
-
 // LoadPriorPreValidationFailures returns this step's still-open prevalidation
 // concerns, newest first, so the next run can be told what its last output got
 // wrong.
@@ -516,7 +589,7 @@ func LoadPriorPreValidationFailures(ctx context.Context, workspacePath, stepID s
 	if limit <= 0 {
 		limit = 10
 	}
-	rows, err := db.QueryContext(ctx, `SELECT fingerprint, step_id, phase, group_name, text,
+	rows, err := db.QueryContext(ctx, `SELECT fingerprint, issue_id, step_id, phase, group_name, text,
 			first_seen_run, first_seen_at, last_seen_run, last_seen_at, seen_count, status,
 			resolved_at, resolved_by, resolution_note
 		FROM run_concerns
@@ -537,7 +610,7 @@ func LoadPriorPreValidationFailures(ctx context.Context, workspacePath, stepID s
 	for rows.Next() {
 		var concern RunConcern
 		if err := rows.Scan(
-			&concern.Fingerprint, &concern.StepID, &concern.Phase, &concern.GroupName,
+			&concern.Fingerprint, &concern.IssueID, &concern.StepID, &concern.Phase, &concern.GroupName,
 			&concern.Text, &concern.FirstSeenRun, &concern.FirstSeenAt,
 			&concern.LastSeenRun, &concern.LastSeenAt, &concern.SeenCount,
 			&concern.Status, &concern.ResolvedAt, &concern.ResolvedBy,

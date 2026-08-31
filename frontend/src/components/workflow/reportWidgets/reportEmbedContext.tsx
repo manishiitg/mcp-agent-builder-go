@@ -27,6 +27,27 @@ export interface ReportDataApi {
   // db/ knowledgebase/ docs/.
   fileUrl: (path: string) => Promise<string | null>
   openFile: (path: string) => void
+  // updateField writes exactly one cell; updateFields writes several columns on
+  // the same row in one atomic call (a form submit). Both share the same
+  // validation: table/column are checked against the live schema server-side
+  // and the row is matched on that table's own primary key — there is no way
+  // to pass raw SQL through either call. Rejects columns that identify or
+  // timestamp the row (the primary key, any *_id column, created_at/
+  // updated_at) and values that aren't a plain string/number/boolean/null.
+  // updateFields applies every field or none (single transaction) and resolves
+  // the confirmed old/new values keyed by column name; throws on validation
+  // failure or if the row/any named column doesn't exist.
+  updateField: (
+    table: string,
+    rowId: string | number,
+    column: string,
+    value: string | number | boolean | null,
+  ) => Promise<{ oldValue: unknown; newValue: unknown }>
+  updateFields: (
+    table: string,
+    rowId: string | number,
+    fields: Record<string, string | number | boolean | null>,
+  ) => Promise<{ oldValues: Record<string, unknown>; newValues: Record<string, unknown> }>
 }
 
 export interface ReportRuntime {

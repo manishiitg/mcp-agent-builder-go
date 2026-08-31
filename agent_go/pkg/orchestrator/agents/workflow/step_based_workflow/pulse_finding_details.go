@@ -107,6 +107,13 @@ type PulseReviewFindingInput struct {
 	IssueID string `json:"issue_id,omitempty"`
 	Concern string `json:"concern"`
 	Module  string `json:"module"`
+	// StepID is the plan step this finding is about, e.g. what
+	// plan_drift_review's verifyStepDriftCheckFindingsExist requires a
+	// fail-status check's linked finding to be filed against. Optional: a
+	// module-wide finding (not about one specific step) legitimately omits
+	// it, and updating an existing issue by IssueID keeps that issue's
+	// original step identity regardless of what is passed here.
+	StepID string `json:"step_id,omitempty"`
 	// HumanInputID links a decision_required finding to the pending decision
 	// created by the reviewer before filing it.
 	HumanInputID string `json:"human_input_id,omitempty"`
@@ -185,7 +192,17 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 	}
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	fingerprint := ""
-	stepID := marker.Module
+	// A brand-new finding is attributed to the caller-supplied step_id when
+	// present; falling back to the module name here (rather than leaving it
+	// empty) previously meant every new finding recorded StepID="plan_drift_
+	// review" etc. instead of an actual plan step, silently defeating any
+	// caller that needs real step attribution (e.g. plan_drift_review's own
+	// verifyStepDriftCheckFindingsExist, which requires a fail-status check's
+	// linked finding to be filed against the exact step under review).
+	stepID := strings.TrimSpace(input.StepID)
+	if stepID == "" {
+		stepID = marker.Module
+	}
 	promotedObservation := false
 	promotedIssueID := ""
 	if issueID := strings.TrimSpace(input.IssueID); issueID != "" {
@@ -194,7 +211,18 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 			return PulseReviewFindingRecord{}, lookupErr
 		}
 		fingerprint = existing.Fingerprint
-		stepID = existing.StepID
+		// Prefer an explicit step_id on this call as the write's candidate
+		// value; otherwise fall back to whatever is already on record. This is
+		// only a candidate — recordRunConcernLinesAtWithFingerprints reads the
+		// row's CURRENT step_id fresh at write time and is the actual
+		// authority on whether a candidate may overwrite it (only when the
+		// persisted value is itself a placeholder module name, never a real
+		// step identity already on record — see its own doc comment).
+		if explicit := strings.TrimSpace(input.StepID); explicit != "" {
+			stepID = explicit
+		} else {
+			stepID = existing.StepID
+		}
 		promotedObservation = !IsPulseIssue(existing)
 		promotedIssueID = NewPulseIssue(existing).ID
 		// A PUL id is a reference to the existing lifecycle row, never a new
@@ -257,14 +285,27 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 	// and makes a successful write look like a failure. The fingerprint is
 	// already the exact internal identity, so verify it against the unfiltered
 	// lifecycle view.
-	findings, loadErr := LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
-	if loadErr != nil {
-		return PulseReviewFindingRecord{}, loadErr
+	//
+	// PLAT-214: this reload used to call the public LoadPulseFindingLifecycles,
+	// which opens its OWN separate database connection/handle rather than
+	// reusing `db` above. Confirmed live on ICICI-BANK-PARSING: an intermittent
+	// false-negative error ("could not be reloaded") on calls updating an
+	// EXISTING issue_id, even though the write had actually landed and was
+	// durably visible moments later through a fresh get_pulse_state read. A
+	// second connection opened right after this one writes is exactly the
+	// shape of a cross-connection SQLite visibility/locking race; reading
+	// back on the SAME connection that performed the write removes that
+	// window by construction, and only needs the one row this check actually
+	// cares about rather than a full backlog scan.
+	var reloadedIssueID, reloadedStatus string
+	err = db.QueryRowContext(ctx, `SELECT issue_id, status FROM run_concerns WHERE fingerprint=?`, fingerprint).
+		Scan(&reloadedIssueID, &reloadedStatus)
+	if err == nil {
+		reloaded := PulseFindingLifecycle{Fingerprint: fingerprint, IssueID: reloadedIssueID, Status: reloadedStatus}
+		return PulseReviewFindingRecord{IssueID: pulseIssueID(reloaded), Fingerprint: fingerprint, Status: reloadedStatus}, nil
 	}
-	for _, finding := range findings {
-		if finding.Fingerprint == fingerprint {
-			return PulseReviewFindingRecord{IssueID: NewPulseIssue(finding).ID, Fingerprint: fingerprint, Status: finding.Status}, nil
-		}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return PulseReviewFindingRecord{}, err
 	}
 	return PulseReviewFindingRecord{}, fmt.Errorf("recorded Pulse finding could not be reloaded by its internal lifecycle identity")
 }
@@ -428,18 +469,39 @@ func ParsePulseFindingDetailMarkers(summary string) []pulseFindingDetailMarker {
 }
 
 func pulseFindingCanonicalFingerprint(stepID string, marker pulseFindingDetailMarker) string {
-	identity := strings.TrimSpace(marker.FindingID)
-	prefix := "finding_id:"
-	if identity == "" {
-		identity = strings.TrimSpace(marker.TargetKey)
-		prefix = "target_key:"
+	// finding_id is an explicit, author-asserted identity: choosing that
+	// literal string is itself a deliberate claim of "this is the same
+	// finding," meant to survive rewording and a change of reporting module
+	// (TestStructuredFindingIDSurvivesRewordingAndReviewerChange pins this).
+	// It stays module-agnostic regardless of issue_kind.
+	if identity := strings.TrimSpace(marker.FindingID); identity != "" {
+		return concernFingerprint("__structured_finding__", "finding_id:"+strings.ToLower(identity))
 	}
+	identity := strings.TrimSpace(marker.TargetKey)
 	if identity == "" {
 		return concernFingerprint(stepID, marker.Concern)
 	}
-	// Structured IDs are workflow-global identities. Including the reporting
-	// module here recreated the same issue once per reviewer.
-	return concernFingerprint("__structured_finding__", prefix+strings.ToLower(identity))
+	// target_key has no such author-asserted-identity convention. For a
+	// harness_issue it is a deliberately shared, module-agnostic platform
+	// identity: multiple reviewers -- even across different workflows, via
+	// the cross-workspace harness registry -- may independently notice the
+	// same underlying platform defect and should converge on one canonical
+	// issue rather than filing a duplicate per reporter.
+	//
+	// For every other kind, target_key is just a workflow-local location
+	// reference (a step, a table, a config key) that different reviewer
+	// modules routinely reuse to name entirely unrelated concerns about the
+	// same location -- e.g. technical_review and strategic_review both
+	// citing the same plan.json step for two different reasons. Without
+	// module scoping here, the second module's write silently overwrote the
+	// first module's finding content while its own module attribution
+	// stayed unchanged, producing a lifecycle row whose content and owning
+	// module disagreed (PUL-1E38F625).
+	scope := "__structured_finding__"
+	if marker.IssueKind != IssueKindHarness {
+		scope = "__structured_finding__:module:" + strings.ToLower(strings.TrimSpace(stepID))
+	}
+	return concernFingerprint(scope, "target_key:"+strings.ToLower(identity))
 }
 
 func pulseFindingFingerprintsByConcern(summary, stepID string) map[string]string {

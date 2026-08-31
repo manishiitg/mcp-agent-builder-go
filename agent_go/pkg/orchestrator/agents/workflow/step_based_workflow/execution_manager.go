@@ -756,7 +756,7 @@ func (em *ExecutionManager) CleanupProgressOnly(ctx context.Context) error {
 // CleanupForPlanChange handles cleanup when plan structure changed
 // This is used when user chooses to delete old progress and start fresh after plan change
 // It handles backward compatibility with old folder structure
-func (em *ExecutionManager) CleanupForPlanChange(ctx context.Context, totalSteps int, workspacePath, runMode string) error {
+func (em *ExecutionManager) CleanupForPlanChange(ctx context.Context, totalSteps int, workspacePath string) error {
 	orch := em.orchestrator
 
 	orch.GetLogger().Info(fmt.Sprintf("🧹 Cleaning up for plan change (total: %d steps)", totalSteps))
@@ -767,7 +767,7 @@ func (em *ExecutionManager) CleanupForPlanChange(ctx context.Context, totalSteps
 	}
 
 	// Clean execution artifacts (handles both new and old structure for backward compat)
-	orch.cleanupExecutionArtifactsForFreshStart(ctx, workspacePath, runMode)
+	orch.cleanupExecutionArtifactsForFreshStart(ctx, workspacePath)
 
 	// Initialize fresh progress
 	if err := orch.initializeFreshProgress(ctx, totalSteps); err != nil {
@@ -780,7 +780,7 @@ func (em *ExecutionManager) CleanupForPlanChange(ctx context.Context, totalSteps
 
 // CleanupForStartFromBeginning handles cleanup when starting from beginning
 // Similar to CleanupForPlanChange but used in different context
-func (em *ExecutionManager) CleanupForStartFromBeginning(ctx context.Context, workspacePath, runMode string) error {
+func (em *ExecutionManager) CleanupForStartFromBeginning(ctx context.Context, workspacePath string) error {
 	orch := em.orchestrator
 
 	orch.GetLogger().Info(fmt.Sprintf("🧹 Cleaning up for start from beginning"))
@@ -791,7 +791,7 @@ func (em *ExecutionManager) CleanupForStartFromBeginning(ctx context.Context, wo
 	}
 
 	// Clean execution artifacts (handles both new and old structure)
-	orch.cleanupExecutionArtifactsForFreshStart(ctx, workspacePath, runMode)
+	orch.cleanupExecutionArtifactsForFreshStart(ctx, workspacePath)
 
 	orch.GetLogger().Info(fmt.Sprintf("✅ Start from beginning cleanup completed"))
 	return nil

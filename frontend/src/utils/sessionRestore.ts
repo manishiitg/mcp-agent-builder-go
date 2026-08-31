@@ -134,9 +134,6 @@ async function doRestoreSession(
         isSyntheticTurn: runtime.is_synthetic_turn,
         canSteer: runtime.can_steer,
       })
-      if (runtime.events.length > 0) {
-        chatStore.addTabEvents(sessionId, runtime.events)
-      }
       // Every chat uses the same recovery contract: the workspace-backed
       // conversation is the authoritative durable transcript, while the
       // polling endpoint is only the volatile live tail. Do this for all
@@ -147,6 +144,12 @@ async function doRestoreSession(
         sessionId,
         options?.workspacePath || existingTab?.metadata?.agentProfileWorkspace,
       )
+      // Hydration replaces rendered rows, so the volatile tail must be added
+      // afterwards. Adding it first silently discarded current Codex tool
+      // calls and completions when the persisted conversation was older.
+      if (runtime.events.length > 0) {
+        chatStore.addTabEvents(sessionId, runtime.events)
+      }
       if (runtime.last_processed_index !== undefined) {
         chatStore.setTabLastEventIndex(sessionId, runtime.last_processed_index)
       }
@@ -487,7 +490,12 @@ async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?
   const events = restoreToolArgumentsFromConversation(rawEvents, conversation)
 
   chatStore.setTabEvents(sessionId, events)
-  chatStore.setTabLastEventIndex(sessionId, events.length - 1)
+  // Restored conversation rows are synthesized from durable history, while
+  // tabEventIndices is a cursor into the backend's volatile raw event store.
+  // Those sequences are unrelated. Using history.length here can put the
+  // cursor ahead of a newly restarted coding-agent stream and permanently
+  // hide its tool calls and responses from the formatted view.
+  chatStore.setTabLastEventIndex(sessionId, -1)
   chatStore.setTabHasMoreOlderEvents(sessionId, conversation.history_pagination?.has_more ?? false)
   chatStore.setTabHistoryPagination(
     sessionId,
@@ -566,6 +574,20 @@ export async function hydrateTabEvents(
   // authoritative so a currently running turn still renders as streaming.
   const restored = await tryHydrateTabEventsFromChatHistory(sessionId, options.workspacePath, options.includeUiEvents)
   if (restored) {
+    // Durable history can predate an active in-memory provider stream. Keep
+    // its richer, restart-safe transcript, then append the live tail rather
+    // than replacing it. This is especially important for retained Codex CLI
+    // sessions: a browser reload may restore history from before the most
+    // recent completed turn while the server still has those raw events.
+    if (response.events.length > 0) {
+      chatStore.addTabEvents(sessionId, response.events)
+      if (response.last_processed_index !== undefined) {
+        chatStore.setTabLastEventIndex(sessionId, response.last_processed_index)
+      }
+      if (response.has_more !== undefined) {
+        chatStore.setTabHasMoreOlderEvents(sessionId, response.has_more)
+      }
+    }
     return {
       status: response.session_status || restored.status,
       hasRunningBackgroundAgents: response.has_running_background_agents,

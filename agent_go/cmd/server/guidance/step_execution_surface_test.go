@@ -52,7 +52,7 @@ func TestStepExecutionSurfaceOmitsDesignAndPulseDocs(t *testing.T) {
 	// Deliberately checked with every signal enabled: if even the most capable
 	// step does not get these, no step does.
 	for _, banned := range []string{
-		"routing", "regular", "message-sequence", "todo-task", "step-config",
+		"routing", "scripted", "message-sequence", "todo-task", "step-config",
 		"running-steps", "execution-policy", "planning-steps", "plan-design",
 		"pulse-gate", "pulse-review-fixer", "pulse-finalizer", "pulse-bug-review",
 		"backup-strategy", "publish-strategy", "reporting-policy", "html-output",
@@ -118,6 +118,32 @@ func TestStepExecutionSurfaceFollowsTheToolsHeld(t *testing.T) {
 				t.Errorf("%s attached without its signal", tc.doc)
 			}
 		})
+	}
+}
+
+// TestScriptedActiveProviderToolsReceiveBridgeSafeGuidance pins PLAT-246's
+// contract: a scripted step that can use either active provider tool must get
+// both the tool-specific decision guide and the bridge contract that makes the
+// call without raw endpoints or credentials.
+func TestScriptedActiveProviderToolsReceiveBridgeSafeGuidance(t *testing.T) {
+	skill := MaterializeStepExecutionReferenceSkill(StepExecutionSignals{
+		ToolNames:         []string{"execute_shell_command", "generate_text_llm", "search_web_llm"},
+		CodeExecutionMode: true,
+		ScriptedStep:      true,
+	})
+	if skill == nil {
+		t.Fatal("expected scripted active-provider tool guidance")
+	}
+	for _, path := range []string{"references/workspace-media-tools.md", "references/mcp-bridge.md"} {
+		if !strings.Contains(skill.Content, path) {
+			t.Fatalf("scripted active-provider tool step missing %s\nTOC:\n%s", path, skill.Content)
+		}
+	}
+	mediaTools := materializedFileContent(t, skill, "references/workspace-media-tools.md")
+	for _, want := range []string{"## Scripted workflow use", "$MCP_CUSTOM/generate_text_llm", "$MCP_CUSTOM/search_web_llm", "must never be replaced with a direct provider request"} {
+		if !strings.Contains(mediaTools, want) {
+			t.Fatalf("scripted active-provider tool guidance missing %q\n%s", want, mediaTools)
+		}
 	}
 }
 

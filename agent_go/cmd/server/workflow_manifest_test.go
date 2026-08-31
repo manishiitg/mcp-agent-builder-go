@@ -4,12 +4,78 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 )
+
+func TestValidateManifestFolderAccess(t *testing.T) {
+	manifest := NewWorkflowManifest("Attached folders")
+	manifest.FolderAccess = []workflowtypes.WorkflowFolderGrant{{
+		ID: "grant-1", Alias: "rts-source", Path: t.TempDir(), Access: workflowtypes.FolderAccessReadWrite,
+	}}
+	if err := ValidateManifest(manifest); err != nil {
+		t.Fatalf("valid folder grant rejected: %v", err)
+	}
+
+	manifest.FolderAccess = append(manifest.FolderAccess, workflowtypes.WorkflowFolderGrant{
+		ID: "grant-2", Alias: "rts_source", Path: t.TempDir(), Access: workflowtypes.FolderAccessReadOnly,
+	})
+	if err := ValidateManifest(manifest); err == nil || !strings.Contains(err.Error(), "environment key") {
+		t.Fatalf("environment-key alias collision should be rejected, got %v", err)
+	}
+
+	manifest.FolderAccess = []workflowtypes.WorkflowFolderGrant{{
+		ID: "grant-root", Alias: "root", Path: string(filepath.Separator), Access: workflowtypes.FolderAccessReadOnly,
+	}}
+	if err := ValidateManifest(manifest); err == nil || !strings.Contains(err.Error(), "filesystem root") {
+		t.Fatalf("filesystem root should be rejected, got %v", err)
+	}
+}
+
+func TestValidateManifestFolderAccessRequest(t *testing.T) {
+	manifest := NewWorkflowManifest("Pending folder request")
+	manifest.FolderAccessRequests = []workflowtypes.WorkflowFolderAccessRequest{{
+		ID: "folder-request-1", Alias: "public-website", Access: workflowtypes.FolderAccessReadWrite,
+		RequestedPath: t.TempDir(), Reason: "Publish the website", RequestedAt: "2026-08-29T16:45:00Z",
+	}}
+	if err := ValidateManifest(manifest); err != nil {
+		t.Fatalf("valid pending folder request rejected: %v", err)
+	}
+	manifest.FolderAccessRequests[0].Reason = ""
+	if err := ValidateManifest(manifest); err == nil {
+		t.Fatal("pending folder request without a reason should be rejected")
+	}
+	manifest.FolderAccessRequests[0].Reason = "Publish the website"
+	manifest.FolderAccessRequests[0].RequestedPath = "relative/path"
+	if err := ValidateManifest(manifest); err == nil || !strings.Contains(err.Error(), "must be absolute") {
+		t.Fatalf("relative requested path should be rejected, got %v", err)
+	}
+}
+
+func TestNormalizeWorkflowFolderGrantsCanonicalizesAndPreservesCreation(t *testing.T) {
+	realRoot := t.TempDir()
+	linkParent := t.TempDir()
+	link := filepath.Join(linkParent, "selected")
+	if err := os.Symlink(realRoot, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	requested := []workflowtypes.WorkflowFolderGrant{{ID: "grant-1", Alias: "source", Path: link, Access: workflowtypes.FolderAccessReadOnly}}
+	previous := []workflowtypes.WorkflowFolderGrant{{ID: "grant-1", CreatedAt: "2026-08-01T00:00:00Z"}}
+	normalized, err := normalizeWorkflowFolderGrants(requested, previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, _ := filepath.EvalSymlinks(realRoot)
+	if normalized[0].Path != canonical || normalized[0].CreatedAt != previous[0].CreatedAt || normalized[0].UpdatedAt == "" {
+		t.Fatalf("unexpected normalized grant: %#v", normalized[0])
+	}
+}
 
 func TestWorkflowManifestChangelogChangesIsStableAndValueFree(t *testing.T) {
 	previous := `{
@@ -239,7 +305,7 @@ func TestReadWorkflowManifestMigratesMissingLabelFromWorkspacePath(t *testing.T)
 	}
 }
 
-func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsField(t *testing.T) {
+func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsFields(t *testing.T) {
 	const workspacePath = "Workflow/linkedin"
 	manifestJSON, err := json.Marshal(map[string]interface{}{
 		"schema_version": 1,
@@ -269,35 +335,68 @@ func TestReadWorkflowManifestPrunesRetiredExecutionDefaultsField(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("ReadWorkflowManifest() found=%v err=%v", found, err)
 	}
-	if manifest.ExecutionDefs.WorkshopMode != "optimizer" || !manifest.ExecutionDefs.AlwaysUseSameRun {
+	if manifest.ExecutionDefs.WorkshopMode != "optimizer" {
 		t.Fatalf("known execution_defaults fields not preserved: %+v", manifest.ExecutionDefs)
 	}
 
 	workspace.mu.Lock()
 	persistedJSON := workspace.files[workspacePath+"/workflow.json"]
 	workspace.mu.Unlock()
-	if strings.Contains(persistedJSON, "global_skill_objective") {
-		t.Fatalf("persisted manifest still contains retired field global_skill_objective: %s", persistedJSON)
+	if strings.Contains(persistedJSON, "global_skill_objective") || strings.Contains(persistedJSON, "always_use_same_run") {
+		t.Fatalf("persisted manifest still contains retired execution defaults: %s", persistedJSON)
 	}
 	if !strings.Contains(persistedJSON, "\"workshop_mode\": \"optimizer\"") {
 		t.Fatalf("persisted manifest lost known field workshop_mode: %s", persistedJSON)
 	}
 }
 
-func TestEnabledPulseReviewScheduleIsRecurringPulseSourceOfTruth(t *testing.T) {
+func TestPulseEnabledAndLegacyScheduleMigration(t *testing.T) {
 	var nilManifest *WorkflowManifest
-	if nilManifest.HasEnabledPulseReviewSchedule() {
+	if nilManifest.PulseEnabled() {
 		t.Fatal("nil manifest must not have recurring Pulse")
 	}
 	manifest := &WorkflowManifest{Schedules: []WorkflowSchedule{
 		{Name: "ordinary", Enabled: true},
 		{Name: "disabled Pulse", Enabled: false, PulseReviewOnly: true},
 	}}
-	if manifest.HasEnabledPulseReviewSchedule() {
+	if manifest.PulseEnabled() {
 		t.Fatal("a disabled Pulse schedule must not enable recurring Pulse")
 	}
 	manifest.Schedules = append(manifest.Schedules, WorkflowSchedule{Name: "Pulse", Enabled: true, PulseReviewOnly: true})
-	if !manifest.HasEnabledPulseReviewSchedule() {
-		t.Fatal("an enabled Pulse review schedule must enable recurring Pulse")
+	if !manifest.PulseEnabled() {
+		t.Fatal("an enabled legacy Pulse schedule must preserve enablement before migration")
+	}
+	if !manifest.MigrateLegacyPulseSchedule() {
+		t.Fatal("legacy Pulse schedules must be migrated")
+	}
+	if manifest.Pulse == nil || !manifest.Pulse.Enabled {
+		t.Fatal("migration must store pulse.enabled=true")
+	}
+	if len(manifest.Schedules) != 1 || manifest.Schedules[0].Name != "ordinary" {
+		t.Fatalf("migration must retain only normal schedules: %+v", manifest.Schedules)
+	}
+	if manifest.MigrateLegacyPulseSchedule() {
+		t.Fatal("migration must be idempotent")
+	}
+}
+
+func TestSetWorkflowPulseEnabledRemovesDedicatedSchedule(t *testing.T) {
+	manifest := &WorkflowManifest{
+		Pulse: &WorkflowPulseConfig{AdvisorSpecialization: &WorkflowAdvisorSpecialization{Version: 1}},
+		Schedules: []WorkflowSchedule{
+			{ID: "normal", Enabled: true},
+			{ID: "legacy-pulse", Enabled: true, PulseReviewOnly: true},
+		},
+	}
+	setWorkflowPulseEnabled(manifest, true)
+	if !manifest.Pulse.Enabled || manifest.Pulse.AdvisorSpecialization == nil {
+		t.Fatalf("Pulse update lost config: %+v", manifest.Pulse)
+	}
+	if len(manifest.Schedules) != 1 || manifest.Schedules[0].ID != "normal" {
+		t.Fatalf("Pulse update retained obsolete schedule: %+v", manifest.Schedules)
+	}
+	setWorkflowPulseEnabled(manifest, false)
+	if manifest.Pulse.Enabled {
+		t.Fatal("Pulse update did not disable post-run review")
 	}
 }

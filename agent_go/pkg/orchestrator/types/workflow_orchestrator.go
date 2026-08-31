@@ -173,16 +173,15 @@ func (wo *WorkflowOrchestrator) SetVirtualPlan(plan *step_based_workflow.Plannin
 	wo.virtualPlan = plan
 }
 
-// SetExecutionOptions sets the execution options from frontend
-// When set, backend will use these options instead of asking interactively
+// SetExecutionOptions sets the execution details for the current workflow run.
 func (wo *WorkflowOrchestrator) SetExecutionOptions(options *step_based_workflow.ExecutionOptions) {
 	wo.executionOptions = options
 	if options != nil {
 		wo.ApplyWorkflowLogContext(wo.GetWorkspacePath(), orchestrator.SingleSelectedGroupName(options.EnabledGroupNames))
 	}
 	if options != nil {
-		wo.GetLogger().Info(fmt.Sprintf("📋 WorkflowOrchestrator: Execution options set from frontend: run_mode=%s, strategy=%s, run_folder=%s",
-			options.RunMode, options.ExecutionStrategy, options.SelectedRunFolder))
+		wo.GetLogger().Info(fmt.Sprintf("📋 WorkflowOrchestrator: Execution options set: strategy=%s, run_folder=%s",
+			options.ExecutionStrategy, options.SelectedRunFolder))
 	}
 }
 
@@ -662,8 +661,8 @@ func (wo *WorkflowOrchestrator) runHumanControlledPlanning(ctx context.Context, 
 	// Pass execution options from WorkflowOrchestrator to the todo planner if set
 	if wo.executionOptions != nil {
 		todoPlannerAgent.SetExecutionOptions(wo.executionOptions)
-		wo.GetLogger().Info(fmt.Sprintf("📋 Passed execution options to todo planner: run_mode=%s, strategy=%s",
-			wo.executionOptions.RunMode, wo.executionOptions.ExecutionStrategy))
+		wo.GetLogger().Info(fmt.Sprintf("📋 Passed execution options to todo planner: strategy=%s",
+			wo.executionOptions.ExecutionStrategy))
 	}
 
 	// Generate todo list using Execute method

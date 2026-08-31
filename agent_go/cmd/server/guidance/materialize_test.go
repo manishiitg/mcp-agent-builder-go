@@ -96,8 +96,13 @@ func TestMaterializedReferenceSkillIncludesConfigToolOnlyDocs(t *testing.T) {
 		}
 	}
 
+	// PLAT-244 deliberately narrowed the active workspace provider surface to
+	// generate_text_llm/search_web_llm and hid media tools (image/video/audio/
+	// music/transcription), routing search through hosted-MCP providers
+	// (parallel/exa/firecrawl) rather than the published LLM set -- so this
+	// reference's content, and this test's expectations, changed with it.
 	mediaTools := materializedFileContent(t, skill, "references/workspace-media-tools.md")
-	for _, want := range []string{"set_provider_auth", "workspace-backed image generation defaults", "**Search provider routing** comes from the published LLM set"} {
+	for _, want := range []string{"set_provider_auth", "deprecated and hidden", "hosted-MCP web search", "## Scripted workflow use", "$MCP_CUSTOM/generate_text_llm", "$MCP_CUSTOM/search_web_llm", "references/mcp-bridge.md"} {
 		if !strings.Contains(mediaTools, want) {
 			t.Fatalf("workspace-media-tools reference should contain %q\n%s", want, mediaTools)
 		}
@@ -273,7 +278,7 @@ func TestPulseReviewFixerDocsAreNamedAndLoadable(t *testing.T) {
 		"durable approval request",
 	} {
 		if !strings.Contains(prompt, want) {
-		t.Errorf("pulse-review-fixer is missing execution-health handoff %q", want)
+			t.Errorf("pulse-review-fixer is missing execution-health handoff %q", want)
 		}
 	}
 }
@@ -292,7 +297,7 @@ func TestEngineeringReviewUsesTheCanonicalReviewOnlySequence(t *testing.T) {
 		"Own the review yourself",
 		"Persist typed findings and matured verification",
 		"Do not apply repairs",
-		"`/pulse-fixer` owns later mutations",
+		"same retained Review+Fix task may later",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("engineering-review prompt is missing canonical sequence contract %q", want)

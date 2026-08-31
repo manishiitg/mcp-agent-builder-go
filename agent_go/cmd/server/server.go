@@ -40,6 +40,7 @@ import (
 	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	orchEvents "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
 	orchtypes "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/types"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulerstate"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 
 	"github.com/manishiitg/mcpagent/agent/codeexec"
@@ -494,7 +495,20 @@ type StreamingAPI struct {
 	// replacing the original message root.
 	retainedMainTurnAdditionalExecutionIDs map[string]map[string]struct{}
 	retainedMainTurnWatchCancels           map[string]context.CancelFunc
-	retainedMainTurnsMu                    sync.Mutex
+	// retainedMainTurnCompletionEmitted guards emitRetainedMainTurnStreamCompletion
+	// against firing twice for one logical turn. Idle-composer detection
+	// (observeRetainedMainTurnStream) and a closed control stream that already
+	// has a durable final response (handleRetainedMainTurnStreamClosed) can both
+	// independently decide the same turn just finished -- without this guard
+	// both emit their own unified_completion event carrying the identical final
+	// text, rendered as the same answer twice in a row.
+	retainedMainTurnCompletionEmitted map[string]time.Time
+	retainedMainTurnsMu               sync.Mutex
+	// nativeTranscriptSyncInFlight coalesces the post-completion durable sync
+	// for live coding-CLI turns. Guarded separately so transcript I/O never
+	// blocks the terminal/event observer.
+	nativeTranscriptSyncInFlight map[string]bool
+	nativeTranscriptSyncMu       sync.Mutex
 
 	// Pending completions queue — background agent IDs that finished while session was busy
 	pendingCompletions map[string][]string
@@ -682,9 +696,6 @@ type QueryRequest struct {
 	// Each port must belong to a separate Chrome --user-data-dir. The legacy
 	// cdp_port remains the primary/first port for backward compatibility.
 	CdpPorts []int `json:"cdp_ports,omitempty"`
-	// Image generation configuration
-	EnableImageGeneration *bool           `json:"enable_image_generation,omitempty"` // Enable image generation virtual tool
-	ImageGenConfig        *ImageGenConfig `json:"image_gen_config,omitempty"`        // Image generation provider configuration
 	// Selected skills to include in chat context
 	SelectedSkills []string `json:"selected_skills,omitempty"` // Array of skill folder names
 	// BotPlatform identifies the chat channel the session is talking through
@@ -957,13 +968,6 @@ func (api *StreamingAPI) resolveBackendNotificationSecret(ctx context.Context, u
 		}
 	}
 	return "", false
-}
-
-// ImageGenConfig holds image generation provider configuration
-type ImageGenConfig struct {
-	Provider string `json:"provider"` // e.g. "vertex"
-	ModelID  string `json:"model_id"` // e.g. "gemini-3.1-flash-image"
-	APIKey   string `json:"api_key"`  // e.g. GEMINI_API_KEY value (optional; backend falls back to env var)
 }
 
 const maxCDPPortsPerRun = 4
@@ -1765,6 +1769,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		retainedMainTurnExecutionIDs:           make(map[string]string),
 		retainedMainTurnAdditionalExecutionIDs: make(map[string]map[string]struct{}),
 		retainedMainTurnWatchCancels:           make(map[string]context.CancelFunc),
+		nativeTranscriptSyncInFlight:           make(map[string]bool),
 		pendingCompletions:                     make(map[string][]string),
 		completionRetryScheduled:               make(map[string]bool),
 		pendingStartNotifications:              make(map[string][]string),
@@ -1911,7 +1916,6 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/llm-config/models/metadata", api.handleGetModelMetadata).Methods("GET")
 	apiRouter.HandleFunc("/llm-config/azure/deployments", api.handleGetAzureDeployedModels).Methods("POST")
 	apiRouter.HandleFunc("/llm-config/validate-key", api.handleValidateAPIKey).Methods("POST")
-	apiRouter.HandleFunc("/image-gen/test", api.handleTestImageGen).Methods("POST")
 	apiRouter.HandleFunc("/llm-config/delegation-tiers", api.handleGetDelegationTierDefaults).Methods("GET")
 	apiRouter.HandleFunc("/llm-config/providers", api.handleGetProviderManifest).Methods("GET")
 	apiRouter.HandleFunc("/llm-config/providers/{provider}/models", api.handleGetProviderModels).Methods("GET")
@@ -2132,6 +2136,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/workflow/pulse-agent-metrics", api.handleGetPulseAgentMetrics).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-impact", api.handleGetPulseImpact).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/pulse-context", api.handleGetPulseContext).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/workflow/pulse-eval-results", api.handleGetPulseEvalResults).Methods("GET", "OPTIONS")
 
 	// Workflow running-session API (decoupled from chat session storage).
 	apiRouter.HandleFunc("/workflow/running", api.handleListRunningWorkflows).Methods("GET")
@@ -3125,6 +3130,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	queryLogCtx := requestLogContext(r.Context(), req, sessionID)
 	logfWithContext(queryLogCtx, "[USER_ID_DEBUGGING] HTTP handler: currentUserID=%q (from auth context)", currentUserID)
 
+	// PLAT-262: resolved fresh from this request's own live auth claims, not
+	// cached anywhere — a demotion takes effect on the caller's very next
+	// request. Gates mutating tool registration and workflow-folder write
+	// access below; never gates WorkshopMode (that axis stays prompt-only
+	// focus, per docs/design/agent_tool_surface_single_source.md).
+	currentUserIsReadOnly := workflowAccessForClaims(GetUserFromContext(r.Context())) == WorkflowAccessRead
+
 	api.applySavedMultiAgentChatConfig(r.Context(), &req, currentUserID)
 	resolvedProfile, err := api.resolveAgentProfileForQuery(r.Context(), &req, currentUserID, sessionID)
 	if err != nil {
@@ -3458,6 +3470,15 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	//
 	// This runs BEFORE the deprecated agent_mode=="workflow" orchestrator branch
 	// to intercept and redirect.
+	//
+	// req.AgentMode is one of: "workflow_phase" (Workflow Builder chat, this
+	// branch), the deprecated "workflow" (see below), or "multi-agent" — the
+	// generic direct-chat mode (model + skills + tools + workspace context)
+	// that the base agentworks surface uses by default and that other product
+	// surfaces (Video Studio, Dominion) opt into explicitly for plain chat.
+	// "multi-agent" is NOT a "Chief of Staff" product — no such product exists
+	// on main (only on the separate, unmerged feature/chief-of-staff-product
+	// branch) — see frontend/src/utils/agentModeDescriptions.ts.
 	isWorkflowPhase := req.AgentMode == "workflow_phase"
 	workflowPhaseID := req.PhaseID
 	workflowPhaseFolder := "" // The preset's SelectedFolder — used to auto-grant write access in FolderGuard
@@ -3684,7 +3705,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[MANIFEST] WARNING: No workflow.json found for preset %s - workflow will run with request defaults only. Run migration: POST /api/workflows/migrate", req.PresetQueryID)
 		}
 
-		// --- Post-load processing: browser and image generation ---
+		// --- Post-load processing: browser configuration ---
 		// Runs after either manifest or preset loading has populated the config variables.
 
 		// Resolve effective browser mode.
@@ -3727,22 +3748,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[WORKFLOW] Auto-adding agent-browser skill for browser access")
 			}
 
-		}
-
-		// Load image generation from LLM config (works for both manifest and preset sources)
-		if presetLLMConfig != nil && presetLLMConfig.EnableImageGeneration != nil && *presetLLMConfig.EnableImageGeneration {
-			imgCfg := virtualtools.ImageGenExecutorConfig{
-				WorkspaceAPIURL: getWorkspaceAPIURL(),
-				UserID:          currentUserID,
-			}
-			if presetLLMConfig.ImageGenProvider != "" {
-				imgCfg.Provider = presetLLMConfig.ImageGenProvider
-			}
-			if presetLLMConfig.ImageGenModelID != "" {
-				imgCfg.ModelID = presetLLMConfig.ImageGenModelID
-			}
-			virtualtools.MergeImageToolExecutorsUntyped(imgCfg, allExecutors, toolCategories)
-			log.Printf("[WORKFLOW] Updated image tool executors (provider=%s model=%s)", imgCfg.Provider, imgCfg.ModelID)
 		}
 
 		// Use selected tools from request if preset didn't provide any
@@ -3966,6 +3971,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if workflowPhaseID == workflowtypes.WorkflowStatusWorkflowBuilder {
 					triggeredBy = "workflow_builder"
 				}
+				// Scheduler turns intentionally use the workflow-builder phase,
+				// but they are still cron work. Preserve that origin in the running
+				// registry so the frontend restores a Schedule lane rather than
+				// treating it as the user's interactive Builder chat.
+				if requestedTrigger := strings.TrimSpace(req.TriggeredBy); requestedTrigger != "" {
+					triggeredBy = requestedTrigger
+				}
 
 				runFolder := ""
 				if req.ExecutionOptions != nil {
@@ -3980,6 +3992,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					PhaseID:       workflowPhaseID,
 					Status:        "running",
 					UserID:        currentUserID,
+					Title:         req.SessionTitle,
 					Query:         req.Query,
 					TriggeredBy:   triggeredBy,
 					StartedAt:     time.Now(),
@@ -4110,15 +4123,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			if req.ExecutionOptions != nil {
 				// Always run in iteration-0 — controller handles backup of previous iteration-0
 				req.ExecutionOptions.SelectedRunFolder = "iteration-0"
-				req.ExecutionOptions.RunMode = "use_same_run"
 
 				log.Printf("[EXECUTION_OPTIONS_DEBUG] [Backend] Execution options received: %+v", req.ExecutionOptions)
-				log.Printf("[WORKFLOW EXECUTION] Frontend execution options provided: run_mode=%s, strategy=%s, run_folder=%s, resume_from_step=%d, enabled_group_names=%v, save_validation_responses=%v",
-					req.ExecutionOptions.RunMode, req.ExecutionOptions.ExecutionStrategy, req.ExecutionOptions.SelectedRunFolder, req.ExecutionOptions.ResumeFromStep, req.ExecutionOptions.EnabledGroupNames, req.ExecutionOptions.SaveValidationResponses)
+				log.Printf("[WORKFLOW EXECUTION] Frontend execution options provided: strategy=%s, run_folder=%s, resume_from_step=%d, enabled_group_names=%v, save_validation_responses=%v",
+					req.ExecutionOptions.ExecutionStrategy, req.ExecutionOptions.SelectedRunFolder, req.ExecutionOptions.ResumeFromStep, req.ExecutionOptions.EnabledGroupNames, req.ExecutionOptions.SaveValidationResponses)
 
 				// Convert to controller ExecutionOptions and pass to workflow orchestrator
 				controllerOpts := &todo_creation_human.ExecutionOptions{
-					RunMode:           req.ExecutionOptions.RunMode,
 					SelectedRunFolder: req.ExecutionOptions.SelectedRunFolder,
 					ExecutionStrategy: req.ExecutionOptions.ExecutionStrategy,
 					ResumeFromStep:    req.ExecutionOptions.ResumeFromStep,
@@ -4142,8 +4153,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					[]string{workflowWorkspacePath},
 					[]string{workflowWorkspacePath},
 				)
-				if hostDownloads := common.GrantSessionCDPHostDownloadsReadOnly(sessionID, workflowBrowserMode); hostDownloads != "" {
-					log.Printf("[WORKFLOW EXECUTION] Added read-only CDP host Downloads: %s", hostDownloads)
+				if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, workflowBrowserMode); hostDownloads != "" {
+					log.Printf("[WORKFLOW EXECUTION] Added read-write CDP host Downloads: %s", hostDownloads)
 				}
 			}
 
@@ -4764,7 +4775,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var workspaceEnv map[string]string // hoisted so secrets can be injected after allChatSecrets is computed
-		log.Printf("[CHAT_TOOLS_DEBUG] isChatMode=%v agentNonNil=%v enableImageGenPtr=%v", isChatMode, llmAgent.GetUnderlyingAgent() != nil, req.EnableImageGeneration)
+		log.Printf("[CHAT_TOOLS_DEBUG] isChatMode=%v agentNonNil=%v", isChatMode, llmAgent.GetUnderlyingAgent() != nil)
 
 		// Extract #workflow read-only folders early — needed both inside isChatMode block
 		// (for folder guard setup) and in the workflow_phase block (for shell isolator).
@@ -4875,11 +4886,23 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// workflow_layout.json must go through typed plan-mod tools that serialize
 			// full structs, not raw writes.
 			var fileContextBlockedWriteFolders []string
-			if isWorkflowPhase && workflowPhaseFolder != "" {
-				fileContextWriteFolders = append(fileContextWriteFolders, workflowPhaseFolder+"/")
-				blockedPlanning := workflowPhaseFolder + "/" + todo_creation_human.PlanningFolderName + "/"
+			// PLAT-262: a read-only identity gets none of the whole-workflow write
+			// grant below — effectiveWorkflowPhaseFolderForWrites stays "" for them,
+			// which workflowPhaseWriteFolders() below treats as "no workflow write
+			// root", leaving only its unconditional Downloads/ + the caller's own
+			// chat-history folder writable. Reads are untouched (readPaths below
+			// still uses the real workflowPhaseFolder).
+			effectiveWorkflowPhaseFolderForWrites := workflowPhaseFolder
+			if currentUserIsReadOnly {
+				effectiveWorkflowPhaseFolderForWrites = ""
+			}
+			if isWorkflowPhase && effectiveWorkflowPhaseFolderForWrites != "" {
+				fileContextWriteFolders = append(fileContextWriteFolders, effectiveWorkflowPhaseFolderForWrites+"/")
+				blockedPlanning := effectiveWorkflowPhaseFolderForWrites + "/" + todo_creation_human.PlanningFolderName + "/"
 				fileContextBlockedWriteFolders = append(fileContextBlockedWriteFolders, blockedPlanning)
-				log.Printf("[WORKFLOW_PHASE FOLDER GUARD] Write access: %s/ (whole workflow) with blocked-write prefix: %s", workflowPhaseFolder, blockedPlanning)
+				log.Printf("[WORKFLOW_PHASE FOLDER GUARD] Write access: %s/ (whole workflow) with blocked-write prefix: %s", effectiveWorkflowPhaseFolderForWrites, blockedPlanning)
+			} else if isWorkflowPhase && currentUserIsReadOnly {
+				log.Printf("[WORKFLOW_PHASE FOLDER GUARD] Read-only identity — no whole-workflow write grant for session=%s", sessionID)
 			}
 
 			// Apply folder guard to restrict writes based on mode.
@@ -4908,8 +4931,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						append([]string{profileWrite, perUserChatHistory}, profileReadOnly...),
 						[]string{profileWrite, perUserChatHistory},
 					)
-					if hostDownloads := common.GrantSessionCDPHostDownloadsReadOnly(sessionID, req.BrowserMode); hostDownloads != "" {
-						log.Printf("[AGENT PROFILE FOLDER GUARD] Added read-only CDP host Downloads: %s", hostDownloads)
+					if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, hostDownloadsBrowserMode(req)); hostDownloads != "" {
+						log.Printf("[AGENT PROFILE FOLDER GUARD] Added read-write CDP host Downloads: %s", hostDownloads)
 					}
 					log.Printf("[AGENT PROFILE FOLDER GUARD] Applied project restriction (profile=%s workspace=%s read-only=%v)", resolvedProfile.Definition.ID, profileWrite, profileReadOnly)
 				} else {
@@ -4927,22 +4950,30 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						readPaths,
 						append([]string{perUserChatsWrite, "Downloads/", perUserChatHistory}, additionalFolders...),
 					)
-					if hostDownloads := common.GrantSessionCDPHostDownloadsReadOnly(sessionID, req.BrowserMode); hostDownloads != "" {
-						log.Printf("[MULTI-AGENT FOLDER GUARD] Added read-only CDP host Downloads: %s", hostDownloads)
+					if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, hostDownloadsBrowserMode(req)); hostDownloads != "" {
+						log.Printf("[MULTI-AGENT FOLDER GUARD] Added read-write CDP host Downloads: %s", hostDownloads)
 					}
 					log.Printf("[MULTI-AGENT FOLDER GUARD] Applied per-user folder restriction (chats: %s, write: %v, read-only: %v, grants: %v)", perUserChatsWrite, additionalFolders, workflowReadOnlyFolders, resolvedGrants.AppliedNames)
 				}
 			} else {
 				perUserChatsWrite := perUserChatsFolder + "/"
 				perUserChatHistory := strings.TrimSuffix(perUserChatsFolder, "Chats") + "chat_history/"
-				extraFolders := append([]string{}, resolvedGrants.WriteFolders...)
-				extraFolders = append(extraFolders, fileContextWriteFolders...)
-				extraFolders = append(extraFolders, perUserChatHistory)
-				workspaceExecutors = wrapExecutorsWithWorkflowPhaseFolderGuard(workspaceExecutors, workflowPhaseFolder, workflowReadOnlyFolders, fileContextBlockedWriteFolders, extraFolders...)
+				// PLAT-262: a read-only identity gets none of the approved external
+				// write grants either — write access is write access regardless of
+				// source. Their own chat-history folder stays writable (that's
+				// conversation persistence, not workflow mutation) and readPaths
+				// below is built the same for everyone (full reads, unaffected).
+				var extraWriteFolders []string
+				if !currentUserIsReadOnly {
+					extraWriteFolders = append([]string{}, resolvedGrants.WriteFolders...)
+					extraWriteFolders = append(extraWriteFolders, fileContextWriteFolders...)
+				}
+				extraFolders := append(append([]string{}, extraWriteFolders...), perUserChatHistory)
+				workspaceExecutors = wrapExecutorsWithWorkflowPhaseFolderGuard(workspaceExecutors, effectiveWorkflowPhaseFolderForWrites, workflowReadOnlyFolders, fileContextBlockedWriteFolders, extraFolders...)
 				workspace.SetSessionWorkingDir(sessionID, chatWorkingFolder)
 				readPaths := append([]string{perUserChatsWrite, perUserChatHistory, "Downloads/", "skills/", "subagents/", "Workflow/"}, extraFolders...)
 				readPaths = append(readPaths, workflowReadOnlyFolders...)
-				writePaths := workflowPhaseWriteFolders(workflowPhaseFolder, extraFolders...)
+				writePaths := workflowPhaseWriteFolders(effectiveWorkflowPhaseFolderForWrites, extraFolders...)
 				workspace.SetSessionFolderGuard(sessionID,
 					readPaths,
 					writePaths,
@@ -4956,9 +4987,10 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if len(fileContextBlockedWriteFolders) > 0 {
 					workspace.SetSessionFolderGuardBlockedWritePaths(sessionID, fileContextBlockedWriteFolders)
 				}
-				if hostDownloads := common.GrantSessionCDPHostDownloadsReadOnly(sessionID, req.BrowserMode); hostDownloads != "" {
-					log.Printf("[WORKFLOW PHASE FOLDER GUARD] Added read-only CDP host Downloads: %s", hostDownloads)
+				if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, hostDownloadsBrowserMode(req)); hostDownloads != "" {
+					log.Printf("[WORKFLOW PHASE FOLDER GUARD] Added read-write CDP host Downloads: %s", hostDownloads)
 				}
+				todo_creation_human.RefreshWorkflowFolderAccessSession(sessionID, workflowPhaseFolder)
 				log.Printf("[WORKFLOW PHASE FOLDER GUARD] Applied workflow folder restriction (workflow writes: %v, chats read-only: %s, read-only: %v, blocked-write: %v)", writePaths, perUserChatsWrite, workflowReadOnlyFolders, fileContextBlockedWriteFolders)
 			}
 
@@ -5024,14 +5056,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 					// Executor is already the correct type (func(ctx, args) (string, error))
 					// No type assertion needed unlike workflow where executors are map[string]interface{}
-					if virtualtools.IsImageTool(toolName) && req.ImageGenConfig != nil {
-						executor = virtualtools.WrapImageToolExecutorWithRuntimeOverride(executor, virtualtools.ImageGenRuntimeOverride{
-							Provider: req.ImageGenConfig.Provider,
-							ModelID:  req.ImageGenConfig.ModelID,
-							APIKey:   req.ImageGenConfig.APIKey,
-						})
-					}
-
 					if err := llmAgent.RegisterCustomTool(
 						toolName,
 						enhancedDescription,
@@ -5064,9 +5088,18 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						additionalFolders = append(additionalFolders, fileContextWriteFolders...)
 						return wrapExecutorsWithPlanFolderGuard(execs, perUserChatsFolder, workflowReadOnlyFolders, additionalFolders...)
 					}
-					browserExtraFolders := append([]string{}, resolvedGrants.WriteFolders...)
-					browserExtraFolders = append(browserExtraFolders, fileContextWriteFolders...)
-					return wrapExecutorsWithWorkflowPhaseFolderGuard(execs, workflowPhaseFolder, workflowReadOnlyFolders, fileContextBlockedWriteFolders, browserExtraFolders...)
+					// PLAT-262: this closure previously granted full write access to a
+					// read-only session's browser tools unconditionally — a real gap,
+					// found while investigating the shell-command read regression above.
+					var browserExtraFolders []string
+					browserGuardWriteFolder := workflowPhaseFolder
+					if currentUserIsReadOnly {
+						browserGuardWriteFolder = ""
+					} else {
+						browserExtraFolders = append([]string{}, resolvedGrants.WriteFolders...)
+						browserExtraFolders = append(browserExtraFolders, fileContextWriteFolders...)
+					}
+					return wrapExecutorsWithWorkflowPhaseFolderGuard(execs, browserGuardWriteFolder, workflowReadOnlyFolders, fileContextBlockedWriteFolders, browserExtraFolders...)
 				}
 				browserPorts := getCdpPorts(req)
 				if getBrowserMode(req) == "auto" {
@@ -5223,7 +5256,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if resolvedProfile != nil {
 					secretWorkflowPath = req.SelectedFolder
 				}
-				if err := api.registerSecretManagementTools(llmAgent, currentUserID, secretWorkflowPath, "secret_tools", nil, nil); err != nil {
+				if err := api.registerSecretManagementTools(llmAgent, currentUserID, secretWorkflowPath, "secret_tools", currentUserIsReadOnly, nil, nil); err != nil {
 					logfWithContext(queryLogCtx, "[SECRET TOOLS] Failed to register multi-agent secret tools: %v", err)
 					sendError(fmt.Sprintf("Failed to register multi-agent secret tools: %v", err), true)
 					return
@@ -5299,7 +5332,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// 2. CONTEXT — skills. Attaching a skill is not an instruction
 			//    section (AttachSkill, not AddInstructions), so it stays here
 			//    rather than in the prompt-section registry below.
-			if len(req.SelectedSkills) > 0 {
+			identitySkillNames := skills.WithAgentBrowserCapability(req.SelectedSkills, buildChatBrowserConfig(req).HasAgentBrowser)
+			if len(identitySkillNames) > 0 {
 				// Phase 3 rewire: skills are now first-class on the agent.
 				// mcpagent's ensureSystemPrompt auto-injects the progressive-
 				// disclosure listing (name + description); CLI transports
@@ -5317,13 +5351,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if underlying := llmAgent.GetUnderlyingAgent(); underlying != nil {
 					underlying.SetInstalledSkillResolver(installedSkillResolver(req.SelectedFolder))
 				}
-				if attached := skills.LoadAttachableIn(getWorkspaceAPIURL(), req.SelectedFolder, req.SelectedSkills); len(attached) > 0 {
+				if attached := skills.LoadAttachableIn(getWorkspaceAPIURL(), req.SelectedFolder, identitySkillNames); len(attached) > 0 {
 					attachedNames := make([]string, 0, len(attached))
 					for _, s := range attached {
 						_ = llmAgent.AttachSkill(s)
 						attachedNames = append(attachedNames, s.Name)
 					}
-					log.Printf("[SKILLS] Attached %d of %d skill(s): %v", len(attached), len(req.SelectedSkills), attachedNames)
+					log.Printf("[SKILLS] Attached %d of %d skill(s): %v", len(attached), len(identitySkillNames), attachedNames)
 				}
 			}
 
@@ -5345,8 +5379,6 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				// The snapshot instructs the agent to call these. The gate is the
 				// authority on whether it can, so ask it rather than assuming.
 				HasLLMCapabilityTools: toolGate.Admit("list_llm_capabilities") ||
-					toolGate.Admit("text_to_speech") ||
-					toolGate.Admit("generate_music") ||
 					toolGate.Admit("set_provider_auth"),
 				ChannelFormatting: buildChannelFormattingInstructions(req.BotPlatform),
 				GrantSections:     resolvedGrants.PromptSections,
@@ -5447,9 +5479,10 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						phaseReadPaths,
 						[]string{phaseWorkspacePath, "Downloads"},
 					)
-					if hostDownloads := common.GrantSessionCDPHostDownloadsReadOnly(sessionID, req.BrowserMode); hostDownloads != "" {
-						log.Printf("[WORKFLOW_PHASE] Added read-only CDP host Downloads: %s", hostDownloads)
+					if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, hostDownloadsBrowserMode(req)); hostDownloads != "" {
+						log.Printf("[WORKFLOW_PHASE] Added read-write CDP host Downloads: %s", hostDownloads)
 					}
+					todo_creation_human.RefreshWorkflowFolderAccessSession(sessionID, phaseWorkspacePath)
 					if len(workflowReadOnlyFolders) > 0 {
 						log.Printf("[WORKFLOW_PHASE] Added read-only access for #workflow references: %v", workflowReadOnlyFolders)
 					}
@@ -5606,6 +5639,21 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				}
 				if phaseTemplateVars["WorkshopMode"] == "" {
 					phaseTemplateVars["WorkshopMode"] = "workshop"
+				}
+
+				// PLAT-262: a read-only identity is always pinned to Run mode,
+				// overriding whatever was requested or defaulted above — the
+				// client-side toggle is hidden for these users too, but the
+				// server has the final say. This is the single point that
+				// decides WorkshopMode for both the system prompt rendered
+				// just below and every phaseTemplateVars["WorkshopMode"] read
+				// inside installWorkflowPhaseTools (same map, passed by
+				// reference). Read-only users never perform a same-session
+				// Workshop<->Run toggle, so this does not reopen the removed
+				// mode-based tool-catalog-filtering bug — see
+				// installWorkflowPhaseTools's doc comment.
+				if currentUserIsReadOnly {
+					phaseTemplateVars["WorkshopMode"] = "run"
 				}
 
 				// Read variable names from workspace (if any)
@@ -6981,8 +7029,6 @@ func retainedCodingAgentProvider(snapshot terminals.Snapshot) string {
 		return string(llm.ProviderCodexCLI)
 	case strings.HasPrefix(tmuxSession, "mlp-cursor-cli"):
 		return string(llm.ProviderCursorCLI)
-	case strings.HasPrefix(tmuxSession, "mlp-agy-cli"):
-		return "agy-cli"
 	case strings.HasPrefix(tmuxSession, "mlp-pi-cli"):
 		return string(llm.ProviderPiCLI)
 	}
@@ -6995,8 +7041,6 @@ func retainedCodingAgentProvider(snapshot terminals.Snapshot) string {
 		return string(llm.ProviderCodexCLI)
 	case strings.Contains(label, "cursor"):
 		return string(llm.ProviderCursorCLI)
-	case strings.Contains(label, "agy") || strings.Contains(label, "antigravity"):
-		return "agy-cli"
 	case strings.Contains(label, "pi-cli") || strings.HasPrefix(label, "pi "):
 		return string(llm.ProviderPiCLI)
 	default:
@@ -7243,7 +7287,18 @@ func (api *StreamingAPI) emitRetainedMainTurnStreamCompletion(sessionID string, 
 	api.retainedMainTurnsMu.Lock()
 	executionID := strings.TrimSpace(api.retainedMainTurnExecutionIDs[sessionID])
 	turnStartedAt := api.retainedMainTurns[sessionID]
+	alreadyEmitted := !turnStartedAt.IsZero() && api.retainedMainTurnCompletionEmitted[sessionID].Equal(turnStartedAt)
+	if !alreadyEmitted && !turnStartedAt.IsZero() {
+		if api.retainedMainTurnCompletionEmitted == nil {
+			api.retainedMainTurnCompletionEmitted = make(map[string]time.Time)
+		}
+		api.retainedMainTurnCompletionEmitted[sessionID] = turnStartedAt
+	}
 	api.retainedMainTurnsMu.Unlock()
+	if alreadyEmitted {
+		log.Printf("[RETAINED_TURN] Completion already emitted for this turn, skipping duplicate session=%s terminal=%s", sessionID, snapshot.TerminalID)
+		return
+	}
 	if executionID == "" {
 		executionID = strings.TrimSpace(snapshot.ExecutionID)
 	}
@@ -7424,6 +7479,11 @@ func (api *StreamingAPI) observeRetainedMainTurnEvent(sessionID string, event ev
 			api.completeTrackedExecution(id, trackedExecutionStatusCompleted, "", nil)
 		}
 	}
+	// A live retained CLI turn bypasses handleQuery's normal final-save block.
+	// Its provider transcript is now complete, so reconcile it asynchronously
+	// into the durable workflow conversation before a later restart can expose
+	// a user-only snapshot.
+	api.scheduleWorkflowBuilderNativeTranscriptSync(sessionID)
 	log.Printf("[RETAINED_TURN] Settled retained main-agent turn from structured %s event session=%s terminal=%s state=%s",
 		eventType, sessionID, snapshot.TerminalID, snapshot.State)
 }
@@ -9110,10 +9170,6 @@ func (api *StreamingAPI) buildWorkshopConfig(
 				if llmCfg.UseKnowledgebase != nil {
 					cfg.UseKnowledgebase = *llmCfg.UseKnowledgebase
 				}
-				if llmCfg.LockKnowledgebase != nil {
-					cfg.LockKnowledgebase = *llmCfg.LockKnowledgebase
-				}
-
 				// Tiered LLM allocation
 				if cfg.TieredConfig != nil {
 					cfg.LLMAllocationMode = "tiered"
@@ -9123,24 +9179,8 @@ func (api *StreamingAPI) buildWorkshopConfig(
 						workshopFormatAgentLLM(cfg.TieredConfig.Tier3))
 				}
 
-				// Image generation tools
-				if llmCfg.EnableImageGeneration != nil && *llmCfg.EnableImageGeneration {
-					imgCfg := virtualtools.ImageGenExecutorConfig{
-						WorkspaceAPIURL: getWorkspaceAPIURL(),
-						UserID:          currentUserID,
-					}
-					if llmCfg.ImageGenProvider != "" {
-						imgCfg.Provider = llmCfg.ImageGenProvider
-					}
-					if llmCfg.ImageGenModelID != "" {
-						imgCfg.ModelID = llmCfg.ImageGenModelID
-					}
-					virtualtools.MergeImageToolExecutorsUntyped(imgCfg, allExecutors, toolCategories)
-					log.Printf("[WORKSHOP] Updated image tool executors (provider=%s model=%s)", imgCfg.Provider, imgCfg.ModelID)
-				}
-
-				log.Printf("[WORKSHOP] LLM config loaded: phase=%v pulse=%v tiered=%v kb=%v kbLock=%v",
-					cfg.PresetPhaseLLM != nil, cfg.PresetPulseLLM != nil, cfg.TieredConfig != nil, cfg.UseKnowledgebase, cfg.LockKnowledgebase)
+				log.Printf("[WORKSHOP] LLM config loaded: phase=%v pulse=%v tiered=%v kb=%v",
+					cfg.PresetPhaseLLM != nil, cfg.PresetPulseLLM != nil, cfg.TieredConfig != nil, cfg.UseKnowledgebase)
 			}
 		}
 	}
@@ -9659,28 +9699,53 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			if err != nil {
 				return "", err
 			}
-			if len(runs) == 0 {
-				return "No runs found for this schedule.", nil
-			}
 			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("## Run History (%d of %d)\n\n", len(runs), total))
-			for _, r := range runs {
-				duration := ""
-				if r.DurationMs != nil {
-					duration = fmt.Sprintf(" (%dms)", *r.DurationMs)
+			if len(runs) == 0 {
+				sb.WriteString("No runs found for this schedule.\n\n")
+			} else {
+				sb.WriteString(fmt.Sprintf("## Run History (%d of %d)\n\n", len(runs), total))
+				for _, r := range runs {
+					duration := ""
+					if r.DurationMs != nil {
+						duration = fmt.Sprintf(" (%dms)", *r.DurationMs)
+					}
+					idPrefix := r.ID
+					if len(idPrefix) > 8 {
+						idPrefix = idPrefix[:8]
+					}
+					sb.WriteString(fmt.Sprintf("- **%s** [%s]%s — %s", idPrefix, r.Status, duration, r.StartedAt.Format("2006-01-02 15:04:05")))
+					if r.RunFolder != "" {
+						sb.WriteString(fmt.Sprintf(" → `%s`", r.RunFolder))
+					}
+					if r.Error != "" {
+						sb.WriteString(fmt.Sprintf("\n  Error: %s", r.Error))
+					}
+					sb.WriteString("\n")
 				}
-				idPrefix := r.ID
-				if len(idPrefix) > 8 {
-					idPrefix = idPrefix[:8]
+			}
+			// Every scheduled occurrence is recorded here, including ones the
+			// scheduler correctly decided NOT to run (a global pause, another
+			// schedule already owning the workflow, a queued dependency) — those
+			// never produce a schedule_runs row above at all. A schedule that
+			// looks silent in Run History can be a scheduler working exactly as
+			// designed the whole time; this is the only way to tell that apart
+			// from an actual missed/dropped occurrence.
+			if api.scheduler != nil {
+				if decisions, decErr := api.scheduler.ListFireDecisions(ctx, workspacePath, jobID, limit); decErr == nil {
+					var skipped []schedulerstate.FireDecision
+					for _, d := range decisions {
+						if d.Decision != "started" {
+							skipped = append(skipped, d)
+						}
+					}
+					if len(skipped) > 0 {
+						sb.WriteString(fmt.Sprintf("\n## Skipped/Non-Run Occurrences (%d)\n\n", len(skipped)))
+						for _, d := range skipped {
+							sb.WriteString(fmt.Sprintf("- scheduled_for=%s decision=%q reason=%q\n",
+								d.ScheduledFor.Format("2006-01-02 15:04:05"), d.Decision, d.Reason))
+						}
+					}
 				}
-				sb.WriteString(fmt.Sprintf("- **%s** [%s]%s — %s", idPrefix, r.Status, duration, r.StartedAt.Format("2006-01-02 15:04:05")))
-				if r.RunFolder != "" {
-					sb.WriteString(fmt.Sprintf(" → `%s`", r.RunFolder))
-				}
-				if r.Error != "" {
-					sb.WriteString(fmt.Sprintf("\n  Error: %s", r.Error))
-				}
-				sb.WriteString("\n")
 			}
 			return sb.String(), nil
 		},

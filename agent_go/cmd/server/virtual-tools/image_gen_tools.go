@@ -25,9 +25,12 @@ var imageGenModelCosts = map[string]float64{
 }
 
 var imageProviderModels = map[string][]string{
-	"vertex":    {"gemini-3.1-flash-image", "gemini-3-pro-image", "gemini-3.1-flash-lite-image"},
-	"codex-cli": {"codex-cli", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.3-codex-spark"},
-	"agy-cli":   {"agy-cli"},
+	"vertex": {"gemini-3.1-flash-image", "gemini-3-pro-image", "gemini-3.1-flash-lite-image"},
+	// codex-cli's --model only selects which model orchestrates the tool
+	// call (cost/latency); the native image_gen tool itself is the same
+	// regardless, so there is no meaningfully different "model" to offer
+	// here.
+	"codex-cli": {"codex-cli"},
 }
 
 // ImageGenExecutorConfig holds configuration for the image generation executor
@@ -87,11 +90,11 @@ func GetImageGenToolDefinition() llmtypes.Tool {
 					},
 					"provider": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional provider override. Discover usable provider/model pairs with list_llm_capabilities(capability=\"generate_image\", include_models=true). Supported values: vertex, codex-cli, or agy-cli. If specifying model_id, pass the matching provider too.",
+						"description": "Optional provider override. Discover usable provider/model pairs with list_llm_capabilities(capability=\"generate_image\", include_models=true). Supported values: vertex or codex-cli. If specifying model_id, pass the matching provider too.",
 					},
 					"model_id": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional image model override. Use a model from list_llm_capabilities(capability=\"generate_image\", include_models=true), and pass the matching provider in the same call. Do not use LLM tier labels such as low, medium, high, or auto as image model IDs. Vertex (Gemini) image tiers, pick by need: gemini-3.1-flash-lite-image (Nano Banana 2 Lite) - fastest/cheapest, near-real-time; use for high-volume or latency-sensitive generation. gemini-3.1-flash-image (Nano Banana 2, DEFAULT) - generalist workhorse; best balance of quality, latency, and cost for most requests, use unless another tier is clearly warranted. gemini-3-pro-image (Nano Banana Pro) - most capable and highest latency/cost; use only for complex/professional work needing precise control, dense/legible text rendering, or advanced reasoning, where accuracy matters more than speed. Other examples: codex-cli, agy-cli, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, or gpt-5.3-codex-spark.",
+						"description": "Optional image model override. Use a model from list_llm_capabilities(capability=\"generate_image\", include_models=true), and pass the matching provider in the same call. Do not use LLM tier labels such as low, medium, high, or auto as image model IDs. Vertex (Gemini) image tiers, pick by need: gemini-3.1-flash-lite-image (Nano Banana 2 Lite) - fastest/cheapest, near-real-time; use for high-volume or latency-sensitive generation. gemini-3.1-flash-image (Nano Banana 2, DEFAULT) - generalist workhorse; best balance of quality, latency, and cost for most requests, use unless another tier is clearly warranted. gemini-3-pro-image (Nano Banana Pro) - most capable and highest latency/cost; use only for complex/professional work needing precise control, dense/legible text rendering, or advanced reasoning, where accuracy matters more than speed. Other example: codex-cli.",
 					},
 					"input_image": map[string]interface{}{
 						"type":        "string",
@@ -155,8 +158,6 @@ func defaultImageModelForProvider(provider string) string {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "codex-cli":
 		return "codex-cli"
-	case "agy-cli":
-		return "agy-cli"
 	default:
 		return defaultImageGenModelID
 	}
@@ -198,8 +199,6 @@ func defaultImageAnalysisModelForProvider(provider string) string {
 		return "gpt-5.4-mini"
 	case "cursor-cli":
 		return "cursor-cli"
-	case "agy-cli":
-		return "agy-cli"
 	case "claude-code":
 		return "claude-code"
 	default:
@@ -214,8 +213,6 @@ func inferImageProviderFromModel(modelID string) string {
 		return "vertex"
 	case modelID == "codex-cli", modelID == "gpt-5.4", modelID == "gpt-5.4-mini", modelID == "gpt-5.3-codex", modelID == "gpt-5.3-codex-spark":
 		return "codex-cli"
-	case modelID == "agy-cli":
-		return "agy-cli"
 	default:
 		return ""
 	}
@@ -232,8 +229,6 @@ func inferImageAnalysisProviderFromModel(modelID string) string {
 		return "claude-code"
 	case modelID == "cursor-cli", modelID == "gpt-5", modelID == "sonnet-4", modelID == "sonnet-4-thinking":
 		return "cursor-cli"
-	case modelID == "agy-cli":
-		return "agy-cli"
 	default:
 		return inferImageProviderFromModel(modelID)
 	}
@@ -252,7 +247,7 @@ func normalizeImageProviderAndModel(provider, modelID string) (string, string, e
 	modelID = normalizeImageModelAlias(provider, modelID)
 
 	switch provider {
-	case "vertex", "codex-cli", "agy-cli":
+	case "vertex", "codex-cli":
 		if !isSupportedImageModel(provider, modelID) {
 			return "", "", fmt.Errorf("unsupported image generation model %q for provider %q. %s", modelID, provider, imageModelsSummaryForProvider(provider))
 		}
@@ -277,7 +272,7 @@ func normalizeImageAnalysisProviderAndModel(provider, modelID string) (string, s
 	}
 
 	switch provider {
-	case "vertex", "z-ai", "kimi", "codex-cli", "cursor-cli", "agy-cli", "claude-code":
+	case "vertex", "z-ai", "kimi", "codex-cli", "cursor-cli", "claude-code":
 		return provider, modelID, nil
 	default:
 		return "", "", fmt.Errorf("unsupported image analysis provider %q. %s", provider, supportedImageAnalysisProviderSummary())
@@ -288,8 +283,6 @@ func hasImageProviderAuth(provider string, apiKeys *llm.ProviderAPIKeys) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "vertex":
 		return apiKeys != nil && apiKeys.Vertex != nil && strings.TrimSpace(*apiKeys.Vertex) != ""
-	case "agy-cli":
-		return true
 	case "codex-cli":
 		return apiKeys != nil && apiKeys.CodexCLI != nil && strings.TrimSpace(*apiKeys.CodexCLI) != ""
 	default:
@@ -299,7 +292,7 @@ func hasImageProviderAuth(provider string, apiKeys *llm.ProviderAPIKeys) bool {
 
 func hasImageAnalysisProviderAuth(provider string, apiKeys *llm.ProviderAPIKeys) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "codex-cli", "cursor-cli", "agy-cli", "claude-code":
+	case "codex-cli", "cursor-cli", "claude-code":
 		return true
 	case "z-ai":
 		return apiKeys != nil && apiKeys.ZAI != nil && strings.TrimSpace(*apiKeys.ZAI) != ""
@@ -311,16 +304,16 @@ func hasImageAnalysisProviderAuth(provider string, apiKeys *llm.ProviderAPIKeys)
 }
 
 func supportedImageProviderSummary() string {
-	return "Supported image providers: vertex (gemini-3.1-flash-lite-image = fast/cheap tier, gemini-3.1-flash-image = balanced default, gemini-3-pro-image = highest-accuracy/control tier), codex-cli (codex-cli, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, gpt-5.3-codex-spark), agy-cli (agy-cli)"
+	return "Supported image providers: vertex (gemini-3.1-flash-lite-image = fast/cheap tier, gemini-3.1-flash-image = balanced default, gemini-3-pro-image = highest-accuracy/control tier), codex-cli (codex-cli)"
 }
 
 func supportedImageAnalysisProviderSummary() string {
-	return "Supported image analysis providers: vertex (Gemini vision models), codex-cli (codex-cli, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, gpt-5.3-codex-spark), cursor-cli (cursor-cli, gpt-5, sonnet-4-thinking, sonnet-4), agy-cli (agy-cli), claude-code (claude-code, claude-sonnet-5, claude-sonnet-4-6)"
+	return "Supported image analysis providers: vertex (Gemini vision models), codex-cli (codex-cli, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, gpt-5.3-codex-spark), cursor-cli (cursor-cli, gpt-5, sonnet-4-thinking, sonnet-4), claude-code (claude-code, claude-sonnet-5, claude-sonnet-4-6)"
 }
 
 func pathBasedImageAnalysisProvider(provider string) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "codex-cli", "cursor-cli", "agy-cli", "claude-code":
+	case "codex-cli", "cursor-cli", "claude-code":
 		return true
 	default:
 		return false
@@ -339,9 +332,6 @@ func imageGenerationCostMetadata(provider, modelID string) (*float64, string) {
 	if strings.EqualFold(strings.TrimSpace(provider), "codex-cli") {
 		return nil, "Token-priced via Codex CLI; fixed per-image cost is not available. This is not free."
 	}
-	if strings.EqualFold(strings.TrimSpace(provider), "agy-cli") {
-		return nil, "Token/account-priced via Antigravity CLI; fixed per-image cost is not available. This is not free."
-	}
 	if cost, ok := imageGenModelCosts[modelID]; ok {
 		return &cost, ""
 	}
@@ -353,7 +343,7 @@ func wrapImageGenerationSelectionError(err error) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"image generation setup is incomplete: %w. Add workspace provider auth with set_provider_auth(provider=\"vertex\"|\"codex-cli\"|\"agy-cli\", api_key=\"...\") or update the workspace image generation defaults to point to a provider that has auth configured. %s",
+		"image generation setup is incomplete: %w. Add workspace provider auth with set_provider_auth(provider=\"vertex\"|\"codex-cli\", api_key=\"...\") or update the workspace image generation defaults to point to a provider that has auth configured. %s",
 		err,
 		supportedImageProviderSummary(),
 	)
@@ -375,12 +365,6 @@ func wrapImageGenerationInitializationError(provider, modelID string, err error)
 	case "codex-cli":
 		return fmt.Errorf(
 			"image generation could not start for provider %q and model %q: %w. To fix this, set workspace auth with set_provider_auth(provider=\"codex-cli\", api_key=\"...\") or change the workspace image generation defaults to another provider with matching auth. %s",
-			provider, modelID, err,
-			imageModelsSummaryForProvider(provider),
-		)
-	case "agy-cli":
-		return fmt.Errorf(
-			"image generation could not start for provider %q and model %q: %w. To fix this, run `agy` locally and complete sign-in, or change the workspace image generation defaults to another provider with matching auth. %s",
 			provider, modelID, err,
 			imageModelsSummaryForProvider(provider),
 		)
@@ -813,11 +797,11 @@ func GetImageEditToolDefinition() llmtypes.Tool {
 					},
 					"provider": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional provider override. Discover usable provider/model pairs with list_llm_capabilities(capability=\"generate_image\", include_models=true). Supported values: vertex, codex-cli, or agy-cli. If specifying model_id, pass the matching provider too.",
+						"description": "Optional provider override. Discover usable provider/model pairs with list_llm_capabilities(capability=\"generate_image\", include_models=true). Supported values: vertex or codex-cli. If specifying model_id, pass the matching provider too.",
 					},
 					"model_id": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional image model override. Use a model from list_llm_capabilities(capability=\"generate_image\", include_models=true), and pass the matching provider in the same call. Do not use LLM tier labels such as low, medium, high, or auto as image model IDs. Vertex (Gemini) image tiers, pick by need: gemini-3.1-flash-lite-image (Nano Banana 2 Lite) - fastest/cheapest, near-real-time; use for high-volume or latency-sensitive generation. gemini-3.1-flash-image (Nano Banana 2, DEFAULT) - generalist workhorse; best balance of quality, latency, and cost for most requests, use unless another tier is clearly warranted. gemini-3-pro-image (Nano Banana Pro) - most capable and highest latency/cost; use only for complex/professional work needing precise control, dense/legible text rendering, or advanced reasoning, where accuracy matters more than speed. Other examples: codex-cli, agy-cli, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, or gpt-5.3-codex-spark.",
+						"description": "Optional image model override. Use a model from list_llm_capabilities(capability=\"generate_image\", include_models=true), and pass the matching provider in the same call. Do not use LLM tier labels such as low, medium, high, or auto as image model IDs. Vertex (Gemini) image tiers, pick by need: gemini-3.1-flash-lite-image (Nano Banana 2 Lite) - fastest/cheapest, near-real-time; use for high-volume or latency-sensitive generation. gemini-3.1-flash-image (Nano Banana 2, DEFAULT) - generalist workhorse; best balance of quality, latency, and cost for most requests, use unless another tier is clearly warranted. gemini-3-pro-image (Nano Banana Pro) - most capable and highest latency/cost; use only for complex/professional work needing precise control, dense/legible text rendering, or advanced reasoning, where accuracy matters more than speed. Other example: codex-cli.",
 					},
 					"aspect_ratio": map[string]interface{}{
 						"type":        "string",

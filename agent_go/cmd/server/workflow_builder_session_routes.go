@@ -258,6 +258,21 @@ func (api *StreamingAPI) restoreLatestBuilderConversation(ctx context.Context, p
 		return nil, nil
 	}
 
+	// PLAT-178: conversation_history is only rewritten when a full turn
+	// completes. A resumed session can then continue through /api/live-input,
+	// leaving its snapshot behind while the native CLI transcript keeps
+	// growing. Refresh *every* candidate before choosing the newest one: doing
+	// it only after sorting can select an older saved snapshot and never even
+	// inspect the conversation the user actually used last.
+	for i := range candidates {
+		candidates[i].log = api.refreshLatestBuilderConversationFromNativeTranscript(
+			ctx,
+			candidates[i].path,
+			candidates[i].rawContent,
+			candidates[i].log,
+		)
+		candidates[i].updatedAt = parseBuilderConversationUpdatedAt(candidates[i].log.UpdatedAt)
+	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if !candidates[i].updatedAt.Equal(candidates[j].updatedAt) {
 			return candidates[i].updatedAt.After(candidates[j].updatedAt)
@@ -266,15 +281,6 @@ func (api *StreamingAPI) restoreLatestBuilderConversation(ctx context.Context, p
 	})
 
 	latest := candidates[0]
-	// PLAT-178: conversation_history is only rewritten when a full turn
-	// completes. A resumed session that goes on to exchange further messages
-	// purely through /api/live-input (the normal state right after any
-	// resume, while the tmux pane is still warm) never triggers that
-	// rewrite, so this snapshot can be stale by the time it's the only
-	// source restore has left. Claude Code's own transcript keeps recording
-	// regardless, so catch up from it before trusting this snapshot.
-	latest.log = api.refreshLatestBuilderConversationFromNativeTranscript(ctx, latest.path, latest.rawContent, latest.log)
-	latest.updatedAt = parseBuilderConversationUpdatedAt(latest.log.UpdatedAt)
 	rawEvents := builderConversationToRawEvents(latest.log)
 	if len(rawEvents) == 0 {
 		return nil, nil

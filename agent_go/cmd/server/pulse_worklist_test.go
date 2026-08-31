@@ -457,6 +457,178 @@ func TestPulseWorklistLetsGateSelectTheEvidenceJustifiedModules(t *testing.T) {
 	}
 }
 
+func TestPulseWorklistRequiresTechnicalReviewForFailedPlanDependencyIntake(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	changelogDir := filepath.Join(root, workspacePath, "planning", "changelog")
+	if err := os.MkdirAll(changelogDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `{"entries":[{"change_id":"change-current","timestamp":"2026-08-28T09:00:00Z","tool":"update_message_sequence_step","reason":"change output","artifact_review":{"done":true}}]}`
+	if err := os.WriteFile(filepath.Join(changelogDir, "changelog-current.json"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped := completePulseWorklistDecisions(nil)
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-plan-check-skip", skipped); err == nil ||
+		!strings.Contains(err.Error(), "plan change") || !strings.Contains(err.Error(), "technical_review must be due") {
+		t.Fatalf("failed plan dependency intake was allowed to skip Technical Review: %v", err)
+	}
+
+	due := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Inspect incomplete plan dependency coverage."},
+	})
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-plan-check-due", due); err != nil {
+		t.Fatalf("agentic Technical Review routing was rejected: %v", err)
+	}
+}
+
+func TestPulseWorklistRequiresTechnicalReviewForFailedRuntimeIntake(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	runDir := filepath.Join(root, workspacePath, "runs", "iteration-0", "default")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "run_metadata.json"), []byte(`{"status":"failed"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-runtime-check", completePulseWorklistDecisions(nil)); err == nil ||
+		!strings.Contains(err.Error(), "runtime intake") || !strings.Contains(err.Error(), "technical_review must be due") {
+		t.Fatalf("failed runtime intake was allowed to skip Technical Review: %v", err)
+	}
+
+	due := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Review the new runtime failure."},
+	})
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-runtime-review", due); err != nil {
+		t.Fatalf("record Technical Review routing: %v", err)
+	}
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-runtime-after-review", completePulseWorklistDecisions(nil)); err != nil {
+		t.Fatalf("already-checked retained runtime failure forced another review: %v", err)
+	}
+}
+
+// plan_drift_review's due-ness is a plain fact (any step with a null
+// drift_review record), not agentic judgment — mirrors the Technical Review
+// intake-routing tests above, but for validatePlanDriftRouting.
+func TestPulseWorklistRequiresPlanDriftReviewWhenCandidatesExist(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	planningDir := filepath.Join(root, workspacePath, "planning")
+	if err := os.MkdirAll(planningDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planJSON := `{"steps":[{"id":"step-a","type":"regular"}]}`
+	if err := os.WriteFile(filepath.Join(planningDir, "plan.json"), []byte(planJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stepConfig := `{"steps":[{"id":"step-a"}]}`
+	if err := os.WriteFile(filepath.Join(planningDir, "step_config.json"), []byte(stepConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped := completePulseWorklistDecisions(nil)
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-drift-check-skip", skipped); err == nil ||
+		!strings.Contains(err.Error(), "plan_drift_review must be due") || !strings.Contains(err.Error(), "step-a") {
+		t.Fatalf("a step with a null drift_review record was allowed to skip plan_drift_review: %v", err)
+	}
+
+	due := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModulePlanDriftReview: {Module: pulseModulePlanDriftReview, Due: true, Reason: "step-a has a null drift_review record."},
+	})
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-drift-check-due", due); err != nil {
+		t.Fatalf("plan_drift_review routing was rejected despite being marked due: %v", err)
+	}
+}
+
+// A deleted step's own drift_review record is cascade-removed along with it,
+// so the per-step candidate set alone can go empty even though a deletion's
+// dependent-artifact fallout still needs auditing — the workflow-level
+// WorkflowDriftReviewStepID record (flagged by delete_plan_steps) must force
+// plan_drift_review due on its own, even when every real step is clean.
+func TestPulseWorklistRequiresPlanDriftReviewWhenWorkflowLevelFlagged(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	planningDir := filepath.Join(root, workspacePath, "planning")
+	if err := os.MkdirAll(planningDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planJSON := `{"steps":[{"id":"step-a","type":"regular"}]}`
+	if err := os.WriteFile(filepath.Join(planningDir, "plan.json"), []byte(planJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// step-a is fully reviewed; only the workflow-level sentinel is pending —
+	// this is exactly the state right after a step was deleted.
+	stepConfig := `{"steps":[
+		{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
+		{"id":"__workflow_drift_review__","agent_configs":{"drift_review":{"needs_review":true}}}
+	]}`
+	if err := os.WriteFile(filepath.Join(planningDir, "step_config.json"), []byte(stepConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped := completePulseWorklistDecisions(nil)
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-workflow-level-skip", skipped); err == nil ||
+		!strings.Contains(err.Error(), "plan_drift_review must be due") || !strings.Contains(err.Error(), "__workflow_drift_review__") {
+		t.Fatalf("a flagged workflow-level record was allowed to skip plan_drift_review: %v", err)
+	}
+
+	due := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModulePlanDriftReview: {Module: pulseModulePlanDriftReview, Due: true, Reason: "A step was deleted; workflow-level drift review is flagged."},
+	})
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-workflow-level-due", due); err != nil {
+		t.Fatalf("plan_drift_review routing was rejected despite being marked due: %v", err)
+	}
+}
+
+// A scan failure (unreadable/malformed plan.json or step_config.json) must
+// never silently read as "nothing is due" — the real candidate set is
+// unknown, not empty, so Gate must route it to either plan_drift_review or
+// technical_review rather than being allowed to skip both.
+func TestPulseWorklistRequiresRoutingWhenPlanDriftScanFails(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	planningDir := filepath.Join(root, workspacePath, "planning")
+	if err := os.MkdirAll(planningDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(planningDir, "plan.json"), []byte("{not valid json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped := completePulseWorklistDecisions(nil)
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-drift-scan-fail-skip", skipped); err == nil ||
+		!strings.Contains(err.Error(), "plan_drift_review or technical_review must be due") {
+		t.Fatalf("a failed plan drift scan was allowed to skip both plan_drift_review and technical_review: %v", err)
+	}
+
+	due := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Investigate malformed plan.json."},
+	})
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-drift-scan-fail-due", due); err != nil {
+		t.Fatalf("technical_review routing was rejected despite being marked due: %v", err)
+	}
+}
+
+func TestPulseWorklistDecisionRejectsReviewPlanFields(t *testing.T) {
+	_, err := pulseWorklistDecisionsFromArgs([]interface{}{map[string]interface{}{
+		"module":  pulseModuleTechnicalReview,
+		"due":     true,
+		"reason":  "Runtime evidence requires review.",
+		"focuses": []interface{}{"execution_health"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), `unknown field "focuses"`) {
+		t.Fatalf("review-plan field must not be accepted by the small worklist receipt: %v", err)
+	}
+}
+
 func TestTrustedPulseWorklistKeepsFirstCompleteGateDecision(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
@@ -652,7 +824,7 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	pulseRunID := "schedule-cron--audit"
 	sessionID := "schedule-cron--audit-session"
 	if _, err := recordPulseWorklist(context.Background(), workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleWorkflowReview: {Module: pulseModuleWorkflowReview, Due: true, Reason: "A verified repair is required."},
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "A verified repair is required."},
 	})); err != nil {
 		t.Fatalf("record worklist: %v", err)
 	}
@@ -660,13 +832,13 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
 	_, executors, _ := createPulseWorklistTools()
 	if _, err := step_based_workflow.RecordRunConcerns(
-		ctx, workspacePath, pulseRunID, "", pulseModuleWorkflowReview,
+		ctx, workspacePath, pulseRunID, "", pulseModuleTechnicalReview,
 		step_based_workflow.ConcernPhaseReview,
 		"CONCERNS: stale run binding in planning/step_config.json",
 	); err != nil {
 		t.Fatalf("record reviewer finding: %v", err)
 	}
-	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleWorkflowReview, 10)
+	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleTechnicalReview, 10)
 	if err != nil || len(findings) != 1 {
 		t.Fatalf("load reviewer finding: findings=%+v err=%v", findings, err)
 	}
@@ -678,7 +850,7 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	_, err = execute(ctx, map[string]interface{}{
 		"workspace_path": workspacePath,
 		"pulse_run_id":   pulseRunID,
-		"module":         pulseModuleWorkflowReview,
+		"module":         pulseModuleTechnicalReview,
 		"result":         "changed",
 		"reason":         "Fixed the stale run binding.",
 		"evidence":       []string{"pulse/reviews/audit/workflow_review.md"},
@@ -715,7 +887,7 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	err = db.QueryRow(`SELECT result, reason, changed_files_json, verification_json,
 		before_refs_json, after_refs_json, recorded_at
 		FROM pulse_module_audit WHERE workspace_path=? AND module=? AND pulse_run_id=?`,
-		workspacePath, pulseModuleWorkflowReview, pulseRunID,
+		workspacePath, pulseModuleTechnicalReview, pulseRunID,
 	).Scan(&result, &reason, &changedFilesJSON, &verificationJSON, &beforeRefsJSON, &afterRefsJSON, &recordedAt)
 	if err != nil {
 		t.Fatalf("read audit: %v", err)
@@ -750,6 +922,187 @@ func TestMarkPulseModuleResultStoresMinimalDurableAudit(t *testing.T) {
 	if len(lifecycles[0].Attempts) != 1 || len(lifecycles[0].Verification) != 1 ||
 		lifecycles[0].Verification[0].Verdict != step_based_workflow.VerificationPassed {
 		t.Fatalf("finding fix evidence missing: %+v", lifecycles[0])
+	}
+}
+
+// PLAT-206: the split reviewer/Fixer contract legitimately produces two
+// terminal-shaped calls to record_pulse_result for the SAME (module,
+// pulse_run_id) -- the reviewer's own "done" (nothing more to review) and
+// the Fixer's later "changed" (files were modified), dispatched as separate
+// background agents per the pulse-review-fixer split. Before this fix, the
+// retry path only accepted a second call whose result string matched the
+// first exactly, so the Fixer's genuinely different "changed" call was
+// rejected outright as "already terminal or belongs to another run" --
+// confirmed live on confida-login: three real repairs stayed forever
+// mislabelled queued_for_engineering because the Fixer had no channel to
+// record their disposition and fell back to record_pulse_finding
+// (evidence-only, no status mutation).
+func TestRecordPulseResultAcceptsFixerSupplementalDispositionsAfterReviewerTerminal(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	pulseRunID := "schedule-cron--split-reviewer-fixer"
+	sessionID := "schedule-cron--split-reviewer-fixer-session"
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "A review is required."},
+	})); err != nil {
+		t.Fatalf("record worklist: %v", err)
+	}
+
+	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
+	_, executors, _ := createPulseWorklistTools()
+	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
+
+	// The reviewer's own terminal write: nothing more to review this pass.
+	if _, err := execute(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
+		"module": pulseModuleTechnicalReview, "result": "done",
+		"reason": "Review complete, findings recorded for a linked decision.",
+	}); err != nil {
+		t.Fatalf("reviewer terminal write: %v", err)
+	}
+
+	// A finding the reviewer recorded, later repaired by a separately
+	// dispatched Fixer background agent -- the split contract this reproduces.
+	if _, err := step_based_workflow.RecordRunConcerns(
+		ctx, workspacePath, pulseRunID, "", pulseModuleTechnicalReview,
+		step_based_workflow.ConcernPhaseReview,
+		"CONCERNS: stale run binding in planning/step_config.json",
+	); err != nil {
+		t.Fatalf("record reviewer finding: %v", err)
+	}
+	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleTechnicalReview, 10)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("load reviewer finding: findings=%+v err=%v", findings, err)
+	}
+	selected := findings[0]
+
+	// The Fixer's own later, separately-dispatched call: a genuinely
+	// different result ("changed" vs. the reviewer's "done") for the SAME
+	// pulse_run_id, carrying the repair's disposition.
+	if _, err := execute(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
+		"module": pulseModuleTechnicalReview, "result": "changed",
+		"reason":        "Fixed the stale run binding.",
+		"changed_files": []string{"planning/step_config.json"},
+		"verification":  []string{"targeted binding test passed"},
+		"before_refs":   []string{"step_config:sha256:before"},
+		"after_refs":    []string{"step_config:sha256:after"},
+		"finding_dispositions": []map[string]interface{}{{
+			"issue_id":      selected.Issue.ID,
+			"disposition":   "fixed_verified",
+			"summary":       "The stale run binding was corrected and the targeted test passed.",
+			"changed_files": []string{"planning/step_config.json"},
+			"before_refs":   []string{"step_config:sha256:before"},
+			"after_refs":    []string{"step_config:sha256:after"},
+			"verification": []map[string]interface{}{{
+				"check":    "targeted binding test",
+				"verdict":  "passed",
+				"expected": "the configured run binding resolves",
+				"observed": "the configured run binding resolved",
+				"evidence": []string{"go test ./cmd/server -run TestRunBinding"},
+			}},
+		}},
+	}); err != nil {
+		t.Fatalf("Fixer supplemental write was rejected: %v", err)
+	}
+
+	// The module's own terminal verdict stays the reviewer's original "done"
+	// -- the Fixer's write records a disposition, it does not relitigate what
+	// the review itself concluded.
+	states, err := getPulseModuleStates(context.Background(), workspacePath)
+	if err != nil {
+		t.Fatalf("get states: %v", err)
+	}
+	found := false
+	for _, state := range states {
+		if state.Module == pulseModuleTechnicalReview {
+			found = true
+			if state.LastResult != "done" {
+				t.Fatalf("module's own terminal result was overwritten: got %q, want %q", state.LastResult, "done")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("module state missing entirely: %+v", states)
+	}
+
+	// pulse_module_audit is keyed unique on (workspace_path, module,
+	// pulse_run_id) -- it upserts, it is not an append log -- so the Fixer's
+	// write becomes the one row's latest snapshot rather than a second row.
+	// That is a pre-existing property of this table, not something this fix
+	// changes; the load-bearing record for Gate's active queue is the
+	// FINDING's own lifecycle/attempts below, which is append-only.
+	_, db, err := openPulseModuleStateDB(context.Background(), workspacePath, false)
+	if err != nil {
+		t.Fatalf("open state db: %v", err)
+	}
+	defer db.Close()
+	var auditCount int
+	var latestResult string
+	if err := db.QueryRow(`SELECT COUNT(*), MAX(result) FROM pulse_module_audit WHERE workspace_path=? AND module=? AND pulse_run_id=?`,
+		workspacePath, pulseModuleTechnicalReview, pulseRunID,
+	).Scan(&auditCount, &latestResult); err != nil {
+		t.Fatalf("count audit rows: %v", err)
+	}
+	if auditCount != 1 || latestResult != "changed" {
+		t.Fatalf("audit rows = %d (latest result %q), want 1 row upserted to the Fixer's most recent write", auditCount, latestResult)
+	}
+
+	// The repaired finding is no longer stuck at queued_for_engineering --
+	// this is the exact confida-login symptom this fix closes. Its own
+	// lifecycle (unlike the module audit row above) preserves both the
+	// reviewer's original finding and the Fixer's resolving attempt.
+	lifecycles, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, pulseModuleTechnicalReview, 10)
+	if err != nil {
+		t.Fatalf("load finding lifecycles: %v", err)
+	}
+	if len(lifecycles) != 1 || lifecycles[0].Status != step_based_workflow.ConcernStatusResolved {
+		t.Fatalf("Fixer's disposition did not close the finding: %+v", lifecycles)
+	}
+	if len(lifecycles[0].Attempts) != 1 || len(lifecycles[0].Verification) != 1 ||
+		lifecycles[0].Verification[0].Verdict != step_based_workflow.VerificationPassed {
+		t.Fatalf("finding fix evidence missing: %+v", lifecycles[0])
+	}
+}
+
+// The relaxed retry path must not become a general-purpose way to overwrite
+// an already-terminal module: a same-run call with a genuinely different
+// result and NO dispositions carries no new evidence, so it must still be
+// rejected exactly as before this fix.
+func TestRecordPulseResultStillRejectsMismatchedResultWithNoDispositions(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	pulseRunID := "schedule-cron--mismatch-no-dispositions"
+	sessionID := "schedule-cron--mismatch-no-dispositions-session"
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "A review is required."},
+	})); err != nil {
+		t.Fatalf("record worklist: %v", err)
+	}
+
+	ctx := mcpexecutor.WithSessionID(context.Background(), sessionID)
+	_, executors, _ := createPulseWorklistTools()
+	execute := executors["record_pulse_result"].(func(context.Context, map[string]interface{}) (string, error))
+
+	if _, err := execute(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
+		"module": pulseModuleTechnicalReview, "result": "done",
+		"reason": "Review complete.",
+	}); err != nil {
+		t.Fatalf("first terminal write: %v", err)
+	}
+
+	// "blocked" carries no changed_files/dispositions requirement, so this
+	// exercises a genuinely different result with zero dispositions.
+	_, err := execute(ctx, map[string]interface{}{
+		"workspace_path": workspacePath, "pulse_run_id": pulseRunID,
+		"module": pulseModuleTechnicalReview, "result": "blocked",
+		"reason": "Trying to relitigate the module's own verdict with no new evidence.",
+	})
+	if err == nil || !strings.Contains(err.Error(), "already terminal or belongs to another run") {
+		t.Fatalf("mismatched result with no dispositions should still be rejected, got: %v", err)
 	}
 }
 
@@ -1129,7 +1482,7 @@ func TestHandleGetPulseFindingsReturnsFiledLifecycle(t *testing.T) {
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
 	workspacePath := "Workflow/example"
 	if _, err := step_based_workflow.RecordRunConcerns(
-		ctx, workspacePath, "pulse-run-1", "", pulseModuleWorkflowReview,
+		ctx, workspacePath, "pulse-run-1", "", pulseModuleTechnicalReview,
 		step_based_workflow.ConcernPhaseReview,
 		"CONCERNS: selector keeps targeting the same accounts",
 	); err != nil {
@@ -1138,7 +1491,7 @@ func TestHandleGetPulseFindingsReturnsFiledLifecycle(t *testing.T) {
 
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/api/workflow/pulse-findings?workspace_path=Workflow/example&module=workflow_review",
+		"/api/workflow/pulse-findings?workspace_path=Workflow/example&module=technical_review",
 		nil,
 	)
 	rec := httptest.NewRecorder()
@@ -1157,7 +1510,7 @@ func TestHandleGetPulseFindingsReturnsFiledLifecycle(t *testing.T) {
 		t.Fatalf("payload = %+v", payload)
 	}
 	finding := payload.Findings[0]
-	if finding.Status != step_based_workflow.ConcernStatusOpen || finding.Module != pulseModuleWorkflowReview {
+	if finding.Status != step_based_workflow.ConcernStatusOpen || finding.Module != pulseModuleTechnicalReview {
 		t.Fatalf("finding identity/status mismatch: %+v", finding)
 	}
 	if finding.Kind != step_based_workflow.PulseFindingKindIssue {
@@ -1224,11 +1577,8 @@ func TestPulseBacklogViewKeepsWorkflowObservationsOutOfFixerFeed(t *testing.T) {
 	if payload.Detail != "compact" || payload.IssueTotal != 1 || len(payload.Issues) != 1 {
 		t.Fatalf("Fixer feed should contain exactly the canonical issue: %+v", payload)
 	}
-	if payload.ObservationTotal != 1 || len(payload.Observations) != 1 {
-		t.Fatalf("review evidence should contain exactly the workflow observation: %+v", payload)
-	}
-	if got := payload.Observations[0]["kind"]; got != step_based_workflow.PulseFindingKindObservation {
-		t.Fatalf("observation kind=%v", got)
+	if payload.ObservationTotal != 1 || len(payload.Observations) != 0 {
+		t.Fatalf("workflow observations must remain counted for audit but stay out of the reviewer/fixer feed: %+v", payload)
 	}
 	if _, leaked := payload.Issues[0]["fingerprint"]; leaked {
 		t.Fatalf("internal fingerprint leaked into Fixer feed: %+v", payload.Issues[0])
@@ -1239,6 +1589,43 @@ func TestPulseBacklogViewKeepsWorkflowObservationsOutOfFixerFeed(t *testing.T) {
 	}
 	if _, duplicated := rawMap["findings"]; duplicated {
 		t.Fatal("compact backlog duplicated canonical issues under legacy findings alias")
+	}
+}
+
+func TestPulseBacklogCompactIncludesClosedIssueTextForSemanticReuse(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/example"
+	const concern = "collector silently drops failed records"
+	if _, err := step_based_workflow.RecordRunConcerns(ctx, workspacePath, "review-1", "", pulseModuleTechnicalReview,
+		step_based_workflow.ConcernPhaseReview, "CONCERNS: "+concern); err != nil {
+		t.Fatalf("record issue: %v", err)
+	}
+	findings, err := step_based_workflow.LoadPulseFindingLifecycles(ctx, workspacePath, "", -1)
+	if err != nil || len(findings) != 1 {
+		t.Fatalf("load issue: findings=%+v err=%v", findings, err)
+	}
+	if err := step_based_workflow.ResolveRunConcern(ctx, workspacePath, findings[0].Fingerprint,
+		step_based_workflow.ConcernStatusResolved, "test", "Fix applied."); err != nil {
+		t.Fatalf("close issue: %v", err)
+	}
+
+	raw, err := readPulseBacklogView(ctx, workspacePath, "")
+	if err != nil {
+		t.Fatalf("read compact register: %v", err)
+	}
+	var payload struct {
+		Issues       []map[string]interface{} `json:"issues"`
+		ClosedIssues []map[string]interface{} `json:"closed_issues"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("decode compact register: %v", err)
+	}
+	if len(payload.Issues) != 0 || len(payload.ClosedIssues) != 1 {
+		t.Fatalf("closed semantic candidate missing: %+v", payload)
+	}
+	if payload.ClosedIssues[0]["summary"] != concern || payload.ClosedIssues[0]["issue_id"] == "" {
+		t.Fatalf("closed candidate lacks issue identity/text: %+v", payload.ClosedIssues[0])
 	}
 }
 
@@ -1519,6 +1906,10 @@ func TestGetPulseModuleStateExposesLoopClosureButNotShadowHistory(t *testing.T) 
 	if !exists || runtime["coverage_status"] != "not_instrumented" {
 		t.Fatalf("runtime intake = %#v, want not-instrumented evidence", intake["runtime"])
 	}
+	planDependencies, exists := intake["plan_change_dependencies"].(map[string]interface{})
+	if !exists || planDependencies["coverage_status"] != "verified" || planDependencies["failed"] != false {
+		t.Fatalf("plan dependency intake = %#v, want verified clean evidence", intake["plan_change_dependencies"])
+	}
 	if note, _ := payload["deterministic_intake_note"].(string); !strings.Contains(note, "not an automatic Pulse issue") {
 		t.Fatalf("deterministic_intake_note = %q", note)
 	}
@@ -1637,6 +2028,83 @@ func completePulseWorklistDecisions(overrides map[string]PulseWorklistDecision) 
 		out = append(out, decision)
 	}
 	return out
+}
+
+// recordPulseModuleDueForManualReview is the fix for a manual, non-Gate
+// invocation (e.g. /review-artifact-drift's Part 1) needing to persist a
+// record_pulse_result -- that write is due-gated on a Gate-recorded worklist
+// row for the exact pulse_run_id, which a manual invocation never has.
+func TestRecordPulseModuleDueForManualReviewSucceedsWithNoPriorState(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/manual-review-due"
+	pulseRunID := "manual-session-1"
+
+	if err := recordPulseModuleDueForManualReview(ctx, workspacePath, pulseRunID, pulseModulePlanDriftReview, "manual /review-artifact-drift invocation"); err != nil {
+		t.Fatalf("recordPulseModuleDueForManualReview: %v", err)
+	}
+	if due, err := pulseWorklistModulesDue(ctx, workspacePath, pulseRunID, pulseModulePlanDriftReview); err != nil {
+		t.Fatalf("inspect due-ness: %v", err)
+	} else if !due {
+		t.Fatal("plan_drift_review should be due for the manual session after recordPulseModuleDueForManualReview")
+	}
+	// The whole point: record_pulse_result must now accept a terminal write
+	// for this exact pulse_run_id.
+	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModulePlanDriftReview, pulseRunID, "done", "Manual artifact-drift audit complete.", nil); err != nil {
+		t.Fatalf("record_pulse_result rejected the manual invocation's own due claim: %v", err)
+	}
+}
+
+func TestRecordPulseModuleDueForManualReviewRefusesWhenAnotherRunIsMidFlight(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/manual-review-collision"
+
+	// A real scheduled Pulse pass: Gate recorded plan_drift_review due for
+	// pulse-scheduled-1, and its reviewer turn has not yet persisted a result.
+	if _, err := recordPulseWorklist(ctx, workspacePath, "pulse-scheduled-1", completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModulePlanDriftReview: {Module: pulseModulePlanDriftReview, Due: true, Reason: "A step's drift_review record is null."},
+	})); err != nil {
+		t.Fatalf("record scheduled worklist: %v", err)
+	}
+
+	// A manual /review-artifact-drift invocation, running concurrently under a
+	// completely different pulse_run_id, must not be able to silently steal
+	// the module's single shared row out from under the in-flight scheduled
+	// pass -- that would corrupt the scheduled pass's own later receipt
+	// validation.
+	err := recordPulseModuleDueForManualReview(ctx, workspacePath, "manual-session-concurrent", pulseModulePlanDriftReview, "manual /review-artifact-drift invocation")
+	if err == nil || !strings.Contains(err.Error(), "pulse-scheduled-1") {
+		t.Fatalf("expected refusal naming the in-flight scheduled run, got: %v", err)
+	}
+
+	// The scheduled pass's own claim must remain completely intact.
+	if due, dueErr := pulseWorklistModulesDue(ctx, workspacePath, "pulse-scheduled-1", pulseModulePlanDriftReview); dueErr != nil {
+		t.Fatalf("inspect scheduled due-ness: %v", dueErr)
+	} else if !due {
+		t.Fatal("the refused manual declaration must not have disturbed the scheduled pass's own due claim")
+	}
+}
+
+func TestRecordPulseModuleDueForManualReviewAllowedAfterScheduledPassResolves(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/manual-review-after-resolved"
+
+	if _, err := recordPulseWorklist(ctx, workspacePath, "pulse-scheduled-2", completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModulePlanDriftReview: {Module: pulseModulePlanDriftReview, Due: true, Reason: "A step's drift_review record is null."},
+	})); err != nil {
+		t.Fatalf("record scheduled worklist: %v", err)
+	}
+	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModulePlanDriftReview, "pulse-scheduled-2", "done", "Scheduled pass finished.", nil); err != nil {
+		t.Fatalf("resolve scheduled pass: %v", err)
+	}
+
+	// The scheduled pass already recorded its own terminal result -- it is no
+	// longer mid-flight, so a later manual invocation is safe to claim the row.
+	if err := recordPulseModuleDueForManualReview(ctx, workspacePath, "manual-session-after", pulseModulePlanDriftReview, "manual /review-artifact-drift invocation"); err != nil {
+		t.Fatalf("recordPulseModuleDueForManualReview should succeed once the prior pass has a terminal result: %v", err)
+	}
 }
 
 func TestPulseReviewFocusCatalogUsesValidationContractHealthWithoutSafety(t *testing.T) {

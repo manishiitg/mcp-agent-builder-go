@@ -1,7 +1,7 @@
 ## Pulse Gate / Worklist
 
 Use only for the scheduler's Gate stage. Gate performs a progressive evidence
-scan and records which of the two canonical review perspectives is due. It does
+scan and records which of the canonical review perspectives is due. It does
 not audit deeply, launch reviewers, fix anything, write workflow artifacts,
 publish, back up, notify, or render the dashboard.
 Gate must not launch reviewers.
@@ -16,6 +16,12 @@ The canonical modules are:
 - `strategic_review`: one retained strategic reviewer sequence. It audits the
   current strategy and measurement system, and conditionally explores
   materially different approaches. It is never folded into Technical Review.
+- `plan_drift_review`: event-triggered, not cadenced — due whenever
+  `get_pulse_state(view="module")`'s `plan_drift_candidates` is non-empty
+  (a canonical plan step has no `drift_review` record, or has one flagged
+  `needs_review: true`). This is a plain fact, not a judgment call: the
+  backend rejects the worklist if a non-empty candidate list is not marked
+  due, so always record its true state rather than guessing.
 
 Do not emit retired module names such as `workflow_review`, `llm_ops_review`,
 `strategy_auditor`, or `goal_advisor`. Historical rows using those names are
@@ -102,6 +108,22 @@ canonical issue, or needs a new durable finding. Do not keyword-scan ordinary
 output for words such as "error" and do not launch a Fixer directly from the
 signal.
 
+A failed verified deterministic intake cannot be cooled down or skipped: set
+`technical_review.due=true` and route it to the smallest matching technical
+focus. For `plan_change_dependencies`, this means a current-contract change
+with a durable `change_id` lacks a complete receipt across downstream steps,
+validation, evaluation, reporting, database, and learnings/knowledge. Select
+`plan_orchestration_integrity`. The failure proves missing coverage, not that
+all six surfaces need edits; the reviewer must inspect each surface and record
+an evidence-backed disposition. Legacy reviewed entries without `change_id`
+are not reopened by this check.
+
+The same boundary applies to `plan_drift_candidates`: a non-empty list means
+`plan_drift_review.due=true` is required, not agentic judgment. It is a
+different fact from `plan_change_dependencies` — the latter is about a plan
+edit's blast radius never having been traced; `plan_drift_candidates` is about
+a step's per-check drift record specifically never having been recorded.
+
 When DB, knowledgebase, or learnings integrity is selected, explicitly name the
 Stores Health scope in the reason. Stores Health remains a technical lens, not
 a separate module.
@@ -185,11 +207,27 @@ An old backlog must not hide a new production failure. Conversely, unchanged
 backlog must not force another expensive discovery pass. A cooldown or focus
 rotation cannot suppress a measured miss or a new critical regression.
 
-Select **at most two** due modules. Call `record_pulse_worklist` exactly once with
-the mode, mode reason, and one decision for every canonical module:
-`technical_review` and
-`strategic_review`. On recovery, if this Pulse run already has a complete
+Select **at most two** due modules, chosen agentically from `technical_review`
+and `strategic_review`. `plan_drift_review` is never part of that judgment
+call: its due state is the plain fact reported in `plan_drift_candidates` (see
+Deterministic-intake boundary above), so record it as due exactly when that
+list is non-empty, whether or not you also select two other modules. Call
+`record_pulse_worklist` exactly once with the mode, mode reason, and one
+decision for every canonical module: `technical_review`, `strategic_review`,
+and `plan_drift_review`. On recovery, if this Pulse run already has a complete
 worklist, verify it and stop rather than recording it again.
+
+### Worklist payload boundary (required)
+
+`record_pulse_worklist.decisions[]` is deliberately a **small scheduling
+receipt**, not a review plan. Each decision may contain only `module`, `due`,
+`reason`, `evidence`, `next_check_at`, `next_check_after_run_id`, and
+`cooldown_runs`. Do **not** put `focuses`, `route_scope`, `issue_ids`,
+`deferred_focuses`, `decision`, or any review-plan field in this call. Explain
+the selected scope in `reason` and `evidence`; the later reviewer records its
+actual focus coverage with `record_pulse_review_focus` after inspecting the
+evidence. An unknown field rejects the whole worklist and prevents all review
+and repair work from starting.
 
 After the worklist, optionally record trustworthy comparable success-criterion
 measurements with `record_pulse_impact`. Use stable criterion IDs, producing run
@@ -198,6 +236,6 @@ qualitative status. If trustworthy evidence does not exist, record nothing;
 missing evidence is not zero or healthy. Gate never creates interventions or
 impact assessments.
 
-The later Review and independent Fix turns own selected technical work,
+The later retained Review+Fix task owns selected technical work,
 strategic work, lifecycle updates, verification, and terminal receipts. Stop
 after recording the worklist and any honest impact observations.

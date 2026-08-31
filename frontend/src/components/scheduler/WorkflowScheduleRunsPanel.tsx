@@ -4,7 +4,7 @@ import cronstrue from 'cronstrue'
 import {
   X, Play, Trash2, Clock, CheckCircle, XCircle, PauseCircle, Minus, Loader,
   Terminal, Pause, Calendar, ClipboardCheck, AlertTriangle,
-  ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Square, Radio, Search, FileText, MessageSquare
+  ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Square, Radio, Search, FileText, MessageSquare, MoreHorizontal
 } from 'lucide-react'
 import { schedulerApi } from '../../api/scheduler'
 import { agentApi } from '../../services/api'
@@ -21,9 +21,12 @@ import EvaluationPopup from '../workflow/EvaluationPopup'
 import { ReportViewer } from '../workflow/ReportViewer'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '../ui/tooltip'
 import { scheduleTabLabel } from '../../utils/scheduleTabLabel'
+import { useAuthStore } from '../../stores/useAuthStore'
+import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
 
 interface WorkflowScheduleRunsPanelProps {
   onClose: () => void
+  embedded?: boolean
   onJobsLoaded?: (jobs: ScheduledJob[]) => void
   workflowScope?: {
     presetQueryId?: string | null
@@ -456,6 +459,41 @@ function isMissedSchedule(job: ScheduledJob): boolean {
   return !!job.enabled && (job.missed_run_count ?? 0) > 0
 }
 
+type ScheduleExecutionScope = {
+  label: string
+  title: string
+}
+
+function getScheduleExecutionScope(job: ScheduledJob): ScheduleExecutionScope | null {
+  if (job.entity_type !== 'workflow') return null
+
+  const selectedRoutes = Object.values(job.route_selections ?? {}).filter(Boolean)
+  if (selectedRoutes.length > 0) {
+    const routeList = selectedRoutes.join(', ')
+    return {
+      label: selectedRoutes.length === 1 ? `Route: ${routeList}` : `${selectedRoutes.length} selected routes`,
+      title: `Runs the full workflow using the saved route selection${selectedRoutes.length === 1 ? '' : 's'}: ${routeList}`,
+    }
+  }
+
+  const instructions = job.messages?.join('\n').toLowerCase() ?? ''
+  if (!instructions || instructions.includes('run_full_workflow')) {
+    return {
+      label: 'Full workflow',
+      title: 'Runs the complete workflow from the beginning for the selected group or groups.',
+    }
+  }
+
+  if (instructions.includes('execute_step') || instructions.includes('run only step-')) {
+    return {
+      label: 'Selected step',
+      title: 'Runs only the step or steps named in this schedule, not the full workflow.',
+    }
+  }
+
+  return null
+}
+
 function formatMissedScheduleReason(job: ScheduledJob): string {
   switch (job.missed_run_reason) {
     case 'no_execution_recorded':
@@ -608,11 +646,13 @@ function sortJobs(a: ScheduledJob, b: ScheduledJob): number {
   return bTime.localeCompare(aTime)
 }
 
-const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ onClose, onJobsLoaded, workflowScope }) => {
+const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ onClose, onJobsLoaded, workflowScope, embedded = false }) => {
+  const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
   const [jobs, setJobs] = useState<ScheduledJob[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expandedJobIds, setExpandedJobIds] = useState<string[]>([])
+  const [openActionMenuJobId, setOpenActionMenuJobId] = useState<string | null>(null)
   const [expandedWorkflowKeys, setExpandedWorkflowKeys] = useState<string[]>([])
   const isWorkflowScoped = !!workflowScope
   const [activeView, setActiveView] = useState<SchedulePanelView>(isWorkflowScoped ? 'schedules' : 'by-workflow')
@@ -635,6 +675,13 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
   // For running runs without run_folder, we detect the latest iteration folder
   const [runningRunFolders, setRunningRunFolders] = useState<Record<string, string>>({})
   const [latestRunFoldersByJob, setLatestRunFoldersByJob] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    if (!openActionMenuJobId) return
+    const closeMenu = () => setOpenActionMenuJobId(null)
+    document.addEventListener('pointerdown', closeMenu)
+    return () => document.removeEventListener('pointerdown', closeMenu)
+  }, [openActionMenuJobId])
 
   const { workflowPresets, refreshPresets } = useGlobalPresetStore()
 
@@ -990,6 +1037,12 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
         return haystack.includes(normalizedSearch)
       })
   }, [panelJobs, activeFilter, normalizedSearch, presetMap, selectedWorkflowFilter])
+
+  // When the panel or explicit workflow filter already identifies one
+  // automation, repeating "Automation / <name>" on every schedule adds noise.
+  // Keep that identity only in the mixed-workflow list where it supplies
+  // information the surrounding UI does not.
+  const showWorkflowIdentityInScheduleRows = !isWorkflowScoped && selectedWorkflowFilter === 'all'
 
   const workflowGroups = useMemo<WorkflowScheduleGroup[]>(() => {
     const groups = new Map<string, WorkflowScheduleGroup>()
@@ -1475,6 +1528,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     const missedDelayMs = getMissedScheduleDelayMs(job)
     const missedReason = isMissedJob ? formatMissedScheduleReason(job) : ''
     const hasWorkspace = !!job.workspace_path || !!preset?.workspacePath
+    const executionScope = getScheduleExecutionScope(job)
 
     return (
       <div key={job.id} className={`px-4 py-3 ${!job.enabled ? 'opacity-65' : ''}`}>
@@ -1564,9 +1618,9 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                       Groups: {job.group_names.join(', ')}
                     </span>
                   )}
-                  {job.mode === 'workshop' && (
-                    <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[11px] font-medium text-purple-600 dark:bg-purple-900/30 dark:text-purple-300">
-                      Workshop{job.workshop_mode ? ` · ${job.workshop_mode}` : ''}
+                  {executionScope && (
+                    <span className="rounded-full bg-purple-100 px-1.5 py-0.5 text-[11px] font-medium text-purple-600 dark:bg-purple-900/30 dark:text-purple-300" title={executionScope.title}>
+                      {executionScope.label}
                     </span>
                   )}
                   {!hasWorkspace && (
@@ -1587,10 +1641,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                     {job.waiting_reason}
                   </div>
                 )}
-                <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <MessageSquare className="h-3.5 w-3.5" />
-                  <span>To change this schedule, ask the automation agent in Chat.</span>
-                </div>
               </div>
             </div>
           </div>
@@ -1598,86 +1648,69 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
           <div className="flex shrink-0 flex-wrap items-center gap-1 lg:justify-end">
             {job.enabled ? (
               isRunningJob ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={() => handleStopRun(job)}
-                      className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/50"
-                    >
-                      <Square className="h-3 w-3" />
-                      Stop
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Stop the running execution</TooltipContent>
-                </Tooltip>
+                <button
+                  type="button"
+                  onClick={() => handleStopRun(job)}
+                  className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/50"
+                >
+                  <Square className="h-3 w-3" />
+                  Stop
+                </button>
               ) : (
-                <>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={() => handleTrigger(job)}
-                        disabled={triggering === job.id}
-                        className={`rounded-md transition-colors disabled:opacity-40 ${
-                          isMissedJob
-                            ? 'inline-flex items-center gap-1 border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50'
-                            : 'p-1.5 text-muted-foreground hover:bg-muted hover:text-green-600'
-                        }`}
-                      >
-                        <Play className="h-3.5 w-3.5" />
-                        {isMissedJob && <span>Run now</span>}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">{isMissedJob ? 'Run this missed schedule now' : 'Trigger a manual run now'}</TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={() => handleToggle(job)}
-                        className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-amber-500"
-                      >
-                        <Pause className="h-3.5 w-3.5" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Pause future cron runs</TooltipContent>
-                  </Tooltip>
-                </>
+                <button
+                  type="button"
+                  onClick={() => handleTrigger(job)}
+                  disabled={triggering === job.id}
+                  className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
+                    isMissedJob
+                      ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50'
+                      : 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-green-600'
+                  }`}
+                >
+                  <Play className="h-3 w-3" />
+                  Run now
+                </button>
               )
             ) : (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={() => handleToggle(job)}
-                    className="inline-flex items-center gap-1 rounded-md border border-green-200 bg-green-50 px-2 py-1 text-xs font-medium text-green-600 transition-colors hover:bg-green-100 dark:border-green-800 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50"
-                  >
-                    <Play className="h-3 w-3" />
-                    Resume
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Resume cron schedule</TooltipContent>
-              </Tooltip>
+              <button
+                type="button"
+                onClick={() => handleToggle(job)}
+                className="inline-flex items-center gap-1 rounded-md border border-green-200 bg-green-50 px-2 py-1 text-xs font-medium text-green-600 transition-colors hover:bg-green-100 dark:border-green-800 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50"
+              >
+                <Play className="h-3 w-3" />
+                Resume
+              </button>
             )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={() => handleDelete(job)}
-                  className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-red-500"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Delete schedule</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={() => showScheduleDetails(job)}
-                  className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Open schedule details</TooltipContent>
-            </Tooltip>
+            <div className="relative">
+              <button
+                type="button"
+                aria-label="More schedule actions"
+                aria-expanded={openActionMenuJobId === job.id}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setOpenActionMenuJobId((openId) => openId === job.id ? null : job.id)
+                }}
+                className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </button>
+              {openActionMenuJobId === job.id && (
+                <div role="menu" onPointerDown={(event) => event.stopPropagation()} className="absolute right-0 top-8 z-30 w-36 rounded-md border border-border bg-popover p-1 shadow-lg">
+                  {job.enabled && !isRunningJob && (
+                    <button type="button" role="menuitem" onClick={() => { setOpenActionMenuJobId(null); handleToggle(job) }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-popover-foreground hover:bg-muted">
+                      <Pause className="h-3.5 w-3.5" /> Pause schedule
+                    </button>
+                  )}
+                  <button type="button" role="menuitem" onClick={() => { setOpenActionMenuJobId(null); showScheduleDetails(job) }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-popover-foreground hover:bg-muted">
+                    <ChevronRight className="h-3.5 w-3.5" /> Show details
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => { setOpenActionMenuJobId(null); handleDelete(job) }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-red-600 hover:bg-red-500/10 dark:text-red-400">
+                    <Trash2 className="h-3.5 w-3.5" /> Delete schedule
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -1692,14 +1725,19 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     { key: 'issues', label: 'Issues', count: summary.issues },
     { key: 'all', label: 'All', count: summary.total },
   ]
+  const activeFilterLabel = filterPills.find((pill) => pill.key === activeFilter)?.label ?? 'All'
 
-  return ReactDOM.createPortal(
+  const panel = (
     <TooltipProvider delayDuration={300}>
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+      className={embedded
+        ? 'flex h-full min-h-0 w-full bg-background'
+        : 'fixed inset-0 z-[9999] flex items-center justify-center bg-black/50'}
+      onClick={embedded ? undefined : (e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="w-full max-w-6xl mx-4 bg-card text-card-foreground rounded-xl shadow-2xl border border-border flex flex-col max-h-[85vh]">
+      <div className={embedded
+        ? 'flex h-full min-h-0 w-full flex-col bg-card text-card-foreground'
+        : 'mx-4 flex max-h-[85vh] w-full max-w-6xl flex-col rounded-xl border border-border bg-card text-card-foreground shadow-2xl'}>
 
         {/* Header */}
         <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-border flex-shrink-0">
@@ -1733,7 +1771,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                     {summary.running} running
                   </span>
                 )}
-                {summary.missed > 0 && (
+                {summary.missed > 0 && !isWorkflowScoped && (
                   <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
                     {summary.missed} missed
                   </span>
@@ -1847,8 +1885,14 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                       ? `${monthlyCalendar.total} scheduled item${monthlyCalendar.total === 1 ? '' : 's'} this month`
                       : activeView === 'by-workflow'
                         ? `${workflowGroups.length} automation${workflowGroups.length === 1 ? '' : 's'} · ${filteredJobs.length} schedule${filteredJobs.length === 1 ? '' : 's'} shown`
-                        : `${filteredJobs.length} schedule${filteredJobs.length !== 1 ? 's' : ''} shown`}
+                        : `${filteredJobs.length} schedule${filteredJobs.length !== 1 ? 's' : ''} · ${activeFilterLabel}`}
                 </div>
+                {activeView === 'schedules' && (
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                    <span>To change a schedule, ask the automation agent in Chat.</span>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1938,13 +1982,10 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
 
               {missedJobs.length > 0 && (
                 <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-3">
-                  <div className="flex items-center justify-between gap-3 mb-2">
+                  <div className="mb-2">
                     <div>
                       <div className="text-[11px] uppercase tracking-wide text-amber-600 dark:text-amber-400">Missed schedules</div>
                       <div className="text-sm font-medium text-foreground">Schedules that were due but have not run yet</div>
-                    </div>
-                    <div className="text-xs text-muted-foreground whitespace-nowrap">
-                      {summary.missed} missed
                     </div>
                   </div>
 
@@ -2217,7 +2258,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                     </div>
 
                   <div className="flex flex-wrap gap-2">
-                    {filterPills.map((pill) => (
+                    {filterPills.filter((pill) => pill.key === 'all' || pill.count > 0).map((pill) => (
                       <button
                         key={pill.key}
                         onClick={() => setActiveFilter(pill.key)}
@@ -2396,6 +2437,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                 const localizedJobName = getLocalizedJobName(job)
                 const workflowDisplayLabel = preset?.label || job.workflow_label || job.name
                 const isExpanded = expandedJobIds.includes(job.id)
+                const executionScope = getScheduleExecutionScope(job)
                 const hasWorkspace = !!job.workspace_path || !!preset?.workspacePath
                 const runs = jobRuns[job.id] ?? []
                 const isLoadingThis = !!loadingRunIds[job.id]
@@ -2414,49 +2456,34 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                   <React.Fragment key={job.id}>
                     {showRunningHeader && (
                       <div className="px-5 py-3 bg-amber-500/5 border-b border-amber-500/10">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-[11px] uppercase tracking-wide text-amber-600 dark:text-amber-400">Running schedules</div>
-                            <div className="text-sm font-medium text-foreground">Schedules with an active execution right now</div>
-                          </div>
-                          <div className="text-xs text-muted-foreground whitespace-nowrap">
-                            {summary.running} active schedule{summary.running === 1 ? '' : 's'}
-                          </div>
+                        <div>
+                          <div className="text-[11px] uppercase tracking-wide text-amber-600 dark:text-amber-400">Running schedules</div>
+                          <div className="text-sm font-medium text-foreground">Schedules with an active execution right now</div>
                         </div>
                       </div>
                     )}
 
                     {showScheduledHeader && (
                       <div className="px-5 py-3 bg-muted/30 border-b border-border">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Automation schedules</div>
-                            <div className="text-sm font-medium text-foreground">Saved schedules that are idle, paused, or waiting for their next run</div>
-                          </div>
-                          <div className="text-xs text-muted-foreground whitespace-nowrap">
-                            {Math.max(filteredJobs.length - summary.running, 0)} listed
-                          </div>
+                        <div>
+                          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Automation schedules</div>
+                          <div className="text-sm font-medium text-foreground">Saved schedules that are idle, paused, or waiting for their next run</div>
                         </div>
                       </div>
                     )}
 
                     {showMissedHeader && (
                       <div className="px-5 py-3 bg-amber-500/5 border-b border-amber-500/10">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-[11px] uppercase tracking-wide text-amber-600 dark:text-amber-400">Missed schedules</div>
-                            <div className="text-sm font-medium text-foreground">Schedules that were due, but never started at the scheduled time</div>
-                          </div>
-                          <div className="text-xs text-muted-foreground whitespace-nowrap">
-                            {summary.missed} missed
-                          </div>
+                        <div>
+                          <div className="text-[11px] uppercase tracking-wide text-amber-600 dark:text-amber-400">Missed schedules</div>
+                          <div className="text-sm font-medium text-foreground">Schedules that were due, but never started at the scheduled time</div>
                         </div>
                       </div>
                     )}
 
                     <div className={`px-5 py-4 ${!job.enabled ? 'opacity-60' : ''}`}>
                     {/* Row top */}
-                    <div className="flex items-start gap-3">
+                    <div className="relative flex items-start gap-3">
                       {/* Status dot */}
                       <div className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${
                         job.last_status === 'running' ? 'bg-amber-500 animate-pulse' :
@@ -2467,22 +2494,26 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
 
                       {/* Main content */}
                       <div className="flex-1 min-w-0">
-                        <div className="min-w-0">
-                          <div className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                            Automation
+                        {showWorkflowIdentityInScheduleRows && (
+                          <div className="min-w-0 pr-28">
+                            <div className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                              Automation
+                            </div>
+                            <div className="mt-0.5 flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate" title={workflowDisplayLabel}>
+                                {workflowDisplayLabel}
+                              </span>
+                            </div>
                           </div>
-                          <div className="mt-0.5 flex items-center gap-2 flex-wrap">
-                            <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate" title={workflowDisplayLabel}>
-                              {workflowDisplayLabel}
-                            </span>
-                          </div>
-                        </div>
+                        )}
 
-                        <div className="mt-1 flex items-center gap-2 flex-wrap">
-                          <span className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                            Schedule
-                          </span>
-                          <span className="text-xs font-medium text-gray-700 dark:text-gray-300 truncate" title={job.name}>
+                        <div className={`${showWorkflowIdentityInScheduleRows ? 'mt-1' : ''} flex items-center gap-2 flex-wrap pr-28`}>
+                          {showWorkflowIdentityInScheduleRows && (
+                            <span className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                              Schedule
+                            </span>
+                          )}
+                          <span className={`${showWorkflowIdentityInScheduleRows ? 'text-xs font-medium' : 'text-sm font-semibold'} text-gray-700 dark:text-gray-300 truncate`} title={job.name}>
                             {localizedJobName}
                           </span>
                           {isMissedJob && (
@@ -2505,7 +2536,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                         </div>
 
                         {/* Cron + groups */}
-                        <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
+                        <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 pr-28 text-xs text-gray-500 dark:text-gray-400">
                           <span className="flex items-center gap-1">
                             <Clock className="w-3 h-3" />
                             {cronDesc}
@@ -2513,20 +2544,22 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                           {job.group_names && job.group_names.length > 0 && (
                             <span>Groups: {job.group_names.join(', ')}</span>
                           )}
-                          {job.mode === 'workshop' && (
-                            <span className="px-1.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 font-medium">
-                              Workshop{job.workshop_mode ? ` · ${job.workshop_mode}` : ''}
+                          {executionScope && (
+                            <span className="px-1.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 font-medium" title={executionScope.title}>
+                              {executionScope.label}
                             </span>
                           )}
                         </div>
                         {job.mode === 'workshop' && job.messages && job.messages.length > 0 && (
-                          <div className="mt-1 space-y-0.5">
-                            {job.messages.map((m, i) => (
-                              <div key={i} className="text-xs text-gray-500 dark:text-gray-400 flex items-start gap-1">
-                                <span className="text-gray-400 dark:text-gray-500 shrink-0">{i + 1}.</span>
-                                <span>{m}</span>
-                              </div>
-                            ))}
+                          <div className="mt-1 pr-28">
+                            <div className="space-y-0.5">
+                              {job.messages.map((m, i) => (
+                                <div key={i} className="flex items-start gap-1 text-xs text-gray-500 dark:text-gray-400">
+                                  <span className="shrink-0 text-gray-400 dark:text-gray-500">{i + 1}.</span>
+                                  <span>{m}</span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         )}
 
@@ -2589,106 +2622,100 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                             {job.waiting_reason}
                           </div>
                         )}
-                        <div className="mt-2 flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-                          <MessageSquare className="w-3.5 h-3.5" />
-                          <span>To change this schedule, ask the automation agent in Chat.</span>
-                        </div>
                       </div>
 
-                      {/* Actions */}
-                      <div className="flex items-center gap-1 flex-shrink-0">
+                      {/* Keep the immediate operational action visible; secondary actions live in one menu. */}
+                      <div className="absolute right-0 top-0 flex items-center gap-1">
                         {job.enabled ? (
-                          <>
-                            {job.last_status === 'running' ? (
-                              /* Stop button when running */
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <button
-                                    onClick={() => handleStopRun(job)}
-                                    className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/30 hover:bg-red-100 dark:hover:bg-red-900/50 border border-red-200 dark:border-red-800 transition-colors"
-                                  >
-                                    <Square className="w-3 h-3" />
-                                    Stop
-                                  </button>
-                                </TooltipTrigger>
-                                <TooltipContent side="bottom">Stop the running execution</TooltipContent>
-                              </Tooltip>
-                            ) : (
-                              <>
-                                {/* Run now */}
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button
-                                    onClick={() => handleTrigger(job)}
-                                    disabled={triggering === job.id}
-                                    className={`rounded-md transition-colors disabled:opacity-40 ${
-                                      isMissedJob
-                                        ? 'flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 hover:bg-amber-100 dark:hover:bg-amber-900/50 border border-amber-200 dark:border-amber-800'
-                                        : 'p-1.5 text-gray-400 hover:text-green-600 hover:bg-gray-100 dark:hover:bg-gray-700'
-                                    }`}
-                                  >
-                                    <Play className="w-3.5 h-3.5" />
-                                    {isMissedJob && <span>Run now</span>}
-                                  </button>
-                                </TooltipTrigger>
-                                  <TooltipContent side="bottom">{isMissedJob ? 'Run this missed schedule now' : 'Trigger a manual run now'}</TooltipContent>
-                                </Tooltip>
-                                {/* Pause */}
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button
-                                      onClick={() => handleToggle(job)}
-                                      className="p-1.5 rounded-md text-gray-400 hover:text-amber-500 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                                    >
-                                      <Pause className="w-3.5 h-3.5" />
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent side="bottom">Pause — stops future cron runs</TooltipContent>
-                                </Tooltip>
-                              </>
-                            )}
-                          </>
-                        ) : (
-                          /* Resume - prominent green button when paused */
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button
-                                onClick={() => handleToggle(job)}
-                                className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/30 hover:bg-green-100 dark:hover:bg-green-900/50 border border-green-200 dark:border-green-800 transition-colors"
-                              >
-                                <Play className="w-3 h-3" />
-                                Resume
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom">Resume — re-enable cron schedule</TooltipContent>
-                          </Tooltip>
-                        )}
-                        <Tooltip>
-                          <TooltipTrigger asChild>
+                          job.last_status === 'running' ? (
                             <button
-                              onClick={() => handleDelete(job)}
-                              className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                              type="button"
+                              onClick={() => handleStopRun(job)}
+                              className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/50"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <Square className="h-3 w-3" />
+                              Stop
                             </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">Delete schedule</TooltipContent>
-                        </Tooltip>
-                        <button
-                          onClick={() => {
-                            if (job.last_status === 'running') return
-                            setExpandedJobIds(prev => (
-                              isExpanded
-                                ? prev.filter(id => id !== job.id)
-                                : [...prev, job.id]
-                            ))
-                          }}
-                          disabled={job.last_status === 'running'}
-                          className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-gray-400"
-                          title={job.last_status === 'running' ? 'Running schedules stay expanded' : undefined}
-                        >
-                          {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                        </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleTrigger(job)}
+                              disabled={triggering === job.id}
+                              className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
+                                isMissedJob
+                                  ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50'
+                                  : 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-green-600'
+                              }`}
+                            >
+                              <Play className="h-3 w-3" />
+                              Run now
+                            </button>
+                          )
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleToggle(job)}
+                            className="inline-flex items-center gap-1 rounded-md border border-green-200 bg-green-50 px-2 py-1 text-xs font-medium text-green-600 transition-colors hover:bg-green-100 dark:border-green-800 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50"
+                          >
+                            <Play className="h-3 w-3" />
+                            Resume
+                          </button>
+                        )}
+                        <div className="relative">
+                          <button
+                            type="button"
+                            aria-label="More schedule actions"
+                            aria-expanded={openActionMenuJobId === job.id}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setOpenActionMenuJobId((openId) => openId === job.id ? null : job.id)
+                            }}
+                            className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                          >
+                            <MoreHorizontal className="h-3.5 w-3.5" />
+                          </button>
+                          {openActionMenuJobId === job.id && (
+                            <div
+                              role="menu"
+                              onPointerDown={(event) => event.stopPropagation()}
+                              className="absolute right-0 top-8 z-30 w-36 rounded-md border border-border bg-popover p-1 shadow-lg"
+                            >
+                              {job.enabled && job.last_status !== 'running' && (
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => { setOpenActionMenuJobId(null); handleToggle(job) }}
+                                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-popover-foreground hover:bg-muted"
+                                >
+                                  <Pause className="h-3.5 w-3.5" /> Pause schedule
+                                </button>
+                              )}
+                              {job.last_status !== 'running' && (
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => {
+                                    setOpenActionMenuJobId(null)
+                                    setExpandedJobIds((ids) => isExpanded ? ids.filter((id) => id !== job.id) : [...ids, job.id])
+                                  }}
+                                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-popover-foreground hover:bg-muted"
+                                >
+                                  {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                                  {isExpanded ? 'Hide details' : 'Show details'}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => { setOpenActionMenuJobId(null); handleDelete(job) }}
+                                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-red-600 hover:bg-red-500/10 dark:text-red-400"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" /> Delete schedule
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -2839,8 +2866,13 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
 
                                   {/* Action buttons */}
                                   <div className="flex items-center gap-2 ml-auto flex-shrink-0">
-                                    {/* Open the scheduled run itself as a read-only chat tab. */}
-                                    {currentSessionId && (
+                                    {/* Open the scheduled run itself as a read-only chat tab.
+                                        Hidden (not just disabled) for a read-only-access user —
+                                        this already opens view-only for every user, but the icon
+                                        looked interactive enough to cause confusion, so it's cut
+                                        from this role entirely as a UX nicety. No server-side
+                                        capability changes with this — see PLAT-262. */}
+                                    {currentSessionId && !isReadOnlyUser && (
                                       <Tooltip>
                                         <TooltipTrigger asChild>
                                           <button
@@ -2968,9 +3000,10 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
       )}
 
     </div>
-    </TooltipProvider>,
-    document.body
+    </TooltipProvider>
   )
+
+  return embedded ? panel : ReactDOM.createPortal(panel, document.body)
 }
 
 export default WorkflowScheduleRunsPanel

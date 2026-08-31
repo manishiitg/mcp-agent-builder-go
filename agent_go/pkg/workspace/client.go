@@ -393,6 +393,11 @@ func validatePathAgainstGuard(guard *FolderGuardConfig, inputPath string, isWrit
 }
 
 func isExactFolderGuardFilePath(path string) bool {
+	if filepath.IsAbs(path) {
+		if info, err := os.Stat(path); err == nil {
+			return !info.IsDir()
+		}
+	}
 	base := filepath.Base(filepath.Clean(strings.TrimSpace(path)))
 	return strings.Contains(base, ".")
 }

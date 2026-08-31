@@ -473,6 +473,72 @@ func TestDownloadsRequiresExplicitPermission(t *testing.T) {
 	}
 }
 
+// TestMacOSAuthorizedSiblingDirectory verifies the complete permission path
+// used by Builder attachments: an allowed directory below workspace-docs must
+// permit access to the directory node as well as its descendants. A subpath-
+// only rule permits existing child files but macOS still rejects listing the
+// directory and creating a new child with "Operation not permitted".
+func TestMacOSAuthorizedSiblingDirectory(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Skipping macOS-specific test")
+	}
+
+	projectRoot := t.TempDir()
+	baseDir := filepath.Join(projectRoot, "workspace-docs")
+	workDir := filepath.Join(baseDir, "Workflow", "jobsearch")
+	downloadsDir := filepath.Join(baseDir, "Downloads")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
+		t.Fatalf("mkdir Downloads: %v", err)
+	}
+
+	isolator := &Isolator{
+		ReadPaths:  []string{"Workflow/jobsearch", "Downloads"},
+		WritePaths: []string{"Workflow/jobsearch", "Downloads"},
+		WorkDir:    workDir,
+		BaseDir:    baseDir,
+	}
+
+	canonicalDownloads := canonicalPath(downloadsDir)
+	profile := isolator.generateSandboxProfile()
+	if !strings.Contains(profile, fmt.Sprintf("(literal \"%s\")", sandboxQuoted(canonicalDownloads))) {
+		t.Fatalf("authorized directory node is missing its literal grant:\n%s", profile)
+	}
+	if !strings.Contains(profile, fmt.Sprintf("(subpath \"%s\")", sandboxQuoted(canonicalDownloads))) {
+		t.Fatalf("authorized directory descendants are missing their subpath grant:\n%s", profile)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	listCmd, listCleanup, err := isolator.ExecuteIsolated(ctx, "ls", []string{downloadsDir})
+	if listCleanup != nil {
+		defer listCleanup()
+	}
+	if err != nil {
+		t.Fatalf("ExecuteIsolated list failed: %v", err)
+	}
+	if output, err := listCmd.CombinedOutput(); err != nil {
+		t.Fatalf("authorized Downloads list failed: %v\nOutput: %s", err, output)
+	}
+
+	testFile := filepath.Join(downloadsDir, "builder-download-test.txt")
+	cmd, cleanup, err := isolator.ExecuteIsolated(ctx, "touch", []string{testFile})
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		t.Fatalf("ExecuteIsolated write failed: %v", err)
+	}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("authorized Downloads write failed: %v\nOutput: %s", err, output)
+	}
+	if _, err := os.Stat(testFile); err != nil {
+		t.Fatalf("authorized file was not created: %v", err)
+	}
+}
+
 func TestSandboxAllowPathsRejectWorkspaceSymlinkEscapes(t *testing.T) {
 	root := t.TempDir()
 	baseDir := filepath.Join(root, "workspace-docs")
@@ -786,5 +852,39 @@ func BenchmarkIsolatorOverhead(b *testing.B) {
 			cleanup()
 		}
 		cancel()
+	}
+}
+
+// TestMountNamespaceCommandUsesUnprivilegedUserNamespace pins the exact
+// privilege shape executeIsolatedMountNamespace requests. A plain "unshare
+// -m" (mount namespace only) needs CAP_SYS_ADMIN in the CURRENT user
+// namespace, which an unprivileged service account never has -- it fails
+// with EPERM regardless of Landlock/AppArmor state, making the whole
+// fallback permanently unusable for every rootless deployment. Confirmed
+// live on the Dominion Hetzner deployment 2026-08-29: identical "-m" alone
+// failed with "Operation not permitted" as the unprivileged service user,
+// while "--mount --user --map-root-user" succeeded -- the standard
+// unprivileged-mount-namespace pattern rootless container runtimes use.
+// This test is portable (no linux build tag) so it catches a regression on
+// any platform, even though the command it inspects only ever runs on Linux.
+func TestMountNamespaceCommandUsesUnprivilegedUserNamespace(t *testing.T) {
+	isolator := &Isolator{WorkDir: t.TempDir()}
+	cmd, cleanup, err := isolator.executeIsolatedMountNamespace(context.Background(), "true", nil)
+	if err != nil {
+		t.Fatalf("executeIsolatedMountNamespace: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	args := cmd.Args
+	if len(args) < 1 || !strings.HasSuffix(args[0], "unshare") {
+		t.Fatalf("args[0] = %q, want it to invoke unshare", args)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"--mount", "--user", "--map-root-user"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("unshare args %v missing %q -- without it this command needs CAP_SYS_ADMIN in the caller's own (unprivileged) user namespace and will always fail with EPERM on a rootless deployment", args, want)
+		}
 	}
 }

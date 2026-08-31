@@ -274,10 +274,11 @@ func ensureIntegratedProject(ctx context.Context, workspaceAPIURL string, runtim
 			return err
 		}
 	}
-	return client.InitializeWorkflowDB(ctx, workspace.InitializeWorkflowDBParams{
+	_, err = client.InitializeWorkflowDB(ctx, workspace.InitializeWorkflowDBParams{
 		DBPath:     filepath.ToSlash(filepath.Join(runtime.WorkspacePath, "db/db.sqlite")),
 		Migrations: []string{presentationsMigration, presentationsKindIndexMigration},
 	})
+	return err
 }
 
 func integratedProjectFolders() []string {

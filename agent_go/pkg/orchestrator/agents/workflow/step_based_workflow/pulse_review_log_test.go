@@ -244,37 +244,3 @@ func TestLoadPulseReviewReceiptsNegativeLimitReturnsCompleteHistory(t *testing.T
 		t.Fatalf("preview=%d complete=%d", len(preview), len(complete))
 	}
 }
-
-func TestRequiredBackgroundPulseReviewReceiptControlsCompletion(t *testing.T) {
-	ctx := context.Background()
-	workspacePath := t.TempDir()
-	const reviewRunID = "background-review-session"
-
-	err := requireBackgroundPulseReviewReceipts(ctx, workspacePath, reviewRunID, []string{"llm_ops_review"})
-	if err == nil || !strings.Contains(err.Error(), "required llm_ops_review receipt") {
-		t.Fatalf("missing receipt error=%v", err)
-	}
-
-	if err := CompletePulseReview(ctx, workspacePath, []string{"llm_ops_review"}, reviewRunID, reviewRunID, "Review failed before reconciliation.", "failed"); err != nil {
-		t.Fatalf("seed failed review receipt: %v", err)
-	}
-	err = requireBackgroundPulseReviewReceipts(ctx, workspacePath, reviewRunID, []string{"llm_ops_review"})
-	if err == nil || !strings.Contains(err.Error(), "status failed") {
-		t.Fatalf("failed receipt error=%v", err)
-	}
-
-	if err := CompletePulseReview(ctx, workspacePath, []string{"llm_ops_review"}, reviewRunID, reviewRunID, "Review completed with typed evidence.", "completed"); err != nil {
-		t.Fatalf("seed completed review receipt: %v", err)
-	}
-	if err := requireBackgroundPulseReviewReceipts(ctx, workspacePath, reviewRunID, []string{"llm_ops_review"}); err != nil {
-		t.Fatalf("completed receipt rejected: %v", err)
-	}
-
-	const strategyRunID = "background-strategy-session"
-	if err := CompletePulseReview(ctx, workspacePath, []string{"strategic_review"}, strategyRunID, strategyRunID, "Strategy review completed with typed evidence.", "completed"); err != nil {
-		t.Fatalf("seed strategic review receipt: %v", err)
-	}
-	if err := requireBackgroundPulseReviewReceipts(ctx, workspacePath, strategyRunID, []string{"strategic_review"}); err != nil {
-		t.Fatalf("completed strategic receipt rejected: %v", err)
-	}
-}

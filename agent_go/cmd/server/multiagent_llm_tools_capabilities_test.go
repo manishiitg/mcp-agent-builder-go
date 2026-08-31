@@ -55,6 +55,29 @@ func TestProviderAuthConfiguredTreatsPiProviderKeysAsPiAuth(t *testing.T) {
 	}
 }
 
+func TestRetiredMediaProvidersAreNeitherCollectableNorAdvertised(t *testing.T) {
+	keys := &StoredProviderKeys{}
+	for _, provider := range []string{"minimax", "elevenlabs", "deepgram"} {
+		if setStoredProviderAPIKey(keys, provider, "test-key") {
+			t.Errorf("setStoredProviderAPIKey(%q) accepted a retired media provider", provider)
+		}
+	}
+
+	capabilities := buildLLMCapabilities(context.Background(), "all", false)
+	for _, capability := range []string{
+		"read_image", "generate_image", "generate_video",
+		"text_to_speech", "speech_to_text", "generate_music",
+	} {
+		if _, ok := capabilities[capability]; ok {
+			t.Errorf("retired media capability %q was advertised", capability)
+		}
+	}
+
+	if got := buildLLMCapabilities(context.Background(), "text_to_speech", false); len(got) != 2 {
+		t.Fatalf("retired capability response = %#v, want only schema_version and notes", got)
+	}
+}
+
 func TestBuildLLMDiscoveryShowsCursorLoginRequired(t *testing.T) {
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
 	t.Setenv("SUPPORTED_LLM_PROVIDERS", "cursor-cli")

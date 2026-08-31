@@ -1,13 +1,15 @@
 import React, { useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
+  BrainCircuit,
   BookOpen,
-  Settings,
   FileText,
   DollarSign,
-  Download,
+  Files,
   FolderOpen,
   LayoutDashboard,
+  KeyRound,
+  Monitor,
   Route,
   Cloud,
   Globe,
@@ -19,14 +21,10 @@ import {
   Activity,
   BellRing,
   CalendarClock,
+  ClipboardCheck,
   RefreshCw,
-  Smartphone,
-  Tablet,
-  Laptop,
-  MoreHorizontal,
-  Pin,
-  PanelRightClose,
-  SlidersHorizontal,
+  Puzzle,
+  Server,
   X,
 } from 'lucide-react'
 import ModalPortal from '../../ui/ModalPortal'
@@ -46,7 +44,6 @@ import type {
 import type { PlanningResponse } from '../../../utils/stepConfigMatching'
 import type { WorkflowExecutionStatus } from '../hooks/useWorkflowExecution'
 import type { ExecutionOptions } from '../../../services/api-types'
-import { useCommandDialogStore } from '../../../stores/useCommandDialogStore'
 import { agentApi } from '../../../services/api'
 import { schedulerApi } from '../../../api/scheduler'
 import WorkflowBackupPopup from '../WorkflowBackupPopup'
@@ -58,59 +55,21 @@ import { PulseWorkspace } from '../PulseWorkspace'
 import { getNotificationDotClass } from '../notificationStatus'
 import { loadWorkflowNotificationInfo, type WorkflowNotificationState } from '../../../services/workflow-notifications'
 import WorkflowAccessPopup from '../WorkflowAccessPopup'
-import WorkflowScheduleRunsPanel from '../../scheduler/WorkflowScheduleRunsPanel'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip'
 import { WORKFLOW_SOUL_REFRESH_EVENT } from '../SoulViewer'
 import { hasWorkflowWriteAccess, hasWorkflowOwnerAccess } from '../../../utils/workflowPermissions'
 import { useAppStore } from '../../../stores/useAppStore'
 import {
-  REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
-  readReportPreviewPreference,
-  writeReportPreviewPreference,
-  type ReportPreviewDevice,
-} from '../../../utils/reportPreviewPreference'
-import {
   PULSE_FIXED_COMMANDS,
   PULSE_MODULE_COMMANDS,
 } from './pulseSections'
-import { buildPulseFocusedReviewChatMessage, sendWorkflowMessageToChat } from '../../../utils/reportHumanInputChat'
+import { sendWorkflowMessageToChat } from '../../../utils/reportHumanInputChat'
 
 // Execution phase ID - special phase that should be displayed separately
 const EXECUTION_PHASE_ID = 'execution'
 const WORKFLOW_SCHEDULE_TOOLBAR_LIMIT = 10_000
 
-type WorkspaceView = 'flow' | 'report' | 'files' | 'costs' | 'execution-logs' | 'learnings' | 'knowledgebase' | 'database'
-
-// These remain stable until the user explicitly pins another destination.
-const DEFAULT_QUICK_WORKSPACE_VIEWS: WorkspaceView[] = ['report', 'costs', 'flow', 'execution-logs', 'learnings']
-const WORKSPACE_VIEW_IDS = new Set<WorkspaceView>([
-  'report', 'flow', 'files', 'costs', 'execution-logs', 'learnings', 'knowledgebase', 'database',
-])
-
-function pinnedWorkspaceViewsStorageKey(workspacePath?: string | null): string {
-  return `agentworks:pinned-workspace-views:${normalizeWorkspacePath(workspacePath) || 'default'}`
-}
-
-function readPinnedWorkspaceViews(workspacePath?: string | null): WorkspaceView[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(pinnedWorkspaceViewsStorageKey(workspacePath)) || '[]')
-    if (!Array.isArray(parsed)) return []
-    const views = parsed.filter((value): value is WorkspaceView => WORKSPACE_VIEW_IDS.has(value))
-    return Array.from(new Set(views)).filter(view => !DEFAULT_QUICK_WORKSPACE_VIEWS.includes(view))
-  } catch {
-    return []
-  }
-}
-
-function writePinnedWorkspaceViews(workspacePath: string | null | undefined, views: WorkspaceView[]): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(pinnedWorkspaceViewsStorageKey(workspacePath), JSON.stringify(views.filter(view => !DEFAULT_QUICK_WORKSPACE_VIEWS.includes(view))))
-  } catch {
-    // A blocked localStorage must not make workspace navigation unusable.
-  }
-}
+type WorkspaceView = 'flow' | 'report' | 'files' | 'costs' | 'execution-logs' | 'learnings' | 'knowledgebase' | 'database' | 'evaluation' | 'schedules' | 'skills' | 'mcp' | 'secrets' | 'folders' | 'browser' | 'llm'
 
 type WorkflowScheduleStats = {
   total: number
@@ -132,11 +91,6 @@ const EMPTY_WORKFLOW_SCHEDULE_STATS: WorkflowScheduleStats = {
 
 function normalizeWorkspacePath(path?: string | null): string {
   return (path || '').replace(/\/+$/, '')
-}
-
-function formatWorkflowNameFromPath(path?: string | null): string {
-  const name = normalizeWorkspacePath(path).split('/').filter(Boolean).pop()
-  return name || 'Workflow'
 }
 
 interface CompactToolbarMenuProps {
@@ -324,7 +278,6 @@ interface WorkflowToolbarProps {
   onCreatePlan: () => void
   showChatArea?: boolean
   onToggleChatArea?: () => void
-  onRefresh?: () => Promise<void>  // Refresh plan and variables
   onExport?: () => void
   // Chat tab strip (WorkflowChatTabs) rendered inline on the left of this bar so the
   // workflow chat tabs + new-chat share one row with the status/tools instead of
@@ -345,9 +298,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   variablesManifest,
   isLoadingWorkspaceState = false,
   chatTabsSlot,
-  onRefresh,
-  onExport,
-  showChatArea = false,
   openPulseOnMount = false,
   className = ''
 }) => {
@@ -380,23 +330,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const setWorkflowWorkspaceView = useWorkflowStore(state => state.setWorkflowWorkspaceView)
   const setCanvasViewMode = useWorkflowStore(state => state.setCanvasViewMode)
   const setShowWorkspacePane = useWorkflowStore(state => state.setShowWorkspacePane)
-  const [previewDevice, setPreviewDeviceState] = useState<ReportPreviewDevice>(() => readReportPreviewPreference(workspacePath))
-  const [pinnedWorkspaceViews, setPinnedWorkspaceViews] = useState<WorkspaceView[]>(() => readPinnedWorkspaceViews(workspacePath))
-
-  useEffect(() => {
-    const sync = () => setPreviewDeviceState(readReportPreviewPreference(workspacePath))
-    sync()
-    window.addEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, sync as EventListener)
-    window.addEventListener('storage', sync)
-    return () => {
-      window.removeEventListener(REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT, sync as EventListener)
-      window.removeEventListener('storage', sync)
-    }
-  }, [workspacePath])
-
-  useEffect(() => {
-    setPinnedWorkspaceViews(readPinnedWorkspaceViews(workspacePath))
-  }, [workspacePath])
 
   const openWorkspaceView = useCallback((view: WorkspaceView) => {
     if (view === 'flow' || view === 'report') setCanvasViewMode(view)
@@ -405,19 +338,19 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     useAppStore.getState().setWorkspaceMinimized(view !== 'files')
   }, [setCanvasViewMode, setShowWorkspacePane, setWorkflowWorkspaceView])
 
-  const collapseWorkspace = useCallback(() => {
-    setShowWorkspacePane(false)
-    useAppStore.getState().setWorkspaceMinimized(true)
-  }, [setShowWorkspacePane])
-
   const isInspectorView = workflowWorkspaceView === 'costs'
     || workflowWorkspaceView === 'execution-logs'
     || workflowWorkspaceView === 'learnings'
     || workflowWorkspaceView === 'knowledgebase'
     || workflowWorkspaceView === 'database'
-  const isPreviewView = workflowWorkspaceView !== 'files' && !isInspectorView
-    && (canvasViewMode === 'flow' || canvasViewMode === 'report')
-
+    || workflowWorkspaceView === 'evaluation'
+    || workflowWorkspaceView === 'schedules'
+    || workflowWorkspaceView === 'skills'
+    || workflowWorkspaceView === 'mcp'
+    || workflowWorkspaceView === 'secrets'
+    || workflowWorkspaceView === 'folders'
+    || workflowWorkspaceView === 'browser'
+    || workflowWorkspaceView === 'llm'
   const activeWorkspaceView: WorkspaceView = workflowWorkspaceView === 'files' || isInspectorView
     ? workflowWorkspaceView
     : canvasViewMode === 'flow' ? 'flow' : 'report'
@@ -425,74 +358,35 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const workspaceViewDefinitions = useMemo(() => ([
     ['report', LayoutDashboard, 'Report', true],
     ['flow', Route, 'Plan', hasPlan],
-    ['files', FolderOpen, 'Files', true],
     ['costs', DollarSign, 'Costs', true],
     ['execution-logs', FileText, 'Execution logs', true],
     ['learnings', BookOpen, 'Learnings', true],
     ['knowledgebase', Database, 'Knowledgebase', true],
     ['database', Table2, 'Database', true],
+    ['files', Files, 'Files', true],
   ] as const).filter(([, , , visible]) => visible), [hasPlan])
 
-  const quickWorkspaceViews = useMemo(() => {
-    const available = new Set<WorkspaceView>(workspaceViewDefinitions.map(([view]) => view))
-    const candidates: WorkspaceView[] = [
-      ...DEFAULT_QUICK_WORKSPACE_VIEWS,
-      ...pinnedWorkspaceViews,
-    ]
-    return Array.from(new Set(candidates)).filter(view => available.has(view))
-  }, [pinnedWorkspaceViews, workspaceViewDefinitions])
-
-  const togglePinnedWorkspaceView = useCallback((view: WorkspaceView) => {
-    setPinnedWorkspaceViews(current => {
-      const next = current.includes(view)
-        ? current.filter(candidate => candidate !== view)
-        : [...current, view]
-      writePinnedWorkspaceViews(workspacePath, next)
-      return next
-    })
-  }, [workspacePath])
-
-  // PLAT-158: the enabled dedicated review schedule is the only recurring
-  // Pulse switch. Ordinary workflow runs never launch Gate/Review+Fix inline.
-  const pulseReviewSchedule = useWorkflowManifestStore((s) => {
+  const pulseConfig = useWorkflowManifestStore(useShallow((s) => {
     const wf = s.workflows.find((w) => w.workspace_path === workspacePath)
-    return wf?.manifest.schedules?.find((schedule) => schedule.pulse_review_only)
-  })
-  const monitorOn = !!pulseReviewSchedule?.enabled
-  const refreshWorkflowManifests = useWorkflowManifestStore((s) => s.refreshWorkflows)
+    return {
+      enabled: wf?.manifest.pulse?.enabled,
+      legacyEnabled: wf?.manifest.schedules?.some((schedule) => schedule.pulse_review_only && schedule.enabled),
+    }
+  }))
+  const monitorOn = !!(pulseConfig.enabled || pulseConfig.legacyEnabled)
+  const updateWorkflowManifest = useWorkflowManifestStore((s) => s.updateWorkflow)
   const [monitorSaving, setMonitorSaving] = useState(false)
   const toggleMonitor = useCallback(async () => {
     if (!workspacePath || monitorSaving) return
     setMonitorSaving(true)
     try {
-      if (pulseReviewSchedule) {
-        if (monitorOn) {
-          await schedulerApi.disableJob(pulseReviewSchedule.id)
-        } else {
-          await schedulerApi.enableJob(pulseReviewSchedule.id)
-        }
-      } else {
-        // PLAT-158: creating the dedicated pulse_review_only schedule IS
-        // enabling Pulse — this is still the single source of truth, just
-        // created lazily from the toolbar toggle instead of /pulse-setup.
-        await schedulerApi.createJob({
-          name: 'Pulse review',
-          entity_type: 'workflow',
-          workspace_path: workspacePath,
-          mode: 'workshop',
-          cron_expression: '0 9 * * *',
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          enabled: true,
-          pulse_review_only: true,
-        })
-      }
-      await refreshWorkflowManifests()
+      await updateWorkflowManifest(workspacePath, { pulse_enabled: !monitorOn })
     } catch (err) {
       console.error('[WorkflowToolbar] Failed to toggle Pulse review schedule:', err)
     } finally {
       setMonitorSaving(false)
     }
-  }, [workspacePath, pulseReviewSchedule, monitorOn, monitorSaving, refreshWorkflowManifests])
+  }, [workspacePath, monitorOn, monitorSaving, updateWorkflowManifest])
   const [showMonitorHelp, setShowMonitorHelp] = useState(false)
   const [pulseModuleStates, setPulseModuleStates] = useState<PulseModuleState[]>([])
   const [pulseFinalCommandStates, setPulseFinalCommandStates] = useState<PulseFinalCommandState[]>([])
@@ -510,10 +404,8 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [showNotifications, setShowNotifications] = useState(false)
   const [notificationState, setNotificationState] = useState<WorkflowNotificationState | 'loading'>('loading')
   const [showAccessPopup, setShowAccessPopup] = useState(false)
-  const [showWorkflowSchedulesPanel, setShowWorkflowSchedulesPanel] = useState(false)
   const [workflowScheduleStats, setWorkflowScheduleStats] = useState<WorkflowScheduleStats>(EMPTY_WORKFLOW_SCHEDULE_STATS)
   const [manualPulseStarting, setManualPulseStarting] = useState(false)
-  const [focusedPulseStarting, setFocusedPulseStarting] = useState<string | null>(null)
 
   const runPulseNow = useCallback(async () => {
     if (!workspacePath || manualPulseStarting) return
@@ -538,35 +430,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       setManualPulseStarting(false)
     }
   }, [manualPulseStarting, workspacePath])
-
-  const runFocusedPulseNow = useCallback(async (module: string, focusKey: string) => {
-    if (!workspacePath || focusedPulseStarting) return
-    const focusID = `${module}:${focusKey}`
-    setFocusedPulseStarting(focusID)
-    try {
-      const message = buildPulseFocusedReviewChatMessage(module, focusKey)
-      const result = await sendWorkflowMessageToChat({ workspacePath, message })
-      useChatStore.getState().addToast(
-        result.queuedBehindRunningTurn
-          ? 'Focused review queued behind the current chat turn.'
-          : result.reused
-            ? 'Focused review sent to the existing chat.'
-            : 'New chat opened for the focused review.',
-        'success',
-      )
-      setShowMonitorHelp(false)
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : 'Unable to open focused Pulse review in chat'
-      useChatStore.getState().addToast(detail.trim() || 'Unable to start focused Pulse review', 'error')
-    } finally {
-      setFocusedPulseStarting(null)
-    }
-  }, [focusedPulseStarting, workspacePath])
-
-  const workflowScheduleLabel = useMemo(
-    () => formatWorkflowNameFromPath(workspacePath),
-    [workspacePath]
-  )
 
   const refreshPulseModuleStates = useCallback(async (showLoading = true) => {
     if (!workspacePath) {
@@ -743,7 +606,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     setShowBackupPopup(false)
     setShowPublishPopup(false)
     setShowNotifications(false)
-    setShowWorkflowSchedulesPanel(false)
     setShowMonitorHelp(false)
   }, [])
   
@@ -936,10 +798,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
           {workspacePath && (
             <>
               <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
-                {quickWorkspaceViews.map(view => {
-                  const definition = workspaceViewDefinitions.find(([candidate]) => candidate === view)
-                  if (!definition) return null
-                  const [, Icon, label] = definition
+                {workspaceViewDefinitions.map(([view, Icon, label]) => {
                   const active = view === activeWorkspaceView
                   const viewButton = (
                     <button
@@ -970,132 +829,8 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   </Tooltip>
                   )
                 })}
-                <CompactToolbarMenu
-                  label="More workspace views"
-                  active={!quickWorkspaceViews.includes(activeWorkspaceView)}
-                  icon={<MoreHorizontal className="h-3.5 w-3.5" />}
-                >
-                  {(close) => (
-                    <>
-                      {workspaceViewDefinitions
-                        // Already shown as a quick-access icon -- listing it again here
-                        // too is pure duplication.
-                        .filter(([view]) => !quickWorkspaceViews.includes(view))
-                        .map(([view, Icon, label]) => (
-                        <CompactToolbarMenuItem
-                          key={view}
-                          icon={<Icon className="h-3.5 w-3.5" />}
-                          label={label}
-                          active={workflowWorkspaceView === view}
-                          // Every item that survives the quickWorkspaceViews filter
-                          // above is by definition not in DEFAULT_QUICK_WORKSPACE_VIEWS
-                          // (a subset of it), so it's always pin-eligible here.
-                          trailingAction={{
-                            label: pinnedWorkspaceViews.includes(view) ? 'Unpin from shortcuts' : 'Pin to shortcuts',
-                            icon: <Pin className={`h-3.5 w-3.5 ${pinnedWorkspaceViews.includes(view) ? 'fill-current' : ''}`} />,
-                            active: pinnedWorkspaceViews.includes(view),
-                            onClick: () => togglePinnedWorkspaceView(view),
-                          }}
-                          onClick={() => {
-                            openWorkspaceView(view)
-                            close()
-                          }}
-                        />
-                      ))}
-                    </>
-                  )}
-                </CompactToolbarMenu>
               </div>
 
-              {showWorkspacePane && (
-                <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
-                  <CompactToolbarMenu
-                    label={`${previewDevice === 'mobile' ? 'Mobile' : previewDevice === 'tablet' ? 'Tablet' : 'Laptop'} workspace`}
-                    icon={previewDevice === 'mobile'
-                      ? <Smartphone className="h-3.5 w-3.5" />
-                      : previewDevice === 'tablet'
-                        ? <Tablet className="h-3.5 w-3.5" />
-                        : <Laptop className="h-3.5 w-3.5" />}
-                  >
-                    {(close) => (
-                      <>
-                        <div className="px-2.5 pb-1.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Preview size</div>
-                        {([
-                          ['mobile', Smartphone, 'Mobile'],
-                          ['tablet', Tablet, 'Tablet'],
-                          ['desktop', Laptop, 'Laptop'],
-                        ] as const).map(([mode, Icon, label]) => (
-                          <CompactToolbarMenuItem
-                            key={mode}
-                            icon={<Icon className="h-3.5 w-3.5" />}
-                            label={label}
-                            active={previewDevice === mode}
-                            onClick={() => {
-                              writeReportPreviewPreference(workspacePath, mode)
-                              close()
-                            }}
-                          />
-                        ))}
-                      </>
-                    )}
-                  </CompactToolbarMenu>
-                  {activeWorkspaceView === 'report' && onRefresh && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={() => void onRefresh()}
-                          className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
-                          aria-label="Refresh report"
-                          data-testid="refresh-report"
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom"><p>Refresh report</p></TooltipContent>
-                    </Tooltip>
-                  )}
-                  <CompactToolbarMenu
-                    label="Workspace actions"
-                    icon={<SlidersHorizontal className="h-3.5 w-3.5" />}
-                  >
-                    {(close) => (
-                      <>
-                        {isPreviewView && activeWorkspaceView !== 'report' && onRefresh && (
-                          <CompactToolbarMenuItem
-                            icon={<RefreshCw className="h-3.5 w-3.5" />}
-                            label="Refresh"
-                            onClick={() => {
-                              void onRefresh()
-                              close()
-                            }}
-                          />
-                        )}
-                        {isPreviewView && onExport && (
-                          <CompactToolbarMenuItem
-                            icon={<Download className="h-3.5 w-3.5" />}
-                            label={`Download ${canvasViewMode === 'report' ? 'report' : 'plan'}`}
-                            onClick={() => {
-                              onExport()
-                              close()
-                            }}
-                          />
-                        )}
-                        {showChatArea && (
-                          <CompactToolbarMenuItem
-                            icon={<PanelRightClose className="h-3.5 w-3.5" />}
-                            label="Collapse workspace"
-                            onClick={() => {
-                              collapseWorkspace()
-                              close()
-                            }}
-                          />
-                        )}
-                      </>
-                    )}
-                  </CompactToolbarMenu>
-                </div>
-              )}
             </>
           )}
 
@@ -1122,7 +857,20 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 <TooltipTrigger asChild>
                   <button
                     type="button"
-                    onClick={() => setShowWorkflowSchedulesPanel(true)}
+                    onClick={() => openWorkspaceView('evaluation')}
+                    className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    aria-label="Evaluation"
+                  >
+                    <ClipboardCheck className="h-3.5 w-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom"><p>Evaluation results</p></TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => openWorkspaceView('schedules')}
                     className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                     aria-label="Schedules"
                   >
@@ -1166,39 +914,63 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
           </Tooltip>
         )}
 
-        {/* Workflow Settings — write-only (read users don't see this) */}
+        {/* Workflow capabilities — write-only (read users don't see this) */}
         {canWriteWorkflow && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => useCommandDialogStore.getState().openDialog('presetSettings')}
-                className="p-1.5 rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
-              >
-                <Settings className="w-3.5 h-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom"><p>Settings</p></TooltipContent>
-          </Tooltip>
+          <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={() => openWorkspaceView('skills')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'skills' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow skills" aria-pressed={workflowWorkspaceView === 'skills'}>
+                  <Puzzle className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>Workflow skills</p></TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={() => openWorkspaceView('secrets')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'secrets' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow secrets" aria-pressed={workflowWorkspaceView === 'secrets'}>
+                  <KeyRound className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>Workflow secrets</p></TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={() => openWorkspaceView('mcp')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'mcp' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow MCP servers" aria-pressed={workflowWorkspaceView === 'mcp'}>
+                  <Server className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>Workflow MCP servers</p></TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={() => openWorkspaceView('browser')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'browser' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Browser automation" aria-pressed={workflowWorkspaceView === 'browser'}>
+                  <Monitor className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>Browser automation</p></TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={() => openWorkspaceView('llm')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'llm' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow LLM configuration" aria-pressed={workflowWorkspaceView === 'llm'}>
+                  <BrainCircuit className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>Workflow LLM configuration</p></TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={() => openWorkspaceView('folders')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'folders' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Attached folders" aria-pressed={workflowWorkspaceView === 'folders'}>
+                  <FolderOpen className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>Attached folders</p></TooltipContent>
+            </Tooltip>
+          </div>
         )}
 
         </TooltipProvider>
       </div>
     </div>
-    {showWorkflowSchedulesPanel && (
-      <WorkflowScheduleRunsPanel
-        workflowScope={{
-          presetQueryId,
-          workspacePath,
-          label: workflowScheduleLabel,
-        }}
-        onClose={() => {
-          setShowWorkflowSchedulesPanel(false)
-          refreshWorkflowScheduleStats()
-        }}
-        onJobsLoaded={updateWorkflowScheduleStats}
-      />
-    )}
-
     {/* Database-native Pulse workspace */}
     {showMonitorHelp && (
       <ModalPortal>
@@ -1249,19 +1021,11 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 {workspacePath && (
                   <PulseWorkspace
                     workspacePath={workspacePath}
-                    monitorOn={monitorOn}
+                    moduleStates={pulseModuleStates}
                     finalCommandStates={pulseFinalCommandStates}
-                    gateMode={pulseGateMode}
                     reviewFocuses={pulseReviewFocuses}
                     reviewFocusSelections={pulseReviewFocusSelections}
-                    statusLoading={pulseStatusLoading}
                     statusError={pulseStatusError}
-                    onRefresh={() => {
-                      window.dispatchEvent(new CustomEvent(WORKFLOW_SOUL_REFRESH_EVENT))
-                      void refreshPulseModuleStates()
-                    }}
-                    onRunFocus={runFocusedPulseNow}
-                    focusRunStarting={focusedPulseStarting}
                   />
                 )}
               </div>
@@ -1282,8 +1046,8 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${monitorOn ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
                 </button>
                 <div className="min-w-0">
-                  <div className="text-xs font-medium text-foreground">{monitorOn ? 'Reviewing on its own schedule' : pulseReviewSchedule ? 'Scheduled review is off' : 'Pulse is off'}</div>
-                  <div className="truncate text-[11px] text-muted-foreground">{pulseReviewSchedule ? 'Pulse findings, fixes, decisions, and history are here.' : 'Turn on to review runs daily and track findings here.'}</div>
+                  <div className="text-xs font-medium text-foreground">{monitorOn ? 'Reviews scheduled runs' : 'Pulse is off'}</div>
+                  <div className="truncate text-[11px] text-muted-foreground">{monitorOn ? 'Pulse Gate runs after each normal scheduled run.' : 'Turn on to review completed scheduled runs.'}</div>
                 </div>
               </div>
               <div className="inline-flex h-8 items-center overflow-hidden rounded-lg border border-border bg-muted/30">

@@ -513,7 +513,6 @@ func wrapExecutorsWithChatModeFolderGuard(executors map[string]func(ctx context.
 		executors,
 		"CHAT MODE FOLDER GUARD",
 		"CHAT FOLDER GUARD WRAPPER",
-		"chat mode",
 		folderGuardContextChat,
 		readOnlyFolders,
 		blockedWriteFolders,
@@ -529,7 +528,6 @@ func wrapExecutorsWithWorkflowPhaseFolderGuard(executors map[string]func(ctx con
 		executors,
 		"WORKFLOW PHASE FOLDER GUARD",
 		"WORKFLOW FOLDER GUARD WRAPPER",
-		"workflow builder",
 		folderGuardContextWorkflow,
 		readOnlyFolders,
 		blockedWriteFolders,
@@ -540,7 +538,7 @@ func wrapExecutorsWithWorkflowPhaseFolderGuard(executors map[string]func(ctx con
 // wrapExecutorsWithFolderGuard is the shared low-level path check. Mode-specific
 // wrappers above own the policy: which roots are writable and which context key
 // is injected for shell execution.
-func wrapExecutorsWithFolderGuard(executors map[string]func(ctx context.Context, args map[string]interface{}) (string, error), logPrefix string, wrapperLogPrefix string, workflowAccessDenyMode string, contextMode folderGuardContextMode, readOnlyFolders []string, blockedWriteFolders []string, allowedWriteFolders []string) map[string]func(ctx context.Context, args map[string]interface{}) (string, error) {
+func wrapExecutorsWithFolderGuard(executors map[string]func(ctx context.Context, args map[string]interface{}) (string, error), logPrefix string, wrapperLogPrefix string, contextMode folderGuardContextMode, readOnlyFolders []string, blockedWriteFolders []string, allowedWriteFolders []string) map[string]func(ctx context.Context, args map[string]interface{}) (string, error) {
 	// No protected folders — all users share the same filesystem
 	protectedFolders := []string{}
 
@@ -559,16 +557,6 @@ func wrapExecutorsWithFolderGuard(executors map[string]func(ctx context.Context,
 	// For shell sandboxing, pass all allowed write folders
 	shellAllowedFolders := make([]string, len(allowedWriteFolders))
 	copy(shellAllowedFolders, allowedWriteFolders)
-
-	// Check if any allowed write folder OR read-only folder grants Workflow/ access (case-insensitive)
-	hasWorkflowAccess := false
-	allAccessFolders := append(append([]string{}, allowedWriteFolders...), readOnlyFolders...)
-	for _, f := range allAccessFolders {
-		if strings.HasPrefix(strings.ToLower(filepath.Clean(f)), "workflow") {
-			hasWorkflowAccess = true
-			break
-		}
-	}
 
 	// Write tools that should be restricted
 	writeTools := map[string]bool{
@@ -658,18 +646,6 @@ func wrapExecutorsWithFolderGuard(executors map[string]func(ctx context.Context,
 							}
 						}
 
-						// Check if shell command references Workflow/ folder (blocked unless @context grants access)
-						if !hasWorkflowAccess {
-							workflowLower := "workflow"
-							if strings.Contains(cmdLower, workflowLower+"/") ||
-								strings.Contains(cmdLower, workflowLower+" ") ||
-								strings.Contains(cmdLower, " "+workflowLower) ||
-								strings.Contains(cmdLower, "/"+workflowLower) ||
-								strings.HasSuffix(cmdLower, workflowLower) {
-								log.Printf("[%s] Blocked shell command referencing Workflow/: %s", logPrefix, cmdStr)
-								return "", fmt.Errorf("access denied: shell commands cannot reference 'Workflow/' folder in %s", workflowAccessDenyMode)
-							}
-						}
 					}
 				}
 				// Inject allowed write folders for kernel-level sandboxing

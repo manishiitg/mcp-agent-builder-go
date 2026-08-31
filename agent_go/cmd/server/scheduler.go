@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,9 +38,8 @@ type ScheduleContext struct {
 	// A scheduled run mints its own session, so without this link its terminals
 	// are invisible to the tab that asked for the run. Empty for cron.
 	OriginSessionID string
-	// ForcePulseReview is used by the toolbar's one-off Pulse action and by a
-	// dedicated Pulse schedule. It reuses the scheduled-run pipeline without
-	// coupling Pulse to ordinary workflow schedules.
+	// ForcePulseReview is used by the toolbar's one-off Pulse action. Normal
+	// schedules use workflow.json pulse.enabled instead.
 	ForcePulseReview bool
 	// PulseOnly suppresses the normal workflow message for the toolbar's one-off
 	// Pulse action. Version preflight still runs before Pulse, which reviews the
@@ -277,6 +275,15 @@ func (s *SchedulerService) Start(ctx context.Context) error {
 	// Discover all workflows by scanning workspace-docs/Workflow/*/workflow.json
 	workflows := s.discoverWorkflows(ctx)
 	scheduleLogf("[SCHEDULER] Discovered %d workflows with manifests", len(workflows))
+	for i := range workflows {
+		if workflows[i].Manifest.MigrateLegacyPulseSchedule() {
+			if err := WriteWorkflowManifest(ctx, workflows[i].WorkspacePath, workflows[i].Manifest); err != nil {
+				scheduleLogf("[PULSE] Failed to migrate legacy dedicated schedule in %s: %v", workflows[i].WorkspacePath, err)
+			} else {
+				scheduleLogf("[PULSE] Migrated legacy dedicated schedule to pulse.enabled in %s", workflows[i].WorkspacePath)
+			}
+		}
+	}
 	for _, wf := range workflows {
 		// Reviewer rows are stranded by an interrupted agent process and no
 		// longer represent live work after restart. This cleanup does not infer
@@ -333,7 +340,7 @@ func (s *SchedulerService) Start(ctx context.Context) error {
 			sctx := buildScheduleContext(wf.WorkspacePath, wf.Manifest, sched)
 			if err := s.LoadSchedule(sctx); err != nil {
 				scheduleLogf("[SCHEDULER] Failed to load schedule %s (%s): %v", sched.ID, sched.Name, err)
-			} else if sched.Enabled {
+			} else if sched.Enabled && !sched.PulseReviewOnly {
 				loaded++
 			}
 		}
@@ -344,9 +351,6 @@ func (s *SchedulerService) Start(ctx context.Context) error {
 
 	// Wall-clock tick loop: every 60s, evaluate all registered schedules against current time.
 	go s.tickLoop(ctx)
-	// Do not make a durable fast-Pulse request wait for the first tick after a
-	// restart. It still goes through the same dedicated schedule/session path.
-	go s.launchPendingFastPulseRequests(context.Background())
 
 	// Wait for context cancellation
 	<-ctx.Done()
@@ -472,12 +476,11 @@ func (s *SchedulerService) tickLoop(ctx context.Context) {
 			// schedules (PLAT-101).
 			go s.resumeDueCapacityWaits(context.Background(), t.UTC())
 			go s.resumeQueuedScheduleOccurrences(context.Background(), t.UTC())
-			// A workflow finalizer may ask for an earlier Pulse after judging that
-			// its just-finished run materially changed evidence. The request is
-			// durable and coalesced, but it still launches only the configured
-			// PulseReviewOnly schedule in a separate scheduler session.
+			// A durable fast-Pulse request (PLAT-262) otherwise sits inert
+			// until a regularly scheduled Pulse run happens to coalesce it
+			// (see the PulseOnly branch in triggerSchedule) — the whole point
+			// of "fast" is dispatching it now, not waiting for that.
 			go s.launchPendingFastPulseRequests(context.Background())
-
 			lastTick = t
 		}
 	}
@@ -603,7 +606,7 @@ func shouldRunPulseLifecycle(sctx *ScheduleContext, manifest *WorkflowManifest) 
 	if manifest == nil {
 		return false
 	}
-	return manifest.HasEnabledPulseReviewSchedule() || (sctx != nil && sctx.ForcePulseReview)
+	return manifest.PulseEnabled() || (sctx != nil && sctx.ForcePulseReview)
 }
 
 // pulseScheduleTimingSummary supplies facts to the ordinary-run finalizer; it
@@ -680,6 +683,13 @@ func (s *SchedulerService) LoadSchedule(sctx *ScheduleContext) error {
 		if strings.HasPrefix(key, calendarPrefix) {
 			delete(s.jobs, key)
 		}
+	}
+	// Legacy manifests may still contain a dedicated Pulse cron. It now serves
+	// only as a backwards-compatible enablement signal; recurring Pulse is
+	// triggered by completion of a normal scheduled run instead.
+	if sched.PulseReviewOnly {
+		s.scheduleFingerprints[runtimeKey] = scheduleConfigFingerprint(sctx)
+		return nil
 	}
 
 	// Update workspace index
@@ -1141,6 +1151,27 @@ func (s *SchedulerService) GetWorkspaceForSchedule(scheduleID string) string {
 		match = workspacePath
 	}
 	return match
+}
+
+// ListFireDecisions returns the durable tick-loop decision log for one
+// schedule — including occurrences the scheduler correctly skipped
+// (global pause, busy, a queued dependency) and never turned into a
+// schedule_runs row at all. get_schedule_runs's own history only shows
+// actual runs, so a schedule that looks silent for days there can be a
+// scheduler correctly honoring a pause the whole time, not a defect —
+// this is the only read path that can tell the two apart (found live on
+// confida-login: four Technical Review passes theorized a missing
+// misfire-recovery mechanism instead of reading this durable, already-logged
+// decision trail).
+func (s *SchedulerService) ListFireDecisions(ctx context.Context, workspacePath, scheduleID string, limit int) ([]schedulerstate.FireDecision, error) {
+	s.stateStoreMu.RLock()
+	store := s.stateStore
+	s.stateStoreMu.RUnlock()
+	if store == nil {
+		return nil, errors.New("schedule state store is unavailable")
+	}
+	scopeID := filepath.Clean(strings.TrimSpace(workspacePath))
+	return store.ListFireDecisions(ctx, "workflow", scopeID, scheduleID, limit)
 }
 
 // TriggerNow triggers a schedule immediately (for manual trigger API).
@@ -2101,16 +2132,13 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] Failed to update run entry for %s: %v", schedID, err)
 	}
 
-	// Pulse: the dedicated review lifecycle. Its own schedule runs a Gate turn that reads
+	// Pulse runs after an enabled normal schedule completes. Gate reads
 	// run evidence and records a module worklist in db/db.sqlite, then executes
 	// only the selected agents (consolidated Workflow Review, independent
 	// Strategy Auditor, and independent Goal Advisor), then one Fixer, backs
 	// up the final state, publishes, and sends
-	// a review summary notification. Ordinary workflow schedules run only their
-	// short backup/publish/run-summary finalizer.
-	// Recurring Pulse is configured only by an enabled pulse_review_only
-	// schedule. Ordinary workflow runs receive the short run finalizer but never
-	// Gate/Review+Fix; the dedicated schedule owns the full Pulse lifecycle.
+	// a review summary notification. Recurring Pulse is configured by
+	// workflow.json pulse.enabled and has no independent cron.
 	// Manual one-off Pulse explicitly forces the same lifecycle.
 	// Never affects the run's recorded result.
 	// A blocked contract-upgrade preflight is the one failure where Pulse has
@@ -2129,15 +2157,15 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 			if sctx.PulseOnly && strings.TrimSpace(sctx.PulseEvidenceRunStatus) != "" {
 				pulseEvidenceStatus = sctx.PulseEvidenceRunStatus
 			}
-			// Only a dedicated/manual Pulse occurrence enters Pulse lifecycle state.
-			// An ordinary run stays at workflow_finished while its short finalizer runs.
+			// Manual Pulse enters its explicit lifecycle state. A normal schedule
+			// continues post-run in the same session against the run it just made.
 			if sctx.PulseOnly {
 				s.transitionScheduleRun(ctx, sctx, schedulerstate.Transition{
 					RunID: runID, To: schedulerstate.StatePulseGate, Reason: "dedicated Pulse review started", SessionID: sessionID, SessionKind: "pulse", At: time.Now().UTC(),
 				})
 			}
 			// Pass the run's sessionID so the next message resumes the SAME chat.
-			pulseResult = s.runPulseLifecycle(ctx, sctx, manifest, pulseEvidenceStatus, runFolder, sessionID, runID, errMsg)
+			pulseResult = s.runPulseLifecycle(ctx, sctx, pulseEvidenceStatus, runFolder, sessionID, runID, errMsg)
 		}
 	}
 
@@ -2198,7 +2226,7 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 }
 
 // runPulseLifecycle continues the scheduled run's main-agent conversation with
-// four conceptual turns: Gate, optional Review, optional Fix, and Finalize.
+// three conceptual turns: Gate, optional Review+Fix, and Finalize.
 // The agent owns reviewer selection, specialist delegation, diagnosis, repair,
 // and verification. Go supplies tools and permissions, preserves turn ordering,
 // and validates the typed durable receipts between turns. Pulse never changes
@@ -2212,7 +2240,7 @@ const (
 	pulseLifecycleStopped   pulseLifecycleResult = "stopped"
 )
 
-func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *ScheduleContext, manifest *WorkflowManifest, runStatus, runFolder, runSessionID, scheduleRunID, runFailureReason string) (pulseResult pulseLifecycleResult) {
+func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *ScheduleContext, runStatus, runFolder, runSessionID, scheduleRunID, runFailureReason string) (pulseResult pulseLifecycleResult) {
 	pulseResult = pulseLifecyclePartial
 	var reviewFixStartedAt, reviewFixCompletedAt time.Time
 
@@ -2236,10 +2264,10 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 		return
 	}
 
-	// Pulse is one continuing agent conversation. Go sends four ordered turns:
-	// Gate, Review, Fix, and Finalize. Reviewers classify evidence before an
-	// independent Fixer receives a bounded agent-selected repair batch. Go preserves
-	// ordering and validates durable receipts; the agents own semantic choices.
+	// Pulse is one continuing agent conversation. Go sends three ordered turns:
+	// Gate, Review+Fix, and Finalize. The selected module's terminal result is
+	// the single durable completion boundary; Go preserves ordering while agents
+	// own the semantic choices and per-finding lifecycle.
 	pulseContext := "A scheduled run of this workflow just finished"
 	if sctx.PulseOnly {
 		pulseContext = "This is a manual Pulse-only review of the latest retained workflow evidence. The workflow was not executed by this action"
@@ -2332,14 +2360,14 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 		s.sessionLogf(sctx, sessionID, "[PULSE] workflow did not start in this invocation; skipping Gate, reviewers, Fixer, dashboard and publish")
 	}
 
-	lightweightFinalizeOnly := scheduledRunUsesLightweightFinalize(reviewEvidenceAvailable, sctx.PulseOnly)
-
 	var steps []pulseLifecycleStep
+	// reviewFixScheduled tracks whether pulseLifecycleAgenticReviewStep is
+	// already in `steps`, checked by the late-schedule insertion below (a
+	// plan_drift_review finding must not get technical_review dispatched
+	// twice in the same pass).
+	reviewFixScheduled := false
 	if !reviewEvidenceAvailable {
 		steps = pulseLifecycleNoRunSteps(pulseRunID, runFailureReason, notificationInstructionsFromCapabilities(sctx.Capabilities))
-	} else if lightweightFinalizeOnly {
-		s.sessionLogf(sctx, sessionID, "[FINALIZE] running backup/publish/notify only; Gate/Review+Fix belong exclusively to the dedicated Pulse schedule")
-		steps = scheduledRunFinalizeStepWithPulseTiming(pulseRunID, pulseScheduleTimingSummary(manifest), notificationInstructionsFromCapabilities(sctx.Capabilities))
 	} else {
 		gateStep := pulseLifecycleGateStep(pulseRunID, runFolder, runStatus)
 		if sctx.Schedule.PulseReviewOnly {
@@ -2386,13 +2414,31 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 			}
 		}
 		if gateCompleted {
-			if due, err := pulseWorklistHasDueModule(ctx, sctx.WorkspacePath, pulseRunID); err != nil {
-				s.sessionLogf(sctx, sessionID, "[PULSE] could not inspect due-module receipt after Gate; preserving Review and Fix turns: %v", err)
-				steps = append(steps, pulseLifecycleAgenticReviewStep(pulseRunID), pulseLifecycleAgenticFixStep(pulseRunID))
+			// plan_drift_review must run and fully complete BEFORE technical_review
+			// is dispatched, or technical_review's backlog read can race a drift
+			// finding that hasn't been written yet — see
+			// pulseLifecyclePlanDriftReviewStep's own doc comment.
+			runningPlanDriftReview := false
+			if planDriftDue, err := pulseWorklistModulesDue(ctx, sctx.WorkspacePath, pulseRunID, pulseModulePlanDriftReview); err != nil {
+				s.sessionLogf(sctx, sessionID, "[PULSE] could not inspect plan_drift_review due-module receipt after Gate; preserving the plan drift review turn: %v", err)
+				steps = append(steps, pulseLifecyclePlanDriftReviewStep(pulseRunID))
+				runningPlanDriftReview = true
+			} else if planDriftDue {
+				steps = append(steps, pulseLifecyclePlanDriftReviewStep(pulseRunID))
+				runningPlanDriftReview = true
+			}
+			if due, err := pulseWorklistModulesDue(ctx, sctx.WorkspacePath, pulseRunID, pulseModuleTechnicalReview, pulseModuleStrategicReview); err != nil {
+				s.sessionLogf(sctx, sessionID, "[PULSE] could not inspect due-module receipt after Gate; preserving the sequenced Review + Fix turn: %v", err)
+				steps = append(steps, pulseLifecycleAgenticReviewStep(pulseRunID))
+				reviewFixScheduled = true
 			} else if due {
-				steps = append(steps, pulseLifecycleAgenticReviewStep(pulseRunID), pulseLifecycleAgenticFixStep(pulseRunID))
-			} else {
-				s.sessionLogf(sctx, sessionID, "[PULSE] Gate skipped every review perspective; omitting Review and Fix turns")
+				steps = append(steps, pulseLifecycleAgenticReviewStep(pulseRunID))
+				reviewFixScheduled = true
+			} else if !runningPlanDriftReview {
+				// Only plan_drift_review can still add repair-worthy findings this
+				// pass (see the "late-schedule review-fix" check in the loop below).
+				// If it isn't even running, Gate really did find nothing due.
+				s.sessionLogf(sctx, sessionID, "[PULSE] Gate skipped every review perspective; omitting the Review + Fix turn")
 			}
 			steps = append(steps, pulseLifecycleFinalSteps(pulseRunID, notificationInstructionsFromCapabilities(sctx.Capabilities))...)
 			if len(steps) > 0 && !isPulseLifecycleFinalStep(steps[0].label) {
@@ -2407,11 +2453,15 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 		}
 	}
 
-	for i, st := range steps {
+	// Index-based (not range) so a late review-fix insertion below is picked
+	// up by the loop that is already in progress — range would have captured
+	// the pre-insertion length and never see it.
+	for i := 0; i < len(steps); i++ {
+		st := steps[i]
 		// No Pulse turn stamps a contract version, so none of them is granted
 		// one. Revoking after each turn keeps that true even if a future step
 		// starts minting.
-		if st.label == "review" {
+		if st.label == "review-fix" {
 			reviewFixStartedAt = time.Now().UTC()
 		}
 		result := runStep(st)
@@ -2419,22 +2469,100 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 		if abortIfInterrupted(st, result) {
 			return
 		}
-		if result.outcome == pulseLifecycleStepCompleted && st.label == "fix" {
-			if err := validatePulseDueModuleResults(ctx, sctx.WorkspacePath, pulseRunID); err != nil {
-				s.sessionLogf(sctx, sessionID, "[PULSE] Review/Fix receipt incomplete; asking the same conversation to reconcile it: %v", err)
-				continuation := pulseLifecycleReviewFixContinuationStep(pulseRunID, err)
+		if result.outcome == pulseLifecycleStepCompleted && (st.label == "review-fix" || st.label == "plan-drift-review") {
+			var receiptErr error
+			if st.label == "plan-drift-review" {
+				receiptErr = validatePulseDueModuleResultsFor(ctx, sctx.WorkspacePath, pulseRunID, pulseModulePlanDriftReview)
+			} else {
+				receiptErr = validatePulseDueModuleResults(ctx, sctx.WorkspacePath, pulseRunID)
+			}
+			if receiptErr != nil {
+				s.sessionLogf(sctx, sessionID, "[PULSE] %s receipt incomplete; asking the same conversation to reconcile it: %v", st.label, receiptErr)
+				continuation := pulseLifecycleReviewFixContinuationStep(pulseRunID, receiptErr)
 				result = runStep(continuation)
 				if abortIfInterrupted(continuation, result) {
 					return
 				}
 				if result.outcome == pulseLifecycleStepCompleted {
-					if receiptErr := validatePulseDueModuleResults(ctx, sctx.WorkspacePath, pulseRunID); receiptErr != nil {
-						result = pulseLifecycleStepRunResult{outcome: pulseLifecycleStepWaitFailed, err: receiptErr}
+					var retryErr error
+					if st.label == "plan-drift-review" {
+						retryErr = validatePulseDueModuleResultsFor(ctx, sctx.WorkspacePath, pulseRunID, pulseModulePlanDriftReview)
+					} else {
+						retryErr = validatePulseDueModuleResults(ctx, sctx.WorkspacePath, pulseRunID)
+					}
+					if retryErr != nil {
+						result = pulseLifecycleStepRunResult{outcome: pulseLifecycleStepWaitFailed, err: retryErr}
+					}
+				}
+			}
+			// The repair-drain completeness gate below is technical_review's Fixer
+			// contract specifically. plan_drift_review has its own review-and-fix
+			// authority and applies/verifies safe workflow-owned fixes directly in
+			// its own turn, but "every actionable issue in the whole backlog is
+			// drained" is technical_review's completeness bar, not plan_drift_review's
+			// narrower per-step scope — checked separately below.
+			if st.label == "review-fix" && result.outcome == pulseLifecycleStepCompleted {
+				remaining, countErr := stepworkflow.CountPulseActionableWorkflowIssues(ctx, sctx.WorkspacePath)
+				if countErr != nil {
+					result = pulseLifecycleStepRunResult{outcome: pulseLifecycleStepWaitFailed, err: fmt.Errorf("read actionable Pulse repair backlog: %w", countErr)}
+				} else if remaining > 0 {
+					// A persisted receipt proves the agent finished its turn; it does
+					// not prove it completed the workflow-owned repair objective. Keep
+					// the run partial rather than announcing a successful Pulse pass
+					// while actionable work still exists.
+					result = pulseLifecycleStepRunResult{outcome: pulseLifecycleStepWaitFailed, err: fmt.Errorf("Review+Fix left %d actionable workflow-owned Pulse issue(s); the repair drain is incomplete", remaining)}
+				}
+			}
+			// plan_drift_review has real repair authority (it applies and verifies
+			// safe workflow-owned fixes directly — see plan-drift-review.md), but
+			// what it cannot safely fix in this turn becomes a record_pulse_finding
+			// routed to fixer_handoff/decision_required/external_action_required in
+			// the actionable backlog. Gate's own due-decision for technical_review
+			// was made BEFORE plan_drift_review ran, and pulse_module_state.
+			// last_decision is a static per-pass row with no live recomputation from
+			// backlog content — the already-scheduled (or not-yet-scheduled)
+			// review-fix step's own get_pulse_state read still sees Gate's original
+			// due=false for technical_review even after plan_drift_review files a
+			// same-pass finding technical_review's Fixer needs to pick up. Check
+			// whether plan_drift_review just created real repair work and, if
+			// technical_review is not already due, force its due decision so the
+			// review-fix step (already scheduled for strategic_review, or inserted
+			// fresh here) actually dispatches it instead of silently skipping it for
+			// a full extra Pulse cycle.
+			if st.label == "plan-drift-review" && result.outcome == pulseLifecycleStepCompleted {
+				remaining, countErr := stepworkflow.CountPulseActionableWorkflowIssues(ctx, sctx.WorkspacePath)
+				if countErr != nil {
+					// This safety net exists specifically to prevent late repair debt
+					// from silently surviving as a false "completed" pass — a failure
+					// to even CHECK for that debt must not itself be swallowed into a
+					// clean completion; that would defeat the whole point the same way
+					// the thing being guarded against would.
+					result = pulseLifecycleStepRunResult{outcome: pulseLifecycleStepWaitFailed, err: fmt.Errorf("check for late plan_drift_review repair work: %w", countErr)}
+				} else if remaining > 0 {
+					technicalDue, technicalDueErr := pulseWorklistModulesDue(ctx, sctx.WorkspacePath, pulseRunID, pulseModuleTechnicalReview)
+					if technicalDueErr != nil {
+						result = pulseLifecycleStepRunResult{outcome: pulseLifecycleStepWaitFailed, err: fmt.Errorf("inspect technical_review due state after plan_drift_review found %d late issue(s): %w", remaining, technicalDueErr)}
+					} else if !technicalDue {
+						if forceErr := forcePulseModuleDueForLateRepairDebt(ctx, sctx.WorkspacePath, pulseRunID, pulseModuleTechnicalReview,
+							fmt.Sprintf("plan_drift_review left %d actionable workflow-owned issue(s) Gate did not anticipate before it ran", remaining)); forceErr != nil {
+							result = pulseLifecycleStepRunResult{outcome: pulseLifecycleStepWaitFailed, err: fmt.Errorf("force technical_review due for %d late plan_drift_review issue(s): %w", remaining, forceErr)}
+						} else if !reviewFixScheduled {
+							s.sessionLogf(sctx, sessionID, "[PULSE] plan_drift_review left %d actionable issue(s) Gate did not anticipate; inserting a same-pass Review + Fix turn", remaining)
+							inserted := append([]pulseLifecycleStep{pulseLifecycleAgenticReviewStep(pulseRunID)}, steps[i+1:]...)
+							steps = append(steps[:i+1], inserted...)
+							reviewFixScheduled = true
+						} else {
+							// A review-fix step for strategic_review alone is already
+							// scheduled ahead of us in `steps` and has not run yet — it
+							// will read the freshly forced due=true for technical_review
+							// live when it dispatches, so no second step is needed.
+							s.sessionLogf(sctx, sessionID, "[PULSE] plan_drift_review left %d actionable issue(s) Gate did not anticipate; forced technical_review due for the already-scheduled Review + Fix turn", remaining)
+						}
 					}
 				}
 			}
 		}
-		if st.label == "fix" {
+		if st.label == "review-fix" {
 			reviewFixCompletedAt = time.Now().UTC()
 		}
 		if result.outcome != pulseLifecycleStepCompleted {
@@ -2560,8 +2688,8 @@ func workflowHasPendingPlanChangelogArtifactReview(ctx context.Context, workspac
 func pulseLifecycleSteps() []pulseLifecycleStep {
 	steps := []pulseLifecycleStep{
 		pulseLifecycleGateStep("<pulse_run_id>", "<run_folder>", "<run_status>"),
+		pulseLifecyclePlanDriftReviewStep("<pulse_run_id>"),
 		pulseLifecycleAgenticReviewStep("<pulse_run_id>"),
-		pulseLifecycleAgenticFixStep("<pulse_run_id>"),
 	}
 	steps = append(steps, pulseLifecycleFinalSteps("<pulse_run_id>")...)
 	return steps
@@ -2639,30 +2767,42 @@ func pulseReviewBacklogFolderLine(folder RunFolderInfo) string {
 		folder.Name, folder.Metadata.Status, folder.Metadata.StartedAt.Format(time.RFC3339), completedAt)
 }
 
+// pulseLifecyclePlanDriftReviewStep runs plan_drift_review as its own
+// lifecycle step, sequenced strictly BEFORE pulseLifecycleAgenticReviewStep's
+// technical_review dispatch. Both used to be launched as sibling
+// run_in_background children of one combined step, which let technical_review
+// read the Pulse finding backlog for repair candidates before
+// plan_drift_review's own async handoff finding had necessarily been written
+// — a real drift finding could then sit unrepaired for a full extra Pulse
+// cycle even though plan_drift_review had already run. runStep blocks until
+// a step's turn (and everything it dispatches in the background) fully
+// completes, so making this its own preceding step is what actually
+// guarantees the ordering; reordering text within one shared prompt would
+// not, since same-step dispatches still run concurrently with each other.
+func pulseLifecyclePlanDriftReviewStep(pulseRunID string) pulseLifecycleStep {
+	planDriftCheckpoint := fmt.Sprintf("runs/pulse/%s/plan-drift-review.md", pulseRunID)
+	return pulseLifecycleStep{
+		label: "plan-drift-review",
+		query: fmt.Sprintf(`PULSE PLAN DRIFT REVIEW DISPATCH. pulse_run_id=%q. Read the durable Gate worklist via get_pulse_state(view="module", pulse_run_id=<this id>). If plan_drift_review is not due, do nothing and end this turn immediately.
+
+		When plan_drift_review is due, launch exactly one executor with run_in_background. Its instruction must name exact pulse_run_id=%q and checkpoint %q, and tell it to load read_skill(skills=[{"name":"builder-reference","path":"references/plan-drift-review.md"}]) and follow it exactly. In that one retained turn it establishes ground truth per due step, applies and verifies safe workflow-owned fixes directly, and only routes what it cannot safely fix itself — a genuine human decision, a platform-owned boundary, or (rarely, as a last resort) a fixer_handoff for technical_review to pick up.
+
+		After dispatch, end this parent turn immediately; the runtime waits for the registered child, and this step does not return until it completes — that is the point: technical_review's own dispatch in the next lifecycle step must only ever see a Pulse backlog that already reflects this run's plan_drift_review findings, never a race with them. Do not do review or repair in this parent, render a dashboard, back up, publish, or notify.`, pulseRunID, pulseRunID, planDriftCheckpoint),
+	}
+}
+
 func pulseLifecycleAgenticReviewStep(pulseRunID string) pulseLifecycleStep {
 	technicalCheckpoint := fmt.Sprintf("runs/pulse/%s/technical-review.md", pulseRunID)
 	strategicCheckpoint := fmt.Sprintf("runs/pulse/%s/strategic-review.md", pulseRunID)
 	return pulseLifecycleStep{
-		label: "review",
-		query: fmt.Sprintf(`PULSE REVIEW DISPATCH. pulse_run_id=%q. Load read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}]) and follow its Review contract. Read the durable Gate worklist via get_pulse_state(view="module", pulse_run_id=<this id>) and handle only due modules in the persisted mode.
+		label: "review-fix",
+		query: fmt.Sprintf(`PULSE SEQUENCED REVIEW + FIX DISPATCH. pulse_run_id=%q. Load read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}]) and follow its Sequenced Technical Maintenance contract. Read the durable Gate worklist via get_pulse_state(view="module", pulse_run_id=<this id>) and handle only due modules in the persisted mode. plan_drift_review, if it was due, already ran and completed in a prior lifecycle step — its findings (if any) are already in the backlog you read here; do not dispatch it from this step.
 
-		Use run_in_background to dispatch at most two ordinary background reviewers. The Technical reviewer is one message sequence, not several agents: (1) perform a lightweight safety scan from get_pulse_state(view="backlog", detail="compact"), plan routes, retained run selectors, and the focus agenda; (2) map relevant evidence to stable route/group/sub-workflow scopes and agentically choose the smallest sufficient set of deep technical focuses using persisted priority and rotation; a small route may need one, while materially distinct large routes may justify several; (3) add a focus only when it has distinct evidence, risk, decision, or repair value, and stop when another focus would only repeat context; (4) request full detail only for selected public PUL ids and authoritative evidence selectors; (5) verify matured retained findings and investigate the selected focuses, loading Stores Health or Operations evidence only when a focus needs it; (6) classify every selected workflow observation by linking it to an existing issue, promoting it, or rejecting it with evidence; (7) record every investigated technical_review focus with its route_scope and persist typed findings, verification evidence, and exactly one terminal technical_review receipt. It must not modify workflow/platform implementation files. Every message reads and updates the same compact checkpoint at %q. It continuously merges semantic duplicates into canonical root causes; do not add a separate consolidation turn. In backlog_drain restrict it to matured verification and classification of retained evidence—no broad discovery.
+		When technical_review is due, launch exactly one executor with run_in_background. Its single retained task instruction must name exact pulse_run_id=%q and checkpoint %q. In that one retained turn: (1) read the compact backlog once, plan routes, retained run selectors, and focus agenda, then perform the lightweight safety scan and choose the smallest sufficient evidence-backed focus set; (2) investigate only selected focuses and exact public PUL ids, classify every selected observation, continuously merge semantic duplicates, and update the checkpoint; (3) drain every actionable workflow-owned canonical repair root that the compact backlog exposes: apply safe coherent repair bundles, verify them proportionally, and continue to the next bundle until none remain. Platform-owned findings, human decisions, and evidence waits are durable but are not workflow repair debt; classify and route them instead of leaving them in the repair queue. Do not stop after merely the highest-value bundle; (4) persist every focus, typed finding, verification, exact repair disposition, and one terminal technical_review module result before ending. A no-safe-repair outcome is valid only when no actionable workflow-owned root remains; otherwise record the exact PUL ids and a truthful partial technical result rather than claiming completion. Do not split review and repair into artificial sequence turns, and never launch a fresh Fixer or another technical reviewer.
 
-		The Strategic reviewer is one message sequence for the single strategic_review module: (1) perform the same route-aware lightweight scan and agentically choose the smallest sufficient strategic focus set from its agenda; route size alone is not a quota, but distinct goals, audiences, feedback loops, or intervention domains may justify multiple focuses; (2) verify retained strategic findings and audit the selected hidden mechanisms such as feedback loops, selection bias, observation contamination, proxy optimization, concentration, saturation, local optima, goal measurement, or experiment impact; (3) only when Gate evidence warrants opportunity discovery, independently search for materially different approaches; (4) critic/conclusion with exactly one of keep, improve, propose_alternative, experiment, or evidence_wait; (5) record every investigated strategic_review focus with its route_scope, then persist typed findings, decisions, impact records, and exactly one terminal strategic_review receipt. Every turn reads and updates %q. Audit-only and backlog_drain omit opportunity discovery. An experiment is optional, and concurrent running experiments are permitted only when their declared interference domains do not overlap.
+		When strategic_review is due, launch one separate read-only executor. It performs the route-aware scan, selects the smallest sufficient strategic focus set, audits the warranted mechanisms, persists typed findings/decisions/impact and one terminal strategic_review module result. Every turn updates %q. Audit-only and backlog_drain omit opportunity discovery. Strategic Review never repairs workflow implementation.
 
-		The final message in each child sequence owns its typed review writes because it has the full checkpoint and sequence context. Both reviewers record their own terminal review receipt; the later Fixer records repair outcome separately and never rewrites review completion. Automatic-notification prose is only a notification, never a substitute database payload. Give each child the pulse run ID, mode, due modules, Gate evidence, checkpoint path, normal read/review authority, and exact persistence contract. Put the first turn in instruction and each later turn in message_sequence with a non-empty message; IDs are optional. After dispatch, end this turn immediately. The runtime waits for registered children. Do not fix implementation files, render the dashboard, back up, publish, or notify here.`, pulseRunID, technicalCheckpoint, strategicCheckpoint),
-	}
-}
-
-func pulseLifecycleAgenticFixStep(pulseRunID string) pulseLifecycleStep {
-	technicalCheckpoint := fmt.Sprintf("runs/pulse/%s/technical-review.md", pulseRunID)
-	return pulseLifecycleStep{
-		label: "fix",
-		query: fmt.Sprintf(`PULSE INDEPENDENT FIX DISPATCH. pulse_run_id=%q. Continue only after registered reviewers finished. Load read_skill(skills=[{"name":"builder-reference","path":"references/pulse-review-fixer.md"}]) and follow its Fix contract. Read the durable Gate worklist, get_pulse_state(view="backlog", detail="compact") once, saved reviewer records, and %q. Fetch full lifecycle evidence only for the exact public PUL ids selected for the coherent repair objective.
-
-		Workflow observations are evidence, not Fixer work. Select a bounded repair batch from canonical issues only. Start with the highest-value coherent bundle; it may cover several issues when they share one root cause, compatible targets, and one proof boundary. Add another independent bundle only when it is low-risk, needs no broad rediscovery, has a separately clear proof boundary, and fits the current context plus targeted evidence. Never batch a different public-action risk, user decision, route context, or unresolved design investigation. Do not use a fixed issue count. Use run_in_background to launch one fresh executor Fixer for the selected batch; never reuse a reviewer conversation. The Fixer applies and verifies every selected bundle before starting the next, records exact attempts/dispositions and proportional proof per bundle, and updates the checkpoint with the deferred queue and reasons. Reviewer receipts describe review completion and are not rewritten by the Fixer; record the separate technical module result from the verified repair outcome. Unselected canonical issues remain durable. If no safe canonical bundle exists, record a truthful done/blocked technical result yourself from reviewer evidence without launching a Fixer. Strategic Review owns its own receipt and must not be repeated here.
-
-		End after dispatch; the runtime waits for the registered Fixer. Do not perform new broad discovery, promote raw observations without reviewer evidence, reconstruct findings from notification prose, render the dashboard, back up, publish, or notify.`, pulseRunID, technicalCheckpoint),
+		Automatic-notification prose is not persistence. Use message_sequence only when further reasoning genuinely needs a later turn, never merely to separate review from repair. After dispatch, end this parent turn immediately; the runtime waits for registered children. Do not do review or repair in this parent, render a dashboard, back up, publish, or notify.`, pulseRunID, pulseRunID, technicalCheckpoint, strategicCheckpoint),
 	}
 }
 
@@ -2790,13 +2930,6 @@ func pulseLifecycleFinalSteps(pulseRunID string, instructions ...workflowNotific
 	return []pulseLifecycleStep{{"finalize", fmt.Sprintf("PULSE FINALIZER. pulse_run_id=%q. Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-finalizer.md\"}]) and follow it exactly. First confirm every due module has a terminal current-run result; never treat missing as success. The Pulse popup is the only presentation: do not write a Pulse HTML document or dashboard card. Complete backup, publish, and notify in that order in this one turn, recording running and terminal status for each with record_pulse_result(command=...). Continue after individual failures, keep every status truthful, then stop.%s", pulseRunID, notificationContext)}}
 }
 
-// scheduledRunUsesLightweightFinalize separates ordinary run completion from
-// Pulse review. It requires real run evidence; no-evidence runs take the
-// truthful no-run finalizer path. PulseOnly always owns the full Pulse chain.
-func scheduledRunUsesLightweightFinalize(reviewEvidenceAvailable, pulseOnly bool) bool {
-	return reviewEvidenceAvailable && !pulseOnly
-}
-
 // scheduledRunFinalizeStep finalizes an ordinary workflow run. Gate,
 // Review+Fix, and Pulse publication are never part of this session; the
 // dedicated pulse_review_only schedule owns them. Keeping the normal session
@@ -2872,14 +3005,12 @@ func validatePulseDueModuleResults(ctx context.Context, workspacePath, pulseRunI
 	if !ok {
 		return fmt.Errorf("Pulse worklist %q is missing", pulseRunID)
 	}
-	var dueModules []string
 	var unresolved []string
 	for _, module := range pulseModuleOrder {
 		state, exists := worklist[module]
 		if !exists || strings.TrimSpace(strings.ToLower(state.LastDecision)) != "due" {
 			continue
 		}
-		dueModules = append(dueModules, module)
 		if strings.TrimSpace(state.LastResult) == "" {
 			unresolved = append(unresolved, module)
 		}
@@ -2887,63 +3018,34 @@ func validatePulseDueModuleResults(ctx context.Context, workspacePath, pulseRunI
 	if len(unresolved) > 0 {
 		return fmt.Errorf("due Pulse modules lack terminal current-run results: %s", strings.Join(unresolved, ", "))
 	}
-	if err := validatePulseDueModuleReviewReceipts(ctx, workspacePath, pulseRunID, dueModules); err != nil {
-		return err
-	}
 	return nil
 }
 
-// validatePulseDueModuleReviewReceipts closes the gap between the two durable
-// completion projections owned by Review+Fix. A module result records the
-// parent turn's summary; pulse_review_log is the typed reviewer receipt. The
-// scheduler must not advance when only the first exists: Upwork did exactly
-// that on 2026-08-15, then a later server restart found the still-running
-// reviewer row and falsely labeled an already-finished review interrupted.
-func validatePulseDueModuleReviewReceipts(ctx context.Context, workspacePath, pulseRunID string, dueModules []string) error {
-	if len(dueModules) == 0 {
-		return nil
-	}
-	_, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
+// validatePulseDueModuleResultsFor is validatePulseDueModuleResults scoped to
+// specific modules, needed once plan_drift_review became its own preceding
+// lifecycle step: checking the full pulseModuleOrder right after that step
+// would wrongly flag technical_review/strategic_review as missing a receipt
+// when they simply have not had their turn yet (it runs next, not before).
+func validatePulseDueModuleResultsFor(ctx context.Context, workspacePath, pulseRunID string, modules ...string) error {
+	worklist, ok, err := getPulseWorklistForRun(ctx, workspacePath, pulseRunID)
 	if err != nil {
-		return fmt.Errorf("open Pulse review receipts: %w", err)
+		return fmt.Errorf("read Pulse worklist: %w", err)
 	}
-	if db == nil {
-		return fmt.Errorf("due Pulse modules lack terminal current-run review receipts: %s", strings.Join(dueModules, ", "))
+	if !ok {
+		return fmt.Errorf("Pulse worklist %q is missing", pulseRunID)
 	}
-	defer db.Close()
-
-	var tableName string
-	if err := db.QueryRowContext(ctx,
-		`SELECT name FROM sqlite_master WHERE type='table' AND name='pulse_review_log'`).Scan(&tableName); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("due Pulse modules lack terminal current-run review receipts: %s", strings.Join(dueModules, ", "))
-		}
-		return fmt.Errorf("inspect Pulse review receipts: %w", err)
-	}
-
-	var incomplete []string
-	for _, module := range dueModules {
-		var status, verdict string
-		err := db.QueryRowContext(ctx, `SELECT status, verdict FROM pulse_review_log
-			WHERE pulse_run_id = ? AND module = ? ORDER BY _id DESC LIMIT 1`,
-			strings.TrimSpace(pulseRunID), normalizePulseModule(module)).Scan(&status, &verdict)
-		if errors.Is(err, sql.ErrNoRows) {
-			incomplete = append(incomplete, module+" (missing)")
+	var unresolved []string
+	for _, module := range modules {
+		state, exists := worklist[module]
+		if !exists || strings.TrimSpace(strings.ToLower(state.LastDecision)) != "due" {
 			continue
 		}
-		if err != nil {
-			return fmt.Errorf("read Pulse review receipt for %s: %w", module, err)
-		}
-		status = strings.ToLower(strings.TrimSpace(status))
-		if (status != "completed" && status != "failed") || strings.TrimSpace(verdict) == "" {
-			if status == "" {
-				status = "empty"
-			}
-			incomplete = append(incomplete, fmt.Sprintf("%s (%s)", module, status))
+		if strings.TrimSpace(state.LastResult) == "" {
+			unresolved = append(unresolved, module)
 		}
 	}
-	if len(incomplete) > 0 {
-		return fmt.Errorf("due Pulse modules lack terminal current-run review receipts: %s", strings.Join(incomplete, ", "))
+	if len(unresolved) > 0 {
+		return fmt.Errorf("due Pulse modules lack terminal current-run results: %s", strings.Join(unresolved, ", "))
 	}
 	return nil
 }
@@ -2957,6 +3059,29 @@ func pulseWorklistHasDueModule(ctx context.Context, workspacePath, pulseRunID st
 		return false, fmt.Errorf("Pulse worklist %q is missing", pulseRunID)
 	}
 	for _, module := range pulseModuleOrder {
+		state, exists := worklist[module]
+		if exists && strings.TrimSpace(strings.ToLower(state.LastDecision)) == "due" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// pulseWorklistModulesDue reports whether ANY of the given specific modules
+// is marked due in the durable worklist — unlike pulseWorklistHasDueModule
+// (any module at all), this lets the caller ask a narrower question, needed
+// once plan_drift_review and technical_review/strategic_review became
+// separately-sequenced lifecycle steps (each only needs to know about its
+// own module set, not "is anything due at all").
+func pulseWorklistModulesDue(ctx context.Context, workspacePath, pulseRunID string, modules ...string) (bool, error) {
+	worklist, ok, err := getPulseWorklistForRun(ctx, workspacePath, pulseRunID)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, fmt.Errorf("Pulse worklist %q is missing", pulseRunID)
+	}
+	for _, module := range modules {
 		state, exists := worklist[module]
 		if exists && strings.TrimSpace(strings.ToLower(state.LastDecision)) == "due" {
 			return true, nil
@@ -3146,7 +3271,7 @@ func attachScheduledPendingDecisionNotice(turns []scheduledWorkshopTurn, pending
 	return turns
 }
 
-func scheduledWorkshopTurns(manifest *WorkflowManifest, messages []string) ([]scheduledWorkshopTurn, error) {
+func scheduledWorkshopTurns(manifest *WorkflowManifest, messages []string, workspacePath string) ([]scheduledWorkshopTurn, error) {
 	upgradePlan := workflowVersionUpgradePlan(manifest)
 	manifestVersion := workflowContractVersionForUpgrade(manifest)
 	if manifestVersion != WorkflowContractCurrentVersion && (len(upgradePlan) == 0 || upgradePlan[len(upgradePlan)-1].to != WorkflowContractCurrentVersion) {
@@ -3160,9 +3285,13 @@ func scheduledWorkshopTurns(manifest *WorkflowManifest, messages []string) ([]sc
 
 	turns := make([]scheduledWorkshopTurn, 0, len(upgradePlan)+len(messages))
 	for _, upgrade := range upgradePlan {
+		query := bindWorkflowUpgradeWorkspacePath(upgrade.query, workspacePath)
+		if strings.Contains(query, workflowUpgradeWorkspacePathPlaceholder) {
+			return nil, fmt.Errorf("workflow upgrade preflight %s requires a workspace path", upgrade.label)
+		}
 		turns = append(turns, scheduledWorkshopTurn{
 			label:         upgrade.label,
-			query:         upgrade.query,
+			query:         query,
 			upgradeTarget: upgrade.to,
 		})
 	}
@@ -3282,7 +3411,7 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 	if !found {
 		return sessionID, runFolder, fmt.Errorf("workflow upgrade preflight: workflow manifest not found at %s", sctx.WorkspacePath)
 	}
-	turns, err := scheduledWorkshopTurns(manifest, messages)
+	turns, err := scheduledWorkshopTurns(manifest, messages, sctx.WorkspacePath)
 	if err != nil {
 		return sessionID, runFolder, err
 	}
@@ -3473,7 +3602,7 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 		s.sessionLogf(sctx, sessionID,
 			"[SCHEDULER] skipping run-outcome reconciliation for %s: run-folder listing unavailable (pre-run err=%v, post-run err=%v); this invocation's outcome stands on its session result alone",
 			sctx.Schedule.ID, preRunFoldersErr, postRunFoldersErr)
-	} else if failedFolder, found := reconcileWorkshopRunOutcome(preRunFolderNames, postRunFolders); found {
+	} else if failedFolder, found := reconcileWorkshopRunOutcome(preRunFolderNames, postRunFolders, invocationStartedAt); found {
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] ⚠️ Workshop session for %s completed normally, but run %s recorded status \"failed\" in its own run_metadata.json", sctx.Schedule.ID, failedFolder)
 		return sessionID, runFolder, fmt.Errorf("workflow run %s failed (its run_metadata.json records status \"failed\"), even though the orchestrating workshop session completed its turns without an infrastructure error", failedFolder)
 	}
@@ -3609,19 +3738,42 @@ func (s *SchedulerService) scheduledWorkflowExecutionProducedEvidence(sessionID 
 	return false
 }
 
-// reconcileWorkshopRunOutcome finds the first run folder created during this
-// workshop invocation (present in after but not in before — a pre-existing
-// run's status must never affect this invocation's own result) whose own
-// run_metadata.json recorded status "failed". Ambiguous states — no metadata,
-// "running", "completed", anything else — are never treated as failure; only
-// an explicit "failed" is, so a transient listing hiccup fails open toward
-// "cannot verify" rather than toward a false failure.
-func reconcileWorkshopRunOutcome(before map[string]bool, after []RunFolderInfo) (failedFolder string, found bool) {
+// reconcileWorkshopRunOutcome finds the run folder this invocation actually
+// touched — either newly created (its name absent from before) or an
+// existing folder whose metadata was (re)started during this invocation's own
+// window, per its StartedAt/CreatedAt versus since — whose own
+// run_metadata.json recorded status "failed".
+//
+// The since-based fallback matters because a workflow that reuses the same
+// run-folder name every cycle (e.g. iteration-0/<group>, confirmed live on
+// confida-login — see PLAT-182) never appears "new" by name after its first
+// cycle: before[folder.Name] is already true every time, so a name-only check
+// would skip inspecting that folder's metadata on every single subsequent
+// invocation, regardless of what it actually recorded. workshopRunProducedEvidence,
+// called moments earlier in the same code path for a different purpose, already
+// carries this same since-based fallback for exactly this reason; this function
+// previously lacked it.
+//
+// Ambiguous states — no metadata, "running", "completed", anything else — are
+// still never treated as failure; only an explicit "failed" is, so a
+// transient listing hiccup, or a workflow genuinely still running in the
+// background, fails open toward "cannot verify" rather than toward a false
+// failure.
+func reconcileWorkshopRunOutcome(before map[string]bool, after []RunFolderInfo, since time.Time) (failedFolder string, found bool) {
 	for _, folder := range after {
-		if folder.Name == "" || before[folder.Name] {
+		if folder.Name == "" || folder.Metadata == nil {
 			continue
 		}
-		if folder.Metadata == nil {
+		touchedThisInvocation := !before[folder.Name]
+		if !touchedThisInvocation {
+			for _, stamp := range []time.Time{folder.Metadata.StartedAt, folder.Metadata.CreatedAt} {
+				if !stamp.IsZero() && !stamp.Before(since) {
+					touchedThisInvocation = true
+					break
+				}
+			}
+		}
+		if !touchedThisInvocation {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(folder.Metadata.Status), "failed") {
@@ -3891,6 +4043,7 @@ func (s *SchedulerService) buildWorkshopRequest(ctx context.Context, sctx *Sched
 		"preset_query_id":             sctx.WorkflowID,
 		"selected_folder":             sctx.WorkspacePath,
 		"triggered_by":                "cron",
+		"session_title":               sctx.Schedule.Name,
 		"servers":                     sctx.Capabilities.SelectedServers,
 		"selected_tools":              sctx.Capabilities.SelectedTools,
 		"selected_skills":             sctx.Capabilities.SelectedSkills,
@@ -3914,7 +4067,6 @@ func (s *SchedulerService) buildWorkshopRequest(ctx context.Context, sctx *Sched
 	s.applyLLMAndSecretsToReqMap(ctx, reqMap, sctx)
 
 	execOpts := map[string]interface{}{
-		"run_mode":            "use_same_run",
 		"selected_run_folder": "iteration-0",
 		"execution_strategy":  "start_from_beginning_no_human",
 		// Scheduled runs execute the workflow builder exactly like a normal

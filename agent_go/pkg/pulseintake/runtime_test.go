@@ -12,6 +12,7 @@ func TestCheckRuntimeFindsOnlyStructuredStatusDisagreements(t *testing.T) {
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
 	run := filepath.Join(root, "Workflow", "demo", "runs", "iteration-1", "default")
 	writeRuntimeFixture(t, filepath.Join(run, "run_metadata.json"), `{"status":"completed"}`)
+	writeRuntimeFixture(t, filepath.Join(root, "Workflow", "demo", "runs", "run_index.json"), `{"version":1,"active_iteration":"iteration-0","retained_iterations":["iteration-1"],"last_transition":"full_run_rotation"}`)
 	writeRuntimeFixture(t, filepath.Join(run, "logs", "step-a", "execution", "execution-attempt-1-iteration-1-timing.json"), `{
   "step_id":"step-a",
   "llm":{"errored_count":1,"canceled_count":0},
@@ -30,6 +31,35 @@ func TestCheckRuntimeFindsOnlyStructuredStatusDisagreements(t *testing.T) {
 	}
 	if got.Findings[0].Kind != "runtime_status_disagreement" || got.Findings[1].Kind != "tool_success_with_structured_failure" {
 		t.Fatalf("finding kinds = %+v", got.Findings)
+	}
+}
+
+func TestCheckRuntimeExposesAuthoritativeRunAndPlanIdentity(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	runs := filepath.Join(root, "Workflow", "demo", "runs")
+	writeRuntimeFixture(t, filepath.Join(runs, "run_index.json"), `{"version":1,"active_iteration":"iteration-0","retained_iterations":["iteration-8"],"last_transition":"full_run_rotation","full_run_policy":"rotate_iteration_0_to_next_available_iteration","partial_group_policy":"reuse_iteration_0"}`)
+	writeRuntimeFixture(t, filepath.Join(runs, "iteration-0", "default", "run_metadata.json"), `{"status":"completed","execution_id":"exec-new","plan_revision":"plan-new","active_slot_at_start":"iteration-0"}`)
+	writeRuntimeFixture(t, filepath.Join(runs, "iteration-8", "default", "run_metadata.json"), `{"status":"completed","execution_id":"exec-old","plan_revision":"plan-old","active_slot_at_start":"iteration-0"}`)
+
+	got := CheckRuntime("Workflow/demo", time.Now())
+	if got.RunIndex == nil || got.RunIndex.ActiveIteration != "iteration-0" {
+		t.Fatalf("run index = %+v", got.RunIndex)
+	}
+	if len(got.RunIdentities) != 2 {
+		t.Fatalf("run identities = %+v", got.RunIdentities)
+	}
+	roles := map[string]string{}
+	plans := map[string]string{}
+	for _, identity := range got.RunIdentities {
+		roles[identity.RunFolder] = identity.LifecycleRole
+		plans[identity.RunFolder] = identity.PlanRevision
+	}
+	if roles["iteration-0/default"] != "active" || roles["iteration-8/default"] != "retained" {
+		t.Fatalf("roles = %+v", roles)
+	}
+	if plans["iteration-0/default"] != "plan-new" || plans["iteration-8/default"] != "plan-old" {
+		t.Fatalf("plans = %+v", plans)
 	}
 }
 

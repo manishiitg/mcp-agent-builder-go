@@ -124,13 +124,6 @@ var providerStaticInfoMap = map[string]providerStaticInfo{
 		authDescription: "Local CLI (API key optional)",
 		requiresAPIKey:  false,
 	},
-	"agy-cli": {
-		displayName:     "Antigravity CLI (Deprecated)",
-		description:     "Deprecated for new setup. Existing sessions remain runnable; use Pi CLI for new multi-provider coding-agent work.",
-		integrationKind: "coding_agent",
-		authDescription: "Local CLI (Agy sign-in)",
-		requiresAPIKey:  false,
-	},
 	"pi-cli": {
 		displayName:     "Pi CLI",
 		description:     "Uses Pi CLI through tmux marker transport for Pi model IDs across Gemini, Z.AI, Kimi, MiniMax, DeepSeek, and custom Pi providers.",
@@ -189,32 +182,6 @@ var providerStaticInfoMap = map[string]providerStaticInfo{
 		authDescription: "Endpoint + API key required",
 		requiresAPIKey:  true,
 		apiKeyEnv:       "AZURE_AI_API_KEY",
-	},
-	"minimax": {
-		displayName:     "MiniMax",
-		description:     "MiniMax API for speech, music, and audio models.",
-		integrationKind: "audio_provider",
-		authDescription: "API key required",
-		requiresAPIKey:  true,
-		apiKeyEnv:       "MINIMAX_API_KEY",
-	},
-	"elevenlabs": {
-		displayName:     "ElevenLabs",
-		description:     "Speech synthesis, voice cloning, and audio generation.",
-		integrationKind: "audio_provider",
-		authDescription: "API key required",
-		requiresAPIKey:  true,
-		apiKeyEnv:       "ELEVENLABS_API_KEY",
-		apiKeyURL:       "https://elevenlabs.io/app/settings/api-keys",
-	},
-	"deepgram": {
-		displayName:     "Deepgram",
-		description:     "Speech-to-text transcription and audio intelligence.",
-		integrationKind: "audio_provider",
-		authDescription: "API key required",
-		requiresAPIKey:  true,
-		apiKeyEnv:       "DEEPGRAM_API_KEY",
-		apiKeyURL:       "https://console.deepgram.com/",
 	},
 }
 
@@ -345,9 +312,7 @@ func (api *StreamingAPI) handleGetProviderManifest(w http.ResponseWriter, r *htt
 
 	providerOrder := []string{
 		"claude-code", "codex-cli", "cursor-cli", "pi-cli",
-		"agy-cli",
 		"openai", "anthropic", "vertex", "bedrock", "azure",
-		"elevenlabs", "deepgram", "minimax",
 	}
 
 	supported := getSupportedProviders()
@@ -430,9 +395,8 @@ func (api *StreamingAPI) handleGetProviderManifest(w http.ResponseWriter, r *htt
 	resp := providerManifestResponse{
 		Providers: entries,
 		IntegrationKinds: map[string]integrationKindInfo{
-			"coding_agent":   {Label: "Coding Agents", Description: "Local agent CLI runtimes"},
-			"api_model":      {Label: "API Providers", Description: "Cloud-hosted LLM APIs"},
-			"audio_provider": {Label: "Audio & Media", Description: "Speech, voice, and media models"},
+			"coding_agent": {Label: "Coding Agents", Description: "Local agent CLI runtimes"},
+			"api_model":    {Label: "API Providers", Description: "Cloud-hosted LLM APIs"},
 		},
 		ProviderOrder: providerOrder,
 	}

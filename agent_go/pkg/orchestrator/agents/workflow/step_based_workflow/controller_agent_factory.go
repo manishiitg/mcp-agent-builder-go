@@ -385,7 +385,8 @@ func isGenericAgentStep(stepID, stepPath string) bool {
 // setupExecutionFolderGuard sets up folder guard paths for execution agents.
 // kbAccess must be one of KBAccessRead / Write / ReadWrite / None — callers resolve it
 // via resolveKnowledgebaseAccess before invoking. learningsAccess must be resolved via
-// resolveLearningsAccess. When kbAccess permits writes the step is the KB writer,
+// resolveExecutionLearningsAccess so evaluation/routing isolation matches the prompt.
+// When kbAccess permits writes the step is the KB writer,
 // so knowledgebase/notes/ is added to writePaths. Returns readPaths and writePaths.
 func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath string, stepID string, kbAccess string, learningsAccess string, dbAccess string, stepConfig *AgentConfigs) (readPaths, writePaths []string) {
 	baseWorkspacePath := hcpo.GetWorkspacePath()
@@ -500,7 +501,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 	}
 
 	readPaths = appendAdditionalWorkflowReadPaths(readPaths, baseWorkspacePath, stepConfig)
-	readPaths = hcpo.appendCDPHostDownloadsReadPath(readPaths)
+	readPaths, writePaths, _, _ = appendWorkflowFolderAccess(baseWorkspacePath, readPaths, writePaths)
+	readPaths, writePaths = hcpo.appendCDPHostDownloadsPaths(readPaths, writePaths)
 	return common.DeduplicateStrings(readPaths), common.DeduplicateStrings(writePaths)
 }
 
@@ -722,24 +724,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) applyStepConfigToAgentConfig(config *
 			hcpo.GetLogger().Info(fmt.Sprintf("🔧 Step config found but no SelectedTools specified - using orchestrator defaults: %v", config.SelectedTools))
 		}
 	}
-	// record_run_concern is capability-derived, not model-selected (same
-	// reasoning as prepareCustomTools' EnabledCustomTools branch below): a
-	// step's identity is already set up for it via configureRunConcernSession
-	// at this session (called by the caller just before this function runs),
-	// but neither branch above ever added the tool itself to SelectedTools --
-	// confirmed live (2026-08-17, confida-login) as the reason a reflection
-	// turn reported record_run_concern as unregistered despite the prompt
-	// naming it. Force it in so identity setup and tool availability agree.
-	hasRunConcernTool := false
-	for _, name := range config.SelectedTools {
-		if name == "workflow_db:record_run_concern" {
-			hasRunConcernTool = true
-			break
-		}
-	}
-	if !hasRunConcernTool {
-		config.SelectedTools = append(config.SelectedTools, "workflow_db:record_run_concern")
-	}
+	config.SelectedTools = withoutRetiredRunConcernTool(config.SelectedTools)
 
 	// Determine execution mode: CLI providers and scripted steps always use code execution mode.
 	// scripted steps need code execution mode so the agent gets the tool index and get_api_spec
@@ -815,8 +800,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		var enabledTools []string
 		hasAdvanced := false
 		for _, entry := range stepConfig.EnabledCustomTools {
-			// workspace_image* entries are legacy — image tools now live inside workspace_advanced,
-			// which is auto-added below, so these entries become no-ops and are dropped.
+			// workspace_image* entries are retired and must not re-enable provider
+			// media tools through old workflow manifests.
 			if entry == "workspace_image:*" || strings.HasPrefix(entry, "workspace_image:") ||
 				entry == "workspace_image_gen:*" || strings.HasPrefix(entry, "workspace_image_gen:") ||
 				entry == "workspace_image_edit:*" || strings.HasPrefix(entry, "workspace_image_edit:") {
@@ -836,7 +821,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		// path or escalate a read-only step to mutation authority.
 		enabledTools = append(enabledTools, "workflow_db:query_workflow_db")
 		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
-			enabledTools = append(enabledTools, "workflow_db:mutate_workflow_db")
+			enabledTools = append(enabledTools, "workflow_db:mutate_workflow_db", "workflow_db:apply_workflow_db_migration")
 		}
 		// PLAT-184. This workflow's own cost ledger is capability-derived like
 		// query_workflow_db above: a custom allowlist may narrow other tools,
@@ -844,11 +829,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 		// runs through this same path) can always read its own workflow's cost
 		// and token breakdown.
 		enabledTools = append(enabledTools, "workflow_costs:query_workflow_costs")
-		// PLAT-055. Every step can raise a structured concern. This is
-		// capability-derived like the DB tools above: a step that observed a
-		// defect must always be able to report it, and a custom allowlist must
-		// not be able to silence that channel.
-		enabledTools = append(enabledTools, "workflow_db:record_run_concern")
 
 		// Auto-include workspace_browser:* if agent_browser exists in the workspace tools pool
 		// (present when preset has enable_browser_access: true) and not already listed.
@@ -869,6 +849,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 			}
 		}
 
+		enabledTools = withoutRetiredRunConcernTool(enabledTools)
 		// Filter tools based on unified format (category:tool or category:*)
 		toolsToRegister, executorsToUse = orchestrator.FilterCustomToolsByCategory(
 			hcpo.WorkspaceTools,
@@ -885,10 +866,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 			"workflow_db:query_workflow_db",
 			// PLAT-184, capability-derived like query_workflow_db above.
 			"workflow_costs:query_workflow_costs",
-			// Capability-derived like query_workflow_db above, not part of the
-			// default/custom distinction this function otherwise draws -- see
-			// the EnabledCustomTools branch's identical inclusion a few lines up.
-			"workflow_db:record_run_concern",
 		}
 		if resolveDBAccess(stepConfig) == DBAccessReadWrite {
 			defaultEnabledTools = append(defaultEnabledTools, "workflow_db:mutate_workflow_db")
@@ -901,6 +878,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 				break
 			}
 		}
+		defaultEnabledTools = withoutRetiredRunConcernTool(defaultEnabledTools)
 		toolsToRegister, executorsToUse = orchestrator.FilterCustomToolsByCategory(
 			hcpo.WorkspaceTools,
 			hcpo.WorkspaceToolExecutors,
@@ -910,6 +888,20 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareCustomTools(stepConfig *AgentC
 	}
 
 	return toolsToRegister, executorsToUse
+}
+
+// withoutRetiredRunConcernTool prevents legacy workflow configuration from
+// re-enabling the retired step-observation writer. Pulse reviews retained step
+// evidence and deterministic receipts directly instead.
+func withoutRetiredRunConcernTool(tools []string) []string {
+	filtered := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		if strings.TrimSpace(tool) == "workflow_db:record_run_concern" {
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+	return filtered
 }
 
 // prepareWorkspaceToolsOnly prepares minimal tools for KB maintenance agents.
@@ -997,8 +989,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) workflowStepShellWorkingDir() string 
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) configureSubAgentSessionGuard(sessionID string, agentKind string, stepID string, readPaths []string, writePaths []string) {
+	readPaths, writePaths, readOnlyPaths, folderEnv := appendWorkflowFolderAccess(hcpo.GetWorkspacePath(), readPaths, writePaths)
 	common.SetSessionFolderGuard(sessionID, readPaths, writePaths)
-	hcpo.grantSessionCDPHostDownloadsReadOnly(sessionID)
+	configureWorkflowFolderAccessSession(sessionID, hcpo.GetWorkspacePath(), readOnlyPaths, folderEnv)
+	hcpo.grantSessionCDPHostDownloadsReadWrite(sessionID)
 
 	// Set the child identity's cwd directly. The run cwd used to be recorded on
 	// httpSessionID, while shell calls carry this dedicated sessionID. Group
@@ -1216,7 +1210,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) applyPostSetupToAgent(agent agents.Or
 // artifactFolderNameOverride: Optional execution/log folder name. This keeps logical step ID stable while isolating per-call artifacts.
 //
 //	When empty, the step ID will be derived from stepPath.
-func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.Context, phase string, stepPath string, agentName string, stepConfig *AgentConfigs, stepIDOverride string, artifactFolderNameOverride string, evaluationDBWrite bool) (agents.OrchestratorAgent, error) {
+func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.Context, phase string, stepPath string, agentName string, stepConfig *AgentConfigs, planStep PlanStepInterface, stepIDOverride string, artifactFolderNameOverride string, evaluationDBWrite bool) (agents.OrchestratorAgent, error) {
 	// 1. Resolve stepID first (needed for folder guard setup)
 	stepID := hcpo.resolveStepID(stepPath, stepIDOverride)
 	artifactStepID := stepID
@@ -1228,7 +1222,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 
 	// 2. Setup folder guard (extracted method). Empty kbAccess defaults to orchestrator-level UseKnowledgebase.
 	kbAccess := resolveKnowledgebaseAccess(stepConfig, hcpo.UseKnowledgebase())
-	learningsAccess := resolveLearningsAccess(stepConfig)
+	learningsAccess := resolveExecutionLearningsAccess(stepConfig, planStep, hcpo.isEvaluationMode)
 	dbAccess := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, evaluationDBWrite)
 	readPaths, writePaths := hcpo.setupExecutionFolderGuard(artifactStepPath, artifactStepID, kbAccess, learningsAccess, dbAccess, stepConfig)
 	stepEnvOutputPathOverride := ""
@@ -1248,6 +1242,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 		}
 		hcpo.GetLogger().Info(fmt.Sprintf("🔒 Message sequence folder guard override for execution agent - Read: %v Write: %v", readPaths, writePaths))
 	}
+	readPaths, writePaths, _, _ = appendWorkflowFolderAccess(hcpo.GetWorkspacePath(), readPaths, writePaths)
 
 	// Scripted code mode: add code/ subdir to the enforced write paths so the LLM can write main.py there.
 	// writePaths[0] is the step execution folder (e.g. execution/step-1); appending /code gives execution/step-1/code.
@@ -1315,9 +1310,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	config.MCPSessionID = execSessionID
 	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
 	configureWorkflowDBSession(execSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
-	// PLAT-055. record_run_concern attributes from this trusted identity rather
-	// than from tool arguments, so a step cannot file against another step.
-	hcpo.configureRunConcernSession(execSessionID, stepID, ConcernPhaseExecution)
 	// Bind the per-step tool session to the workflow's browser session. Tool-session
 	// isolation protects folder and DB permissions without creating a second browser.
 	sharedBrowserSessionID := hcpo.resolveWorkshopBrowserSessionID(hcpo.currentGroupName)
@@ -1356,13 +1348,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	if dbAccess == DBAccessRead {
 		filtered := toolsToRegister[:0]
 		for _, tool := range toolsToRegister {
-			if tool.Function != nil && tool.Function.Name == "mutate_workflow_db" {
+			if tool.Function != nil && (tool.Function.Name == "mutate_workflow_db" || tool.Function.Name == "apply_workflow_db_migration") {
 				continue
 			}
 			filtered = append(filtered, tool)
 		}
 		toolsToRegister = filtered
 		delete(executorsToUse, "mutate_workflow_db")
+		delete(executorsToUse, "apply_workflow_db_migration")
 	}
 	// Inject STEP_OUTPUT_DIR and STEP_EXECUTION_DIR for all execution-only agents (both scripted and agentic).
 	// Any script run via execute_shell_command may need STEP_OUTPUT_DIR to know where to write output
@@ -1636,14 +1629,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	// Run the coding-CLI session in a fresh os.MkdirTemp dir instead of
 	// CodingAgentWorkingDir — same protection the regular execution-step
 	// path gets via applyStepConfigToAgentConfig. Without this, a
-	// todo-task orchestrator agent collides with any other agy-cli
+	// todo-task orchestrator agent collides with any other coding-CLI
 	// session already attached to the workflow folder (notably the
-	// workshop chat that triggered the run): agy-cli rejects concurrent
-	// sessions on the same dir with different MCP configs, and the step
-	// fails with "agy-cli does not support concurrent sessions in
-	// working directory ... with different MCP configs". The MCP bridge
-	// remains the authoritative path for any file changes the model
-	// wants to make to the user's actual workspace.
+	// workshop chat that triggered the run): some coding CLIs reject
+	// concurrent sessions on the same dir with different MCP configs,
+	// failing the step with a "does not support concurrent sessions in
+	// working directory ... with different MCP configs"-style error. The
+	// MCP bridge remains the authoritative path for any file changes the
+	// model wants to make to the user's actual workspace.
 	config.IsolateCodingAgentWorkspace = true
 
 	// Give nested todo_task orchestrators their own session-level folder guard just like
@@ -1655,15 +1648,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	dbAccess := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, false)
 	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
 	configureWorkflowDBSession(todoSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
-	// record_run_concern is registered for every workflow-mode session, so the
-	// orchestrator is offered the tool whether or not it can use it. Without a
-	// trusted identity on this session the call fails with "no trusted step
-	// identity" — the orchestrator sees an advertised tool that always errors,
-	// and its own observations (a route that keeps failing, a sub-agent that
-	// never produced its artifact) have nowhere structured to go. It owns a
-	// dedicated session already, so this attributes to its own step ID and
-	// cannot file against another step.
-	hcpo.configureRunConcernSession(todoSessionID, stepID, ConcernPhaseExecution)
 	if subAgentExecCtx != nil {
 		subAgentExecCtx.ToolSessionID = todoSessionID
 	}
@@ -1694,26 +1678,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	} else {
 		config.SelectedTools = hcpo.GetSelectedTools()
 		hcpo.GetLogger().Info(fmt.Sprintf("🔧 Using orchestrator default todo task orchestrator tools: %v", config.SelectedTools))
-	}
-	// The comment above configureRunConcernSession claims record_run_concern is
-	// "registered for every workflow-mode session" -- that was true of the
-	// underlying tool registry but never actually reflected here: neither
-	// branch above adds it to SelectedTools, so it was advertised nowhere for
-	// this agent (confirmed live: confida-login's survey-app-and-refresh-
-	// knowledge todo-orchestrator session had query_workflow_db/
-	// mutate_workflow_db -- because the workflow's own declared tools happen
-	// to include them -- but never record_run_concern, which nobody would
-	// think to declare manually). Force it in, matching the equivalent
-	// capability-derived force-include for the regular step-execution path.
-	hasRunConcernTool := false
-	for _, name := range config.SelectedTools {
-		if name == "workflow_db:record_run_concern" {
-			hasRunConcernTool = true
-			break
-		}
-	}
-	if !hasRunConcernTool {
-		config.SelectedTools = append(config.SelectedTools, "workflow_db:record_run_concern")
 	}
 
 	// Enable code execution mode for CLI providers that need HTTP bridge tool routing.
@@ -1764,8 +1728,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 		}
 		return false
 	}
-	for _, name := range []string{"query_workflow_db", "mutate_workflow_db"} {
-		if name == "mutate_workflow_db" && dbAccess == DBAccessRead {
+	for _, name := range []string{"query_workflow_db", "mutate_workflow_db", "apply_workflow_db_migration"} {
+		if (name == "mutate_workflow_db" || name == "apply_workflow_db_migration") && dbAccess == DBAccessRead {
 			continue
 		}
 		if !hasTool(name) {
@@ -1783,13 +1747,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	if dbAccess == DBAccessRead {
 		filtered := toolsToRegister[:0]
 		for _, tool := range toolsToRegister {
-			if tool.Function != nil && tool.Function.Name == "mutate_workflow_db" {
+			if tool.Function != nil && (tool.Function.Name == "mutate_workflow_db" || tool.Function.Name == "apply_workflow_db_migration") {
 				continue
 			}
 			filtered = append(filtered, tool)
 		}
 		toolsToRegister = filtered
 		delete(executorsToUse, "mutate_workflow_db")
+		delete(executorsToUse, "apply_workflow_db_migration")
 	}
 
 	// Inject STEP_OUTPUT_DIR and STEP_EXECUTION_DIR into execute_shell_command so the

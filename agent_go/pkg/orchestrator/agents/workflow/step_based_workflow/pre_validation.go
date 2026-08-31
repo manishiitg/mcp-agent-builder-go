@@ -223,11 +223,9 @@ func SavePreValidationLog(
 	_ = bo.WriteWorkspaceFile(ctx, historyPath, string(data))
 	_ = bo.WriteWorkspaceFile(ctx, logPath, string(data))
 
-	if !results.OverallPass && strings.TrimSpace(workspaceRoot) != "" {
-		if summary := buildPreValidationConcernSummary(results); summary != "" {
-			_, _ = RecordRunConcerns(ctx, workspaceRoot, runFolder, groupName, stepID, ConcernPhasePreValidation, summary)
-		}
-	}
+	// Failed validation remains in this run's persisted validation receipt for
+	// Pulse's deterministic intake and Technical Review. Do not mirror it into
+	// the observation store: Go must not create or text-deduplicate Pulse work.
 }
 
 func normalizePreValidationAttemptPart(value, fallback string) string {
@@ -241,39 +239,6 @@ func normalizePreValidationAttemptPart(value, fallback string) string {
 		return fallback
 	}
 	return value
-}
-
-// buildPreValidationConcernSummary renders one CONCERNS: line for the step's
-// complete failed gate. Field-level errors are evidence for that one step bug,
-// not independent bugs. RecordRunConcerns gives every prevalidation concern a
-// stable step-level fingerprint, so the detailed text can change from run to
-// run without splitting the lifecycle identity.
-func buildPreValidationConcernSummary(results *WorkspaceVerificationResult) string {
-	if results == nil {
-		return ""
-	}
-	details := make([]string, 0, len(results.Summary.Errors))
-	for _, e := range results.Summary.Errors {
-		location := strings.TrimSpace(strings.TrimSpace(e.File) + " " + strings.TrimSpace(e.Path))
-		message := strings.TrimSpace(e.Message)
-		if message == "" {
-			message = strings.TrimSpace(e.CheckType)
-		}
-		if location == "" && message == "" {
-			continue
-		}
-		detail := location
-		if detail != "" && message != "" {
-			detail += ": "
-		}
-		detail += message
-		details = append(details, detail)
-	}
-	if len(details) == 0 {
-		return ""
-	}
-	return fmt.Sprintf("%s prevalidation gate failed for the step output contract (%d failed checks): %s\n",
-		concernLinePrefix, len(details), strings.Join(details, " | "))
 }
 
 // validateSchemaLimits checks if the schema exceeds resource limits
@@ -534,6 +499,21 @@ func validateFile(
 	return result
 }
 
+// jsonPathMultiMatchPattern recognizes standard JSONPath syntax that can
+// match more than one location: wildcards (*), recursive descent (..),
+// filter expressions (?( ), and slice/union index groups ([0:2], [0,1]).
+// A plain numeric index ([0]) or a bare field path deliberately does not
+// match -- that names exactly one location, regardless of what type its
+// value happens to be.
+var jsonPathMultiMatchPattern = regexp.MustCompile(`\*|\.\.|\?\(|\[[^\]]*[:,][^\]]*\]`)
+
+// jsonPathHasMultipleMatches reports whether path can name more than one
+// JSON location. See the comment above its one call site for why this
+// distinction is load-bearing rather than cosmetic.
+func jsonPathHasMultipleMatches(path string) bool {
+	return jsonPathMultiMatchPattern.MatchString(path)
+}
+
 // validateJSONCheck validates a single JSON check
 func validateJSONCheck(
 	ctx context.Context,
@@ -576,14 +556,25 @@ func validateJSONCheck(
 	// - If path points to an array field directly (like $.missing_months), jsonpath.Get returns the array itself
 	// - If path uses wildcards/filters, jsonpath.Get returns a slice of matching results
 	// - If path points to a scalar, jsonpath.Get returns the scalar value
+	//
+	// []interface{} is genuinely ambiguous between those first two cases --
+	// PaesslerAG/jsonpath.Get returns that same Go type whether $.notes'
+	// own value is the array [] / ["a"], or $.notes[*] matched zero/one/many
+	// separate locations. check.Path itself is the only place that
+	// ambiguity can be resolved: a definite path (no wildcard/recursive-
+	// descent/filter/slice/union syntax) always names exactly one location,
+	// so whatever jsonpath.Get returns for it IS that location's value,
+	// whatever its type -- never a collection of match results to unwrap.
+	// Treating a definite path's own array value as a multi-match
+	// collection and silently substituting its first element let a $.notes
+	// field actually holding a JSON array pass a value_type=string check
+	// (PUL-61C84987): a non-empty string-containing array's first element
+	// is itself a string, so validateValueType saw a string and passed.
 	var value interface{}
-	if valuesSlice, ok := values.([]interface{}); ok {
-		// If we're expecting an array and got a slice, the slice IS the array value
-		// (not a collection of results to take the first element from)
-		if check.ValueType == "array" {
-			value = valuesSlice
-		} else if len(valuesSlice) > 0 {
-			// For non-array types, if we got multiple results, take the first one
+	var multiMatchValues []interface{}
+	if valuesSlice, ok := values.([]interface{}); ok && jsonPathHasMultipleMatches(check.Path) {
+		multiMatchValues = valuesSlice
+		if len(valuesSlice) > 0 {
 			value = valuesSlice[0]
 		} else {
 			// Empty slice - use as is (will fail validation if expected type is not array)
@@ -593,9 +584,40 @@ func validateJSONCheck(
 		value = values
 	}
 
-	// Validate value type
+	// A genuine multi-match path (e.g. $.items[*].name) checks every matched
+	// value against a per-value predicate, not only the first -- otherwise a
+	// valid first item followed by invalid ones would silently pass, since
+	// only value[0] was ever inspected. This applies uniformly to every
+	// per-value check below (type, length, numeric range, pattern), value_type
+	// included: an earlier version special-cased value_type="array" to check
+	// whether the *multi-match result slice itself* was a Go []interface{},
+	// which is trivially always true for a genuine multi-match regardless of
+	// what any individual matched value actually was -- e.g. a real wildcard
+	// match on $.items[*].tags with one item's tags holding a plain string
+	// would still report value_type=array as passed. value_type=array on a
+	// multi-match path means "every matched value must itself be an array",
+	// the same per-match rule as every other predicate here, not "the
+	// collection of matches is a slice."
+	everyMultiMatch := len(multiMatchValues) > 1
+	checkEveryMatch := func(checkFn func(interface{}) JSONCheckResult) JSONCheckResult {
+		if !everyMultiMatch {
+			return checkFn(value)
+		}
+		for index, matched := range multiMatchValues {
+			matchResult := checkFn(matched)
+			if !matchResult.Passed {
+				matchResult.ErrorMsg = fmt.Sprintf("match %d of %d: %s", index, len(multiMatchValues), matchResult.ErrorMsg)
+				return matchResult
+			}
+		}
+		return checkFn(multiMatchValues[0])
+	}
+
+	// Validate value type.
 	if check.ValueType != "" {
-		typeResult := validateValueType(check.Path, value, check.ValueType)
+		typeResult := checkEveryMatch(func(v interface{}) JSONCheckResult {
+			return validateValueType(check.Path, v, check.ValueType)
+		})
 		if !typeResult.Passed {
 			return typeResult
 		}
@@ -603,9 +625,11 @@ func validateJSONCheck(
 		result.Passed = true
 	}
 
-	// Validate min/max length for strings and arrays
+	// Validate min/max length for strings and arrays.
 	if check.MinLength != nil || check.MaxLength != nil {
-		lengthResult := validateLength(check.Path, value, check.MinLength, check.MaxLength)
+		lengthResult := checkEveryMatch(func(v interface{}) JSONCheckResult {
+			return validateLength(check.Path, v, check.MinLength, check.MaxLength)
+		})
 		if !lengthResult.Passed {
 			return lengthResult
 		}
@@ -615,9 +639,11 @@ func validateJSONCheck(
 		result.Passed = true
 	}
 
-	// Validate min/max value for numbers
+	// Validate min/max value for numbers.
 	if check.MinValue != nil || check.MaxValue != nil {
-		valueResult := validateValueRange(check.Path, value, check.MinValue, check.MaxValue)
+		valueResult := checkEveryMatch(func(v interface{}) JSONCheckResult {
+			return validateValueRange(check.Path, v, check.MinValue, check.MaxValue)
+		})
 		if !valueResult.Passed {
 			return valueResult
 		}
@@ -627,9 +653,11 @@ func validateJSONCheck(
 		result.Passed = true
 	}
 
-	// Validate pattern (regex) for strings
+	// Validate pattern (regex) for strings.
 	if check.Pattern != "" {
-		patternResult := validatePattern(check.Path, value, check.Pattern)
+		patternResult := checkEveryMatch(func(v interface{}) JSONCheckResult {
+			return validatePattern(check.Path, v, check.Pattern)
+		})
 		if !patternResult.Passed {
 			return patternResult
 		}

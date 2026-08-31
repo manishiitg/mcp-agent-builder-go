@@ -8,16 +8,17 @@
 | Ticket state | `implemented` — sequence memory and bounded-progress correction shipped; live post-restart verification pending |
 | Last synchronized | `2026-08-21` |
 
-> **Current boundary:** PLAT-155 supersedes this ticket's original assumption
-> that one retained Engineering executor should both review and fix. The
-> compaction-safe reviewer sequence and one-coherent-objective limit remain;
-> Review now classifies/persists first, then a fresh independent Fixer agent
-> receives the selected canonical objective in a later parent turn.
+> **Current boundary:** PLAT-199 supersedes the fresh independent Fixer
+> mechanism introduced by PLAT-155. The compaction-safe sequence and bounded
+> objective remain; one retained Technical Maintenance executor now reviews,
+> persists its receipt, crosses a backend-enforced read-only barrier, and only
+> then receives repair authority in a later message.
 >
 > **2026-08-21 identity consolidation:** PLAT-163 now names this retained
 > reviewer `technical_review`. Engineering and Operations remain selectable
 > lenses in this same sequence; they no longer create separate worklist rows or
-> receipts. The bounded sequence and independent-Fixer boundary stay intact.
+> receipts. The bounded sequence and durable review/repair phase boundary stay
+> intact.
 
 ## Decision-escalation correction — 2026-08-19
 

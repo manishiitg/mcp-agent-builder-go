@@ -341,7 +341,6 @@ export interface ChatTabConfig {
   pastedAttachments?: PastedAttachment[]  // Long pastes captured as attachment chips, prepended on send
   isQueueProcessing?: boolean  // Lock to prevent multiple ChatArea instances from double-processing the queue
   autoRun?: boolean  // Automatically run the chat when tab is loaded
-  enableImageGeneration?: boolean  // Enable/disable image generation virtual tool
 }
 
 const stripRestoreOnlyTabConfig = (config: ChatTabConfig): ChatTabConfig => {
@@ -393,6 +392,7 @@ export interface ChatTab {
     scheduledJobName?: string // Display name of the scheduled job, surfaced in the view-only banner
     isBotRun?: boolean // True when tab is observing a bot-triggered session (read-only live view)
     botPlatform?: string // Display label for the bot platform, e.g. Slack or WhatsApp
+    skipWorkflowAutoRestore?: boolean // True right after an explicit New Chat: this tab is blank on purpose, so the workflow landing panel must not auto-open the previous conversation into it
     readOnlyRestoredAt?: number // Timestamp for an explicit user-opened Schedule/Bot restore
     // Generic product-agent binding. These fields are durable so a project can
     // recover its normal AgentWorks session after a refresh without maintaining
@@ -454,7 +454,6 @@ const getDefaultTabConfig = (mode: 'workflow' | 'multi-agent' = 'multi-agent'): 
     enableContextSummarization: false,
     browserMode: appStore?.lastBrowserMode ?? 'auto',
     enableBrowserAccess: ['auto', 'headless', 'cdp'].includes(appStore?.lastBrowserMode ?? 'auto'),
-    enableImageGeneration: appStore?.lastEnableImageGeneration ?? false,
     selectedSkills: appStore?.lastSelectedSkills ?? [],
     delegationTierConfig: undefined,
     queuedMessages: [],
@@ -2665,12 +2664,10 @@ export const useChatStore = create<ChatState>()(
           type SyncUpdate = {
             lastSelectedSkills?: string[]
             lastBrowserMode?: 'none' | 'auto' | 'headless' | 'cdp'
-            lastEnableImageGeneration?: boolean
           }
           const sync: SyncUpdate = {}
           if (configUpdate.selectedSkills !== undefined) sync.lastSelectedSkills = configUpdate.selectedSkills
           if (configUpdate.browserMode !== undefined) sync.lastBrowserMode = configUpdate.browserMode
-          if (configUpdate.enableImageGeneration !== undefined) sync.lastEnableImageGeneration = configUpdate.enableImageGeneration
           if (Object.keys(sync).length > 0) {
             console.log('[TabSettings] Syncing to AppStore:', sync)
             useAppStore.getState().syncLastTabSettings(sync)

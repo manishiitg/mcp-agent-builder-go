@@ -11,18 +11,34 @@ import (
 
 type WorkflowAccessLevel string
 
-// There is no read-only tier. Every authenticated user can write; "owner"
-// exists only to gate who may manage access itself.
+// A read tier was defined here once, removed 2026-08-17 (see below), and
+// restored in PLAT-262 with a materially different enforcement mechanism —
+// read the two paragraphs below in order, they explain both why it was safe
+// to bring back and what NOT to repeat.
 //
-// A read tier was defined here but none of WORKFLOW_READ_USERS /
+// First attempt (removed 2026-08-17): none of WORKFLOW_READ_USERS /
 // WORKFLOW_WRITE_USERS / WORKFLOW_OWNER_USERS / WORKFLOW_USER_PERMISSIONS was
 // ever set in any deployment, so every caller resolved to owner and the tier
 // never took effect. What it did do was leave a query-access gate full of
 // unreachable checks against workshop modes that no longer exist, which cost
-// real debugging time while diagnosing PLAT-125. Removed 2026-08-17 along with
-// that gate; legacy "read"/"run"/"viewer" values in a config string resolve to
-// write so a deployment that still names them does not lose access.
+// real debugging time while diagnosing PLAT-125. That gate checked HTTP
+// query-endpoint access against workshop-mode strings that had already gone
+// stale by the time anyone read the code.
+//
+// PLAT-262 (this restoration): a read-access identity is forced into Run
+// mode server-side at session-creation time
+// (installWorkflowPhaseTools/workflow_phase_tools.go), which in turn gates
+// real MCP tool registration (registerRunModeAgentTools,
+// interactive_workshop_manager.go) and the chat session's own shell
+// folder-guard write paths (createInteractiveWorkshopAgent) — not an
+// HTTP-query-level check against a mode string. If this tier ever again
+// resolves to owner for everyone because nothing sets
+// WORKFLOW_READ_USERS/WORKFLOW_USER_PERMISSIONS, that is still safe (no
+// regression, matches today's default), but unlike the removed gate, every
+// piece this tier feeds is exercised by a real caller whenever it IS
+// configured — there is no dead branch left behind if it goes unused again.
 const (
+	WorkflowAccessRead  WorkflowAccessLevel = "read"
 	WorkflowAccessWrite WorkflowAccessLevel = "write"
 	WorkflowAccessOwner WorkflowAccessLevel = "owner"
 )
@@ -118,10 +134,11 @@ func parseWorkflowAccessLevel(raw string) (WorkflowAccessLevel, bool) {
 		return WorkflowAccessOwner, true
 	case "write", "writer", "edit", "editor":
 		return WorkflowAccessWrite, true
-	// Legacy read-tier aliases resolve to write: the tier is gone, and a
-	// deployment still naming it should not silently lose access.
+	// PLAT-262: these resolve to the real read tier again (previously
+	// collapsed into write while the tier was removed) — see the
+	// WorkflowAccessLevel doc comment above for why this is safe now.
 	case "read", "reader", "run", "runner", "view", "viewer":
-		return WorkflowAccessWrite, true
+		return WorkflowAccessRead, true
 	default:
 		return "", false
 	}

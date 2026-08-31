@@ -105,8 +105,7 @@ type StepBasedWorkflowOrchestrator struct {
 	approvedPlan *PlanningResponse // Store approved plan
 
 	// Run folder management
-	selectedRunFolder string // Selected run folder name (e.g., "iteration-1", "iteration-2")
-	selectedRunMode   string // Selected run mode (e.g., "use_same_run", "create_new_runs_always")
+	selectedRunFolder string // Current run folder name (iteration-0 for full workflow runs)
 
 	// Batch execution context (tracked for step_progress_updated events)
 	currentGroupName string // Current group name being executed
@@ -597,6 +596,15 @@ func (hcpo *StepBasedWorkflowOrchestrator) HasBrowserCapability() bool {
 // - Skips cleanup phase
 // - Simple direct planning approach
 // - NEW: Includes human approval loop with iterative plan refinement
+// isPartialGroupRun reports whether this run refreshes only some enabled groups.
+// Such a run must retain iteration-0 so the untouched groups stay live.
+func (hcpo *StepBasedWorkflowOrchestrator) isPartialGroupRun() bool {
+	if hcpo.executionOptions == nil || len(hcpo.executionOptions.EnabledGroupNames) == 0 || hcpo.variablesManifest == nil {
+		return false
+	}
+	return len(hcpo.executionOptions.EnabledGroupNames) < len(hcpo.variablesManifest.GetEnabledGroups())
+}
+
 func (hcpo *StepBasedWorkflowOrchestrator) CreateTodoList(ctx context.Context, objective, workspacePath string) (string, error) {
 	hcpo.ApplyWorkflowLogContext(workspacePath, orchestrator.SingleSelectedGroupName(func() []string {
 		if hcpo.executionOptions == nil {
@@ -763,25 +771,27 @@ func (hcpo *StepBasedWorkflowOrchestrator) CreateTodoList(ctx context.Context, o
 	// When running a subset of groups, keep iteration-0 in place so other groups' output is preserved.
 	// Batch execution handles per-group cleanup independently.
 	execOpts := hcpo.executionOptions
-	isPartialGroupRun := execOpts != nil && len(execOpts.EnabledGroupNames) > 0 && hcpo.variablesManifest != nil && len(execOpts.EnabledGroupNames) < len(hcpo.variablesManifest.GetEnabledGroups())
+	isPartialGroupRun := hcpo.isPartialGroupRun()
 	var selectedRunFolder string
 	if isPartialGroupRun {
 		// Partial group run — reuse iteration-0 without backup
 		hcpo.GetLogger().Info(fmt.Sprintf("📦 Partial group run (%d of %d groups) — reusing iteration-0 without backup", len(execOpts.EnabledGroupNames), len(hcpo.variablesManifest.GetEnabledGroups())))
-		selectedRunFolder = "iteration-0"
+		selectedRunFolder = currentWorkflowRunFolder
 		// Ensure iteration-0 structure exists (no-op if already there)
-		iteration0Path := fmt.Sprintf("%s/runs/iteration-0", hcpo.GetWorkspacePath())
+		iteration0Path := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), currentWorkflowRunFolder)
 		if mkErr := hcpo.createRunFolderStructure(ctx, iteration0Path); mkErr != nil {
 			return "", fmt.Errorf("failed to ensure iteration-0: %w", mkErr)
 		}
+		if indexErr := hcpo.writeRunIndex(ctx, "partial_group_reuse"); indexErr != nil {
+			return "", fmt.Errorf("failed to publish partial-group run provenance: %w", indexErr)
+		}
 	} else {
 		// Full run — back up iteration-0 to iteration-N as before
-		selectedRunFolder, err = hcpo.resolveRunFolderWithOptions(ctx, hcpo.GetWorkspacePath(), "use_same_run", "iteration-0")
+		selectedRunFolder, err = hcpo.prepareCurrentRun(ctx, hcpo.GetWorkspacePath())
 	}
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve run folder: %w", err)
 	}
-	hcpo.selectedRunMode = "use_same_run"
 	hcpo.selectedRunFolder = selectedRunFolder
 	hcpo.GetLogger().Info(fmt.Sprintf("Using run folder: %s", selectedRunFolder))
 	// Set iteration folder for real-time token persistence
@@ -807,18 +817,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) CreateTodoList(ctx context.Context, o
 			// Plan changed - handle based on frontend options or ask user
 			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Total steps changed (previous: %d, current: %d)", earlyProgress.TotalSteps, len(breakdownSteps)))
 
-			// Use selected run mode (or default if not set yet)
-			runMode := hcpo.selectedRunMode
-			if runMode == "" {
-				runMode = "use_same_run"
-				hcpo.selectedRunMode = runMode
-			}
-			hcpo.GetLogger().Info(fmt.Sprintf("📁 Using selected run mode: %s", runMode))
-
-			// Check if we should ask the question (only when reusing existing folder)
-			shouldAsk := hcpo.shouldAskDeleteOldProgress(ctx, hcpo.GetWorkspacePath(), runMode)
+			// The current run slot is always reused for interactive execution.
+			shouldAsk := hcpo.shouldAskDeleteOldProgress(ctx, hcpo.GetWorkspacePath())
 			if !shouldAsk {
-				hcpo.GetLogger().Info(fmt.Sprintf("📁 Run mode '%s' will create new folder - skipping 'Delete old progress' question", runMode))
+				hcpo.GetLogger().Info("📁 No current run progress to reconcile")
 				earlyProgress = nil
 				planChangeHandled = true
 			} else if execOpts != nil && execOpts.PlanChangeAction != "" {
@@ -831,7 +833,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) CreateTodoList(ctx context.Context, o
 				case PlanChangeActionDeleteOldProgress:
 					hcpo.GetLogger().Info(fmt.Sprintf("🔄 Frontend chose to delete old progress and start fresh"))
 					execManager := hcpo.GetExecutionManager()
-					if err := execManager.CleanupForPlanChange(ctx, len(breakdownSteps), hcpo.GetWorkspacePath(), runMode); err != nil {
+					if err := execManager.CleanupForPlanChange(ctx, len(breakdownSteps), hcpo.GetWorkspacePath()); err != nil {
 						hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Plan change cleanup failed: %v", err))
 					}
 					earlyProgress = nil
@@ -913,11 +915,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) CreateTodoList(ctx context.Context, o
 
 		// Clean up execution folder when starting from beginning
 		execManager := hcpo.GetExecutionManager()
-		runMode := hcpo.selectedRunMode
-		if runMode == "" {
-			runMode = "use_same_run"
-		}
-		if err := execManager.CleanupForStartFromBeginning(ctx, hcpo.GetWorkspacePath(), runMode); err != nil {
+		if err := execManager.CleanupForStartFromBeginning(ctx, hcpo.GetWorkspacePath()); err != nil {
 			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Start from beginning cleanup failed: %v", err))
 		}
 		// Reset progress to nil to ensure fresh initialization (this will reset RoutingEvaluationCounts)
@@ -950,11 +948,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) CreateTodoList(ctx context.Context, o
 				case PlanChangeActionDeleteOldProgress:
 					hcpo.GetLogger().Info(fmt.Sprintf("🔄 Frontend chose to delete old progress and start fresh"))
 					execManager := hcpo.GetExecutionManager()
-					runMode := hcpo.selectedRunMode
-					if runMode == "" {
-						runMode = "use_same_run"
-					}
-					if err := execManager.CleanupForPlanChange(ctx, len(breakdownSteps), hcpo.GetWorkspacePath(), runMode); err != nil {
+					if err := execManager.CleanupForPlanChange(ctx, len(breakdownSteps), hcpo.GetWorkspacePath()); err != nil {
 						hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Plan change cleanup failed: %v", err))
 					}
 					existingProgress = nil
@@ -1170,9 +1164,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) GetType() string {
 
 // UseKnowledgebase reports whether the knowledgebase prerequisite is enabled.
 // The knowledgebase is now ALWAYS enabled for workflows — the per-preset
-// "enable KB" toggle was removed. Per-step access is still opt-in via each
-// step's knowledgebase_access (default "none"); this prerequisite no longer
-// acts as a global kill-switch.
+// "enable KB" toggle was removed. Steps read it by default; an explicit
+// knowledgebase_access="none" opts out, while writes still require an explicit
+// contribution contract. This prerequisite no longer acts as a global
+// kill-switch.
 func (hcpo *StepBasedWorkflowOrchestrator) UseKnowledgebase() bool {
 	return true
 }

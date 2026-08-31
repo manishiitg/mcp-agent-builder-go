@@ -107,6 +107,36 @@ func TestIsValidationSchemaLikeJSON(t *testing.T) {
 	}
 }
 
+// TestIsValidationSchemaLikeJSONAcceptsRealOutputThatEmbedsASchemaShapedFilesField
+// pins PLAT-243: linkedin's real eval-strategy-loop context_output.json
+// legitimately embeds a "files" array shaped exactly like a validation
+// schema (self-documenting the checks it satisfied) alongside its own
+// real score/max_score/reasoning/evidence. The heuristic must not treat
+// that whole document as a validation-schema echo just because it nests a
+// schema-shaped field -- doing so silently discarded a valid 6/10 score,
+// reported as evaluation_report.json score=0/score_captured=false.
+func TestIsValidationSchemaLikeJSONAcceptsRealOutputThatEmbedsASchemaShapedFilesField(t *testing.T) {
+	realOutputWithNestedSchemaShapedFiles := `{
+		"score": 6,
+		"max_score": 10,
+		"reasoning": "Strategy loop caught 6 of 10 checks.",
+		"evidence": {"note": "see checks"},
+		"checks": ["a", "b"],
+		"files": [
+			{
+				"file_name": "context_output.json",
+				"must_exist": true,
+				"json_checks": [
+					{"path": "$.score", "must_exist": true, "value_type": "number"}
+				]
+			}
+		]
+	}`
+	if isValidationSchemaLikeJSON(realOutputWithNestedSchemaShapedFiles) {
+		t.Fatal("real scored output was misclassified as a validation-schema echo because it nests a schema-shaped files field")
+	}
+}
+
 func TestEvaluationStepLoadsCanonicalValidationSchema(t *testing.T) {
 	var step EvaluationStep
 	err := json.Unmarshal([]byte(`{

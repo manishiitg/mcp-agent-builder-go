@@ -71,12 +71,31 @@ func WithCdpPorts(ports ...int) ExecutorOption {
 	}
 }
 
+// OversizedOutputSpiller persists content too large to return inline to a
+// location the calling session can read back, returning the workspace-relative
+// path it landed at. It must apply the same "only if this session actually has
+// tool_output_folder read access" check the caller already verified — this
+// type does not itself carry authority to write anywhere.
+type OversizedOutputSpiller func(ctx context.Context, content string) (relPath string, err error)
+
 // Executor handles the execution of browser tool commands
 type Executor struct {
-	Client        *Client
-	CdpPort       int   // Legacy primary port; first entry in CdpPorts when configured.
-	CdpPorts      []int // Explicitly authorized CDP browsers. Empty means headless.
-	RuntimeConfig *BrowserRuntimeConfig
+	Client         *Client
+	CdpPort        int   // Legacy primary port; first entry in CdpPorts when configured.
+	CdpPorts       []int // Explicitly authorized CDP browsers. Empty means headless.
+	RuntimeConfig  *BrowserRuntimeConfig
+	SpillOversized OversizedOutputSpiller // Optional; nil means "no recoverable spill available for this session."
+}
+
+// WithOversizedOutputSpiller wires a session-scoped write path for content that
+// would otherwise be silently discarded when a snapshot exceeds the inline cap.
+// The caller (not this package) is responsible for confirming, via the session's
+// own already-granted folder guard, that the target directory is actually
+// readable back by that session -- see workspace_browser_tools.go.
+func WithOversizedOutputSpiller(spiller OversizedOutputSpiller) ExecutorOption {
+	return func(e *Executor) {
+		e.SpillOversized = spiller
+	}
 }
 
 // NewExecutor creates a new browser executor
@@ -447,10 +466,10 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 		// Grant the host Downloads read path at the moment CDP is actually used,
 		// rather than relying on a stale request-time effective mode.
 		if agentSessionID != "" {
-			common.GrantSessionCDPHostDownloadsReadOnly(agentSessionID, "cdp")
+			common.GrantSessionCDPHostDownloadsReadWrite(agentSessionID, "cdp")
 		}
 		if workflowSessionID != "" && workflowSessionID != agentSessionID {
-			common.GrantSessionCDPHostDownloadsReadOnly(workflowSessionID, "cdp")
+			common.GrantSessionCDPHostDownloadsReadWrite(workflowSessionID, "cdp")
 		}
 	}
 
@@ -1138,7 +1157,7 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 		return formatAgentBrowserSkillsOutput(output), nil
 	}
 	if command == "snapshot" {
-		if handled, err := e.handleOversizedSnapshot(&output, fullSnapshotRequested); err != nil {
+		if handled, err := e.handleOversizedSnapshot(ctx, &output, fullSnapshotRequested); err != nil {
 			return "", err
 		} else if handled {
 			return output, nil
@@ -1172,7 +1191,7 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 // chooses with evidence instead of without.
 //
 // Returns handled=true when it has produced the final result for this call.
-func (e *Executor) handleOversizedSnapshot(output *string, fullSnapshotRequested bool) (bool, error) {
+func (e *Executor) handleOversizedSnapshot(ctx context.Context, output *string, fullSnapshotRequested bool) (bool, error) {
 	runeCount := len([]rune(*output))
 	if runeCount <= maxInlineSnapshotOutputRunes {
 		return false, nil
@@ -1186,17 +1205,47 @@ func (e *Executor) handleOversizedSnapshot(output *string, fullSnapshotRequested
 			runeCount, len(*output), fullSnapshotFlag, *output)
 		return true, nil
 	}
-	head := string([]rune(*output)[:maxInlineSnapshotOutputRunes])
+	full := *output
+	head := string([]rune(full)[:maxInlineSnapshotOutputRunes])
+
+	// PLAT-200: the default truncated path used to just discard everything past
+	// the head -- unlike the --full-snapshot path above, nothing spilled it
+	// anywhere, so the only way to recover the rest was a second, full-cost
+	// snapshot call. If this session's caller has confirmed (via its own
+	// granted folder guard, not a path this package invents) that it can write
+	// somewhere the session can also read back, persist the full tree there so
+	// the agent gets a real recoverable path instead of only a re-run option.
+	spilledPath := ""
+	if e.SpillOversized != nil {
+		if p, err := e.SpillOversized(ctx, full); err == nil && strings.TrimSpace(p) != "" {
+			spilledPath = strings.TrimSpace(p)
+		}
+	}
+	recoveryLine := fmt.Sprintf("  - agent_browser(command=\"snapshot\", args=[..., %q])            -- this exact snapshot in full, inline (re-runs the command)", fullSnapshotFlag)
+	if spilledPath != "" {
+		// execute_shell_command is the registered tool that can read the session's
+		// already-granted tool_output_folder. Do not advertise the test-only
+		// read_workspace_file helper here: an unavailable recovery command turns a
+		// successful spill back into an unrecoverable snapshot.
+		recoveryLine = fmt.Sprintf("  - execute_shell_command(command=\"sed -n '1,240p' %q\") -- read this saved tree in chunks; use later line ranges as needed (no re-run)", spilledPath)
+	}
 	*output = fmt.Sprintf(`SNAPSHOT_TRUNCATED: showing the first %d of %d runes (%d bytes).
 
 *** THIS TREE IS INCOMPLETE. An element missing from the text below may still exist on the page -- do NOT record it as absent, and do not assert a negative from this output. ***
 
-To get what you need, pick one:
-  - agent_browser(command="snapshot", args=[..., "--selector", "<css>"])  -- the region you actually need (cheapest)
-  - agent_browser(command="snapshot", args=[..., "--depth", "<n>"])       -- a shallower tree
-  - agent_browser(command="snapshot", args=[..., "%s"])            -- this exact snapshot in full, inline
+To get what you need, pick one -- but choose based on WHY the tree below is
+large, not by trying options in order. --depth only shrinks a tree that is
+large because it is deeply NESTED; on a WIDE/FLAT page (many sibling rows,
+cards, or list items at a similar shallow depth -- look at the indentation
+below), raising or lowering --depth can return a byte-identical result and
+waste the retry, since the size comes from sibling count, not nesting:
+  - agent_browser(command="snapshot", args=[..., "--selector", "<css>"])  -- scope to the region you actually need (cheapest, works for wide OR deep trees)
+  - agent_browser(command="snapshot", args=[..., "--compact"])           -- strip empty structural wrappers (helps on noisy markup)
+  - agent_browser(command="snapshot", args=[..., "--interactive"])       -- only clickable/typeable elements (helps when you only need to act, not read)
+  - agent_browser(command="snapshot", args=[..., "--depth", "<n>"])      -- a shallower tree (only helps if the head below looks deeply nested, not wide)
+%s
 
-%s`, maxInlineSnapshotOutputRunes, runeCount, len(*output), fullSnapshotFlag, head)
+%s`, maxInlineSnapshotOutputRunes, runeCount, len(*output), recoveryLine, head)
 	return true, nil
 }
 
@@ -1246,13 +1295,37 @@ func browserContextGuardPaths(ctx context.Context, key common.ContextKey) []stri
 	return append([]string(nil), paths...)
 }
 
+// listCDPTabs runs the bare `tab` listing form only -- no tab id/selector
+// argument -- so it is always a side-effect-free read, unlike `tab <id>`
+// (switches focus) or `tab new` (creates a tab). The top-level command
+// dispatcher's shouldRetryCDPTimeout retry set deliberately excludes "tab"
+// because that name also covers those side-effecting forms; every caller of
+// this internal helper also bypasses that dispatcher entirely, so a listing
+// timeout here got zero retries even though five independent Pulse findings
+// converged on this exact call, after this exact endpoint, coming back
+// reachable moments earlier from a fresh Stage-0 connection test. Retry once
+// here specifically, sleeping 500ms then reissuing the identical command --
+// only the sleep-then-retry-once *mechanic* mirrors the dispatcher's own
+// timeout retry (executor.go:978-990); this retry deliberately skips the
+// dispatcher's session-recovery steps (guardCDPAutomaticRecovery /
+// resetCDPSessionRuntime / clearCDPActiveTabForPort /
+// clearCDPExclusiveFeaturesForPort), since a bare listing timeout does not
+// by itself indicate a dead session worth resetting, and does not touch
+// shouldRetryCDPTimeout's shared allowlist.
 func (e *Executor) listCDPTabs(ctx context.Context, session, cdpURL string, opts *ExecuteOptions) (string, error) {
-	return e.Client.ExecuteCommand(ctx, []string{
+	args := []string{
 		"--session", session,
 		"tab",
 		"--cdp", cdpURL,
 		"--json",
-	}, opts)
+	}
+	output, err := e.Client.ExecuteCommand(ctx, args, opts)
+	if err != nil && isGenuineCDPListingTimeout(err) {
+		log.Printf("[BROWSER] CDP tab list timed out for session %q, retrying once: %v", session, err)
+		time.Sleep(500 * time.Millisecond)
+		output, err = e.Client.ExecuteCommand(ctx, args, opts)
+	}
+	return output, err
 }
 
 func (e *Executor) listCDPTabsForUser(ctx context.Context, session, cdpURL string, opts *ExecuteOptions, port int, ownerID string) string {
@@ -1429,6 +1502,26 @@ func isCommandTimeoutError(err error) bool {
 		strings.Contains(msg, "command execution timed out") ||
 		strings.Contains(msg, "context deadline exceeded") ||
 		strings.Contains(msg, "context canceled") ||
+		strings.Contains(msg, "exceeded timeout")
+}
+
+// isGenuineCDPListingTimeout is isCommandTimeoutError narrowed for
+// listCDPTabs's retry: isCommandTimeoutError also matches "context
+// canceled", which fires when the *caller's* context was canceled (e.g. the
+// parent request was aborted), not when the CDP endpoint was genuinely
+// slow. Retrying a canceled-context failure after a 500ms sleep is not a
+// recovery attempt -- the reissued command will almost certainly fail
+// immediately for the identical reason, so the sleep is pure waste on that
+// path. Only retry the shapes that indicate the request actually ran out of
+// time against a live endpoint.
+func isGenuineCDPListingTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "command timed out") ||
+		strings.Contains(msg, "command execution timed out") ||
+		strings.Contains(msg, "context deadline exceeded") ||
 		strings.Contains(msg, "exceeded timeout")
 }
 

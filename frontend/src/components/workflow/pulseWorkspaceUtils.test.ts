@@ -20,7 +20,6 @@ function finding(
   seenCount = 1,
 ): PulseFindingLifecycle {
   return {
-    fingerprint: `${module}-${status}-${seenCount}`,
     module,
     step_id: 'step-1',
     phase: 'review',

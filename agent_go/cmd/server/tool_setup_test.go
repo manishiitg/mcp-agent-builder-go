@@ -174,7 +174,7 @@ func TestCollectSplitFolderGuardFolders(t *testing.T) {
 	}
 }
 
-func TestWorkspaceAdvancedToolBundleIncludesProviderMediaTools(t *testing.T) {
+func TestWorkspaceAdvancedToolBundleIncludesActiveTextAndSearchTools(t *testing.T) {
 	tools, executors, categories := createCustomTools(false, "default", "tool-bundle-test-session")
 
 	toolDefs := map[string]bool{}
@@ -185,14 +185,8 @@ func TestWorkspaceAdvancedToolBundleIncludesProviderMediaTools(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		"read_image",
+		"generate_text_llm",
 		"search_web_llm",
-		"image_gen",
-		"image_edit",
-		"generate_video",
-		"text_to_speech",
-		"speech_to_text",
-		"generate_music",
 	} {
 		if !toolDefs[name] {
 			t.Fatalf("workspace tool definitions missing %q", name)

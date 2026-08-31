@@ -176,6 +176,30 @@ func DiffPatchDocument(c *gin.Context) {
 		return
 	}
 
+	// Apply-path-agnostic safety net: every strategy above (strict patch,
+	// corrected-diff retry, the agent-generated-diff fallback) can return
+	// successfully while still silently dropping part of a multi-hunk patch —
+	// confirmed live on confida-login: applied:true was reported while a
+	// hunk's changes were left unapplied and unrelated trailing content was
+	// deleted. Refuse to report success, and refuse to write, if the actual
+	// line-count change doesn't match what the diff's own +/- lines claim.
+	if verifyErr := verifyDiffApplied(string(currentContent), req.Diff, newContent); verifyErr != nil {
+		log.Printf("[DIFF_PATCH] verification failed path=%s duration=%s error=%v", filePathParam, time.Since(started), verifyErr)
+		c.JSON(http.StatusBadRequest, models.APIResponse[models.DiffPatchResponse]{
+			Success: false,
+			Message: "Failed to apply diff patch",
+			Error:   fmt.Sprintf("Failed to apply diff patch: %s", verifyErr.Error()),
+			Data: models.DiffPatchResponse{
+				Applied: false,
+				Suggestions: []string{
+					"Re-read the current file content and retry with a single, precisely-scoped diff",
+					"Split a large multi-hunk patch into separate diff_patch_workspace_file calls, one hunk at a time, and verify each before the next",
+				},
+			},
+		})
+		return
+	}
+
 	// Write updated content back to file
 	if err := os.WriteFile(filePath, []byte(newContent), 0644); err != nil {
 		c.JSON(http.StatusInternalServerError, models.APIResponse[any]{
@@ -193,6 +217,72 @@ func DiffPatchDocument(c *gin.Context) {
 		Message: "Document diff-patched successfully",
 		Data:    models.DiffPatchResponse{Applied: true},
 	})
+}
+
+// diffClaimedLineDelta counts the net line-count change every hunk's own
+// +/- prefixed body lines claim, independent of the @@ header counts (an
+// LLM-supplied header count can itself be wrong — that's exactly why
+// correctAgentGeneratedDiff exists). Only lines inside a hunk (after an @@
+// line) are counted.
+func diffClaimedLineDelta(diffContent string) int {
+	delta := 0
+	inHunk := false
+	for _, line := range strings.Split(diffContent, "\n") {
+		if strings.HasPrefix(line, "@@") {
+			inHunk = true
+			continue
+		}
+		if !inHunk {
+			continue
+		}
+		switch {
+		case line == noNewlineMarker:
+			// Metadata about the preceding line, not a line itself.
+		case strings.HasPrefix(line, "+"):
+			delta++
+		case strings.HasPrefix(line, "-"):
+			delta--
+		}
+	}
+	return delta
+}
+
+// countContentLines counts real lines the way a unified diff's +/- counting
+// does: an empty string is 0 lines, and a single trailing newline does not
+// count as an extra blank line. strings.Split(content, "\n") alone gets this
+// wrong at both ends — "" splits to one empty element (implying 1 line for
+// 0 real lines), and a trailing "\n" splits to one extra empty element (implying
+// one more line than the file actually has).
+func countContentLines(content string) int {
+	if content == "" {
+		return 0
+	}
+	n := strings.Count(content, "\n")
+	if !strings.HasSuffix(content, "\n") {
+		n++
+	}
+	return n
+}
+
+// verifyDiffApplied is a cheap, apply-path-agnostic safety net, not a full
+// hunk-by-hunk re-verification. It checks one invariant: the actual
+// line-count change between originalContent and newContent must equal what
+// diffContent's own +/- lines claim, regardless of which internal strategy
+// (strict patch, corrected-diff retry, the agent-generated-diff fallback)
+// produced newContent. Every one of those strategies can return successfully
+// while still silently dropping part of a multi-hunk patch or deleting
+// unrelated content — this catches that failure shape without needing to
+// know which strategy ran. It is necessary, not sufficient: a corruption
+// that happens to preserve the total line count (e.g. two unrelated lines
+// swapped) is not caught by this check alone.
+func verifyDiffApplied(originalContent, diffContent, newContent string) error {
+	expectedDelta := diffClaimedLineDelta(diffContent)
+	actualDelta := countContentLines(normalizeLineEndings(newContent)) - countContentLines(normalizeLineEndings(originalContent))
+	if actualDelta != expectedDelta {
+		return fmt.Errorf("diff apply produced an unexpected line-count change (diff claims %+d lines, result changed by %+d) — refusing to report success; part of the patch was likely silently dropped or corrupted",
+			expectedDelta, actualDelta)
+	}
+	return nil
 }
 
 func diffPatchErrorPreview(diff string) string {

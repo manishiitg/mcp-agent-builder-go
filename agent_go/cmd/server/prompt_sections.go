@@ -97,8 +97,7 @@ var promptSections = []promptSection{
 	},
 	{
 		// A provider/auth inventory that also instructs the agent to call
-		// list_llm_capabilities, text_to_speech, generate_music and
-		// set_provider_auth. A profile with an allow-list may have none of them
+		// list_llm_capabilities and set_provider_auth. A profile with an allow-list may have none of them
 		// — Video Studio has none — and naming absent tools is how several
 		// defects in docs/bugs/ started. It also tells the agent to fetch the
 		// same inventory via a tool, so injecting it is redundant where the tool

@@ -59,7 +59,7 @@ func describeWorkflowContractUpgrades(ctx context.Context, workspacePath string)
 	for i, upgrade := range pending {
 		sb.WriteString(fmt.Sprintf("### %d. %s → `%s`\n\n", i+1, upgrade.label, upgrade.to))
 		sb.WriteString("```text\n")
-		sb.WriteString(strings.TrimSpace(upgrade.query))
+		sb.WriteString(strings.TrimSpace(bindWorkflowUpgradeWorkspacePath(upgrade.query, workspacePath)))
 		sb.WriteString("\n```\n\n")
 	}
 

@@ -6,9 +6,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 )
 
 // setCORS sets permissive CORS headers shared across workflow/manifest/config route handlers.
@@ -69,7 +74,6 @@ func (api *StreamingAPI) handleGetWorkflowManifest(w http.ResponseWriter, r *htt
 		http.Error(w, "No workflow.json found at this workspace", http.StatusNotFound)
 		return
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":        true,
@@ -148,13 +152,16 @@ func (api *StreamingAPI) handleCreateWorkflowManifest(w http.ResponseWriter, r *
 // --- Update manifest ---
 
 type UpdateWorkflowManifestRequest struct {
-	WorkspacePath     string                     `json:"workspace_path"`
-	Label             *string                    `json:"label,omitempty"`
-	Capabilities      *WorkflowCapabilities      `json:"capabilities,omitempty"`
-	ExecutionDefaults *WorkflowExecutionDefaults `json:"execution_defaults,omitempty"`
-	Schedules         *[]WorkflowSchedule        `json:"schedules,omitempty"`
-	WorkshopMode      *string                    `json:"workshop_mode,omitempty"` // Standalone patch — avoids zeroing out other ExecutionDefaults fields
-	RunRetentionCount *int                       `json:"run_retention_count,omitempty"`
+	WorkspacePath        string                                       `json:"workspace_path"`
+	Label                *string                                      `json:"label,omitempty"`
+	Capabilities         *WorkflowCapabilities                        `json:"capabilities,omitempty"`
+	ExecutionDefaults    *WorkflowExecutionDefaults                   `json:"execution_defaults,omitempty"`
+	Schedules            *[]WorkflowSchedule                          `json:"schedules,omitempty"`
+	WorkshopMode         *string                                      `json:"workshop_mode,omitempty"` // Standalone patch — avoids zeroing out other ExecutionDefaults fields
+	RunRetentionCount    *int                                         `json:"run_retention_count,omitempty"`
+	FolderAccess         *[]workflowtypes.WorkflowFolderGrant         `json:"folder_access,omitempty"`
+	FolderAccessRequests *[]workflowtypes.WorkflowFolderAccessRequest `json:"folder_access_requests,omitempty"`
+	PulseEnabled         *bool                                        `json:"pulse_enabled,omitempty"`
 	// Notification instruction fields are standalone patches so the Notify
 	// popup can update content guidance without replacing workflow capabilities.
 	RunNotificationInstructions   *string   `json:"run_notification_instructions,omitempty"`
@@ -206,6 +213,23 @@ func mergeWorkflowCapabilitiesUpdate(existing WorkflowCapabilities, incoming *Wo
 	return updated
 }
 
+func setWorkflowPulseEnabled(manifest *WorkflowManifest, enabled bool) {
+	if manifest.Pulse == nil {
+		manifest.Pulse = &WorkflowPulseConfig{}
+	}
+	manifest.Pulse.Enabled = enabled
+	// The old model stored Pulse as an independent recurring schedule. Once the
+	// explicit flag is saved, remove those obsolete cron entries so only normal
+	// scheduled runs can trigger recurring Pulse.
+	schedules := manifest.Schedules[:0]
+	for _, schedule := range manifest.Schedules {
+		if !schedule.PulseReviewOnly {
+			schedules = append(schedules, schedule)
+		}
+	}
+	manifest.Schedules = schedules
+}
+
 func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 	if r.Method == "OPTIONS" {
@@ -234,6 +258,7 @@ func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *
 		http.Error(w, "No workflow.json found at this workspace path", http.StatusNotFound)
 		return
 	}
+	previousFolderAccess := append([]workflowtypes.WorkflowFolderGrant(nil), manifest.FolderAccess...)
 
 	// Apply partial updates
 	if req.Label != nil {
@@ -253,6 +278,20 @@ func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *
 	}
 	if req.RunRetentionCount != nil {
 		manifest.RunRetentionCount = req.RunRetentionCount
+	}
+	if req.FolderAccess != nil {
+		normalized, normalizeErr := normalizeWorkflowFolderGrants(*req.FolderAccess, manifest.FolderAccess)
+		if normalizeErr != nil {
+			http.Error(w, normalizeErr.Error(), http.StatusBadRequest)
+			return
+		}
+		manifest.FolderAccess = normalized
+	}
+	if req.FolderAccessRequests != nil {
+		manifest.FolderAccessRequests = append([]workflowtypes.WorkflowFolderAccessRequest(nil), (*req.FolderAccessRequests)...)
+	}
+	if req.PulseEnabled != nil {
+		setWorkflowPulseEnabled(manifest, *req.PulseEnabled)
 	}
 	if req.RunNotificationInstructions != nil || req.PulseNotificationInstructions != nil ||
 		req.RunNotificationChannels != nil || req.PulseNotificationChannels != nil ||
@@ -306,6 +345,26 @@ func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *
 		http.Error(w, fmt.Sprintf("Failed to write manifest: %v", err), http.StatusInternalServerError)
 		return
 	}
+	if req.FolderAccess != nil {
+		previousRoots := make([]string, 0, len(previousFolderAccess))
+		for _, grant := range previousFolderAccess {
+			previousRoots = append(previousRoots, grant.Path)
+		}
+		readRoots := make([]string, 0, len(manifest.FolderAccess))
+		writeRoots := make([]string, 0, len(manifest.FolderAccess))
+		readOnlyRoots := make([]string, 0, len(manifest.FolderAccess))
+		folderEnv := make(map[string]string, len(manifest.FolderAccess))
+		for _, grant := range manifest.FolderAccess {
+			readRoots = append(readRoots, grant.Path)
+			if grant.CanWrite() {
+				writeRoots = append(writeRoots, grant.Path)
+			} else {
+				readOnlyRoots = append(readOnlyRoots, grant.Path)
+			}
+			folderEnv["WORKFLOW_FOLDER_"+workflowFolderAliasEnvKey(grant.Alias)] = grant.Path
+		}
+		common.ReconcileSessionWorkflowFolderAccess(req.WorkspacePath, previousRoots, readRoots, writeRoots, readOnlyRoots, folderEnv)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -313,6 +372,38 @@ func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *
 		"manifest":       manifest,
 		"workspace_path": req.WorkspacePath,
 	})
+}
+
+func normalizeWorkflowFolderGrants(requested, previous []workflowtypes.WorkflowFolderGrant) ([]workflowtypes.WorkflowFolderGrant, error) {
+	previousByID := make(map[string]workflowtypes.WorkflowFolderGrant, len(previous))
+	for _, grant := range previous {
+		previousByID[grant.ID] = grant
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	normalized := make([]workflowtypes.WorkflowFolderGrant, 0, len(requested))
+	for i, grant := range requested {
+		canonical, err := filepath.EvalSymlinks(filepath.Clean(strings.TrimSpace(grant.Path)))
+		if err != nil {
+			return nil, fmt.Errorf("folder_access[%d] is unavailable: %w", i, err)
+		}
+		info, err := os.Stat(canonical)
+		if err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("folder_access[%d] must reference an existing directory", i)
+		}
+		grant.Path = filepath.Clean(canonical)
+		grant.ID = strings.TrimSpace(grant.ID)
+		grant.Alias = strings.TrimSpace(grant.Alias)
+		grant.Access = strings.TrimSpace(grant.Access)
+		grant.Reason = strings.TrimSpace(grant.Reason)
+		if prior, exists := previousByID[grant.ID]; exists && strings.TrimSpace(prior.CreatedAt) != "" {
+			grant.CreatedAt = prior.CreatedAt
+		} else {
+			grant.CreatedAt = now
+		}
+		grant.UpdatedAt = now
+		normalized = append(normalized, grant)
+	}
+	return normalized, nil
 }
 
 func normalizeNotificationChannels(channels []string) []string {
