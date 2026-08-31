@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/gorilla/mux"
 	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
+	"github.com/manishiitg/coding-agent-loop/workspace/sqliteopen"
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	_ "modernc.org/sqlite"
@@ -188,11 +188,11 @@ func openReportHumanInputDB(ctx context.Context, workspacePath string, create bo
 	// the DSN (rather than a runtime PRAGMA ExecContext call, as before)
 	// matters too: this *sql.DB has no SetMaxOpenConns cap, so a runtime
 	// PRAGMA on one pooled connection would silently not apply if the pool
-	// opened a second connection for a concurrent query. Same pattern already
-	// proven correct elsewhere in this codebase (pkg/costledger/sqlite.go,
-	// plan_drift_checks.go, loopclosure.go, whatsapp_service.go).
-	dsn := (&url.URL{Scheme: "file", Path: dbPath}).String() + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
-	db, err := sql.Open("sqlite", dsn)
+	// opened a second connection for a concurrent query. sqliteopen.DSN is
+	// the same helper query_workflow_db's own workspace-service backend
+	// uses, so both surfaces stay in sync on this instead of each
+	// hand-rolling their own DSN string.
+	db, err := sql.Open("sqlite", sqliteopen.DSN(dbPath))
 	if err != nil {
 		return "", nil, err
 	}
