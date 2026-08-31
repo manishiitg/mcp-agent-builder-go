@@ -649,7 +649,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expandedJobIds, setExpandedJobIds] = useState<string[]>([])
-  const [expandedInstructionJobIds, setExpandedInstructionJobIds] = useState<string[]>([])
   const [openActionMenuJobId, setOpenActionMenuJobId] = useState<string | null>(null)
   const [expandedWorkflowKeys, setExpandedWorkflowKeys] = useState<string[]>([])
   const isWorkflowScoped = !!workflowScope
@@ -2433,9 +2432,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                 const localizedJobName = getLocalizedJobName(job)
                 const workflowDisplayLabel = preset?.label || job.workflow_label || job.name
                 const isExpanded = expandedJobIds.includes(job.id)
-                const instructionsExpanded = expandedInstructionJobIds.includes(job.id)
-                const instructionText = job.messages?.join('\n') ?? ''
-                const hasLongInstructions = instructionText.length > 280 || (job.messages?.length ?? 0) > 2
                 const executionScope = getScheduleExecutionScope(job)
                 const hasWorkspace = !!job.workspace_path || !!preset?.workspacePath
                 const runs = jobRuns[job.id] ?? []
@@ -2551,7 +2547,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                         </div>
                         {job.mode === 'workshop' && job.messages && job.messages.length > 0 && (
                           <div className="mt-1 pr-28">
-                            <div className={`space-y-0.5 ${instructionsExpanded ? '' : hasLongInstructions ? 'max-h-[4.5rem] overflow-hidden' : ''}`}>
+                            <div className="space-y-0.5">
                               {job.messages.map((m, i) => (
                                 <div key={i} className="flex items-start gap-1 text-xs text-gray-500 dark:text-gray-400">
                                   <span className="shrink-0 text-gray-400 dark:text-gray-500">{i + 1}.</span>
@@ -2559,17 +2555,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                 </div>
                               ))}
                             </div>
-                            {hasLongInstructions && (
-                              <button
-                                type="button"
-                                onClick={() => setExpandedInstructionJobIds((ids) => (
-                                  instructionsExpanded ? ids.filter((id) => id !== job.id) : [...ids, job.id]
-                                ))}
-                                className="mt-1 text-xs font-medium text-amber-700 hover:text-amber-800 hover:underline dark:text-amber-300 dark:hover:text-amber-200"
-                              >
-                                {instructionsExpanded ? 'Show less' : 'Show full instructions'}
-                              </button>
-                            )}
                           </div>
                         )}
 
