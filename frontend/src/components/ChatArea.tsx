@@ -1597,26 +1597,37 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       }
     } else if (response.last_processed_index === -1) {
       // -1 is the backend's explicit "this session is not in my in-memory
-      // event store" signal (polling.go: !exists -> LastProcessedIndex: -1).
-      // The store is in-memory only, so a server restart wipes every live
-      // session's event log; a tab left open across that restart keeps
-      // polling with its pre-restart since= cursor forever, which the fresh
-      // process's own (much shorter) post-restart event log can never reach
-      // -- the poll silently returns empty on every tick, with no visible
-      // error, indefinitely. Only reset when we previously tracked real
-      // progress (index > 0): a genuinely brand-new, never-polled session
-      // legitimately gets -1 on its first poll too, and resetting an
-      // already-0 index would be a no-op anyway.
+      // event store" signal (polling.go: !exists -> LastProcessedIndex: -1;
+      // sse.go sends the same sentinel on a reconnect that hits an empty,
+      // post-restart store). The store is in-memory only, so a server
+      // restart wipes every live session's event log; a tab left open
+      // across that restart keeps polling/streaming with its pre-restart
+      // since= cursor forever, which the fresh process's own (much shorter)
+      // post-restart event log can never reach -- events silently stop
+      // arriving, with no visible error, indefinitely. Only reset when we
+      // previously tracked real progress (index > 0): a genuinely brand-new,
+      // never-polled session legitimately gets -1 on its first poll too, and
+      // resetting an already-0 index would be a no-op anyway.
       const priorIndex = tab
         ? getTabLastEventIndex(actualSessionId)
         : lastEventIndexRef.current
       if (priorIndex > 0) {
-        logger.warn('ChatArea', `Backend has no record of session ${actualSessionId} (likely a server restart) after prior progress at index ${priorIndex}; resetting cursor to resync`)
+        logger.warn('ChatArea', `Backend has no record of session ${actualSessionId} (likely a server restart) after prior progress at index ${priorIndex}; resetting cursor and reloading from the durable transcript`)
         if (tab) {
           setTabLastEventIndex(actualSessionId, 0)
         } else {
           setLastEventIndex(0)
         }
+        // Zeroing the cursor only stops future events from being silently
+        // dropped going forward -- it does nothing to recover whatever was
+        // generated while this tab's connection was stale (the in-memory
+        // store is wiped by a restart, but the durable transcript on disk
+        // is not). Re-run the same durable-history restore a fresh page
+        // load already uses (sessionRestore.ts) so an already-open tab
+        // self-heals instead of requiring a manual refresh. Confirmed live
+        // on Dominion 2026-08-31: a fully-generated, persisted chat answer
+        // never appeared in an open tab until it was manually reloaded.
+        void restoreSession(actualSessionId, { source: 'sse-reset-resync', skipConfigRestore: true })
       }
     }
 
@@ -1961,8 +1972,18 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
   // Handle SSE status-only messages (no events, just session status updates)
   const handleSSEStatus = useCallback((msg: SSEStatusMessage, sid: string) => {
+    // last_processed_index is required on SSEEventMessage but a status-only
+    // tick carries no cursor information at all -- it must NOT be -1, which
+    // processEventsResponse treats as "the backend has no record of this
+    // session, resync" (see the reset branch below). This is a real,
+    // distinct signal now sent by the backend's SSE handler on an actual
+    // detected restart; the backend also sends status ticks every 2s for
+    // every open tab regardless, so reusing -1 here made that reset branch
+    // fire on a ~2s cadence for every healthy session, not just a genuine
+    // restart. -2 is a plain "no cursor info" placeholder: it doesn't match
+    // either the `>= 0` (real progress) or `=== -1` (resync) branch below.
     handleSSEMessage(
-      { events: [], ...msg, last_processed_index: -1 } as SSEEventMessage,
+      { events: [], ...msg, last_processed_index: -2 } as SSEEventMessage,
       sid
     )
   }, [handleSSEMessage])

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 
+	"github.com/gorilla/mux"
 	pkgevents "github.com/manishiitg/mcpagent/events"
 )
 
@@ -145,5 +147,82 @@ func TestSSEEventMessageStructure(t *testing.T) {
 	evts, ok := parsed["events"].([]interface{})
 	if !ok || len(evts) != 1 {
 		t.Fatalf("events not properly serialized: %v", parsed["events"])
+	}
+}
+
+// TestSSEStreamSendsResyncSignalWhenEventStoreHasNoRecordOfSession covers a
+// reconnect for a session the in-memory EventStore has never seen -- the
+// exact shape of a restart wiping the store while a browser tab was still
+// open with a stale, large since= cursor from before the restart. Before the
+// fix, the empty-backfill branch sent nothing at all: no correction, and the
+// client never learns its cursor is stale. Confirmed live on the Dominion
+// deployment 2026-08-31: a chat turn completed and was persisted correctly,
+// but never appeared in an already-open tab until a manual page refresh.
+func TestSSEStreamSendsResyncSignalWhenEventStoreHasNoRecordOfSession(t *testing.T) {
+	api := &StreamingAPI{eventStore: events.NewEventStore(100)}
+	sessionID := "sess-wiped-by-restart"
+
+	req := httptest.NewRequest("GET", "/api/sessions/"+sessionID+"/events/stream?since=500", nil)
+	req = mux.SetURLVars(req, map[string]string{"session_id": sessionID})
+	ctx, cancel := context.WithTimeout(req.Context(), 150*time.Millisecond)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+	api.handleSSEStream(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, `"last_processed_index":-1`) {
+		t.Fatalf("expected an explicit last_processed_index:-1 resync signal when the event store has no record of the session, got:\n%s", body)
+	}
+	if !strings.Contains(body, "event: event\n") {
+		t.Fatalf("the resync signal must be an 'event' SSE frame (the frontend's real event handler), not only a 'status' tick, got:\n%s", body)
+	}
+}
+
+// TestSSEStreamDeliversNewEventsAfterResyncSignal covers the second half of
+// the same bug: even if a resync signal were sent, the handler's own
+// `lastIndex` tracking must also be reset, or every subsequent genuinely-new
+// event -- freshly numbered from a low index in the recreated store -- keeps
+// getting silently discarded by the "already covered by backfill" guard,
+// forever, for the life of the connection. Without resetting sinceIndex in
+// the fix, this test fails because the post-restart event (index 1) never
+// clears the stale since=500 cursor.
+func TestSSEStreamDeliversNewEventsAfterResyncSignal(t *testing.T) {
+	api := &StreamingAPI{eventStore: events.NewEventStore(100)}
+	sessionID := "sess-wiped-by-restart-2"
+
+	req := httptest.NewRequest("GET", "/api/sessions/"+sessionID+"/events/stream?since=500", nil)
+	req = mux.SetURLVars(req, map[string]string{"session_id": sessionID})
+	ctx, cancel := context.WithCancel(req.Context())
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		api.handleSSEStream(w, req)
+		close(done)
+	}()
+
+	// Let the handler subscribe and send its (empty) backfill/resync signal
+	// before publishing a "new" post-restart event.
+	time.Sleep(50 * time.Millisecond)
+
+	api.eventStore.AddEvent(sessionID, events.Event{
+		ID:        "evt-post-restart-1",
+		Type:      "user_message",
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+		Data:      &pkgevents.AgentEvent{EventIndex: 1},
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	body := w.Body.String()
+	if !strings.Contains(body, "evt-post-restart-1") {
+		t.Fatalf("a genuinely new event published after the resync signal must reach the client, not be silently dropped as already-seen:\n%s", body)
 	}
 }

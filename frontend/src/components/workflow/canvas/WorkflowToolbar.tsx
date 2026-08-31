@@ -919,12 +919,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
           <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  onClick={() => openWorkspaceView('skills')}
-                  className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'skills' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
-                  aria-label="Workflow skills"
-                  aria-pressed={workflowWorkspaceView === 'skills'}
-                >
+                <button onClick={() => openWorkspaceView('skills')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'skills' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow skills" aria-pressed={workflowWorkspaceView === 'skills'}>
                   <Puzzle className="w-3.5 h-3.5" />
                 </button>
               </TooltipTrigger>
@@ -932,12 +927,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  onClick={() => openWorkspaceView('secrets')}
-                  className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'secrets' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
-                  aria-label="Workflow secrets"
-                  aria-pressed={workflowWorkspaceView === 'secrets'}
-                >
+                <button onClick={() => openWorkspaceView('secrets')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'secrets' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow secrets" aria-pressed={workflowWorkspaceView === 'secrets'}>
                   <KeyRound className="w-3.5 h-3.5" />
                 </button>
               </TooltipTrigger>
@@ -945,12 +935,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  onClick={() => openWorkspaceView('mcp')}
-                  className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'mcp' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
-                  aria-label="Workflow MCP servers"
-                  aria-pressed={workflowWorkspaceView === 'mcp'}
-                >
+                <button onClick={() => openWorkspaceView('mcp')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'mcp' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow MCP servers" aria-pressed={workflowWorkspaceView === 'mcp'}>
                   <Server className="w-3.5 h-3.5" />
                 </button>
               </TooltipTrigger>
@@ -958,12 +943,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  onClick={() => openWorkspaceView('browser')}
-                  className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'browser' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
-                  aria-label="Browser automation"
-                  aria-pressed={workflowWorkspaceView === 'browser'}
-                >
+                <button onClick={() => openWorkspaceView('browser')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'browser' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Browser automation" aria-pressed={workflowWorkspaceView === 'browser'}>
                   <Monitor className="w-3.5 h-3.5" />
                 </button>
               </TooltipTrigger>
@@ -971,12 +951,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  onClick={() => openWorkspaceView('llm')}
-                  className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'llm' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
-                  aria-label="Workflow LLM configuration"
-                  aria-pressed={workflowWorkspaceView === 'llm'}
-                >
+                <button onClick={() => openWorkspaceView('llm')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'llm' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow LLM configuration" aria-pressed={workflowWorkspaceView === 'llm'}>
                   <BrainCircuit className="w-3.5 h-3.5" />
                 </button>
               </TooltipTrigger>
@@ -984,12 +959,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  onClick={() => openWorkspaceView('folders')}
-                  className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'folders' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
-                  aria-label="Attached folders"
-                  aria-pressed={workflowWorkspaceView === 'folders'}
-                >
+                <button onClick={() => openWorkspaceView('folders')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'folders' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Attached folders" aria-pressed={workflowWorkspaceView === 'folders'}>
                   <FolderOpen className="w-3.5 h-3.5" />
                 </button>
               </TooltipTrigger>
