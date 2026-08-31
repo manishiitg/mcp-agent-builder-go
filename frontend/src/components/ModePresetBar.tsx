@@ -725,8 +725,11 @@ export const ModePresetBar: React.FC = () => {
                           )}
                         </button>
 
-                        {/* Settings gear icon - separate clickable element */}
-                        {activePreset && (
+                        {/* Settings gear icon - separate clickable element.
+                            Hidden for read-only users (PLAT-262): opens the
+                            automation's edit settings, which the backend
+                            won't let a read-only session mutate anyway. */}
+                        {activePreset && !isReadOnlyUser && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
@@ -741,7 +744,7 @@ export const ModePresetBar: React.FC = () => {
                         )}
 
                         {/* Settings gear icon for when no preset is selected */}
-                        {!activePreset && (
+                        {!activePreset && !isReadOnlyUser && (
                           <div className="px-2 py-1 border-l border-gray-200 dark:border-gray-600">
                             <Settings className="w-3 h-3 text-gray-300" />
                           </div>
@@ -808,7 +811,7 @@ export const ModePresetBar: React.FC = () => {
                                   {/* Edit/Duplicate/Delete buttons */}
                                   {(
                                     <div className="flex gap-1">
-                                      {presetModeCategory !== null && isPresetActive(preset.id, presetModeCategory) && (
+                                      {presetModeCategory !== null && isPresetActive(preset.id, presetModeCategory) && !isReadOnlyUser && (
                                         <button
                                           onClick={(e) => {
                                             e.stopPropagation()
