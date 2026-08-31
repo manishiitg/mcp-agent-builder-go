@@ -12,6 +12,14 @@ function stepPassed(step: EvalResultRecord): boolean {
 
 const MAX_TREND_RUNS = 8
 
+interface EvalTimelineStep {
+  stepID: string
+  title: string
+  description: string
+  historical: boolean
+  resultsByRun: Map<string, EvalResultRecord>
+}
+
 function formatScore(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1)
 }
@@ -38,6 +46,11 @@ export function PulseEvalSummary({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expandedStepID, setExpandedStepID] = useState<string | null>(null)
+  // Historical criteria (no longer in the current plan) pile up over time and
+  // read as noise next to the active ones a user actually cares about right
+  // now. Grouped under one collapsed-by-default toggle instead of showing
+  // every historical row inline.
+  const [showHistorical, setShowHistorical] = useState(false)
 
   const load = useCallback(async () => {
     if (!workspacePath) return
@@ -61,26 +74,21 @@ export function PulseEvalSummary({
     return () => window.removeEventListener(WORKFLOW_LOG_REFRESH_EVENT, refresh)
   }, [load])
 
-  const { runs, steps } = useMemo(() => {
-    // Results arrive newest-first. Keep the most recent runs, then reverse them
-    // so every timeline reads naturally from oldest to newest.
+  const { runs, activeSteps, historicalSteps } = useMemo(() => {
+    // Results arrive newest-first; runTimes preserves that insertion order, so
+    // slicing the first MAX_TREND_RUNS keeps the most recent runs, newest
+    // first -- readers expect the latest run leftmost, like a chat/feed, not
+    // buried at the end of a horizontal scroll.
     const runTimes = new Map<string, string>()
     for (const result of results) {
       if (!runTimes.has(result.run_folder)) runTimes.set(result.run_folder, result.generated_at)
     }
     const recentRuns = [...runTimes.entries()]
       .slice(0, MAX_TREND_RUNS)
-      .reverse()
       .map(([runFolder, generatedAt]) => ({ runFolder, generatedAt }))
     const visibleRunFolders = new Set(recentRuns.map(run => run.runFolder))
 
-    const byStep = new Map<string, {
-      stepID: string
-      title: string
-      description: string
-      historical: boolean
-      resultsByRun: Map<string, EvalResultRecord>
-    }>()
+    const byStep = new Map<string, EvalTimelineStep>()
     for (const result of results) {
       if (!visibleRunFolders.has(result.run_folder)) continue
       let step = byStep.get(result.step_id)
@@ -99,9 +107,84 @@ export function PulseEvalSummary({
       }
     }
 
-    const timelineSteps = [...byStep.values()].sort((a, b) => Number(a.historical) - Number(b.historical))
-    return { runs: recentRuns, steps: timelineSteps }
+    const timelineSteps = [...byStep.values()]
+    const activeSteps = timelineSteps.filter(step => !step.historical)
+    const historicalSteps = timelineSteps.filter(step => step.historical)
+    return { runs: recentRuns, activeSteps, historicalSteps }
   }, [results])
+
+  const renderStepRow = (step: EvalTimelineStep) => {
+    const expanded = expandedStepID === step.stepID
+    return (
+      <Fragment key={step.stepID}>
+        <tr className={expanded ? 'bg-muted/10' : 'border-b'}>
+          <th className="sticky left-0 z-10 w-48 max-w-[12rem] overflow-hidden bg-background px-3 py-2 text-xs font-medium text-foreground">
+            <button
+              type="button"
+              onClick={() => setExpandedStepID(expanded ? null : step.stepID)}
+              className={`flex w-full min-w-0 gap-1.5 rounded px-1 py-0.5 text-left hover:bg-muted ${expanded ? 'items-start' : 'items-center'}`}
+              aria-expanded={expanded}
+              aria-label={`${expanded ? 'Hide' : 'Show'} description for ${step.title}`}
+            >
+              {expanded
+                ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+              {/* Expanded: show the full title, wrapped -- truncating the one
+                  thing the user opened the row to read defeats the point. */}
+              <span className={expanded ? 'min-w-0 break-words' : 'min-w-0 truncate'}>{step.title}</span>
+              {step.historical && (
+                <span className="ml-auto shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                  Historical
+                </span>
+              )}
+            </button>
+          </th>
+          {runs.map(run => {
+            const result = step.resultsByRun.get(run.runFolder)
+            const state = !result
+              ? 'missing'
+              : result.skipped
+                ? 'skipped'
+                : result.score_captured && stepPassed(result)
+                  ? 'passed'
+                  : 'failed'
+            return (
+              <td key={run.runFolder} className="px-3 py-2.5 text-center">
+                <span
+                  className={`inline-flex min-w-16 justify-center rounded-md px-2 py-1 text-[10px] font-medium ${
+                    state === 'passed'
+                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                      : state === 'failed'
+                        ? 'bg-red-500/10 text-red-600 dark:text-red-400'
+                        : 'bg-muted text-muted-foreground'
+                  }`}
+                  title={result?.reasoning || result?.evidence || undefined}
+                >
+                  {!result
+                    ? '—'
+                    : result.skipped
+                      ? 'Skipped'
+                      : result.score_captured
+                        ? `${formatScore(result.score)} / ${formatScore(result.max_score)}`
+                        : 'No score'}
+                </span>
+              </td>
+            )
+          })}
+        </tr>
+        {expanded && (
+          <tr className="border-b bg-muted/10">
+            <td colSpan={runs.length + 1} className="px-5 py-3 text-xs leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">Description:</span>{' '}
+              {step.description || (step.historical
+                ? 'This evaluation criterion is no longer in the current plan. Its previous results are retained for historical comparison.'
+                : 'No description has been provided for this evaluation criterion.')}
+            </td>
+          </tr>
+        )}
+      </Fragment>
+    )
+  }
 
   return (
     <section className={`min-w-0 overflow-hidden rounded-xl border bg-background ${className}`} aria-label="Evaluation results">
@@ -112,7 +195,7 @@ export function PulseEvalSummary({
             {runs.length > 0
               ? runs.length === 1
                 ? 'Latest evaluation run'
-                : `${runs.length} recent runs · oldest to newest`
+                : `${runs.length} recent runs · newest first`
               : 'Criterion scores across recent workflow runs'}
           </p>
         </div>
@@ -133,24 +216,27 @@ export function PulseEvalSummary({
         <div className="flex min-h-32 items-center justify-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading evaluation results…
         </div>
-      ) : steps.length === 0 ? (
+      ) : activeSteps.length === 0 && historicalSteps.length === 0 ? (
         <div className="flex min-h-32 items-center justify-center text-xs text-muted-foreground">No evaluation results yet.</div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[560px] table-fixed border-collapse text-left">
             <colgroup>
-              <col />
+              <col className="w-48" />
               {runs.map(run => <col key={run.runFolder} className="w-32" />)}
             </colgroup>
             <thead>
               <tr className="border-b">
-                <th className="sticky left-0 z-10 bg-muted px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <th className="sticky left-0 z-10 w-48 max-w-[12rem] overflow-hidden bg-muted px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   Criterion
                 </th>
                 {runs.map((run, index) => {
                   const [, ...routeParts] = run.runFolder.split('/')
                   const routeLabel = routeParts.join('/')
-                  const runLabel = runs.length === 1 ? 'Run' : `Run ${index + 1}`
+                  // Newest run displays leftmost (index 0) but keeps the
+                  // highest run number, matching "higher number = more
+                  // recent" regardless of which side of the screen it's on.
+                  const runLabel = runs.length === 1 ? 'Run' : `Run ${runs.length - index}`
                   return (
                     <th key={run.runFolder} className="bg-muted px-2 py-2.5 text-center align-bottom">
                       <div className="truncate text-[11px] font-semibold text-foreground">{runLabel}</div>
@@ -162,7 +248,7 @@ export function PulseEvalSummary({
                       <div className="mt-0.5 whitespace-nowrap text-[9px] font-normal text-muted-foreground">
                         {formatRunTime(run.generatedAt)}
                       </div>
-                      {index === runs.length - 1 && runs.length > 1 && (
+                      {index === 0 && runs.length > 1 && (
                         <div className="mt-1 text-[8px] font-semibold uppercase tracking-wide text-primary">Latest</div>
                       )}
                     </th>
@@ -172,9 +258,9 @@ export function PulseEvalSummary({
             </thead>
             <tbody>
               <tr className="border-b bg-muted/10">
-                <th className="sticky left-0 z-10 bg-background px-4 py-2.5 text-xs font-semibold text-foreground">Overall</th>
+                <th className="sticky left-0 z-10 w-48 max-w-[12rem] overflow-hidden bg-background px-4 py-2.5 text-xs font-semibold text-foreground">Overall</th>
                 {runs.map(run => {
-                  const runResults = steps
+                  const runResults = [...activeSteps, ...historicalSteps]
                     .map(step => step.resultsByRun.get(run.runFolder))
                     .filter((result): result is EvalResultRecord => Boolean(result && !result.skipped))
                   const captured = runResults.filter(result => result.score_captured)
@@ -193,76 +279,31 @@ export function PulseEvalSummary({
                   )
                 })}
               </tr>
-              {steps.map(step => {
-                const expanded = expandedStepID === step.stepID
-                return (
-                  <Fragment key={step.stepID}>
-                    <tr className={expanded ? 'bg-muted/10' : 'border-b'}>
-                      <th className="sticky left-0 z-10 bg-background px-3 py-2 text-xs font-medium text-foreground">
-                        <button
-                          type="button"
-                          onClick={() => setExpandedStepID(expanded ? null : step.stepID)}
-                          className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-muted"
-                          aria-expanded={expanded}
-                          aria-label={`${expanded ? 'Hide' : 'Show'} description for ${step.title}`}
-                        >
-                          {expanded
-                            ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                            : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
-                          <span className="min-w-0 truncate">{step.title}</span>
-                          {step.historical && (
-                            <span className="ml-auto shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
-                              Historical
-                            </span>
-                          )}
-                        </button>
-                      </th>
-                      {runs.map(run => {
-                        const result = step.resultsByRun.get(run.runFolder)
-                        const state = !result
-                          ? 'missing'
-                          : result.skipped
-                            ? 'skipped'
-                            : result.score_captured && stepPassed(result)
-                              ? 'passed'
-                              : 'failed'
-                        return (
-                          <td key={run.runFolder} className="px-3 py-2.5 text-center">
-                            <span
-                              className={`inline-flex min-w-16 justify-center rounded-md px-2 py-1 text-[10px] font-medium ${
-                                state === 'passed'
-                                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                                  : state === 'failed'
-                                    ? 'bg-red-500/10 text-red-600 dark:text-red-400'
-                                    : 'bg-muted text-muted-foreground'
-                              }`}
-                              title={result?.reasoning || result?.evidence || undefined}
-                            >
-                              {!result
-                                ? '—'
-                                : result.skipped
-                                  ? 'Skipped'
-                                  : result.score_captured
-                                    ? `${formatScore(result.score)} / ${formatScore(result.max_score)}`
-                                    : 'No score'}
-                            </span>
-                          </td>
-                        )
-                      })}
-                    </tr>
-                    {expanded && (
-                      <tr className="border-b bg-muted/10">
-                        <td colSpan={runs.length + 1} className="px-5 py-3 text-xs leading-relaxed text-muted-foreground">
-                          <span className="font-medium text-foreground">Description:</span>{' '}
-                          {step.description || (step.historical
-                            ? 'This evaluation criterion is no longer in the current plan. Its previous results are retained for historical comparison.'
-                            : 'No description has been provided for this evaluation criterion.')}
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                )
-              })}
+              {activeSteps.map(step => renderStepRow(step))}
+              {historicalSteps.length > 0 && (
+                <tr className="border-b bg-muted/10">
+                  <th colSpan={runs.length + 1} className="px-3 py-2 text-left">
+                    <button
+                      type="button"
+                      onClick={() => setShowHistorical(prev => !prev)}
+                      className="flex items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                      aria-expanded={showHistorical}
+                      aria-label={`${showHistorical ? 'Hide' : 'Show'} ${historicalSteps.length} historical criteria`}
+                    >
+                      {showHistorical
+                        ? <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                        : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
+                      <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                        Historical
+                      </span>
+                      <span>
+                        {historicalSteps.length} criteri{historicalSteps.length === 1 ? 'on' : 'a'} no longer in the current plan
+                      </span>
+                    </button>
+                  </th>
+                </tr>
+              )}
+              {showHistorical && historicalSteps.map(step => renderStepRow(step))}
             </tbody>
           </table>
         </div>
