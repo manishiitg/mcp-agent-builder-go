@@ -2461,7 +2461,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
 
                     <div className={`px-5 py-4 ${!job.enabled ? 'opacity-60' : ''}`}>
                     {/* Row top */}
-                    <div className="flex items-start gap-3">
+                    <div className="relative flex items-start gap-3">
                       {/* Status dot */}
                       <div className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${
                         job.last_status === 'running' ? 'bg-amber-500 animate-pulse' :
@@ -2472,7 +2472,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
 
                       {/* Main content */}
                       <div className="flex-1 min-w-0">
-                        <div className="min-w-0">
+                        <div className="min-w-0 pr-48">
                           <div className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
                             Automation
                           </div>
@@ -2483,7 +2483,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                           </div>
                         </div>
 
-                        <div className="mt-1 flex items-center gap-2 flex-wrap">
+                        <div className="mt-1 flex items-center gap-2 flex-wrap pr-48">
                           <span className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
                             Schedule
                           </span>
@@ -2510,7 +2510,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                         </div>
 
                         {/* Cron + groups */}
-                        <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500 dark:text-gray-400">
+                        <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 pr-48 text-xs text-gray-500 dark:text-gray-400">
                           <span className="flex items-center gap-1">
                             <Clock className="w-3 h-3" />
                             {cronDesc}
@@ -2601,7 +2601,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                       </div>
 
                       {/* Actions */}
-                      <div className="flex items-center gap-1 flex-shrink-0">
+                      <div className="absolute right-0 top-0 flex items-center gap-1">
                         {job.enabled ? (
                           <>
                             {job.last_status === 'running' ? (
