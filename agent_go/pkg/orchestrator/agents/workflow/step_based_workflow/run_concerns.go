@@ -15,6 +15,7 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulsemodules"
+	"github.com/manishiitg/coding-agent-loop/workspace/sqliteopen"
 
 	_ "modernc.org/sqlite"
 )
@@ -226,7 +227,22 @@ func runConcernsDBPath(workspacePath string) string {
 	return filepath.Join(fsutil.WorkspaceDocsRoot(), filepath.FromSlash(strings.Trim(strings.TrimSpace(workspacePath), "/")), "db", "db.sqlite")
 }
 
+// openRunConcernsDB opens the workflow's shared db.sqlite -- the same file
+// report_human_inputs.go, workspace/handlers/query.go, and
+// openPlanDriftQueryOnlyDB all open, concurrently, from multiple processes
+// (this server plus scheduled background Pulse jobs). Built on the shared
+// sqliteopen.DSN helper (journal_mode=WAL and busy_timeout embedded in the
+// DSN) rather than a bare path + a one-time runtime PRAGMA call: this was
+// the last, and most-used, holdout still opening this file the old way.
+// Confirmed live on the Dominion deployment 2026-08-31: a standalone
+// reproduction of a query through openPlanDriftQueryOnlyDB's already-WAL-DSN
+// connection was fast in isolation, but hung specifically while this
+// function's live, non-WAL-DSN connections from the running server were
+// concurrently active against the same file -- consistent with
+// modernc.org/sqlite's own WAL/locking negotiation being connection-DSN-
+// driven, not purely governed by the file's on-disk journal_mode header.
 func openRunConcernsDB(ctx context.Context, workspacePath string, create bool) (*sql.DB, error) {
+	_ = ctx // busy_timeout is now DSN-embedded (see sqliteopen.DSN), not a runtime PRAGMA on ctx
 	dbPath := runConcernsDBPath(workspacePath)
 	if create {
 		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
@@ -238,12 +254,8 @@ func openRunConcernsDB(ctx context.Context, workspacePath string, create bool) (
 		}
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", sqliteopen.DSN(dbPath))
 	if err != nil {
-		return nil, err
-	}
-	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
-		db.Close()
 		return nil, err
 	}
 	return db, nil
