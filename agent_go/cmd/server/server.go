@@ -3464,6 +3464,15 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	//
 	// This runs BEFORE the deprecated agent_mode=="workflow" orchestrator branch
 	// to intercept and redirect.
+	//
+	// req.AgentMode is one of: "workflow_phase" (Workflow Builder chat, this
+	// branch), the deprecated "workflow" (see below), or "multi-agent" — the
+	// generic direct-chat mode (model + skills + tools + workspace context)
+	// that the base agentworks surface uses by default and that other product
+	// surfaces (Video Studio, Dominion) opt into explicitly for plain chat.
+	// "multi-agent" is NOT a "Chief of Staff" product — no such product exists
+	// on main (only on the separate, unmerged feature/chief-of-staff-product
+	// branch) — see frontend/src/utils/agentModeDescriptions.ts.
 	isWorkflowPhase := req.AgentMode == "workflow_phase"
 	workflowPhaseID := req.PhaseID
 	workflowPhaseFolder := "" // The preset's SelectedFolder — used to auto-grant write access in FolderGuard
