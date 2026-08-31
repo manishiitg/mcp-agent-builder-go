@@ -1205,7 +1205,16 @@ type InteractiveWorkshopManager struct {
 	cancelAllServerAgents  func()                    // optional: cancel all running agents in server's bgAgentRegistry
 	listServerAgents       func() []ServerAgentInfo  // optional: list all agents from server's bgAgentRegistry
 	workshopModeOverride   string                    // frontend-selected workshop mode (takes priority over auto-detection)
-	readOnlyAccess         bool                      // PLAT-262: caller's live WorkflowAccessLevel is read-only; gates mutating tool registration and shell write access
+}
+
+// isRunModeRestricted reports whether this session's current WorkshopMode is
+// "run" — the single gate (PLAT-262) for mutating tools, the system prompt,
+// and skills. A read-only-access identity is always pinned to "run" by the
+// caller (cmd/server); anyone else genuinely in "run" mode (Bot Connector
+// routes, scheduled runs, the agent-profile runtime) gets the same reduced
+// tool set on purpose. See RCA #2 in docs/bugs/pulse_platform/plat-262.md.
+func (iwm *InteractiveWorkshopManager) isRunModeRestricted() bool {
+	return canonicalWorkshopMode(iwm.workshopModeOverride) == "run"
 }
 
 func uniqueStringsPreserveOrder(values []string) []string {
@@ -1693,7 +1702,7 @@ func (iwm *InteractiveWorkshopManager) registerMarkChangelogArtifactReviewedTool
 // registries cannot drift from one another.
 func registerWorkshopAgentTools(iwm *InteractiveWorkshopManager, mcpAgent DefinitionRegistrar, workspacePath string, logger loggerv2.Logger) {
 	registerInteractiveWorkshopTools(iwm, mcpAgent, logger)
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip changelog artifact-review marker registration for read-only access
 	} else if err := iwm.registerMarkChangelogArtifactReviewedTool(mcpAgent, workspacePath, logger); err != nil {
 		logger.Warn(fmt.Sprintf("Failed to register changelog artifact-review marker tool: %v", err))
@@ -1707,7 +1716,7 @@ func registerWorkshopAgentTools(iwm *InteractiveWorkshopManager, mcpAgent Defini
 // the child task's instruction remain the authority for what a particular
 // child may safely change.
 func registerFullWorkshopAgentTools(iwm *InteractiveWorkshopManager, mcpAgent DefinitionRegistrar, workspacePath string, logger loggerv2.Logger, agentName string) error {
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		logger.Info("PLAT-262: skipping plan modification tools for background agent (read-only access)")
 	} else if err := RegisterPlanModificationTools(
 		mcpAgent,
@@ -2081,13 +2090,11 @@ The workflow has a **live frontend report viewer** at the top toolbar's "Report"
 {{end}}
 
 	{{if eq .WorkshopMode "run"}}
-	## Workshop-Owned Tools — Visible But Not Yours
+	## Run Mode — Execute and Monitor Only
 
-	You can see every tool this workflow registers, including Workshop-owned ones. Seeing a tool is not permission to call it. Run mode executes and inspects; it does not repair, redesign, or record maintenance state.
+	You are in Run mode. Every tool that creates, edits, or deletes anything (plan steps, step config, variables, groups, workflow config, secrets, schedules, skills, LLM config, contract version stamps) plus Pulse maintenance tools (`+"`get_pulse_state`"+`, `+"`begin_pulse_fixer_run`"+`, `+"`record_pulse_worklist`"+`, `+"`record_pulse_result`"+`, `+"`record_pulse_impact`"+`, `+"`resolve_run_concern`"+`, `+"`mark_changelog_artifact_reviewed`"+`) is genuinely absent from your tool list here — not just discouraged, not registered at all. You can still: chat, explain the existing plan/design, run/stop/monitor executions (`+"`execute_step`"+`, `+"`run_full_workflow`"+`, `+"`stop_step`"+`, `+"`trigger_schedule`"+`, etc.), read logs/reports/KB, and answer questions.
 
-	Do not call these in Run mode — they belong to Workshop: `+"`get_pulse_state`"+`, `+"`begin_pulse_fixer_run`"+`, `+"`record_pulse_worklist`"+`, `+"`record_pulse_result`"+`, `+"`record_pulse_impact`"+`, `+"`resolve_run_concern`"+`, `+"`mark_changelog_artifact_reviewed`"+`, and the plan/step/eval modification tools.
-
-	If the user asks for something that needs one of them, say the work belongs in Workshop mode and offer to switch, rather than calling the tool or improvising a shell equivalent.
+	If the user asks for something that needs an edit tool, tell them plainly this session can't make that change and the work belongs in Workshop mode, rather than calling the tool or improvising a shell equivalent.
 
 	## Context Capture — Allowed In Run Mode
 
@@ -3364,7 +3371,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool 2b: debug_step — rich insights about a step's execution
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip debug_step registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"debug_step",
@@ -3730,7 +3737,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	declaredExecutionModeEnum := []interface{}{"agentic", "scripted"}
 	declaredExecutionModeDescription := "Required mode declaration for this step. Always set this intentionally so the improve pass records the final decision explicitly. Set scripted from initial design for deterministic API/SDK calls, CLI commands, data fetching, stable parsing/normalization/transforms, and mechanical persistence; no run-history threshold is required to choose scripted. Keep judgment, adaptive discovery, and browser/UI work agentic. Freezing a saved script afterwards with lock_code still requires 10+ successful representative scenario-covering runs."
 	lockCodeDescription := "If true, lock the saved main.py script — prevents LLM-rewritten scripts from being saved back to learnings, and skips the fix loop (falls back directly to agentic mode). Only applies to scripted steps. Use only when the user explicitly wanted scripted, the script is deterministic, and script_metadata/eval evidence shows 10+ successful scenario-covering runs."
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip update_step_config registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"update_step_config",
@@ -4746,7 +4753,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// === Tools: analyze, learn, optimize, background tasks ===
 
 	// Tool 7f: review_plan — background agent that critically reviews current workflow design and artifacts
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip review_plan registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"review_plan",
@@ -5141,7 +5148,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: review_step_code — background agent that checks if saved scripts match step descriptions
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip review_step_code registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"review_step_code",
@@ -5336,7 +5343,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	updateVariableParams, parseErr := parseSchemaForToolParameters(updateVariableSchema)
 	if parseErr != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to parse update_variable schema: %v", parseErr))
-	} else if iwm.readOnlyAccess {
+	} else if iwm.isRunModeRestricted() {
 		// PLAT-262: skip update_variable registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"update_variable",
@@ -5355,7 +5362,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: add_group — create a new variable group
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip add_group registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"add_group",
@@ -5423,7 +5430,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: update_group — update an existing variable group's name, values, or enabled status
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip update_group registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"update_group",
@@ -5527,7 +5534,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: delete_group — remove a variable group
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip delete_group registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"delete_group",
@@ -5954,7 +5961,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 
 	// === Tool: update_workflow_config ===
 	// Tool: update_workflow_config — add/remove MCP servers, skills, secrets, and workflow-level knobs
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip update_workflow_config registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"update_workflow_config",
@@ -7307,7 +7314,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// that their migration work and verification completed. WriteWorkflowManifest
 	// is an internal server helper, not an agent tool; exposing that helper name
 	// in a prompt made agents search for a tool that could never exist.
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip set_workflow_contract_version registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"set_workflow_contract_version",
@@ -7430,7 +7437,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: create_schedule — Create a new cron schedule
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip create_schedule registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"create_schedule",
@@ -7601,7 +7608,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: create_calendar_schedule — Create dated one-time runs for content calendars
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip create_calendar_schedule registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"create_calendar_schedule",
@@ -7689,7 +7696,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: update_schedule — Update a schedule
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip update_schedule registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"update_schedule",
@@ -7918,7 +7925,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: delete_schedule — Delete a schedule
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip delete_schedule registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"delete_schedule",
@@ -8041,7 +8048,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: import_skill — Import a skill from GitHub
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip import_skill registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"import_skill",
@@ -8077,7 +8084,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: uninstall_skill — Uninstall a skill from the workspace
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip uninstall_skill registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"uninstall_skill",
@@ -8140,7 +8147,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	}
 
 	// Tool: install_skill — Install a skill via the skills CLI
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip install_skill registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"install_skill",
@@ -8349,7 +8356,7 @@ func registerWorkshopLLMTools(iwm *InteractiveWorkshopManager, mcpAgent Definiti
 
 	// set_workflow_llm_config saves either a provider profile or fully explicit
 	// workflow role configuration directly to workflow.json.
-	if iwm.readOnlyAccess {
+	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip set_workflow_llm_config registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"set_workflow_llm_config",
@@ -9972,9 +9979,9 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 		"Chats",
 	}
 	writePaths := workshopWritePaths(workspacePath)
-	if iwm.readOnlyAccess {
-		// PLAT-262: read-only access gets full reads but zero write grants for
-		// this background sub-agent's shell/file tools.
+	if iwm.isRunModeRestricted() {
+		// PLAT-262: run mode gets full reads but zero write grants for this
+		// background sub-agent's shell/file tools.
 		writePaths = []string{}
 	}
 	iwm.controller.SetWorkspacePathForFolderGuard(readPaths, writePaths)

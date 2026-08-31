@@ -164,12 +164,11 @@ func (api *StreamingAPI) registerAgentProfileWorkflowTools(
 		return nil
 	}
 
-	// PLAT-262: this path never registers plan-modification tools, and always
-	// hardcodes "run" workshop mode below, but still thread through the
-	// caller's live access level for defense in depth (schedules/skills/config
-	// tools inside registerInteractiveWorkshopTools are gated on it too).
-	isReadOnlyAccess := workflowAccessForClaims(GetUserFromContext(ctx)) == WorkflowAccessRead
-
+	// PLAT-262: this path hardcodes "run" workshop mode below, which is now
+	// the single gate for mutating tools/prompt/skills (see
+	// interactive_workshop_manager.go) — no separate access-level thread
+	// needed here, this session gets the same reduced tool set as any other
+	// Run-mode session automatically.
 	runtimeWorkspacePath := agentProfileRuntimeWorkspace(userID, publicWorkspacePath)
 	const runFolder = "iteration-0"
 	// A browser tab/session can be reused after switching products or projects.
@@ -188,7 +187,6 @@ func (api *StreamingAPI) registerAgentProfileWorkflowTools(
 		if workshopSession != nil {
 			workshopSession.UpdateAPIKeys(mergedAPIKeys)
 			workshopSession.SetWorkshopModeOverride("run")
-			workshopSession.SetReadOnlyAccess(isReadOnlyAccess)
 		}
 	}
 	if workshopSession == nil {
@@ -208,7 +206,6 @@ func (api *StreamingAPI) registerAgentProfileWorkflowTools(
 			return fmt.Errorf("create profile workflow runtime: %w", err)
 		}
 		created.SetWorkshopModeOverride("run")
-		created.SetReadOnlyAccess(isReadOnlyAccess)
 		workshopSession = created
 		api.workshopChatSessions.Store(workshopKey, workshopSession)
 	}

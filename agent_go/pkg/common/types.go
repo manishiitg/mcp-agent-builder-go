@@ -51,17 +51,6 @@ const (
 	// Always the parent session — never changes for isolated sub-agents.
 	// Used by browser session tracker for per-workflow limits.
 	WorkflowSessionIDKey ContextKey = "workflow_session_id"
-	// WorkflowReadOnlyAccessKey is the context key for whether the current
-	// caller's workflow access level is read-only (PLAT-262). Resolved fresh
-	// per request from the caller's live auth claims in cmd/server (which owns
-	// WorkflowAccessLevel and cannot be imported from this lower package) and
-	// injected here so tool registration/executors below cmd/server can gate
-	// mutation without a cross-package type dependency. Value is a plain bool;
-	// absent (ctx.Value returns nil) must be treated as NOT read-only —
-	// callers outside an authenticated workflow-phase request (e.g. tests,
-	// background/system-internal calls) default to full access, matching
-	// workflowAccessForClaims(nil)'s existing "unconfigured -> owner" default.
-	WorkflowReadOnlyAccessKey ContextKey = "workflow_read_only_access"
 )
 
 // WorkspaceFolders are the standard workspace folders.

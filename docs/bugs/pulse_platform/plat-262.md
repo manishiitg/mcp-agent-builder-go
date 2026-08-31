@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `implemented, verified by build/vet/gofmt/tests, live reverify not yet run` — mechanism keyed on `WorkflowAccessLevel` (access-level axis) instead of `WorkshopMode` (focus axis), after finding a dedicated design doc that deliberately removed mode-based tool filtering; confirmed the corrected mechanism matches an already-shipped precedent and closes cleanly, not a workaround |
+| Ticket state | `implemented, live-verified locally` — mechanism keyed on `WorkshopMode` (single source of truth for tools/prompt/skills), with `WorkflowAccessLevel` doing exactly one thing: pinning a read-only identity's session to `WorkshopMode="run"` server-side, permanently, with no client-side toggle. See RCA #1 (why access-level, not mode), RCA #2 (why that was corrected back toward mode), and the Live reverify section (two real folder-guard bugs found and fixed during local live testing, one pre-existing dead security check removed) |
 | Last synchronized | `2026-08-31` |
 
 - **Type:** platform feature (design only at filing time, no code changed
@@ -197,74 +197,162 @@ deliberately committed to treating as advisory-only. The shell folder-guard
 write-path restriction is gated the same way: on access level, not on
 `WorkshopMode`.
 
+## RCA #2: corrected back toward WorkshopMode as the single gate
+
+After the implementation above shipped and was verified live, the user
+reviewed a real read-only session's chat response and pushed back hard on
+one specific consequence of RCA #1's split: the agent's *system prompt* was
+identical for a read-only user and a full admin (RCA #1 deliberately left
+`WorkshopMode`/the prompt untouched), so a read-only user asking "what can
+you do?" got a generic Builder self-description — "I can design the
+workflow..." — that was true of the prompt but false of the actual tool
+catalog. That is a real UX defect RCA #1's reasoning did not address (RCA #1
+was entirely about *tool-catalog* correctness, not prompt correctness).
+
+The fix path went through several iterations, each one narrowing on a wrong
+premise before landing on the final design:
+
+1. First fix: add a `ReadOnlyAccess` template variable, separate from
+   `WorkshopMode`, so the prompt could say "you're read-only" without
+   touching the mode axis. This worked but produced two overlapping
+   variables in the same prompt (`WorkshopMode` and `ReadOnlyAccess`),
+   which the user immediately flagged as confusing on sight.
+2. The user asked to key the prompt check on `WorkshopMode == "run"`
+   instead of the separate `ReadOnlyAccess` variable. This was correctly
+   flagged back as a *correctness* risk, not just a style question: RCA
+   #1 established that a normal write/owner user can legitimately be in
+   Run mode too (Bot Connector WhatsApp/Slack routes explicitly set
+   `workshop_mode: "run"` per route, with full account access) — keying
+   the "your tools are absent" claim on mode alone would have made that
+   claim false for those sessions.
+3. Investigating that objection surfaced the actual resolving fact: **there
+   is no live UI path for a normal human user to toggle `WorkshopMode`
+   at all.** Grepping the entire frontend for every call site of the
+   store's `setWorkshopMode` action found exactly one, gated behind a
+   slash command's `requiredWorkshopMode` — and no built-in command
+   requires `"run"` alone. The only real sources of `WorkshopMode="run"`
+   are: Bot Connector's per-route config, the scheduler, and the
+   agent-profile runtime — none of them a human toggling mode mid-chat.
+   This meant RCA #1's own justification (protecting against the
+   documented same-session tool-catalog-cache bug from
+   `docs/design/agent_tool_surface_single_source.md`) does not actually
+   apply to a human chat session pinned to Run mode at creation and never
+   switched — there is no live toggle to reopen that bug through.
+4. With that confirmed, the user made the final call explicitly and
+   repeated it after seeing the Bot Connector tradeoff spelled out with a
+   concrete before/after preview: **`WorkshopMode` becomes the single gate
+   for tools, prompt, and skills — full stop, for every caller, not just
+   read-only ones.** A Bot Connector/scheduled/agent-profile session sitting
+   in Run mode now gets the exact same reduced tool set a read-only human
+   does. This is treated as intentional, not a regression: Run mode's
+   prompt guidance already told every such caller not to use these tools
+   ("Workshop-Owned Tools — Visible But Not Yours"); this change makes that
+   guidance literally true (tool absent) instead of merely requested (tool
+   present, please don't call it).
+
+**What `WorkflowAccessLevel` still does, and nothing more:** it decides, once
+per turn, whether this session's `WorkshopMode` gets force-pinned to `"run"`
+(server-side, in `server.go`, before both the prompt render and
+`installWorkflowPhaseTools`) — and nothing downstream ever reads
+`WorkflowAccessLevel`/`readOnlyAccess` again. `WorkshopChatSession.readOnlyAccess`,
+`InteractiveWorkshopManager.readOnlyAccess`, `SetReadOnlyAccess`, the
+`ReadOnlyAccess` prompt template variable, and the now-fully-unused
+`pkg/common/WorkflowReadOnlyAccessKey` context-key plumbing were all removed
+as part of this correction — not deprecated, deleted, since nothing consumed
+them once `WorkshopMode` became the sole gate.
+
+**Explicitly out of scope for this correction** (confirmed with the user):
+the shell/file folder-guard write-path restriction in `server.go` (the
+workflow-phase chat session's own write grant) stays keyed on
+`WorkflowAccessLevel` directly, not `WorkshopMode` — switching that too would
+also cut file-write access for live Bot Connector sessions sitting in Run
+mode, a materially different and larger blast radius than the tool-catalog
+change above, and the user's instruction was scoped to "tool and prompt
+skills," not folder guard.
+
 ## Verification
 
-Implementation complete. Results:
+Implementation complete (RCA #2 is the final, current state). Results:
 
 - `go build ./...`: clean (only the pre-existing, unrelated
   `libonnxruntime.dylib` linker version warning).
 - `gofmt -l` on every touched Go file: clean.
-- `go vet ./cmd/server/ ./pkg/orchestrator/agents/workflow/step_based_workflow/...`:
-  clean except two pre-existing, unrelated findings
-  (`message_sequence_stop_test.go` context-leak lint, `scheduler_test.go`
-  unreachable code) — neither touched by this ticket.
 - `go test ./cmd/server/ ./pkg/orchestrator/agents/workflow/step_based_workflow/...`:
   all pass. `cmd/server/virtual-tools` fails at `go vet`/`go test` setup on a
   pre-existing missing-module import (`mcpagent/agentreview`), unrelated to
   this ticket, present before this work started.
-- New Go tests:
+- Go tests:
   - `cmd/server/workflow_permissions_test.go`: `read`/`reader`/`run`/
     `runner`/`view`/`viewer` aliases resolve to `WorkflowAccessRead` (not
     `WorkflowAccessWrite`); `write`/`owner` aliases unaffected;
     `workflowPermissionInfo(WorkflowAccessRead)` yields
     `CanRunWorkflows=true`, `CanWriteWorkflows=false`,
-    `CanManageWorkflowAccess=false`.
+    `CanManageWorkflowAccess=false`. Still valid post-RCA#2 — this tier's
+    parsing is unrelated to which mechanism gates tools.
   - `pkg/orchestrator/agents/workflow/step_based_workflow/workshop_readonly_gate_test.go`:
-    an AST-based test (matching this file's existing
-    `workshop_tool_allowlist_test.go` pattern, since
-    `registerInteractiveWorkshopTools` has too many construction-time
-    dependencies to invoke with fakes) proving all 18 mutating tools
-    (`debug_step`, `update_step_config`, `review_plan`, `review_step_code`,
-    `update_variable`, `add_group`, `update_group`, `delete_group`,
-    `update_workflow_config`, `set_workflow_contract_version`,
-    `create_schedule`, `create_calendar_schedule`, `update_schedule`,
-    `delete_schedule`, `import_skill`, `uninstall_skill`, `install_skill`,
+    `TestMutatingWorkshopToolsAreGatedByRunMode` — an AST-based test
+    (matching this file's existing `workshop_tool_allowlist_test.go`
+    pattern, since `registerInteractiveWorkshopTools` has too many
+    construction-time dependencies to invoke with fakes) proving all 18
+    mutating tools (`debug_step`, `update_step_config`, `review_plan`,
+    `review_step_code`, `update_variable`, `add_group`, `update_group`,
+    `delete_group`, `update_workflow_config`,
+    `set_workflow_contract_version`, `create_schedule`,
+    `create_calendar_schedule`, `update_schedule`, `delete_schedule`,
+    `import_skill`, `uninstall_skill`, `install_skill`,
     `set_workflow_llm_config`) are registered only inside an
-    `if iwm.readOnlyAccess {...} else if err := mcpAgent.RegisterCustomTool(...)`
+    `if iwm.isRunModeRestricted() {...} else if err := mcpAgent.RegisterCustomTool(...)`
     guard, and that `execute_step`/`query_step`/`run_full_workflow`/
-    `list_secrets` are never gated; plus a direct test proving
-    `runBackgroundTaskAgentSequence`'s write-path narrowing zeroes shell
-    write grants under `readOnlyAccess` while `workshopWritePaths` itself
-    still returns a non-empty list for a normal caller (guards against the
-    test passing vacuously).
+    `list_secrets` are never gated. `TestRunModeZeroesBackgroundAgentWritePaths`
+    proves `runBackgroundTaskAgentSequence`'s write-path narrowing zeroes
+    shell write grants when `workshopModeOverride == "run"`, while
+    `workshopWritePaths` itself still returns a non-empty list for a normal
+    (Workshop-mode) caller (guards against the test passing vacuously).
 - Frontend: `npx tsc --noEmit -p .` clean; `npm run build` clean (pre-existing
   bundle-size warning only, not a failure).
 
-Enforcement points implemented, all keyed on `WorkflowAccessLevel` resolved
-fresh every turn, `WorkshopMode` untouched per the RCA above:
+Enforcement points, all keyed on `WorkshopMode` (per RCA #2 — `WorkflowAccessLevel`
+now does exactly one thing: force-pins a read-only identity's `WorkshopMode` to
+`"run"`, server-side, every turn):
 - `RegisterPlanModificationTools` (both call sites in
   `installWorkflowPhaseTools`, plus inside `registerFullWorkshopAgentTools`
-  for background sub-agents) — skipped entirely for read-only access.
+  for background sub-agents) — skipped entirely in Run mode.
 - The 18 Workshop-only tools inside `registerInteractiveWorkshopTools`, plus
-  `mark_changelog_artifact_reviewed` — skipped for read-only access.
+  `mark_changelog_artifact_reviewed` — skipped in Run mode, via
+  `iwm.isRunModeRestricted()` (`canonicalWorkshopMode(iwm.workshopModeOverride) == "run"`).
 - `registerSecretManagementTools` — `set_user_secret`, `delete_user_secret`,
-  `set_workflow_secret`, `delete_workflow_secret` skipped for read-only
-  access; `list_secrets` always registered.
-- `reorganize_knowledgebase`/`consolidate_knowledgebase` — skipped for
-  read-only access.
-- Shell/file write paths: `server.go`'s main chat-session folder guard grant,
-  and `runBackgroundTaskAgentSequence`'s background-agent folder guard, both
-  pass empty write paths for read-only access; read paths stay full and
-  unchanged in both cases.
-- `WorkshopChatSession.readOnlyAccess` / `InteractiveWorkshopManager.readOnlyAccess`
-  are re-set from the live caller's claims on every turn (both the
-  session-reuse and fresh-session-creation paths in
-  `installWorkflowPhaseTools`), matching the per-turn re-registration
-  behavior the RCA relies on.
-- `agent_profile_workflow.go`'s separate agent-profile-driven workflow
-  runtime (which never registered plan-modification tools and already
-  hardcoded `WorkshopMode="run"`) now also threads through
-  `SetReadOnlyAccess` for defense in depth on its Workshop-only tool subset.
+  `set_workflow_secret`, `delete_workflow_secret` skipped in Run mode;
+  `list_secrets` always registered. (The separate multi-agent-chat call site
+  in `server.go` — an unrelated surface with no `WorkshopMode` concept —
+  still keys on `WorkflowAccessLevel` directly, unchanged.)
+- `reorganize_knowledgebase`/`consolidate_knowledgebase` — skipped in Run mode.
+- `phaseTemplateVars["WorkshopMode"]` is force-set to `"run"` in `server.go`
+  for a read-only identity, on every turn, before both the system-prompt
+  render and `installWorkflowPhaseTools` — the single point of truth both
+  read. `workshopSession.SetWorkshopModeOverride(phaseTemplateVars["WorkshopMode"])`
+  is then called unconditionally (not just on session reuse) in
+  `installWorkflowPhaseTools`, closing a gap where a freshly-created session's
+  first turn could have missed the pin.
+- The system prompt's `## Run Mode — Execute and Monitor Only` section
+  (merged from two previously-separate, now-deleted sections) states plainly
+  that mutating tools are genuinely absent, not just discouraged — keyed
+  only on `{{if eq .WorkshopMode "run"}}`, with no separate `ReadOnlyAccess`
+  template variable.
+- Shell/file write paths: `server.go`'s main chat-session folder guard grant
+  and `runBackgroundTaskAgentSequence`'s background-agent folder guard both
+  still key on `WorkflowAccessLevel` directly (deliberately **not** moved to
+  `WorkshopMode` — see the out-of-scope note above RCA #2); read paths stay
+  full and unchanged in both cases.
+- `agent_profile_workflow.go`'s agent-profile-driven workflow runtime
+  (already hardcoded `WorkshopMode="run"`) now gets its Workshop-only-tool
+  restriction automatically, with no separate access-level thread needed —
+  `SetReadOnlyAccess`/`isReadOnlyAccess` were removed from this file entirely.
+- `WorkshopChatSession.readOnlyAccess`, `InteractiveWorkshopManager.readOnlyAccess`,
+  `SetReadOnlyAccess`, the `ReadOnlyAccess` prompt template variable, and
+  `pkg/common/workflow_access_context.go` (`WorkflowReadOnlyAccessKey`,
+  `IsWorkflowReadOnlyAccess`, `WithWorkflowReadOnlyAccess`) were all deleted
+  as part of RCA #2 — none had any remaining consumer once `WorkshopMode`
+  became the sole gate.
 
 Also removed as dead code at the user's explicit request, found while tracing
 this ticket's live tool-registration paths: `InteractiveWorkshopOnly`
@@ -283,10 +371,68 @@ corrected before deleting anything after tracing them to the live
 `run_in_background` background-sub-agent path
 (`runBackgroundTaskAgentSequence`).
 
-Not done in this pass (no live reverify environment available in this
-session): creating a real read-only user end-to-end and confirming in a
-running desktop app that chat works, a mutating tool call is rejected as
-unregistered, shell reads but doesn't write, and a live demotion takes
-effect on the very next turn of an already-open session. The static/unit
-verification above exercises the same code paths a live check would, but
-this is flagged as the one remaining manual-verification gap.
+## Live reverify (local)
+
+Ran a real local server (`WORKFLOW_USER_PERMISSIONS="default=read"`, the
+default single-user local-dev identity flipped to read-only) against a live
+workflow (`confida-login`) and confirmed via server logs the read-only
+identity's `RegisterPlanModificationTools`/`reorganize_knowledgebase` calls
+were actually skipped for that exact session/turn, and the folder guard
+logged no whole-workflow write grant. The agent's own greeting correctly
+self-identified as "in Run mode" (the RCA #2 prompt fix working as intended,
+replacing the earlier misleading generic Builder self-description).
+
+This surfaced two real bugs, both fixed and reverified live before this
+commit:
+
+1. **Shell reads of `Workflow/...` paths were incorrectly denied**, not just
+   writes. Root cause: `wrapExecutorsWithWorkflowPhaseFolderGuard`
+   (`tool_setup.go`) had its own separate, earlier-stage guard — a shell-command
+   *text* scan (`hasWorkflowAccess`) that decided "may this command reference
+   `Workflow/` at all" from the same write-folder parameter used to grant
+   writes. Emptying that parameter to correctly deny writes for a read-only
+   identity also emptied `hasWorkflowAccess`, incorrectly blocking reads too —
+   a bug the real, path-based folder guard (`SetSessionFolderGuard`'s
+   `readPaths`, unaffected) never had.
+2. **Browser tools bypassed the read-only restriction entirely** — a separate
+   folder-guard closure (feeding `registerCodingBrowserTools`) was never
+   gated by `currentUserIsReadOnly` at all, and would have granted a
+   read-only session's browser tools full write access. Found while tracing
+   bug 1; unrelated to it, but same fix shape.
+
+Investigating bug 1 led to removing its root cause rather than working
+around it: the `hasWorkflowAccess` text-scan check was traced via `git log
+-S` to the commit that introduced `tool_setup.go` (`c2c7cba47`, 2026-03-09,
+not a targeted fix for a prior incident) and confirmed to have zero test
+coverage anywhere in the codebase. Its only sensible purpose — blocking a
+general multi-agent chat session from touching `Workflow/` unless the user
+explicitly attached one via the `#workflow` picker — belongs to
+`wrapExecutorsWithChatModeFolderGuard`, a sibling wrapper over the same
+shared low-level function that, per a full grep, has **zero live callers**
+in the actual request-handling flow today (only exported for a test file).
+The only caller that ever reaches this check in production is
+`wrapExecutorsWithWorkflowPhaseFolderGuard`, where it is structurally
+pointless — a workflow-builder session is by definition always working
+inside its own `Workflow/<name>` folder — so it silently passed 100% of the
+time for every session type that existed before read-only access did, and
+broke the instant a legitimately-empty write-folder parameter appeared.
+Deleted the check (`hasWorkflowAccess` computation + its guard block) from
+`wrapExecutorsWithFolderGuard` entirely, and the now-dead `workflowAccessDenyMode`
+parameter from all three functions in its call chain, rather than leave a
+workaround patched around a check that protected nothing live. `go test
+./cmd/server/` (including `tool_setup_test.go`'s `wrapExecutorsWithChatModeFolderGuard`
+write-blocking tests) stayed green throughout.
+
+Confirmed via live retest after the fix: the same `cat`/`sed` commands
+against `Workflow/confida-login/...` paths that previously failed with
+`access denied: shell commands cannot reference 'Workflow/' folder in
+workflow builder` now succeed for the read-only session.
+
+Not yet done: verifying this same read-only flow against a real second
+account in actual multi-user mode (`MULTI_USER_MODE=true` + distinct
+`AUTH_USERS` identities) rather than the single local-dev identity flipped
+to read-only — the local dev script hardcodes single-user mode, so this
+session's live testing exercised the permission/gating logic paths
+correctly but not the separate per-account chat-history isolation path
+(verified instead by code inspection: `chatHistoryRoot(userID)` is
+genuinely per-`userID`-keyed, confirmed no shared state).

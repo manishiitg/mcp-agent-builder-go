@@ -21,6 +21,8 @@ import EvaluationPopup from '../workflow/EvaluationPopup'
 import { ReportViewer } from '../workflow/ReportViewer'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '../ui/tooltip'
 import { scheduleTabLabel } from '../../utils/scheduleTabLabel'
+import { useAuthStore } from '../../stores/useAuthStore'
+import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
 
 interface WorkflowScheduleRunsPanelProps {
   onClose: () => void
@@ -645,6 +647,7 @@ function sortJobs(a: ScheduledJob, b: ScheduledJob): number {
 }
 
 const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ onClose, onJobsLoaded, workflowScope, embedded = false }) => {
+  const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
   const [jobs, setJobs] = useState<ScheduledJob[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -2863,8 +2866,13 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
 
                                   {/* Action buttons */}
                                   <div className="flex items-center gap-2 ml-auto flex-shrink-0">
-                                    {/* Open the scheduled run itself as a read-only chat tab. */}
-                                    {currentSessionId && (
+                                    {/* Open the scheduled run itself as a read-only chat tab.
+                                        Hidden (not just disabled) for a read-only-access user —
+                                        this already opens view-only for every user, but the icon
+                                        looked interactive enough to cause confusion, so it's cut
+                                        from this role entirely as a UX nicety. No server-side
+                                        capability changes with this — see PLAT-262. */}
+                                    {currentSessionId && !isReadOnlyUser && (
                                       <Tooltip>
                                         <TooltipTrigger asChild>
                                           <button

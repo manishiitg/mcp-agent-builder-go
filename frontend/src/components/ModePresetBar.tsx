@@ -1,6 +1,8 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Workflow, Settings, Copy, Keyboard, Bot, Building2, HelpCircle, AlertCircle, Clock, Loader2, Pause } from 'lucide-react'
+import { Workflow, Settings, Copy, Keyboard, Bot, Building2, HelpCircle, AlertCircle, Clock, Loader2, Pause, Eye } from 'lucide-react'
+import { useAuthStore } from '../stores/useAuthStore'
+import { isWorkflowReadOnly } from '../utils/workflowPermissions'
 import { useModeStore } from '../stores/useModeStore'
 import { useGlobalPresetStore, usePresetApplication, usePresetManagement } from '../stores/useGlobalPresetStore'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
@@ -140,6 +142,7 @@ export const ModePresetBar: React.FC = () => {
     workspaceMinimized: state.workspaceMinimized,
     agentMode: state.agentMode,
   })))
+  const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
   // Use toolList to get all available servers, not just enabled ones
   const toolList = useMCPStore(state => state.toolList)
   const appVersion = useAppVersion()
@@ -667,6 +670,20 @@ export const ModePresetBar: React.FC = () => {
                 <span>Org</span>
               </button>
             </div>
+
+            {isReadOnlyUser && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex shrink-0 items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+                    <Eye className="w-3 h-3" />
+                    <span>Read-only</span>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  Your account has read-only workflow access — you can chat and watch runs, but can't edit plans, secrets, schedules, or config.
+                </TooltipContent>
+              </Tooltip>
+            )}
 
             {/* Center: Preset Information */}
             <div className="flex min-w-0 items-center gap-3">

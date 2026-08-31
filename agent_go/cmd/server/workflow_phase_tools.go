@@ -47,15 +47,13 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 	phaseMoveFile func(ctx context.Context, src, dst string) error,
 	syntheticReq QueryRequest,
 ) error {
-	// PLAT-262: resolved fresh from this call's own ctx (ultimately the live
-	// request's auth claims — installWorkflowPhaseTools runs on every
-	// conversational turn, not just once at session creation, so this is
-	// never stale). Gates mutating tool registration below. Never gates
-	// WorkshopMode/syntheticReq.ExecutionOptions.WorkshopMode — that axis
-	// stays prompt-only focus, per
-	// docs/design/agent_tool_surface_single_source.md.
-	isReadOnlyAccess := workflowAccessForClaims(GetUserFromContext(ctx)) == WorkflowAccessRead
-	ctx = common.WithWorkflowReadOnlyAccess(ctx, isReadOnlyAccess)
+	// PLAT-262: phaseTemplateVars["WorkshopMode"] is the single gate for
+	// mutating tools, the prompt, and skills below — not WorkflowAccessLevel
+	// directly. The caller (server.go) already force-set it to "run" for a
+	// read-only identity, on every turn, before calling this function. Anyone
+	// else genuinely in "run" mode (Bot Connector routes, scheduled runs, the
+	// agent-profile runtime) gets the exact same reduced tool set on purpose —
+	// see RCA #2 in docs/bugs/pulse_platform/plat-262.md.
 
 	// Register phase-appropriate tools
 	// PHASE_TOOL_RACE_DIAGNOSTIC: these are the registrations that
@@ -81,8 +79,8 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 		// a per-tool gate — matches the doc-approved "authority, decided once
 		// per distinct-caller registration" pattern (prepareReadOnlyBackgroundAgentTools),
 		// not the deleted per-turn workshop-mode catalog filter.
-		if isReadOnlyAccess {
-			log.Printf("[WORKFLOW_PHASE] Read-only identity — skipping plan modification tool registration for %s", workflowPhaseID)
+		if phaseTemplateVars["WorkshopMode"] == "run" {
+			log.Printf("[WORKFLOW_PHASE] Run mode — skipping plan modification tool registration for %s", workflowPhaseID)
 		} else if err := todo_creation_human.RegisterPlanModificationTools(
 			definitionAgent,
 			phaseWorkspacePath,
@@ -113,10 +111,6 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			workshopSession = cached.(*todo_creation_human.WorkshopChatSession)
 			log.Printf("[WORKFLOW_PHASE] Reusing existing workshop session for %s", sessionID)
 
-			// PLAT-262: re-set every turn from the current caller's live
-			// WorkflowAccessLevel — never trust a cached session's value.
-			workshopSession.SetReadOnlyAccess(isReadOnlyAccess)
-
 			// Always refresh API keys on session reuse (workspace keys may have changed)
 			// Use mergedAPIKeys loaded before goroutine (r.Context() is canceled inside goroutine)
 			workshopSession.UpdateAPIKeys(mergedAPIKeys)
@@ -127,10 +121,9 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 				log.Printf("[WORKFLOW_PHASE] Refreshed enabled group names: %v", syntheticReq.ExecutionOptions.EnabledGroupNames)
 			}
 
-			// Pass frontend-selected workshop mode so AUTO-NOTIFICATION action hints use the correct mode
-			if syntheticReq.ExecutionOptions != nil && syntheticReq.ExecutionOptions.WorkshopMode != "" {
-				workshopSession.SetWorkshopModeOverride(syntheticReq.ExecutionOptions.WorkshopMode)
-			}
+			// WorkshopMode is set unconditionally below on workshopSession, from
+			// phaseTemplateVars["WorkshopMode"] — the single source of truth for
+			// both this reused-session path and the freshly-created-session path.
 
 			// Refresh all settings from manifest in case user edited the workflow
 			if phaseWorkspacePath != "" {
@@ -221,10 +214,15 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 		}
 
 		if workshopSession != nil {
-			// PLAT-262: re-set every turn from the current caller's live
-			// WorkflowAccessLevel (covers both the newly-created-session path
-			// and belt-and-suspenders for the reused-session path above).
-			workshopSession.SetReadOnlyAccess(isReadOnlyAccess)
+			// PLAT-262: WorkshopMode is the single gate for tools/prompt/skills
+			// (see interactive_workshop_manager.go). phaseTemplateVars["WorkshopMode"]
+			// is already the final, authoritative value by this point — forced to
+			// "run" for a read-only identity in server.go before this function was
+			// even called, otherwise whatever the client/default resolved to. Set
+			// it unconditionally here so both the reused-session and
+			// freshly-created-session paths above always end up correct, with no
+			// separate reuse-branch-only special case to keep in sync.
+			workshopSession.SetWorkshopModeOverride(phaseTemplateVars["WorkshopMode"])
 			workshopSession.SetExtraSubAgentNotifier(&workflowSubAgentTrackingNotifier{
 				api:       api,
 				sessionID: sessionID,
@@ -279,7 +277,7 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 				}
 				return builderSession.DetachSecretFromWorkflow(ctx, name)
 			}
-			if err := api.registerSecretManagementTools(definitionAgent, userID, phaseWorkspacePath, "secret_tools", isReadOnlyAccess, afterUpsert, afterDelete); err != nil {
+			if err := api.registerSecretManagementTools(definitionAgent, userID, phaseWorkspacePath, "secret_tools", phaseTemplateVars["WorkshopMode"] == "run", afterUpsert, afterDelete); err != nil {
 				log.Printf("[WORKFLOW_PHASE] Warning: Failed to register secret tools in %s: %v", workflowPhaseID, err)
 			} else {
 				log.Printf("[WORKFLOW_PHASE] Registered secret tools in %s (list_secrets, set_workflow_secret, delete_workflow_secret, set_user_secret, delete_user_secret) with workflow auto-detach", workflowPhaseID)
@@ -382,8 +380,8 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 		if workshopSession != nil {
 			todo_creation_human.RegisterRunFullWorkflowTool(definitionAgent, workshopSession, api.logger)
 			log.Printf("[WORKFLOW_PHASE] Registered run_full_workflow in %s", workflowPhaseID)
-			if isReadOnlyAccess {
-				log.Printf("[WORKFLOW_PHASE] PLAT-262: skipping reorganize_knowledgebase/consolidate_knowledgebase in %s (read-only access)", workflowPhaseID)
+			if phaseTemplateVars["WorkshopMode"] == "run" {
+				log.Printf("[WORKFLOW_PHASE] PLAT-262: skipping reorganize_knowledgebase/consolidate_knowledgebase in %s (run mode)", workflowPhaseID)
 			} else {
 				todo_creation_human.RegisterReorganizeKnowledgebaseTool(definitionAgent, workshopSession, api.logger)
 				log.Printf("[WORKFLOW_PHASE] Registered reorganize_knowledgebase in %s", workflowPhaseID)
@@ -437,9 +435,9 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 	default:
 		// planning: plan modification tools
 		// Returns an error on failure — see workflow-builder case above for rationale.
-		// PLAT-262: same read-only gate as the workflow-builder case above.
-		if isReadOnlyAccess {
-			log.Printf("[WORKFLOW_PHASE] Read-only identity — skipping plan modification tool registration for phase=%s", workflowPhaseID)
+		// PLAT-262: same run-mode gate as the workflow-builder case above.
+		if phaseTemplateVars["WorkshopMode"] == "run" {
+			log.Printf("[WORKFLOW_PHASE] Run mode — skipping plan modification tool registration for phase=%s", workflowPhaseID)
 		} else if err := todo_creation_human.RegisterPlanModificationTools(
 			definitionAgent,
 			phaseWorkspacePath,

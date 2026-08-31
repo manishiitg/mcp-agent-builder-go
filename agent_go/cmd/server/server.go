@@ -5088,9 +5088,18 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						additionalFolders = append(additionalFolders, fileContextWriteFolders...)
 						return wrapExecutorsWithPlanFolderGuard(execs, perUserChatsFolder, workflowReadOnlyFolders, additionalFolders...)
 					}
-					browserExtraFolders := append([]string{}, resolvedGrants.WriteFolders...)
-					browserExtraFolders = append(browserExtraFolders, fileContextWriteFolders...)
-					return wrapExecutorsWithWorkflowPhaseFolderGuard(execs, workflowPhaseFolder, workflowReadOnlyFolders, fileContextBlockedWriteFolders, browserExtraFolders...)
+					// PLAT-262: this closure previously granted full write access to a
+					// read-only session's browser tools unconditionally — a real gap,
+					// found while investigating the shell-command read regression above.
+					var browserExtraFolders []string
+					browserGuardWriteFolder := workflowPhaseFolder
+					if currentUserIsReadOnly {
+						browserGuardWriteFolder = ""
+					} else {
+						browserExtraFolders = append([]string{}, resolvedGrants.WriteFolders...)
+						browserExtraFolders = append(browserExtraFolders, fileContextWriteFolders...)
+					}
+					return wrapExecutorsWithWorkflowPhaseFolderGuard(execs, browserGuardWriteFolder, workflowReadOnlyFolders, fileContextBlockedWriteFolders, browserExtraFolders...)
 				}
 				browserPorts := getCdpPorts(req)
 				if getBrowserMode(req) == "auto" {
@@ -5630,6 +5639,21 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				}
 				if phaseTemplateVars["WorkshopMode"] == "" {
 					phaseTemplateVars["WorkshopMode"] = "workshop"
+				}
+
+				// PLAT-262: a read-only identity is always pinned to Run mode,
+				// overriding whatever was requested or defaulted above — the
+				// client-side toggle is hidden for these users too, but the
+				// server has the final say. This is the single point that
+				// decides WorkshopMode for both the system prompt rendered
+				// just below and every phaseTemplateVars["WorkshopMode"] read
+				// inside installWorkflowPhaseTools (same map, passed by
+				// reference). Read-only users never perform a same-session
+				// Workshop<->Run toggle, so this does not reopen the removed
+				// mode-based tool-catalog-filtering bug — see
+				// installWorkflowPhaseTools's doc comment.
+				if currentUserIsReadOnly {
+					phaseTemplateVars["WorkshopMode"] = "run"
 				}
 
 				// Read variable names from workspace (if any)
