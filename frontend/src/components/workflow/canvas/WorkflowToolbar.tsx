@@ -25,7 +25,6 @@ import {
   RefreshCw,
   Puzzle,
   Server,
-  Settings2,
   X,
 } from 'lucide-react'
 import ModalPortal from '../../ui/ModalPortal'
@@ -915,24 +914,58 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
           </Tooltip>
         )}
 
-        {/* Workflow configuration — compact until the user needs a specific capability. */}
+        {/* Workflow capabilities — write-only (read users don't see this) */}
         {canWriteWorkflow && (
-          <CompactToolbarMenu
-            label="Configure workflow"
-            icon={<Settings2 className="h-3.5 w-3.5" />}
-            active={workflowWorkspaceView != null && ['skills', 'secrets', 'mcp', 'browser', 'llm', 'folders'].includes(workflowWorkspaceView)}
-          >
-            {(close) => (
-              <>
-                <CompactToolbarMenuItem icon={<Puzzle className="h-3.5 w-3.5" />} label="Skills" detail="Reusable instructions" active={workflowWorkspaceView === 'skills'} onClick={() => { openWorkspaceView('skills'); close() }} />
-                <CompactToolbarMenuItem icon={<KeyRound className="h-3.5 w-3.5" />} label="Secrets" detail="Credentials and environment values" active={workflowWorkspaceView === 'secrets'} onClick={() => { openWorkspaceView('secrets'); close() }} />
-                <CompactToolbarMenuItem icon={<Server className="h-3.5 w-3.5" />} label="MCP servers" detail="Connected tools" active={workflowWorkspaceView === 'mcp'} onClick={() => { openWorkspaceView('mcp'); close() }} />
-                <CompactToolbarMenuItem icon={<Monitor className="h-3.5 w-3.5" />} label="Browser automation" detail="Browser access and sessions" active={workflowWorkspaceView === 'browser'} onClick={() => { openWorkspaceView('browser'); close() }} />
-                <CompactToolbarMenuItem icon={<BrainCircuit className="h-3.5 w-3.5" />} label="LLM configuration" detail="Provider and model roles" active={workflowWorkspaceView === 'llm'} onClick={() => { openWorkspaceView('llm'); close() }} />
-                <CompactToolbarMenuItem icon={<FolderOpen className="h-3.5 w-3.5" />} label="Attached folders" detail="Additional workspace access" active={workflowWorkspaceView === 'folders'} onClick={() => { openWorkspaceView('folders'); close() }} />
-              </>
-            )}
-          </CompactToolbarMenu>
+          <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={() => openWorkspaceView('skills')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'skills' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow skills" aria-pressed={workflowWorkspaceView === 'skills'}>
+                  <Puzzle className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>Workflow skills</p></TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={() => openWorkspaceView('secrets')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'secrets' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow secrets" aria-pressed={workflowWorkspaceView === 'secrets'}>
+                  <KeyRound className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>Workflow secrets</p></TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={() => openWorkspaceView('mcp')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'mcp' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow MCP servers" aria-pressed={workflowWorkspaceView === 'mcp'}>
+                  <Server className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>Workflow MCP servers</p></TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={() => openWorkspaceView('browser')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'browser' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Browser automation" aria-pressed={workflowWorkspaceView === 'browser'}>
+                  <Monitor className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>Browser automation</p></TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={() => openWorkspaceView('llm')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'llm' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow LLM configuration" aria-pressed={workflowWorkspaceView === 'llm'}>
+                  <BrainCircuit className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>Workflow LLM configuration</p></TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={() => openWorkspaceView('folders')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'folders' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Attached folders" aria-pressed={workflowWorkspaceView === 'folders'}>
+                  <FolderOpen className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>Attached folders</p></TooltipContent>
+            </Tooltip>
+          </div>
         )}
 
         </TooltipProvider>
