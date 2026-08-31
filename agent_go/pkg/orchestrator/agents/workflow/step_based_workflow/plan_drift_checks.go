@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
+	"github.com/manishiitg/coding-agent-loop/workspace/sqliteopen"
 
 	_ "modernc.org/sqlite"
 )
@@ -33,11 +33,21 @@ func planDriftWorkflowDBPath(workspacePath string) string {
 // openPlanDriftQueryOnlyDB opens the workflow's db.sqlite read-only (WAL-capable,
 // query_only pragma) — a drift check must never be able to mutate real workflow
 // data, no matter what SQL a report or a step's own code embeds.
+//
+// Builds on the shared sqliteopen.DSN helper (journal_mode=WAL,
+// busy_timeout embedded in the DSN, not a one-time runtime PRAGMA) rather
+// than a hand-rolled DSN string. This was the one remaining workflow
+// db.sqlite opener not yet migrated when report_human_inputs.go's
+// SQLITE_BUSY fix and the shared helper itself landed — found live on the
+// Dominion deployment 2026-08-31 as the source of a second, separate
+// get_pulse_state(view=module) hang (in CheckReportQueryCompatibility) that
+// survived that first fix, load-dependent enough that it couldn't be
+// force-reproduced in isolation.
 func openPlanDriftQueryOnlyDB(dbPath string) (*sql.DB, error) {
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil, err
 	}
-	dsn := (&url.URL{Scheme: "file", Path: dbPath}).String() + "?mode=rw&_pragma=query_only(true)&_pragma=busy_timeout(5000)"
+	dsn := sqliteopen.DSN(dbPath) + "&mode=rw&_pragma=query_only(true)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
