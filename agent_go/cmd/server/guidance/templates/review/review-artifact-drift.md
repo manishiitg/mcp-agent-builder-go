@@ -1,28 +1,80 @@
-Use this as the read-only audit checklist for artifact drift after plan or configuration changes. It checks whether step config, the schedules that drive the workflow, learnings, saved code, knowledge-base notes, database contracts, reports, evaluation, and recent run evidence still match the current workflow. It also flags missing or stale eval coverage with an `Eval fix` owner label.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
+Use this to run a manual artifact-drift audit after plan or configuration
+changes — the on-demand equivalent of Pulse's scheduled pass, sharing the
+exact same candidate collector, repair contract, and completion writer as
+`plan_drift_review`, not a separate parallel implementation of it.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
 
 ## Execution model
 
 - In Pulse, the parent may include this checklist in the normal Engineering
   background executor when artifact-drift evidence is selected.
 - Outside Pulse, launch one `run_in_background` executor with this checklist as
-  its read-only instructions.
+  its instructions.
 - If you are already that background reviewer, perform the audit directly. Never launch another reviewer, background tool, or nested maintenance agent.
 - The call returns an `execution_id` immediately. End the current turn and wait
   for the automatic completion notification; do not poll, sleep, or repeatedly
   call `query_step`.
-- The reviewer is strictly read-only. It must not edit files, mutate the plan/config,
-  mark changelog entries, or mark Pulse module state.
-- This checklist is a technical-review evidence pack, not `plan_drift_review`
-  itself. A dedicated `plan_drift_review` Pulse module now owns the mechanical,
-  per-step drift checks below (report query compatibility, `validation_schema`
-  db/file rules, scripted-code queries, `db/README.md` contract, orphaned
-  tables) — see the deferral note on step 3. This checklist's own job is
-  everything plan_drift_review does not cover: schedule cron/timezone/queue
-  drift, eval/success-criteria coverage, downstream-step field consumption,
-  dead step/schedule references, and duplicate control stores. Read only
-  matching typed state through `get_pulse_state(view="review")` with
-  `module=technical_review`, using the managed SQLite-backed tools and structured finding lifecycle; do not query SQLite directly or inspect/create Pulse
-  presentation artifacts.
+- **Part 1 (below) has real repair authority, identical to `plan_drift_review`'s
+  own scheduled turn** — read/apply/verify/persist exactly as
+  `plan-drift-review.md` describes, because you ARE running that same
+  contract, just dispatched manually instead of by Pulse Gate. **Part 2 (the
+  remaining checklist) stays strictly read-only**, as before: it must not edit
+  files, mutate the plan/config, mark changelog entries, or mark Pulse module
+  state — everything it finds becomes a recorded finding for the parent to act
+  on, never a same-turn edit.
+
+## Part 1 — run plan_drift_review's real procedure now
+
+First call `record_pulse_module_due(pulse_run_id="current", module=
+"plan_drift_review", reason="manual /review-artifact-drift invocation")`.
+This manual invocation has no Gate-recorded worklist entry the way a
+scheduled Pulse pass does, and `record_pulse_result`'s own write only accepts
+a terminal result when the durable worklist already shows the module due for
+this exact conversation's run id — without this call, the repair work below
+would complete but its receipt would fail to persist, the exact
+"review completed but result failed" outcome this call exists to prevent.
+
+If `record_pulse_module_due` refuses because a real scheduled Pulse pass is
+already mid-flight for `plan_drift_review` (a genuine, rare collision — it
+means Gate is actively running this same module right now under a different
+run), stop here: state that plainly and do not proceed into repair work whose
+receipt could not be recorded anyway. Do not retry in a loop; the operator can
+re-run this command once the scheduled pass finishes.
+
+Call `get_pulse_state(view="module")`. Its `plan_drift_candidates` array is
+the exact same durable candidate set the scheduled Pulse pass reads — every
+step with no `drift_review` record or `needs_review == true`, plus (per
+`plan_drift_candidates_note`) a possible workflow-level candidate with
+`step_id == "__workflow_drift_review__"` when a step deletion since the last
+audit still needs its dependent-artifact fallout traced.
+
+If the array is non-empty, load
+`read_skill(skills=[{"name":"builder-reference","path":"references/plan-drift-review.md"}])`
+and follow its steps 1-6 (and its workflow-level deletion audit section, for
+the `__workflow_drift_review__` candidate if present) exactly, for every
+candidate — applying and verifying safe workflow-owned fixes directly,
+routing only genuine human decisions or platform-owned boundaries, and
+persisting via `record_plan_drift_review` and `record_pulse_result
+(module="plan_drift_review", ...)`, precisely as that module's own scheduled
+turn would. This is not optional evidence to defer past a stale record — it
+is the same due work Pulse would otherwise run on its own schedule, done now
+because the operator asked for it directly.
+
+If the array is empty, state that plainly (nothing plan_drift_review-scoped
+is currently due) and move on to Part 2 below.
+
+## Part 2 — the read-only checklist for everything plan_drift_review does not cover
+
+This checklist's job is what Part 1 does not cover: schedule
+cron/timezone/queue drift, eval/success-criteria coverage, downstream-step
+field consumption, dead step/schedule references not already resolved by
+Part 1's deletion audit, and duplicate control stores. It checks whether step
+config, the schedules that drive the workflow, learnings, saved code,
+knowledge-base notes, database contracts, reports, evaluation, and recent run
+evidence still match the current workflow, and flags missing or stale eval
+coverage with an `Eval fix` owner label. Read only matching typed state
+through `get_pulse_state(view="review")` with `module=technical_review`, using
+the managed SQLite-backed tools and structured finding lifecycle; do not query
+SQLite directly or inspect/create Pulse presentation artifacts.
 
 For a suspected drift that recurs or a repaired dependency awaiting proof,
 compare the current artifact/run evidence with up to three comparable retained
@@ -58,17 +110,17 @@ Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumpti
      something once a step is in scope.
 3. For each affected step, inspect only relevant current artifacts:
    - `planning/plan.json` and `planning/step_config.json`
-   - **Deferral to plan_drift_review**: before re-deriving any of the mechanical
-     checks below by hand, read the step's `agent_configs.drift_review` record
-     in `step_config.json`. When it is present and its `checks[]` cover
+   - **Deferral to plan_drift_review (Part 1 above)**: never re-derive
      `report_query_compatibility`, `validation_schema_db_rules`,
      `validation_schema_file_rules`, `scripted_code_db_queries`,
-     `db_readme_contract`, or `orphaned_tables`, treat that recorded
-     `status`/`evidence` as authoritative — it is Go-computed (dry-run against
-     the live schema, not a manual read) and strictly more rigorous than a
-     manual re-check. Only inspect one of these surfaces directly yourself
-     when the record is absent, stale relative to the current changelog
-     cursor, or its evidence looks insufficient for the entry under review.
+     `db_readme_contract`, or `orphaned_tables` by hand. Part 1 already ran
+     the real `plan_drift_review` procedure earlier in this same turn for
+     every due candidate, applying and verifying fixes directly — read the
+     step's now-current `agent_configs.drift_review` record in
+     `step_config.json` as the authoritative, just-updated result. Only
+     inspect one of these surfaces directly yourself when the step was not a
+     Part 1 candidate at all (already clean and current) and its evidence
+     still looks insufficient for the entry under review.
    - the workflow's schedules in `workflow.json` — for each schedule, its cron,
      timezone, and the `messages` queue. The queue is what the scheduler
      actually sends, so it is a first-class contract with the plan, not
@@ -105,7 +157,11 @@ Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumpti
      stores disagree so the allocator/router/executor cannot observe the repair
    - report/eval checks use stale artifacts, fields, thresholds, or run identity
    - a changed success criterion lacks eval coverage, or an eval is orphaned/duplicative
-   - deleted steps still have live references, or new steps lack required dependent wiring
+   - new steps lack required dependent wiring (a deleted step's own dangling
+     references are Part 1's workflow-level deletion audit's job now — report
+     one here only if Part 1 found no due `__workflow_drift_review__`
+     candidate at all yet a dangling reference still exists, which would
+     itself be evidence the workflow-level flag was missed)
    - a schedule-local procedure that duplicates durable plan behavior, lacks
      `direct_messages_reason`, or claims canonical step-level learning,
      validation/retry, repair, or Pulse attribution that it does not receive.
@@ -128,6 +184,11 @@ Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumpti
 5. Include clean checks briefly. Do not manufacture drift merely because an artifact exists.
 
 ## Reviewer result
+
+This section covers Part 2's own findings only — Part 1 already persisted its
+own `plan_drift_review` result (`record_plan_drift_review` per candidate,
+`record_pulse_result(module="plan_drift_review", ...)` once) earlier in this
+same turn; do not fold Part 1's checks or findings into the package below.
 
 Return one compact review package containing:
 

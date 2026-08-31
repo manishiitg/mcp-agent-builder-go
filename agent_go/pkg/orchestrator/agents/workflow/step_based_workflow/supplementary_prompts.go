@@ -29,6 +29,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 ) {
 	var identitySkills []*llmtypes.Skill
 	var supplements []string
+	browserCfg := hcpo.resolveBrowserConfig(config.ServerNames, effectiveSkills)
+	for _, toolName := range registeredTools {
+		if toolName == "agent_browser" {
+			browserCfg.HasAgentBrowser = true
+			break
+		}
+	}
+	effectiveSkills = skills.WithAgentBrowserCapability(effectiveSkills, browserCfg.HasAgentBrowser)
 	// Every transport gets the same static AgentWorks reference identity.
 	// Coding CLIs additionally project it to disk; API models read it through
 	// mcpagent's intrinsic read_skill tool. The execution role deliberately
@@ -101,7 +109,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 	}
 
 	// 4. Browser instructions (mode-specific)
-	browserCfg := hcpo.resolveBrowserConfig(config.ServerNames, effectiveSkills)
 	browserPrompt := browserinstructions.BuildBrowserInstructions(browserCfg)
 	if isCodingCLIConfig(config) {
 		browserPrompt = browserinstructions.BuildBrowserRuntimeInstructions(browserCfg)
@@ -120,11 +127,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) appendSupplementaryPrompts(
 			"## Workflow Browser Downloads\nFor this workflow run, use the run-scoped downloads folder %q for browser downloads and file cleanup. Do not read from, write to, or delete files under the root workspace Downloads/ folder.",
 			browserDownloadsPath,
 		)
-		if hostDownloads := common.CDPHostDownloadsReadPath(browserCfg.Mode); hostDownloads != "" {
-			downloadsPrompt += fmt.Sprintf(" In CDP mode, Chrome-native downloads can land in the host Downloads folder %q. That host folder is read-only: copy needed files into %q first, then process the workspace copy. Never write, move, or delete files under the host Downloads folder.", hostDownloads, browserDownloadsPath)
+		if hostDownloads := common.CDPHostDownloadsPath(browserCfg.Mode); hostDownloads != "" {
+			downloadsPrompt += fmt.Sprintf(" In CDP mode, the host Downloads folder %q is also available for reading and writing so browser files can be staged or retrieved there. Prefer %q for run-owned artifacts, and do not modify unrelated files in host Downloads.", hostDownloads, browserDownloadsPath)
 		}
 		supplements = append(supplements, downloadsPrompt)
 		hcpo.GetLogger().Info(fmt.Sprintf("🌐 Added workflow browser downloads guidance to agent: %s", browserDownloadsPath))
+	}
+	if attachedFolders := workflowFolderAccessPrompt(hcpo.GetWorkspacePath()); attachedFolders != "" {
+		supplements = append(supplements, attachedFolders)
 	}
 	if err := baseAgent.ApplyIdentity(ctx, identitySkills, supplements...); err != nil {
 		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to apply supplementary agent identity: %v", err))

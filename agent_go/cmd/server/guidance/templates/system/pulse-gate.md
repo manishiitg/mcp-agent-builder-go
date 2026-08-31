@@ -18,10 +18,10 @@ The canonical modules are:
   materially different approaches. It is never folded into Technical Review.
 - `plan_drift_review`: event-triggered, not cadenced — due whenever
   `get_pulse_state(view="module")`'s `plan_drift_candidates` is non-empty
-  (any step's `drift_review` record is null). This is a plain fact, not a
-  judgment call: the backend rejects the worklist if a non-empty candidate
-  list is not marked due, so always record its true state rather than
-  guessing.
+  (a canonical plan step has no `drift_review` record, or has one flagged
+  `needs_review: true`). This is a plain fact, not a judgment call: the
+  backend rejects the worklist if a non-empty candidate list is not marked
+  due, so always record its true state rather than guessing.
 
 Do not emit retired module names such as `workflow_review`, `llm_ops_review`,
 `strategy_auditor`, or `goal_advisor`. Historical rows using those names are
@@ -207,7 +207,7 @@ An old backlog must not hide a new production failure. Conversely, unchanged
 backlog must not force another expensive discovery pass. A cooldown or focus
 rotation cannot suppress a measured miss or a new critical regression.
 
-Select **at most two** agentically-judged due modules from `technical_review`
+Select **at most two** due modules, chosen agentically from `technical_review`
 and `strategic_review`. `plan_drift_review` is never part of that judgment
 call: its due state is the plain fact reported in `plan_drift_candidates` (see
 Deterministic-intake boundary above), so record it as due exactly when that

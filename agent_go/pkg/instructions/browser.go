@@ -278,7 +278,7 @@ Before the first browser action, load the core skill with `+"`browser(\"skills\"
 - Use `+"`browser(\"tab\", [\"close\", \"<owned-label>\"])`"+` only when the user explicitly requests immediate cleanup or the workflow must replace one of its own labeled tabs. Never close a pre-existing user tab
 - Sessions **persist across tool calls** — you don't need to re-open pages between interactions
 - If a site requires login and the user is already logged in, navigate directly to the target page
-- Native Chrome downloads may land in the host Downloads folder. If the prompt grants a read-only host Downloads path, copy the needed file into the workspace/run Downloads folder before reading or parsing it. Never write, move, or delete files in host Downloads.
+- Native Chrome downloads may land in the host Downloads folder. When the prompt grants that host path, it may be used to read, stage, or retrieve browser files. Prefer the workspace/run Downloads folder for run-owned artifacts, and do not modify unrelated host files.
 - Python/browser code must call this HTTP `+"`agent_browser`"+` tool. Do not connect directly to raw CDP for actions.
 
 ### QA, Network Debugging, and Video Evidence

@@ -43,6 +43,11 @@ interface KBNotesIndex {
   last_updated_by?: { step?: string; run?: string }
 }
 
+type KBFileFreshness = {
+  lastConfirmedAt: string
+  lastAction: string
+}
+
 type LegacyKBTopicMeta = {
   covers?: unknown
   last_updated?: unknown
@@ -162,6 +167,31 @@ function normalizeKBIndex(raw: unknown): KBNotesIndex | null {
   return { topics }
 }
 
+function parseKBFileFreshness(raw: unknown): Record<string, KBFileFreshness> {
+  if (!raw || typeof raw !== 'object') return {}
+  const items = (raw as { items?: unknown }).items
+  if (!items || typeof items !== 'object') return {}
+
+  return Object.fromEntries(
+    Object.entries(items as Record<string, unknown>).flatMap(([path, value]) => {
+      if (!value || typeof value !== 'object') return []
+      const entry = value as { last_confirmed_at?: unknown; last_action?: unknown }
+      const lastConfirmedAt = typeof entry.last_confirmed_at === 'string' ? entry.last_confirmed_at : ''
+      if (!lastConfirmedAt) return []
+      return [[path, {
+        lastConfirmedAt,
+        lastAction: typeof entry.last_action === 'string' ? entry.last_action : '',
+      }]]
+    }),
+  )
+}
+
+function formatFreshnessDate(timestamp: string): string {
+  const date = new Date(timestamp)
+  if (!Number.isFinite(date.getTime())) return 'Fresh'
+  return `Fresh ${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+}
+
 export default function KBPopup({ isOpen, onClose, workspacePath, embedded = false }: KBPopupProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -170,18 +200,26 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
   const [notesBodies, setNotesBodies] = useState<Record<string, string | null>>({})
   const [expandedNotes, setExpandedNotes] = useState<Set<string>>(new Set())
   const [searchTerm, setSearchTerm] = useState('')
+  const [fileFreshness, setFileFreshness] = useState<Record<string, KBFileFreshness>>({})
 
   const notesIndexPath = workspacePath
     ? `${workspacePath}/knowledgebase/notes/_index.json`
     : null
+  const freshnessPath = workspacePath
+    ? `${workspacePath}/knowledgebase/_freshness.json`
+    : null
 
   const load = useCallback(async () => {
-    if (!notesIndexPath) return
+    if (!notesIndexPath || !freshnessPath) return
     setLoading(true)
     setError(null)
     try {
-      const rawIndex = await readJSON<unknown>(notesIndexPath)
+      const [rawIndex, rawFreshness] = await Promise.all([
+        readJSON<unknown>(notesIndexPath),
+        readJSON<unknown>(freshnessPath),
+      ])
       setNotesIndex(normalizeKBIndex(rawIndex))
+      setFileFreshness(parseKBFileFreshness(rawFreshness))
       // Reset per-topic markdown cache on reload — sizes/content may have changed.
       setNotesBodies({})
       setExpandedNotes(new Set())
@@ -190,7 +228,7 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
     } finally {
       setLoading(false)
     }
-  }, [notesIndexPath])
+  }, [freshnessPath, notesIndexPath])
 
   useEffect(() => {
     if (isOpen || embedded) load()
@@ -336,6 +374,7 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
                 const isOpenRow = expandedNotes.has(t.id)
                 const body = notesBodies[t.id]
                 const isMarkdownFile = t.file.toLowerCase().endsWith('.md')
+                const freshness = fileFreshness[t.file]
                 return (
                   <div key={t.id} className="border border-border rounded-md">
                     <button
@@ -354,6 +393,14 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
                       <span className="text-xs text-muted-foreground ml-auto font-mono">
                         {t.file}
                       </span>
+                      {freshness && (
+                        <span
+                          className="shrink-0 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700 dark:text-emerald-300"
+                          title={`Last ${freshness.lastAction || 'confirmed'}: ${new Date(freshness.lastConfirmedAt).toLocaleString()}`}
+                        >
+                          {formatFreshnessDate(freshness.lastConfirmedAt)}
+                        </span>
+                      )}
                       {typeof t.section_count === 'number' && (
                         <span className="text-xs text-muted-foreground ml-2">
                           {t.section_count} section{t.section_count === 1 ? '' : 's'}

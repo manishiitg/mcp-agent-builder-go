@@ -308,6 +308,10 @@ func (iso *Isolator) generateSandboxProfile() string {
 			if !ok {
 				continue
 			}
+			// A sandbox `subpath` rule covers descendants but not the directory
+			// node itself. Grant the already-authorized root literally as well so
+			// callers can list it and use it as the parent of an allowed file.
+			sb.WriteString(fmt.Sprintf("  (literal \"%s\")\n", sandboxQuoted(fullPath)))
 			sb.WriteString(fmt.Sprintf("  (subpath \"%s\")\n", sandboxQuoted(fullPath)))
 		}
 		sb.WriteString(")\n\n")
@@ -322,6 +326,7 @@ func (iso *Isolator) generateSandboxProfile() string {
 			if !ok {
 				continue
 			}
+			sb.WriteString(fmt.Sprintf("  (literal \"%s\")\n", sandboxQuoted(fullPath)))
 			sb.WriteString(fmt.Sprintf("  (subpath \"%s\")\n", sandboxQuoted(fullPath)))
 		}
 		sb.WriteString(")\n\n")
@@ -480,6 +485,7 @@ func (iso *Isolator) generateStrictSandboxProfile() string {
 			if !ok {
 				continue
 			}
+			sb.WriteString(fmt.Sprintf("  (literal \"%s\")\n", sandboxQuoted(fullPath)))
 			sb.WriteString(fmt.Sprintf("  (subpath \"%s\")\n", sandboxQuoted(fullPath)))
 		}
 		sb.WriteString(")\n\n")
@@ -493,6 +499,7 @@ func (iso *Isolator) generateStrictSandboxProfile() string {
 			if !ok {
 				continue
 			}
+			sb.WriteString(fmt.Sprintf("  (literal \"%s\")\n", sandboxQuoted(fullPath)))
 			sb.WriteString(fmt.Sprintf("  (subpath \"%s\")\n", sandboxQuoted(fullPath)))
 		}
 		sb.WriteString(")\n\n")

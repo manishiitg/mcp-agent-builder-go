@@ -278,7 +278,6 @@ interface WorkflowToolbarProps {
   onCreatePlan: () => void
   showChatArea?: boolean
   onToggleChatArea?: () => void
-  onRefresh?: () => Promise<void>  // Refresh plan and variables
   onExport?: () => void
   // Chat tab strip (WorkflowChatTabs) rendered inline on the left of this bar so the
   // workflow chat tabs + new-chat share one row with the status/tools instead of
@@ -299,7 +298,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   variablesManifest,
   isLoadingWorkspaceState = false,
   chatTabsSlot,
-  onRefresh,
   openPulseOnMount = false,
   className = ''
 }) => {
@@ -833,28 +831,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 })}
               </div>
 
-              {showWorkspacePane && Boolean(onRefresh) && (activeWorkspaceView === 'report' || activeWorkspaceView === 'flow') && (
-                <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
-                  {(activeWorkspaceView === 'report' || activeWorkspaceView === 'flow') && onRefresh && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={() => void onRefresh()}
-                          className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
-                          aria-label={`Refresh ${activeWorkspaceView === 'report' ? 'report' : 'plan'}`}
-                          data-testid={activeWorkspaceView === 'report' ? 'refresh-report' : 'refresh-plan'}
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        <p>Refresh {activeWorkspaceView === 'report' ? 'report' : 'plan'}</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </div>
-              )}
             </>
           )}
 

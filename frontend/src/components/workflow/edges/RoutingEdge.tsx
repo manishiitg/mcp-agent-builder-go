@@ -13,16 +13,24 @@ interface RoutingEdgeData extends Record<string, unknown> {
   routeName?: string
   selected?: boolean
   color?: string
+  isLateralHandoff?: boolean
 }
 
 function getRouteLabelPosition(
   sourceX: number,
   sourceY: number,
   targetX: number,
-  targetY: number
+  targetY: number,
+  isLateralHandoff = false
 ) {
   const deltaX = targetX - sourceX
   const deltaY = targetY - sourceY
+  if (isLateralHandoff) {
+    return {
+      x: sourceX + deltaX * 0.5,
+      y: sourceY + deltaY * 0.5,
+    }
+  }
   const labelOffsetY = Math.min(96, Math.max(44, Math.abs(deltaY) * 0.16))
 
   return {
@@ -50,6 +58,9 @@ export const RoutingEdge = memo(({
   const labelText = typeof label === 'string'
     ? label
     : edgeData.routeName
+  const routeNumber = typeof edgeData.routeIndex === 'number'
+    ? edgeData.routeIndex + 1
+    : null
 
   useEffect(() => {
     console.log('[WorkflowCanvas] RoutingEdge rendered', {
@@ -74,7 +85,13 @@ export const RoutingEdge = memo(({
     borderRadius: 18,
     offset: 32
   })
-  const labelPosition = getRouteLabelPosition(sourceX, sourceY, targetX, targetY)
+  const labelPosition = getRouteLabelPosition(
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    Boolean(edgeData.isLateralHandoff),
+  )
 
   return (
     <>
@@ -91,27 +108,20 @@ export const RoutingEdge = memo(({
         }}
       />
 
-      {labelText && (
+      {routeNumber !== null && (
         <EdgeLabelRenderer>
           <div
-            className="nodrag nopan pointer-events-none absolute z-10 flex max-w-[190px] items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-semibold shadow-sm"
+            className="nodrag nopan pointer-events-none absolute z-10 flex h-5 w-5 items-center justify-center rounded-full border text-[9px] font-semibold text-white shadow-sm"
             style={{
               transform: `translate(-50%, -50%) translate(${labelPosition.x}px, ${labelPosition.y}px)`,
-              color,
               borderColor: color,
-              background: 'hsl(var(--popover))',
+              background: color,
               opacity: selectedOpacity
             }}
+            title={labelText}
+            aria-label={labelText ? `Route ${routeNumber}: ${labelText}` : `Route ${routeNumber}`}
           >
-            {typeof edgeData.routeIndex === 'number' && (
-              <span
-                className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] text-white"
-                style={{ background: color }}
-              >
-                {edgeData.routeIndex + 1}
-              </span>
-            )}
-            <span className="truncate">{labelText}</span>
+            {routeNumber}
           </div>
         </EdgeLabelRenderer>
       )}

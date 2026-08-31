@@ -12,6 +12,105 @@ import (
 	"time"
 )
 
+func TestLandlockPolicySupportsExternalReadOnlyAndReadWriteFolders(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	readOnlyRoot := t.TempDir()
+	readWriteRoot := t.TempDir()
+
+	isolator := &Isolator{
+		BaseDir:           workspaceRoot,
+		WorkDir:           workspaceRoot,
+		ReadPaths:         []string{workspaceRoot, readOnlyRoot, readWriteRoot},
+		WritePaths:        []string{workspaceRoot, readWriteRoot},
+		BlockedWritePaths: []string{readOnlyRoot},
+	}
+
+	policy, err := isolator.landlockPolicy()
+	if err != nil {
+		t.Fatalf("landlockPolicy() rejected explicit external folder grants: %v", err)
+	}
+
+	contains := func(paths []string, want string) bool {
+		want = canonicalPath(want)
+		for _, path := range paths {
+			if path == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !contains(policy.ReadPaths, readOnlyRoot) {
+		t.Error("read-only external folder is missing from Landlock read grants")
+	}
+	if contains(policy.WritePaths, readOnlyRoot) {
+		t.Error("read-only external folder unexpectedly received a Landlock write grant")
+	}
+	if !contains(policy.ReadPaths, readWriteRoot) || !contains(policy.WritePaths, readWriteRoot) {
+		t.Error("read-write external folder must receive both Landlock read and write grants")
+	}
+}
+
+func TestLandlockEnforcesExternalFolderAccess(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	readOnlyRoot := t.TempDir()
+	readWriteRoot := t.TempDir()
+	readOnlyFile := filepath.Join(readOnlyRoot, "source.txt")
+	if err := os.WriteFile(readOnlyFile, []byte("external-folder-readable"), 0644); err != nil {
+		t.Fatalf("seed read-only folder: %v", err)
+	}
+
+	isolator := &Isolator{
+		BaseDir:           workspaceRoot,
+		WorkDir:           workspaceRoot,
+		ReadPaths:         []string{workspaceRoot, readOnlyRoot, readWriteRoot},
+		WritePaths:        []string{workspaceRoot, readWriteRoot},
+		BlockedWritePaths: []string{readOnlyRoot},
+	}
+
+	command := fmt.Sprintf(
+		"test \"$(cat %q)\" = external-folder-readable && "+
+			"if echo denied > %q 2>/dev/null; then exit 41; fi && "+
+			"echo allowed > %q",
+		readOnlyFile,
+		filepath.Join(readOnlyRoot, "denied.txt"),
+		filepath.Join(readWriteRoot, "allowed.txt"),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if abi, err := landlockABI(); err != nil || abi < 1 {
+		t.Skipf("Landlock is unavailable in this Linux environment: ABI=%d err=%v", abi, err)
+	}
+	policy, err := isolator.landlockPolicy()
+	if err != nil {
+		t.Fatalf("landlockPolicy() failed: %v", err)
+	}
+	cmd, cleanup, err := isolator.landlockCommand(ctx, policy, command, nil)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "SANDBOX_UNAVAILABLE") {
+			t.Skipf("Landlock launcher is unavailable in this environment: %v", err)
+		}
+		t.Fatalf("landlockCommand() failed: %v", err)
+	}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("external folder policy was not enforced: %v\noutput: %s", err, output)
+	}
+
+	if _, err := os.Stat(filepath.Join(readOnlyRoot, "denied.txt")); !os.IsNotExist(err) {
+		t.Errorf("read-only external folder accepted a write; stat error = %v", err)
+	}
+	contents, err := os.ReadFile(filepath.Join(readWriteRoot, "allowed.txt"))
+	if err != nil {
+		t.Fatalf("read-write external folder rejected a write: %v", err)
+	}
+	if strings.TrimSpace(string(contents)) != "allowed" {
+		t.Fatalf("read-write external folder content = %q, want allowed", contents)
+	}
+}
+
 // TestMountNamespaceFallbackEnforcesLandlockRejectedOverlapPolicy is the
 // proper, repeatable server-side reproduction of the live incident on the
 // Dominion Hetzner deployment 2026-08-28/29 -- run this directly on any

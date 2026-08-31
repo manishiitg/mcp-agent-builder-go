@@ -22,3 +22,16 @@ func configuredCDPPortsForMode(mode string, primary *int, additional []int) []in
 		return nil
 	}
 }
+
+// hostDownloadsBrowserMode resolves the mode used by the shell's built-in
+// host Downloads exception. QueryRequest keeps "auto" as user intent, while
+// the filesystem helper intentionally accepts only the effective "cdp" mode.
+// Resolve that boundary once so normal and restored coding-agent sessions use
+// the same read-only grant.
+func hostDownloadsBrowserMode(req QueryRequest) string {
+	mode := getBrowserMode(req)
+	if mode == "auto" && len(configuredCDPPortsForMode(mode, req.CdpPort, req.CdpPorts)) > 0 {
+		return "cdp"
+	}
+	return mode
+}

@@ -36,8 +36,10 @@ work that must be scripted. Every producing step still needs a
 `validation_schema`; context flow stays forward-only via
 `context_dependencies` → `context_output`.
 
-For fixed branch choices the user already gave the builder, prefer a
-deterministic `routing` step and pass `route_selections` when running.
+For a fixed choice the user already gave the builder, prefer a deterministic
+switch instead of asking again — `branch` for a small in-flow decision,
+`routing` when the choice forks into a major, self-contained sub-workflow —
+and pass `route_selections` when running either.
 Use `todo_task` only when independent sub-agent delegation itself adds value;
 several known actions in one shared context are not enough. Do not add a
 `human_input` step just to ask the same branch choice again.
@@ -54,7 +56,10 @@ several known actions in one shared context are not enough. Do not add a
 - **`todo_task`** — orchestrator with `predefined_routes`; each route
   is `message_sequence` / `regular` / nested `todo_task` (1 level
   deep only)
-- **`routing`** — choose next step from a fixed route map
+- **`routing`** — choose next step from a fixed route map; a major,
+  self-contained sub-workflow fork
+- **`branch`** — same deterministic route-map mechanics as `routing`, for a
+  small in-flow next-step decision instead of a major fork
 - **`human_input`** — pause for operator input
 - **orphan** (`is_orphan: true`) — reusable across orchestrators via
   `shared_with.orchestrator_ids` + `orphan_step_ref`
@@ -72,7 +77,8 @@ point for any plan-composition decision. From there:
   pairing + unattended schedules), `message-sequence` (full pattern
   catalog: Stateful Specialist, Test/Fix Loop, Maker+Reviewer, Panel,
 	  Clean-Room Retry, HITL Re-entry, Scripted Conversation), `routing`
-	  (deterministic route_selection.json contract, anti-patterns).
+	  (deterministic route_selection.json contract, anti-patterns), `branch`
+	  (same mechanics as `routing`, for a small in-flow decision).
 - **Recurring multi-step shapes**: `workflow-patterns` (Phase Router,
   Scoped Investigation, Linear Pipeline, Fan-out & Consolidate,
   Verification Gate, Pre-flight Probe, Human Checkpoint, Critique

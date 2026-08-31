@@ -466,10 +466,10 @@ func (e *Executor) HandleAgentBrowser(ctx context.Context, args map[string]inter
 		// Grant the host Downloads read path at the moment CDP is actually used,
 		// rather than relying on a stale request-time effective mode.
 		if agentSessionID != "" {
-			common.GrantSessionCDPHostDownloadsReadOnly(agentSessionID, "cdp")
+			common.GrantSessionCDPHostDownloadsReadWrite(agentSessionID, "cdp")
 		}
 		if workflowSessionID != "" && workflowSessionID != agentSessionID {
-			common.GrantSessionCDPHostDownloadsReadOnly(workflowSessionID, "cdp")
+			common.GrantSessionCDPHostDownloadsReadWrite(workflowSessionID, "cdp")
 		}
 	}
 

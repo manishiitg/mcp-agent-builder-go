@@ -2363,6 +2363,16 @@ func updateStepInPlan(plan *todo_creation_human.PlanningResponse, stepID string,
 		}
 		updatedStep = &updated
 
+	case *todo_creation_human.BranchPlanStep:
+		// PLAT-259: same common-field-only contract this generic path already
+		// gives every other type -- route-specific fields (routes,
+		// branch_question, default_route_id) stay exclusively the job of the
+		// Builder-native update_branch_step tool's privileged, validated write
+		// path, not this legacy generic one.
+		updated := *s // Copy the step
+		applyCommonFields(&updated.CommonStepFields, updates)
+		updatedStep = &updated
+
 	default:
 		return fmt.Errorf("unknown step type: %T", step)
 	}
@@ -2996,7 +3006,7 @@ func (api *StreamingAPI) handleAddStep(w http.ResponseWriter, r *http.Request) {
 	// Determine step type and unmarshal to typed step
 	stepType, ok := req.Step["type"].(string)
 	if !ok {
-		http.Error(w, "step must have 'type' field (regular, human_input, todo_task, or routing)", http.StatusBadRequest)
+		http.Error(w, "step must have 'type' field (regular, human_input, todo_task, routing, or branch)", http.StatusBadRequest)
 		return
 	}
 
@@ -3020,6 +3030,15 @@ func (api *StreamingAPI) handleAddStep(w http.ResponseWriter, r *http.Request) {
 		var s todo_creation_human.TodoTaskPlanStep
 		if err := json.Unmarshal(stepJSON, &s); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to parse todo_task step: %v", err), http.StatusBadRequest)
+			return
+		}
+		newStep = &s
+	case "branch":
+		// PLAT-259: mirrors routing's deterministic-switch shape exactly, just
+		// its own field name (branch_question) for the human-readable prompt.
+		var s todo_creation_human.BranchPlanStep
+		if err := json.Unmarshal(stepJSON, &s); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to parse branch step: %v", err), http.StatusBadRequest)
 			return
 		}
 		newStep = &s
@@ -3506,8 +3525,31 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 							if exists {
 								var routingData map[string]interface{}
 								if err := json.Unmarshal([]byte(content), &routingData); err == nil {
+									// PLAT-259: this artifact is written by the shared
+									// routing/branch executor for either step type
+									// (executeRoutingStep). Report the step's real type
+									// instead of hardcoding "routing", or a branch step's
+									// execution renders as a routing-colored entry with
+									// "Routing question" in Execution Logs even though its
+									// own step header says Branch.
+									//
+									// Prefer step_type recorded IN the artifact itself
+									// (executeRoutingStep has persisted this since PLAT-259)
+									// over the current plan.json lookup: a step reclassified
+									// routing<->branch after this run executed must keep
+									// reporting what it actually was when it ran, not what
+									// the step is typed as today, or migrating a step's type
+									// silently relabels every one of its historical runs.
+									// Fall back to the live plan.json type only for an
+									// artifact written before this field existed.
+									entryType := "routing"
+									if persistedType, ok := routingData["step_type"].(string); ok && persistedType != "" {
+										entryType = persistedType
+									} else if meta, ok := stepMetadata[stepId]; ok && meta["type"] != "" {
+										entryType = meta["type"]
+									}
 									orchLogs = append(orchLogs, map[string]interface{}{
-										"type":               "routing",
+										"type":               entryType,
 										"source":             "routing_evaluation",
 										"file_path":          logPath,
 										"timestamp":          routingData["timestamp"],

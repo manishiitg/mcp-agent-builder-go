@@ -3,8 +3,11 @@ package step_based_workflow
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+
+	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 )
 
 func TestClearDescriptionReviewedAfterPlanUpdate(t *testing.T) {
@@ -118,31 +121,43 @@ func TestClearDriftReviewAfterPlanUpdate(t *testing.T) {
 		t.Fatalf("clearDriftReviewAfterPlanUpdate returned error: %v", err)
 	}
 	if !cleared {
-		t.Fatalf("expected drift_review to be cleared")
+		t.Fatalf("expected drift_review to be flagged")
 	}
 
 	var out StepConfigFile
 	if err := json.Unmarshal([]byte(files["planning/step_config.json"]), &out); err != nil {
 		t.Fatalf("updated step_config.json is invalid JSON: %v", err)
 	}
-	if got := out.Steps[0].AgentConfigs.DriftReview; got != nil {
-		t.Fatalf("drift_review = %+v, want nil", got)
+	// Stale flag model: the record is flagged, not nulled — its evidence
+	// (Checks/ReviewedAt/ReviewedBy) survives until a completed review
+	// replaces it.
+	got := out.Steps[0].AgentConfigs.DriftReview
+	if got == nil {
+		t.Fatalf("drift_review = nil, want the record preserved with needs_review=true")
+	}
+	if !got.NeedsReview {
+		t.Fatalf("drift_review.needs_review = false, want true after a dependency-triggering edit")
+	}
+	if got.ReviewedAt != "2026-08-01T00:00:00Z" || got.ReviewedBy != "pulse:plan_drift_review" || len(got.Checks) != 1 {
+		t.Fatalf("drift_review evidence was not preserved: %+v", got)
 	}
 	if got := out.Steps[0].AgentConfigs.ReviewNotes; got != "old review" {
 		t.Fatalf("review_notes = %q, want preserved review notes", got)
 	}
 }
 
-func TestClearDriftReviewAfterPlanUpdateSkipsTitleOnly(t *testing.T) {
+// A step already flagged (needs_review already true) from an earlier edit in
+// the same unreviewed window must not report a new "cleared" event — nothing
+// about its due-ness changed.
+func TestClearDriftReviewAfterPlanUpdateIsIdempotentWhenAlreadyFlagged(t *testing.T) {
 	ctx := context.Background()
-	writeCalled := false
 	files := map[string]string{
-		"planning/step_config.json": `{"steps":[{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","checks":[]}}}]}`,
+		"planning/step_config.json": `{"steps":[{"id":"step-a","agent_configs":{"drift_review":{"needs_review":true,"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}}]}`,
 	}
-
+	writeCalled := false
 	cleared, err := clearDriftReviewAfterPlanUpdate(ctx, "", "step-a", []PlanFieldChange{{
 		StepID: "step-a",
-		Field:  "title",
+		Field:  "description",
 	}}, func(_ context.Context, path string) (string, error) {
 		return files[path], nil
 	}, func(_ context.Context, path, content string) error {
@@ -154,10 +169,54 @@ func TestClearDriftReviewAfterPlanUpdateSkipsTitleOnly(t *testing.T) {
 		t.Fatalf("clearDriftReviewAfterPlanUpdate returned error: %v", err)
 	}
 	if cleared {
-		t.Fatalf("title-only changes should not clear drift_review")
+		t.Fatalf("an already-flagged review should not report a new clear event")
 	}
 	if writeCalled {
-		t.Fatalf("title-only changes should not write step_config.json")
+		t.Fatalf("an already-flagged review should not trigger a redundant write")
+	}
+}
+
+// The agreed corrective contract is explicit: do not attempt to classify an
+// update as material or cosmetic in Go, because even a title change can alter
+// meaning. Unlike description_reviewed (which legitimately skips a title-only
+// edit — the prose-vs-behavior claim it makes genuinely doesn't move), a
+// drift review's broader claim ("this step's current configured form has
+// been checked") is stale the instant any field changes, title included.
+func TestClearDriftReviewAfterPlanUpdateFlagsOnTitleOnly(t *testing.T) {
+	ctx := context.Background()
+	files := map[string]string{
+		"planning/step_config.json": `{"steps":[{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}}]}`,
+	}
+
+	cleared, err := clearDriftReviewAfterPlanUpdate(ctx, "", "step-a", []PlanFieldChange{{
+		StepID: "step-a",
+		Field:  "title",
+	}}, func(_ context.Context, path string) (string, error) {
+		return files[path], nil
+	}, func(_ context.Context, path, content string) error {
+		files[path] = content
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("clearDriftReviewAfterPlanUpdate returned error: %v", err)
+	}
+	if !cleared {
+		t.Fatalf("a title-only change must flag drift_review.needs_review — no field is exempt from the drift-review trigger")
+	}
+
+	var out StepConfigFile
+	if err := json.Unmarshal([]byte(files["planning/step_config.json"]), &out); err != nil {
+		t.Fatalf("failed to parse updated step_config.json: %v", err)
+	}
+	got := out.Steps[0].AgentConfigs.DriftReview
+	if got == nil || !got.NeedsReview {
+		t.Fatalf("drift_review.needs_review should be true after a title-only change, got %#v", got)
+	}
+	// Evidence from the prior review must survive — the stale flag model
+	// preserves it until a completed review replaces it, unlike the earlier
+	// null-on-edit design this superseded.
+	if len(got.Checks) != 1 || got.ReviewedBy != "pulse:plan_drift_review" {
+		t.Fatalf("prior review evidence was not preserved: %+v", got)
 	}
 }
 
@@ -165,7 +224,7 @@ func TestArtifactReviewNotices(t *testing.T) {
 	updateNotice := buildPlanStepDependentArtifactReviewNotice("step-a", []PlanFieldChange{{
 		StepID: "step-a",
 		Field:  "description",
-	}}, true, true)
+	}}, true, true, false)
 	for _, want := range []string{
 		"Dependent artifact review required",
 		"validation_schema",
@@ -181,6 +240,9 @@ func TestArtifactReviewNotices(t *testing.T) {
 			t.Fatalf("update notice missing %q:\n%s", want, updateNotice)
 		}
 	}
+	if strings.Contains(updateNotice, "FAILED to flag") {
+		t.Fatalf("update notice should not warn about a flag failure when driftReviewFlagFailed is false:\n%s", updateNotice)
+	}
 
 	addNotice := buildAddedStepArtifactSetupNotice("new-step", "regular")
 	for _, want := range []string{"New step artifact setup required", "planning/step_config.json", "learnings/new-step/main.py"} {
@@ -189,18 +251,99 @@ func TestArtifactReviewNotices(t *testing.T) {
 		}
 	}
 
-	deleteNotice := buildDeletedStepArtifactCleanupNotice([]string{"old-step"}, []string{"old-step"})
+	deleteNotice := buildDeletedStepArtifactCleanupNotice([]string{"old-step"}, []string{"old-step"}, false)
 	for _, want := range []string{"Deleted step artifact cleanup required", "Removed matching planning/step_config.json entries", "learnings/<step-id>"} {
 		if !strings.Contains(deleteNotice, want) {
 			t.Fatalf("delete notice missing %q:\n%s", want, deleteNotice)
 		}
 	}
+	if strings.Contains(deleteNotice, "FAILED to flag the workflow-level drift review record") {
+		t.Fatal("delete notice should not warn about a flag failure when driftReviewFlagFailed is false")
+	}
 
-	routeNotice := buildTodoTaskRouteArtifactReviewNotice("parent", "route-a", "deleted", true, true)
+	failedDeleteNotice := buildDeletedStepArtifactCleanupNotice([]string{"old-step"}, nil, true)
+	if !strings.Contains(failedDeleteNotice, "FAILED to flag the workflow-level drift review record") {
+		t.Fatalf("delete notice missing loud drift-review-flag-failed warning:\n%s", failedDeleteNotice)
+	}
+
+	routeNotice := buildTodoTaskRouteArtifactReviewNotice("parent", "route-a", "deleted", true, true, false)
 	for _, want := range []string{"Todo route artifact review required", "description_reviewed", "drift_review", "learnings/route-a"} {
 		if !strings.Contains(routeNotice, want) {
 			t.Fatalf("route notice missing %q:\n%s", want, routeNotice)
 		}
+	}
+}
+
+// A persistent flag-write failure (both attempts) must surface loudly in the
+// notice text the calling agent actually sees, not just a logger.Warn call
+// nothing reads — the concrete fix for the update/flag atomicity gap.
+func TestArtifactReviewNoticesSurfaceDriftReviewFlagFailure(t *testing.T) {
+	updateNotice := buildPlanStepDependentArtifactReviewNotice("step-a", []PlanFieldChange{{
+		StepID: "step-a",
+		Field:  "description",
+	}}, false, false, true)
+	if !strings.Contains(updateNotice, "FAILED to flag") || !strings.Contains(updateNotice, "needs_review") {
+		t.Fatalf("update notice does not surface the drift_review flag failure:\n%s", updateNotice)
+	}
+
+	routeNotice := buildTodoTaskRouteArtifactReviewNotice("parent", "route-a", "deleted", false, false, true)
+	if !strings.Contains(routeNotice, "FAILED to flag") {
+		t.Fatalf("route notice does not surface the drift_review flag failure:\n%s", routeNotice)
+	}
+}
+
+// The retry wrapper must succeed on a second attempt after a first-attempt
+// failure, and must not retry (or double-write) once the underlying write
+// has already succeeded.
+func TestClearDriftReviewAfterPlanUpdateRetriedSucceedsOnSecondAttempt(t *testing.T) {
+	ctx := context.Background()
+	files := map[string]string{
+		"planning/step_config.json": `{"steps":[{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}}]}`,
+	}
+	attempt := 0
+	readFile := func(_ context.Context, path string) (string, error) {
+		return files[path], nil
+	}
+	writeFile := func(_ context.Context, path, content string) error {
+		attempt++
+		if attempt == 1 {
+			return fmt.Errorf("simulated transient write failure")
+		}
+		files[path] = content
+		return nil
+	}
+	cleared, err := clearDriftReviewAfterPlanUpdateRetried(ctx, "", "step-a", []PlanFieldChange{{
+		StepID: "step-a",
+		Field:  "description",
+	}}, readFile, writeFile, loggerv2.NewNoop())
+	if err != nil {
+		t.Fatalf("expected the retry to succeed, got error: %v", err)
+	}
+	if !cleared {
+		t.Fatal("expected the retried write to report cleared=true")
+	}
+	if attempt != 2 {
+		t.Fatalf("expected exactly 2 write attempts, got %d", attempt)
+	}
+}
+
+func TestClearDriftReviewAfterPlanUpdateRetriedReturnsPersistentFailure(t *testing.T) {
+	ctx := context.Background()
+	files := map[string]string{
+		"planning/step_config.json": `{"steps":[{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"x","checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}}]}`,
+	}
+	readFile := func(_ context.Context, path string) (string, error) {
+		return files[path], nil
+	}
+	writeFile := func(_ context.Context, path, content string) error {
+		return fmt.Errorf("simulated persistent write failure")
+	}
+	_, err := clearDriftReviewAfterPlanUpdateRetried(ctx, "", "step-a", []PlanFieldChange{{
+		StepID: "step-a",
+		Field:  "description",
+	}}, readFile, writeFile, loggerv2.NewNoop())
+	if err == nil {
+		t.Fatal("expected a persistent write failure to be returned after both attempts fail")
 	}
 }
 

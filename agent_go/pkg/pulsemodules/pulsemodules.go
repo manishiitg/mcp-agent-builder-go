@@ -91,12 +91,14 @@ var All = []Module{
 	},
 	{
 		// Plan Drift Review is event-triggered rather than time-cadenced: it is
-		// due whenever any step's step_config.json drift_review record is null
-		// (cleared by the same hook that clears description_reviewed on any
-		// dependency-triggering plan edit), not on a fixed interval. See
-		// validatePlanDriftRouting in pulse_worklist.go for the deterministic
-		// force-due enforcement, mirroring validateDeterministicIntakeRouting's
-		// treatment of technical_review.
+		// due whenever any step has no step_config.json drift_review record, or
+		// one flagged needs_review==true (flagged by the same hook that flags
+		// description_reviewed stale on any persisted plan-step field change),
+		// not on a fixed interval. Evidence from a prior review is preserved on
+		// the flag, not discarded. See validatePlanDriftRouting in
+		// pulse_worklist.go for the deterministic force-due enforcement,
+		// mirroring validateDeterministicIntakeRouting's treatment of
+		// technical_review.
 		ID:        PlanDriftReviewID,
 		Label:     "Plan drift review",
 		StepLabel: "plan-drift-review",

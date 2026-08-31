@@ -55,7 +55,7 @@ export interface UsePlanDataReturn {
   loading: boolean
   error: string | null
   changes: PlanChanges | null  // Latest detected changes (set via setChanges from granular events)
-  loadPlan: () => Promise<void>  // Loads plan without comparison
+  loadPlan: () => Promise<boolean>  // Loads plan without comparison
   /** @deprecated Legacy method - prefer using updateStep() which calls backend APIs. See method documentation for when to use. */
   savePlan: (plan: PlanningResponse) => Promise<void>
   /** @deprecated Legacy method - prefer using agentApi.updateStepConfig(). See method documentation for when to use. */
@@ -65,7 +65,7 @@ export interface UsePlanDataReturn {
   updateStep: (stepIndex: number, updates: Partial<PlanStep>) => Promise<void>
   deleteStep: (stepIndex: number) => Promise<void>
   addStep: (step: PlanStep, afterIndex?: number) => Promise<void>
-  refresh: () => Promise<void>  // Refreshes plan without comparison (alias for loadPlan)
+  refresh: () => Promise<boolean>  // Refreshes plan without comparison (alias for loadPlan)
   clearChanges: () => void  // Clear the changes state
   setChanges: (changes: PlanChanges | null) => void  // Set changes directly (for granular events)
 }
@@ -272,10 +272,10 @@ export function usePlanData(workspacePath: string | null): UsePlanDataReturn {
   }, [getPlanFilePath, getStepConfigFilePath])
 
   // Load plan from workspace with caching to prevent duplicate API calls
-  const loadPlan = useCallback(async (): Promise<void> => {
+  const loadPlan = useCallback(async (): Promise<boolean> => {
     if (!workspacePath) {
       setError('No workspace path provided')
-      return
+      return false
     }
 
     const cacheEntry = getPlanCacheEntry(workspacePath)
@@ -283,7 +283,7 @@ export function usePlanData(workspacePath: string | null): UsePlanDataReturn {
     // Reuse the cached plan for this workspace across workflow switches.
     if (cacheEntry.data !== null) {
       setPlan(cacheEntry.data)
-      return
+      return true
     }
 
     // Check if a load is already in progress for this workspace
@@ -291,10 +291,11 @@ export function usePlanData(workspacePath: string | null): UsePlanDataReturn {
       try {
         const data = await cacheEntry.promise
         setPlan(data)
+        return data !== null
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load plan')
+        return false
       }
-      return
     }
 
     // Check if workspace changed
@@ -319,6 +320,7 @@ export function usePlanData(workspacePath: string | null): UsePlanDataReturn {
       cacheEntry.promise = null
 
       setPlan(planData)
+      return planData !== null
     } catch (err) {
       cacheEntry.promise = null
 
@@ -333,12 +335,12 @@ export function usePlanData(workspacePath: string | null): UsePlanDataReturn {
 
       if (isNotFound) {
         setPlan(null)
-        return
+        return false
       }
 
       console.error('[usePlanData] Failed to load plan:', { httpStatus, errMsg })
       setError(errMsg || 'Failed to load plan')
-      return
+      return false
     } finally {
       setLoading(false)
     }
@@ -698,9 +700,9 @@ export function usePlanData(workspacePath: string | null): UsePlanDataReturn {
 
   // Refresh plan (returns detected changes)
   // Refresh function that invalidates cache and reloads
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<boolean> => {
     invalidatePlanCache()
-    await loadPlan()
+    return loadPlan()
   }, [loadPlan, invalidatePlanCache])
 
   // Clear changes state (call after highlighting animation completes)

@@ -606,6 +606,394 @@ function layoutWithDagre(nodes: WorkflowNode[], edges: WorkflowEdge[], direction
   return { nodes: layoutedNodes, edges }
 }
 
+function explicitPlanStepSuccessors(step: PlanStep): string[] {
+  if (isRoutingStep(step) || isBranchStep(step)) {
+    return step.routes.map(route => route.next_step_id).filter(Boolean)
+  }
+
+  const routable = step as PlanStep & {
+    next_step_id?: string
+    if_yes_next_step_id?: string
+    if_no_next_step_id?: string
+    option_routes?: Record<string, string>
+  }
+  return [
+    routable.next_step_id,
+    routable.if_yes_next_step_id,
+    routable.if_no_next_step_id,
+    ...Object.values(routable.option_routes || {}),
+  ].filter((id): id is string => Boolean(id && id !== 'end'))
+}
+
+function hasExplicitPlanContinuation(step: PlanStep): boolean {
+  if (isRoutingStep(step) || isBranchStep(step)) return step.routes.length > 0
+
+  const routable = step as PlanStep & {
+    next_step_id?: string
+    if_yes_next_step_id?: string
+    if_no_next_step_id?: string
+    option_routes?: Record<string, string>
+  }
+  return Boolean(
+    routable.next_step_id ||
+    routable.if_yes_next_step_id ||
+    routable.if_no_next_step_id ||
+    Object.keys(routable.option_routes || {}).length > 0
+  )
+}
+
+// The visual graph includes a sequential edge when a top-level step has no
+// explicit continuation and the following step is not the target of another
+// route. Mirror that rule here, otherwise an "after X" branch gets detached
+// from the route it governs and is laid out in an unrelated corner.
+function buildPlanSuccessorMap(plan: PlanningResponse): Map<string, string[]> {
+  const explicitTargets = new Set<string>()
+  const directSuccessors = new Map<string, string[]>()
+
+  plan.steps.forEach(step => {
+    const successors = explicitPlanStepSuccessors(step)
+    directSuccessors.set(step.id, successors)
+    successors.forEach(successor => explicitTargets.add(successor))
+  })
+
+  const successorsByID = new Map<string, string[]>()
+  plan.steps.forEach((step, index) => {
+    const successors = [...(directSuccessors.get(step.id) || [])]
+    const canContinueSequentially = !hasExplicitPlanContinuation(step) &&
+      !isRoutingStep(step) &&
+      !isBranchStep(step) &&
+      !isHumanInputStep(step) &&
+      !isTodoTaskStep(step)
+    const nextStep = plan.steps[index + 1]
+    if (canContinueSequentially && nextStep && !explicitTargets.has(nextStep.id)) {
+      successors.push(nextStep.id)
+    }
+    successorsByID.set(step.id, successors)
+  })
+
+  return successorsByID
+}
+
+// A major routing step describes several independently runnable pipelines.
+// Dagre must honour every handoff between those pipelines, which can turn a
+// small set of routes into a very tall, sparse tree. Keep the workflow header
+// where the canvas put it, then arrange route bodies in a compact grid below it.
+// Handoff edges are intentionally retained between cells.
+function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningResponse): WorkflowNode[] {
+  if (nodes.some(node => node.id.includes('-sub-agent-'))) return nodes
+
+  const router = plan.steps.find(isRoutingStep)
+  if (!router) return nodes
+
+  const routes = router.routes
+  if (routes.length < 3) return nodes
+
+  const stepByID = new Map(plan.steps.map(step => [step.id, step]))
+  const nodeByID = new Map(nodes.map(node => [node.id, node]))
+  const routeEntries = new Set(routes.map(route => route.next_step_id))
+  const successorsByID = buildPlanSuccessorMap(plan)
+  const inboundCounts = new Map<string, number>()
+  successorsByID.forEach(successors => {
+    successors.forEach(successor => {
+      inboundCounts.set(successor, (inboundCounts.get(successor) || 0) + 1)
+    })
+  })
+  // Shared terminal work is a convergence point, not part of whichever route
+  // happens to be visited first. Keep it below the routes so each pipeline
+  // reads top-to-bottom before the flow rejoins.
+  const convergenceStepIDs = new Set(
+    Array.from(inboundCounts.entries())
+      .filter(([id, count]) => count > 1 && !routeEntries.has(id))
+      .map(([id]) => id)
+  )
+
+  // A routed workflow is often a *forest*, not six unrelated columns. For
+  // example, a Reddit route can hand off to X and then to a digest route. The
+  // old grid put all route entry points at the same height, which made those
+  // handoff arrows travel backwards up the canvas. Treat route-to-route branch
+  // targets as downstream segments instead: each segment stays in a separate
+  // column and starts below the branch that reaches it.
+  const planIndexByID = new Map(plan.steps.map((step, index) => [step.id, index]))
+  const routeEntryIDs = new Set(routes.map(route => route.next_step_id))
+  const incomingRouteEntryIDs = new Set<string>()
+
+  plan.steps.forEach(step => {
+    if (!isBranchStep(step)) return
+    for (const targetID of successorsByID.get(step.id) || []) {
+      if (routeEntryIDs.has(targetID)) incomingRouteEntryIDs.add(targetID)
+    }
+  })
+
+  // Directly selectable routes which are also branch targets belong below the
+  // branch that can continue into them. This preserves their direct router
+  // edge without turning the graph into a set of backward arrows.
+  const rootRouteEntryIDs = routes
+    .map(route => route.next_step_id)
+    .filter(entryID => !incomingRouteEntryIDs.has(entryID))
+  if (rootRouteEntryIDs.length === 0) return nodes
+
+  interface RouteSegment {
+    entryID: string
+    stepIDs: string[]
+    nextEntries: Array<{ entryID: string; sourceID: string }>
+  }
+
+  const segmentsByEntryID = new Map<string, RouteSegment>()
+  const collectRouteSegment = (entryID: string): RouteSegment => {
+    const existing = segmentsByEntryID.get(entryID)
+    if (existing) return existing
+
+    const seen = new Set<string>()
+    const queue = [entryID]
+    const stepIDs: string[] = []
+    const nextEntries: Array<{ entryID: string; sourceID: string }> = []
+
+    while (queue.length > 0) {
+      const stepID = queue.shift()
+      if (!stepID || seen.has(stepID) || !stepByID.has(stepID)) continue
+      // Crossing into a different route entry starts a new visual segment.
+      if (stepID !== entryID && routeEntryIDs.has(stepID)) continue
+      if (convergenceStepIDs.has(stepID)) continue
+
+      seen.add(stepID)
+      stepIDs.push(stepID)
+      for (const successorID of successorsByID.get(stepID) || []) {
+        if (routeEntryIDs.has(successorID) && successorID !== entryID) {
+          nextEntries.push({ entryID: successorID, sourceID: stepID })
+        } else if (!seen.has(successorID)) {
+          queue.push(successorID)
+        }
+      }
+    }
+
+    const segment = {
+      entryID,
+      stepIDs: stepIDs.sort((left, right) =>
+        (planIndexByID.get(left) || 0) - (planIndexByID.get(right) || 0)
+      ),
+      nextEntries,
+    }
+    segmentsByEntryID.set(entryID, segment)
+    return segment
+  }
+
+  const assignedRouteEntries = new Set<string>()
+  const routeForests = rootRouteEntryIDs.flatMap(rootEntryID => {
+    if (assignedRouteEntries.has(rootEntryID)) return []
+
+    const depthByEntryID = new Map<string, number>([[rootEntryID, 0]])
+    const entries: string[] = []
+    const queue = [rootEntryID]
+    let iterations = 0
+
+    while (queue.length > 0 && iterations < 200) {
+      iterations += 1
+      const entryID = queue.shift()!
+      if (assignedRouteEntries.has(entryID)) continue
+      assignedRouteEntries.add(entryID)
+      entries.push(entryID)
+
+      const currentDepth = depthByEntryID.get(entryID) || 0
+      for (const transition of collectRouteSegment(entryID).nextEntries) {
+        const nextDepth = currentDepth + 1
+        const previousDepth = depthByEntryID.get(transition.entryID)
+        if (previousDepth === undefined || nextDepth > previousDepth) {
+          depthByEntryID.set(transition.entryID, nextDepth)
+        }
+        if (!assignedRouteEntries.has(transition.entryID)) queue.push(transition.entryID)
+      }
+    }
+
+    return [{
+      rootEntryID,
+      entries: entries.sort((left, right) => {
+        const depthDelta = (depthByEntryID.get(left) || 0) - (depthByEntryID.get(right) || 0)
+        return depthDelta || ((planIndexByID.get(left) || 0) - (planIndexByID.get(right) || 0))
+      }),
+      depthByEntryID,
+      width: Math.min(3, Math.max(1, ...Array.from(depthByEntryID.values()).map(depth => depth + 1))),
+    }]
+  })
+
+  const laneStepIDs = new Set(
+    routeForests.flatMap(forest => forest.entries.flatMap(entryID => collectRouteSegment(entryID).stepIDs))
+  )
+  const preRouterIDs = plan.steps
+    .filter(step => successorsByID.get(step.id)?.includes(router.id))
+    .map(step => step.id)
+  const independentIDs = plan.steps
+    .filter(step =>
+      step.id !== router.id &&
+      !laneStepIDs.has(step.id) &&
+      !preRouterIDs.includes(step.id) &&
+      !convergenceStepIDs.has(step.id)
+    )
+    .map(step => step.id)
+
+  const workflowNodes = nodes.filter(node =>
+    node.id !== 'start' && node.id !== 'variables' && node.id !== 'end'
+  )
+  if (workflowNodes.length === 0) return nodes
+
+  // The header is a persistent left column. Reuse the body bounds produced by
+  // the header-aware layout above so routes can never collide with Variables.
+  const bodyLeft = Math.min(...workflowNodes.map(node => node.position.x))
+  const bodyTop = Math.min(...workflowNodes.map(node => node.position.y))
+  const columns = Math.min(3, routes.length)
+  // Route cards need enough white space for labels and their connecting lines.
+  // Keep these deliberately larger than the normal Dagre sibling gap: this is
+  // the readable overview of a multi-pipeline workflow, not a dense DAG dump.
+  const laneGap = 144
+  const stepGap = 72
+  const routeRowGap = 160
+  const maxRouteWidth = Math.max(
+    280,
+    ...Array.from(laneStepIDs).map(id => nodeByID.get(id))
+      .filter((node): node is WorkflowNode => Boolean(node))
+      .map(node => getNodeLayoutDimensions(node).width)
+  )
+  const laneWidth = maxRouteWidth + laneGap
+  const gridWidth = (columns * maxRouteWidth) + ((columns - 1) * laneGap)
+  const centerX = bodyLeft + (gridWidth / 2)
+  const positionByID = new Map<string, { x: number; y: number }>()
+
+  const placeCentered = (id: string, y: number) => {
+    const node = nodeByID.get(id)
+    if (!node) return
+    const dims = getNodeLayoutDimensions(node)
+    positionByID.set(id, { x: centerX - (dims.width / 2), y })
+  }
+
+  let nextY = bodyTop
+  preRouterIDs.forEach(id => {
+    const node = nodeByID.get(id)
+    if (!node) return
+    placeCentered(id, nextY)
+    nextY += getNodeLayoutDimensions(node).height + stepGap
+  })
+
+  placeCentered(router.id, nextY)
+  const routerNode = nodeByID.get(router.id)
+  nextY += (routerNode ? getNodeLayoutDimensions(routerNode).height : 0) + routeRowGap
+
+  // Pack route forests into rows. A route that branches through X and then a
+  // digest needs all three columns; a standalone route and a two-stage route
+  // can share the next row. This keeps related work adjacent without wasting a
+  // full row for every selectable router option.
+  const forestRows: Array<Array<typeof routeForests[number] & { startColumn: number }>> = []
+  let currentRow: Array<typeof routeForests[number] & { startColumn: number }> = []
+  let usedColumns = 0
+  routeForests.forEach(forest => {
+    const width = Math.min(columns, forest.width)
+    if (currentRow.length > 0 && usedColumns + width > columns) {
+      forestRows.push(currentRow)
+      currentRow = []
+      usedColumns = 0
+    }
+    currentRow.push({ ...forest, startColumn: usedColumns })
+    usedColumns += width
+  })
+  if (currentRow.length > 0) forestRows.push(currentRow)
+
+  let laneBottom = nextY
+  forestRows.forEach(row => {
+    const rowTop = laneBottom
+    let rowBottom = rowTop
+
+    row.forEach(forest => {
+      const sourcePositionByID = new Map<string, { x: number; y: number; height: number }>()
+
+      forest.entries.forEach(entryID => {
+        const segment = collectRouteSegment(entryID)
+        const depth = forest.depthByEntryID.get(entryID) || 0
+        const x = bodyLeft + ((forest.startColumn + depth) * laneWidth)
+
+        const precedingSourcePositions = forest.entries
+          .flatMap(candidateEntryID => collectRouteSegment(candidateEntryID).nextEntries)
+          .filter(transition => transition.entryID === entryID)
+          .map(transition => sourcePositionByID.get(transition.sourceID))
+          .filter((position): position is { x: number; y: number; height: number } => Boolean(position))
+        const entryNode = nodeByID.get(entryID)
+        const entryHeight = entryNode ? getNodeLayoutDimensions(entryNode).height : NODE_DIMENSIONS.step.height
+        // A branch-to-route handoff connects through side handles. Centre the
+        // destination card against the decision so the continuation reads
+        // left-to-right, rather than adding another full vertical card gap.
+        const y = precedingSourcePositions.length > 0
+          ? Math.max(
+            rowTop,
+            ...precedingSourcePositions.map(position => position.y + Math.max(0, (position.height - entryHeight) / 2))
+          )
+          : rowTop
+
+        let segmentBottom = y
+        segment.stepIDs.forEach(stepID => {
+          const node = nodeByID.get(stepID)
+          if (!node) return
+          const dims = getNodeLayoutDimensions(node)
+          positionByID.set(stepID, { x, y: segmentBottom })
+          sourcePositionByID.set(stepID, { x, y: segmentBottom, height: dims.height })
+          segmentBottom += dims.height + stepGap
+        })
+        rowBottom = Math.max(rowBottom, segmentBottom - stepGap)
+      })
+    })
+
+    laneBottom = rowBottom + routeRowGap
+  })
+
+  // Steps which are not reachable from a primary route are genuine standalone
+  // jobs. Give them a compact bottom strip rather than letting them occupy
+  // arbitrary corners of the route map.
+  const independentTop = laneBottom
+  let independentBottom = independentTop
+  independentIDs.forEach((id, index) => {
+    const node = nodeByID.get(id)
+    if (!node) return
+    const column = index % columns
+    const row = Math.floor(index / columns)
+    const dims = getNodeLayoutDimensions(node)
+    positionByID.set(id, {
+      x: bodyLeft + (column * laneWidth),
+      y: independentTop + (row * (dims.height + stepGap)),
+    })
+    independentBottom = Math.max(
+      independentBottom,
+      independentTop + (row * (dims.height + stepGap)) + dims.height
+    )
+  })
+
+  convergenceStepIDs.forEach(id => {
+    const node = nodeByID.get(id)
+    if (!node) return
+    const dims = getNodeLayoutDimensions(node)
+    positionByID.set(id, {
+      x: centerX - (dims.width / 2),
+      y: independentBottom + routeRowGap,
+    })
+  })
+
+  return nodes.map(node => {
+    const position = positionByID.get(node.id)
+    if (position) return { ...node, position }
+
+    // Keep supporting nodes attached to their plan step when that step moves
+    // into a route cell. They retain the original side-by-side offset.
+    const parentStepID = (node.data as { parentStepId?: string }).parentStepId
+    const parentPosition = parentStepID ? positionByID.get(parentStepID) : undefined
+    const originalParent = parentStepID ? nodeByID.get(parentStepID) : undefined
+    if (parentPosition && originalParent) {
+      return {
+        ...node,
+        position: {
+          x: parentPosition.x + (node.position.x - originalParent.position.x),
+          y: parentPosition.y + (node.position.y - originalParent.position.y),
+        },
+      }
+    }
+    return node
+  })
+}
+
 /**
  * Determine change type for a step based on detected changes
  */
@@ -814,6 +1202,9 @@ function processSteps(
     }
     if (isTodoTaskStep(s)) addRouteTarget(s.next_step_id)
   })
+  const primaryRouteEntryStepIDs = new Set(
+    steps.find(isRoutingStep)?.routes.map(route => route.next_step_id) || []
+  )
 
   const buildTodoTaskSubAgentGraph = (
     todoTaskStep: PlanStep,
@@ -1083,14 +1474,16 @@ function processSteps(
         step.routes.forEach((route, routeIndex) => {
           const targetNodeId = stepIdToNodeIdMap?.get(route.next_step_id)
           const routeColor = routeColorForIndex(routeIndex)
+          const isLateralHandoff = isBranchStep(step) && primaryRouteEntryStepIDs.has(route.next_step_id)
 
           if (targetNodeId) {
             const isSelectedRoute = !step.selected_route_id || route.route_id === step.selected_route_id
             routingEdges.push({
               id: `${sourceNodeId}-routing-${route.route_id}-to-${targetNodeId}`,
               source: sourceNodeId,
-              sourceHandle: `route-${route.route_id}`,
+              sourceHandle: isLateralHandoff ? `handoff-${route.route_id}` : `route-${route.route_id}`,
               target: targetNodeId,
+              targetHandle: isLateralHandoff ? 'handoff' : undefined,
               type: edgeType,
               label: route.route_name || route.route_id,
               labelStyle: { ...ROUTE_EDGE_LABEL_STYLE, opacity: isSelectedRoute ? 1 : 0.5 },
@@ -1101,12 +1494,15 @@ function processSteps(
                 routeIndex,
                 routeCount: step.routes?.length || 0,
                 routeName: route.route_name || route.route_id,
+                isBranch: isBranchStep(step),
+                isLateralHandoff,
                 selected: isSelectedRoute,
                 color: routeColor
               },
               style: {
                 stroke: isSelectedRoute ? routeColor : '#94a3b8',
                 strokeWidth: isSelectedRoute ? 2.5 : 1.25,
+                strokeDasharray: isBranchStep(step) ? '7 5' : undefined,
                 opacity: isSelectedRoute ? 1 : 0.4
               },
               animated: false
@@ -1128,12 +1524,14 @@ function processSteps(
                 routeIndex,
                 routeCount: step.routes?.length || 0,
                 routeName: route.route_name || route.route_id,
+                isBranch: isBranchStep(step),
                 selected: isSelectedRoute,
                 color: routeColor
               },
               style: {
                 stroke: isSelectedRoute ? routeColor : '#94a3b8',
                 strokeWidth: isSelectedRoute ? 2.5 : 1.25,
+                strokeDasharray: isBranchStep(step) ? '7 5' : undefined,
                 opacity: isSelectedRoute ? 1 : 0.4
               },
               animated: false
@@ -2022,6 +2420,10 @@ export function usePlanToFlow(
 
     // Replace nodes with the adjusted positions
     layoutedResult.nodes = positionedNodes
+
+    if (layoutDirection === 'TB') {
+      layoutedResult.nodes = distributePrimaryRouteLanes(layoutedResult.nodes, plan)
+    }
 
     // Position the end node at the end of the workflow
     const endNodeIndex = layoutedResult.nodes.findIndex(n => n.id === 'end')

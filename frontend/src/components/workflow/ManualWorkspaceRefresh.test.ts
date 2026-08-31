@@ -16,10 +16,13 @@ describe('manual workflow workspace refresh', () => {
   it('keeps explicit Plan and Report refresh controls', () => {
     const toolbar = readFileSync('src/components/workflow/canvas/WorkflowToolbar.tsx', 'utf8')
     const canvas = readFileSync('src/components/workflow/canvas/WorkflowCanvas.tsx', 'utf8')
+    const report = readFileSync('src/components/workflow/ReportViewer.tsx', 'utf8')
 
-    expect(toolbar).toContain('data-testid="refresh-report"')
-    expect(toolbar).toContain('label="Refresh"')
-    expect(canvas).toContain('onRefresh={handleRefresh}')
-    expect(canvas).toContain('onRefresh={handleReportRefresh}')
+    expect(toolbar).not.toContain('data-testid="refresh-report"')
+    expect(canvas).toContain('data-testid="refresh-plan"')
+    expect(canvas).toContain('isRefreshingPlan')
+    expect(canvas).toContain('await loadPlanRefresh()')
+    expect(canvas).toContain("addToast('Plan reloaded', 'success')")
+    expect(report).toContain('aria-label="Refresh report"')
   })
 })

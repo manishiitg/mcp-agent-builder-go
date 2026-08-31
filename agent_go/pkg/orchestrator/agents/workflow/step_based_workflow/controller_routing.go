@@ -104,8 +104,16 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeRoutingStep(
 	}
 
 	routingEvalResponse := map[string]interface{}{
-		"step_index":        stepIndex + 1,
-		"step_path":         routingStepPath,
+		"step_index": stepIndex + 1,
+		"step_path":  routingStepPath,
+		// step_type is the step's real plan.json type ("routing" or "branch")
+		// AT EXECUTION TIME, persisted into the artifact itself rather than
+		// left for a reader to re-derive from the current plan -- if the step
+		// is later reclassified (routing<->branch), this historical run's
+		// evidence must keep reporting what it actually was when it ran, not
+		// what the step is typed as today. handleGetExecutionLogs prefers
+		// this field over the live plan.json lookup for exactly that reason.
+		"step_type":         string(step.StepType()),
 		"routing_step_id":   step.GetID(),
 		"routing_question":  routingStep.GetRoutingQuestionText(),
 		"selected_route_id": selectedRouteID,

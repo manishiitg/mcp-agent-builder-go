@@ -523,6 +523,10 @@ func TestPulseWorklistRequiresPlanDriftReviewWhenCandidatesExist(t *testing.T) {
 	if err := os.MkdirAll(planningDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	planJSON := `{"steps":[{"id":"step-a","type":"regular"}]}`
+	if err := os.WriteFile(filepath.Join(planningDir, "plan.json"), []byte(planJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	stepConfig := `{"steps":[{"id":"step-a"}]}`
 	if err := os.WriteFile(filepath.Join(planningDir, "step_config.json"), []byte(stepConfig), 0o644); err != nil {
 		t.Fatal(err)
@@ -539,6 +543,77 @@ func TestPulseWorklistRequiresPlanDriftReviewWhenCandidatesExist(t *testing.T) {
 	})
 	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-drift-check-due", due); err != nil {
 		t.Fatalf("plan_drift_review routing was rejected despite being marked due: %v", err)
+	}
+}
+
+// A deleted step's own drift_review record is cascade-removed along with it,
+// so the per-step candidate set alone can go empty even though a deletion's
+// dependent-artifact fallout still needs auditing — the workflow-level
+// WorkflowDriftReviewStepID record (flagged by delete_plan_steps) must force
+// plan_drift_review due on its own, even when every real step is clean.
+func TestPulseWorklistRequiresPlanDriftReviewWhenWorkflowLevelFlagged(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	planningDir := filepath.Join(root, workspacePath, "planning")
+	if err := os.MkdirAll(planningDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planJSON := `{"steps":[{"id":"step-a","type":"regular"}]}`
+	if err := os.WriteFile(filepath.Join(planningDir, "plan.json"), []byte(planJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// step-a is fully reviewed; only the workflow-level sentinel is pending —
+	// this is exactly the state right after a step was deleted.
+	stepConfig := `{"steps":[
+		{"id":"step-a","agent_configs":{"drift_review":{"reviewed_at":"2026-08-01T00:00:00Z","reviewed_by":"pulse:plan_drift_review","contract_version":2,"checks":[{"check_id":"report_query_compatibility","status":"pass","evidence":"all report queries ran cleanly"}]}}},
+		{"id":"__workflow_drift_review__","agent_configs":{"drift_review":{"needs_review":true}}}
+	]}`
+	if err := os.WriteFile(filepath.Join(planningDir, "step_config.json"), []byte(stepConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped := completePulseWorklistDecisions(nil)
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-workflow-level-skip", skipped); err == nil ||
+		!strings.Contains(err.Error(), "plan_drift_review must be due") || !strings.Contains(err.Error(), "__workflow_drift_review__") {
+		t.Fatalf("a flagged workflow-level record was allowed to skip plan_drift_review: %v", err)
+	}
+
+	due := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModulePlanDriftReview: {Module: pulseModulePlanDriftReview, Due: true, Reason: "A step was deleted; workflow-level drift review is flagged."},
+	})
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-workflow-level-due", due); err != nil {
+		t.Fatalf("plan_drift_review routing was rejected despite being marked due: %v", err)
+	}
+}
+
+// A scan failure (unreadable/malformed plan.json or step_config.json) must
+// never silently read as "nothing is due" — the real candidate set is
+// unknown, not empty, so Gate must route it to either plan_drift_review or
+// technical_review rather than being allowed to skip both.
+func TestPulseWorklistRequiresRoutingWhenPlanDriftScanFails(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	workspacePath := "Workflow/example"
+	planningDir := filepath.Join(root, workspacePath, "planning")
+	if err := os.MkdirAll(planningDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(planningDir, "plan.json"), []byte("{not valid json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped := completePulseWorklistDecisions(nil)
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-drift-scan-fail-skip", skipped); err == nil ||
+		!strings.Contains(err.Error(), "plan_drift_review or technical_review must be due") {
+		t.Fatalf("a failed plan drift scan was allowed to skip both plan_drift_review and technical_review: %v", err)
+	}
+
+	due := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Investigate malformed plan.json."},
+	})
+	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-drift-scan-fail-due", due); err != nil {
+		t.Fatalf("technical_review routing was rejected despite being marked due: %v", err)
 	}
 }
 
@@ -1953,6 +2028,83 @@ func completePulseWorklistDecisions(overrides map[string]PulseWorklistDecision) 
 		out = append(out, decision)
 	}
 	return out
+}
+
+// recordPulseModuleDueForManualReview is the fix for a manual, non-Gate
+// invocation (e.g. /review-artifact-drift's Part 1) needing to persist a
+// record_pulse_result -- that write is due-gated on a Gate-recorded worklist
+// row for the exact pulse_run_id, which a manual invocation never has.
+func TestRecordPulseModuleDueForManualReviewSucceedsWithNoPriorState(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/manual-review-due"
+	pulseRunID := "manual-session-1"
+
+	if err := recordPulseModuleDueForManualReview(ctx, workspacePath, pulseRunID, pulseModulePlanDriftReview, "manual /review-artifact-drift invocation"); err != nil {
+		t.Fatalf("recordPulseModuleDueForManualReview: %v", err)
+	}
+	if due, err := pulseWorklistModulesDue(ctx, workspacePath, pulseRunID, pulseModulePlanDriftReview); err != nil {
+		t.Fatalf("inspect due-ness: %v", err)
+	} else if !due {
+		t.Fatal("plan_drift_review should be due for the manual session after recordPulseModuleDueForManualReview")
+	}
+	// The whole point: record_pulse_result must now accept a terminal write
+	// for this exact pulse_run_id.
+	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModulePlanDriftReview, pulseRunID, "done", "Manual artifact-drift audit complete.", nil); err != nil {
+		t.Fatalf("record_pulse_result rejected the manual invocation's own due claim: %v", err)
+	}
+}
+
+func TestRecordPulseModuleDueForManualReviewRefusesWhenAnotherRunIsMidFlight(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/manual-review-collision"
+
+	// A real scheduled Pulse pass: Gate recorded plan_drift_review due for
+	// pulse-scheduled-1, and its reviewer turn has not yet persisted a result.
+	if _, err := recordPulseWorklist(ctx, workspacePath, "pulse-scheduled-1", completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModulePlanDriftReview: {Module: pulseModulePlanDriftReview, Due: true, Reason: "A step's drift_review record is null."},
+	})); err != nil {
+		t.Fatalf("record scheduled worklist: %v", err)
+	}
+
+	// A manual /review-artifact-drift invocation, running concurrently under a
+	// completely different pulse_run_id, must not be able to silently steal
+	// the module's single shared row out from under the in-flight scheduled
+	// pass -- that would corrupt the scheduled pass's own later receipt
+	// validation.
+	err := recordPulseModuleDueForManualReview(ctx, workspacePath, "manual-session-concurrent", pulseModulePlanDriftReview, "manual /review-artifact-drift invocation")
+	if err == nil || !strings.Contains(err.Error(), "pulse-scheduled-1") {
+		t.Fatalf("expected refusal naming the in-flight scheduled run, got: %v", err)
+	}
+
+	// The scheduled pass's own claim must remain completely intact.
+	if due, dueErr := pulseWorklistModulesDue(ctx, workspacePath, "pulse-scheduled-1", pulseModulePlanDriftReview); dueErr != nil {
+		t.Fatalf("inspect scheduled due-ness: %v", dueErr)
+	} else if !due {
+		t.Fatal("the refused manual declaration must not have disturbed the scheduled pass's own due claim")
+	}
+}
+
+func TestRecordPulseModuleDueForManualReviewAllowedAfterScheduledPassResolves(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	workspacePath := "Workflow/manual-review-after-resolved"
+
+	if _, err := recordPulseWorklist(ctx, workspacePath, "pulse-scheduled-2", completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+		pulseModulePlanDriftReview: {Module: pulseModulePlanDriftReview, Due: true, Reason: "A step's drift_review record is null."},
+	})); err != nil {
+		t.Fatalf("record scheduled worklist: %v", err)
+	}
+	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModulePlanDriftReview, "pulse-scheduled-2", "done", "Scheduled pass finished.", nil); err != nil {
+		t.Fatalf("resolve scheduled pass: %v", err)
+	}
+
+	// The scheduled pass already recorded its own terminal result -- it is no
+	// longer mid-flight, so a later manual invocation is safe to claim the row.
+	if err := recordPulseModuleDueForManualReview(ctx, workspacePath, "manual-session-after", pulseModulePlanDriftReview, "manual /review-artifact-drift invocation"); err != nil {
+		t.Fatalf("recordPulseModuleDueForManualReview should succeed once the prior pass has a terminal result: %v", err)
+	}
 }
 
 func TestPulseReviewFocusCatalogUsesValidationContractHealthWithoutSafety(t *testing.T) {

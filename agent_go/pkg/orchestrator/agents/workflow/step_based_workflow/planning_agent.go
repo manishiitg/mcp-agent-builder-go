@@ -275,16 +275,38 @@ type AgentConfigs struct {
 	DeclaredExecutionModeReason  string           `json:"declared_execution_mode_reason,omitempty"`  // Audit trail: why the declared mode is the best fit. Not consumed by Go runtime, but preserved so future LLM reviewers (harden, replan) reading raw step_config.json see the original decision rationale.
 	DescriptionReviewed          *bool            `json:"description_reviewed,omitempty"`            // True when the step description has been reviewed — clarity AND secrets/hardcoded values.
 	ReviewNotes                  string           `json:"review_notes,omitempty"`                    // Free-form rationale covering why config, locks, learning/KB choices, or description review state are justified.
-	DriftReview                  *StepDriftReview `json:"drift_review,omitempty"`                    // Plan-drift review record: which drift checks were run against this step's CURRENT config/output and what each found. Nil means "not reviewed since the last dependency-triggering change" — the same trigger that clears description_reviewed also nils this out (clearDriftReviewAfterPlanUpdate), and a nil record on any step is exactly what makes the plan_drift_review Pulse module due. Set by that module or its manual slash-command equivalent; never by a step-editing agent directly.
+	DriftReview                  *StepDriftReview `json:"drift_review,omitempty"`                    // Plan-drift review record: evidence from the last completed plan_drift_review pass over this step, plus a NeedsReview flag every persisted field change sets true (clearDriftReviewAfterPlanUpdate). Nil (no record yet) or NeedsReview==true both mean "due." Set by that module or its manual slash-command equivalent; never by a step-editing agent directly.
 }
 
-// StepDriftReview is one completed plan-drift review pass over a single step —
-// evidence per check, not a bare "reviewed: true" boolean, so a review can't be
-// rubber-stamped without recording what it actually looked at.
+// StepDriftReview is the "stale flag" model (superseding the earlier
+// null-on-edit design): evidence is preserved across edits rather than
+// destroyed, and a step's due-ness is its own NeedsReview flag, not the
+// presence/absence of the whole record. Every persisted plan-step field
+// change sets NeedsReview=true and leaves everything else untouched; only a
+// completed plan_drift_review turn replaces Checks/ReviewedAt/ReviewedBy/
+// ReviewedThroughChangeID and clears the flag. This means a step's last real
+// review is always available as evidence, even while a newer edit has made it
+// stale — the reviewer reads it plus only the changelog entries after
+// ReviewedThroughChangeID, instead of starting from nothing.
 type StepDriftReview struct {
-	ReviewedAt string           `json:"reviewed_at"` // RFC3339
-	ReviewedBy string           `json:"reviewed_by"` // e.g. "pulse:plan_drift_review" or a user-invoked slash-command session id
-	Checks     []StepDriftCheck `json:"checks"`
+	NeedsReview             bool             `json:"needs_review"`
+	ReviewedAt              string           `json:"reviewed_at"`                          // RFC3339, of the last completed review
+	ReviewedBy              string           `json:"reviewed_by"`                          // e.g. "pulse:plan_drift_review" or a user-invoked slash-command session id
+	ReviewedThroughChangeID string           `json:"reviewed_through_change_id,omitempty"` // the latest planning/changelog change_id this review consumed
+	Checks                  []StepDriftCheck `json:"checks"`
+	// ContractVersion is the planDriftReviewContractVersion (plan_drift_candidates.go)
+	// in effect when this review was recorded. A step's own field edits are
+	// what NeedsReview tracks; a *global* change to which checks the reviewer
+	// turn is required to run (e.g. PLAT-259 phase B adding
+	// route_structural_isolation/route_eval_pairing) is not a per-step plan
+	// edit and would never set NeedsReview -- so an old review recorded under
+	// a lower contract version is treated as due again even though nothing
+	// about the step itself changed. Zero (the JSON-omitted default) means
+	// "recorded before this field existed," which is always < the current
+	// version and therefore always due -- the correct behavior, since no
+	// review recorded before this field existed could have run the checks a
+	// later contract version added.
+	ContractVersion int `json:"contract_version,omitempty"`
 }
 
 // StepDriftCheck is the evidence-required record for one drift check against
@@ -294,6 +316,111 @@ type StepDriftCheck struct {
 	CheckID  string `json:"check_id"` // stable id, e.g. "report_query_compatibility", "kb_access_mode"
 	Status   string `json:"status"`   // "pass" | "fail" | "fixed"
 	Evidence string `json:"evidence"` // what was compared and what was found — required, not optional
+	// FindingID is the durable Pulse issue_id (e.g. "PUL-xxxxxxxx") this check's
+	// failure was filed as, via record_pulse_finding. Required when Status is
+	// "fail" — record_plan_drift_review rejects a fail-status check with no
+	// finding_id, so a failed check can never be persisted as "reviewed"
+	// without a corresponding repair item already existing. This closes the
+	// window where the review call succeeds, the finding call never happens
+	// (crash, turn ends, tool error), and the failure silently disappears from
+	// both the drift record (marked reviewed) and the Pulse backlog (no
+	// finding filed).
+	FindingID string `json:"finding_id,omitempty"`
+}
+
+// WorkflowDriftReviewStepID is the reserved step_config.json ID that carries
+// the workflow-level (not per-step) drift review record — deletion coverage.
+// Deleting a step cascade-removes ITS OWN drift_review record along with its
+// step_config.json entry (correct: the step is gone, its per-step evidence is
+// moot), but that also means CollectPlanDriftCandidates — which derives its
+// candidate set from plan.json's current step list — structurally cannot see
+// anything requiring review for a step that no longer exists. A deletion can
+// still leave dangling references in dependent artifacts (reports, evals,
+// other steps' next_step_id/routes, learnings/KB mentions, DB contracts) that
+// need auditing. This sentinel ID reuses the exact same StepDriftReview record
+// shape and record_plan_drift_review write path a real step uses — it is
+// never a valid plan.json step id, so it can never collide with one, and
+// cleanup_orphan_step_configs must explicitly exempt it (it is not "live" in
+// plan.json by definition, but is also never orphaned garbage).
+const WorkflowDriftReviewStepID = "__workflow_drift_review__"
+
+// flagWorkflowDriftReviewOnDeletion sets NeedsReview=true on the workflow-
+// level drift review record (creating it if this workflow has never had a
+// deletion before), preserving any prior evidence — the same stale-flag
+// pattern clearDriftReviewAfterPlanUpdate uses for a real step's own record,
+// so the last completed workflow-level audit stays available even while
+// flagged stale. Unlike a real step, an absent record here does NOT mean
+// "due": a workflow that has never deleted a step has nothing for this
+// candidate to cover, so CollectPlanDriftCandidates only treats the sentinel
+// as pending when a record exists AND is flagged, never merely because it is
+// missing (see its own doc comment).
+func flagWorkflowDriftReviewOnDeletion(configs []StepConfig, deletedStepIDs []string) []StepConfig {
+	if len(deletedStepIDs) == 0 {
+		return configs
+	}
+	for i := range configs {
+		if configs[i].ID != WorkflowDriftReviewStepID {
+			continue
+		}
+		if configs[i].AgentConfigs == nil {
+			configs[i].AgentConfigs = &AgentConfigs{}
+		}
+		if configs[i].AgentConfigs.DriftReview == nil {
+			configs[i].AgentConfigs.DriftReview = &StepDriftReview{}
+		}
+		configs[i].AgentConfigs.DriftReview.NeedsReview = true
+		return configs
+	}
+	return append(configs, StepConfig{
+		ID:           WorkflowDriftReviewStepID,
+		AgentConfigs: &AgentConfigs{DriftReview: &StepDriftReview{NeedsReview: true}},
+	})
+}
+
+// cascadeDeleteStepConfigsOnce reads step_config.json, prunes the deleted
+// steps' own entries, flags the workflow-level drift review record, and
+// writes the result back in one pass.
+func cascadeDeleteStepConfigsOnce(ctx context.Context, workspacePath string, deletedSet map[string]bool, deletedIDs []string, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) ([]string, error) {
+	existingConfigs, cfgErr := readStepConfigViaFileCallback(ctx, workspacePath, readFile)
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
+	newConfigs, removed := pruneStepConfigsByID(existingConfigs, deletedSet)
+	newConfigs = flagWorkflowDriftReviewOnDeletion(newConfigs, deletedIDs)
+	if writeErr := writeStepConfigViaFileCallback(ctx, workspacePath, newConfigs, writeFile); writeErr != nil {
+		return nil, writeErr
+	}
+	return removed, nil
+}
+
+// cascadeDeleteStepConfigsRetried retries cascadeDeleteStepConfigsOnce once on
+// failure — the same pattern clearDriftReviewAfterPlanUpdateRetried uses for a
+// real step's own flag write. A failure here is more consequential than that
+// case: the deleted step's own drift_review record is already gone by
+// definition, so if this workflow-level replacement also fails to persist,
+// plan_drift_review has NO remaining way to learn the deletion happened at
+// all. driftReviewFlagFailed is true only when both attempts failed, so the
+// caller can surface it loudly in its own response rather than only logging it.
+func cascadeDeleteStepConfigsRetried(ctx context.Context, workspacePath string, deletedSet map[string]bool, deletedIDs []string, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, logger loggerv2.Logger) (prunedConfigIDs []string, driftReviewFlagFailed bool) {
+	removed, err := cascadeDeleteStepConfigsOnce(ctx, workspacePath, deletedSet, deletedIDs, readFile, writeFile)
+	if err == nil {
+		if len(removed) > 0 {
+			logger.Info(fmt.Sprintf("🧹 Cascade-removed %d step_config entries: %v", len(removed), removed))
+		}
+		logger.Info(fmt.Sprintf("🚩 Flagged workflow-level drift review needs_review after deleting %d step(s): %v", len(deletedIDs), deletedIDs))
+		return removed, false
+	}
+	logger.Warn(fmt.Sprintf("⚠️ Failed to cascade-delete step_config entries / flag workflow-level drift review, retrying once: %v", err))
+	removed, err = cascadeDeleteStepConfigsOnce(ctx, workspacePath, deletedSet, deletedIDs, readFile, writeFile)
+	if err != nil {
+		logger.Warn(fmt.Sprintf("⚠️ Cascade-delete step_config entries / flag workflow-level drift review failed again after retry: %v", err))
+		return nil, true
+	}
+	if len(removed) > 0 {
+		logger.Info(fmt.Sprintf("🧹 Cascade-removed %d step_config entries: %v", len(removed), removed))
+	}
+	logger.Info(fmt.Sprintf("🚩 Flagged workflow-level drift review needs_review after deleting %d step(s): %v", len(deletedIDs), deletedIDs))
+	return removed, false
 }
 
 // ============================================================================
@@ -978,6 +1105,9 @@ type PartialPlanStep struct {
 	Routes          []RoutingRoute `json:"routes,omitempty"`            // Optional: Updated routes
 	DefaultRouteID  string         `json:"default_route_id,omitempty"`  // Optional: Updated default route ID
 	RouteSourceFile string         `json:"route_source_file,omitempty"` // Optional: Updated deterministic route source file
+	// Branch step fields (PLAT-259: same deterministic-switch shape as
+	// routing, just its own field name for the human-readable prompt)
+	BranchQuestion string `json:"branch_question,omitempty"` // Optional: Updated branch question
 	// Human input step fields
 	Question         string            `json:"question,omitempty"`            // Optional: Updated question
 	VariableName     string            `json:"variable_name,omitempty"`       // Optional: Updated variable name
@@ -2793,6 +2923,8 @@ func updateValidationSchemaOnStep(step PlanStepInterface, schema *ValidationSche
 		s.ValidationSchema = schema
 	case *RoutingPlanStep:
 		s.ValidationSchema = schema
+	case *BranchPlanStep:
+		s.ValidationSchema = schema
 	case *MessageSequencePlanStep:
 		s.ValidationSchema = schema
 	}
@@ -3133,6 +3265,39 @@ func mergePartialStepUpdate(existingStep PlanStepInterface, partialUpdate Partia
 		}
 		if partialUpdate.RoutingQuestion != "" {
 			updated.RoutingQuestion = partialUpdate.RoutingQuestion
+		}
+		if len(partialUpdate.Routes) > 0 {
+			updated.Routes = partialUpdate.Routes
+		}
+		if partialUpdate.DefaultRouteID != "" {
+			updated.DefaultRouteID = partialUpdate.DefaultRouteID
+		}
+		if partialUpdate.RouteSourceFile != "" {
+			updated.RouteSourceFile = partialUpdate.RouteSourceFile
+		}
+		return &updated
+
+	case *BranchPlanStep:
+		updated := *step
+		if partialUpdate.Title != "" {
+			updated.Title = partialUpdate.Title
+		}
+		if partialUpdate.ClearDescription {
+			updated.Description = ""
+		} else if partialUpdate.Description != "" {
+			updated.Description = partialUpdate.Description
+		}
+		if partialUpdate.ContextDependencies != nil {
+			updated.ContextDependencies = partialUpdate.ContextDependencies
+		}
+		if partialUpdate.ContextOutput != "" {
+			updated.ContextOutput = FlexibleContextOutput(partialUpdate.ContextOutput)
+		}
+		if partialUpdate.ValidationSchema != nil {
+			updated.ValidationSchema = partialUpdate.ValidationSchema
+		}
+		if partialUpdate.BranchQuestion != "" {
+			updated.BranchQuestion = partialUpdate.BranchQuestion
 		}
 		if len(partialUpdate.Routes) > 0 {
 			updated.Routes = partialUpdate.Routes
@@ -3561,11 +3726,24 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 			NewValue: partialUpdate.RoutingQuestion,
 		})
 	}
+	if partialUpdate.BranchQuestion != "" {
+		changedFields = append(changedFields, "branch_question")
+		oldQuestion := ""
+		if branchStep, ok := existingStep.(*BranchPlanStep); ok {
+			oldQuestion = branchStep.BranchQuestion
+		}
+		*fieldChanges = append(*fieldChanges, PlanFieldChange{
+			StepID:   partialUpdate.ExistingStepID,
+			Field:    "branch_question",
+			OldValue: oldQuestion,
+			NewValue: partialUpdate.BranchQuestion,
+		})
+	}
 	if partialUpdate.Routes != nil {
 		changedFields = append(changedFields, "routes")
 		oldRoutesJSON := "[]"
-		if routingStep, ok := existingStep.(*RoutingPlanStep); ok {
-			oldBytes, _ := json.Marshal(routingStep.Routes)
+		if routingStep, ok := existingStep.(routeSwitchStep); ok {
+			oldBytes, _ := json.Marshal(routingStep.GetRoutes())
 			oldRoutesJSON = string(oldBytes)
 		}
 		newBytes, _ := json.Marshal(partialUpdate.Routes)
@@ -3579,8 +3757,8 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 	if partialUpdate.DefaultRouteID != "" {
 		changedFields = append(changedFields, "default_route_id")
 		oldDefaultRouteID := ""
-		if routingStep, ok := existingStep.(*RoutingPlanStep); ok {
-			oldDefaultRouteID = routingStep.DefaultRouteID
+		if routingStep, ok := existingStep.(routeSwitchStep); ok {
+			oldDefaultRouteID = routingStep.GetDefaultRouteID()
 		}
 		*fieldChanges = append(*fieldChanges, PlanFieldChange{
 			StepID:   partialUpdate.ExistingStepID,
@@ -3592,8 +3770,8 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 	if partialUpdate.RouteSourceFile != "" {
 		changedFields = append(changedFields, "route_source_file")
 		oldRouteSourceFile := ""
-		if routingStep, ok := existingStep.(*RoutingPlanStep); ok {
-			oldRouteSourceFile = routingStep.RouteSourceFile
+		if routingStep, ok := existingStep.(routeSwitchStep); ok {
+			oldRouteSourceFile = routingStep.GetRouteSourceFile()
 		}
 		*fieldChanges = append(*fieldChanges, PlanFieldChange{
 			StepID:   partialUpdate.ExistingStepID,
@@ -3676,6 +3854,7 @@ func planStepUpdateInvalidatesDescriptionReview(fieldChanges []PlanFieldChange) 
 			field == "next_step_id" ||
 			field == "validation_schema" ||
 			field == "routing_question" ||
+			field == "branch_question" ||
 			field == "routes" ||
 			field == "default_route_id" ||
 			field == "route_source_file" ||
@@ -3719,15 +3898,29 @@ func clearDescriptionReviewedAfterPlanUpdate(ctx context.Context, workspacePath,
 	return false, nil
 }
 
-// clearDriftReviewAfterPlanUpdate mirrors clearDescriptionReviewedAfterPlanUpdate
-// exactly — same trigger condition, same read/find/clear/write shape — because a
-// step's drift review is stale for precisely the same set of field changes that
-// stale a description review: anything that changes what the step actually does.
-// A nil DriftReview on any step is what makes the plan_drift_review Pulse module
-// due, so this is the mechanism that turns "we edited a step" into "Pulse will
-// now notice."
+// clearDriftReviewAfterPlanUpdate flags an existing drift review stale rather
+// than destroying it — the "stale flag" model. It deliberately does NOT share
+// clearDescriptionReviewedAfterPlanUpdate's field classifier: a description
+// review is specifically about whether the step's prose still matches its
+// behavior, so a title-only edit legitimately leaves it untouched, but a
+// drift review's broader claim ("this step's current configured form has
+// been checked") is stale the instant any field changes, title included. Do
+// not attempt to classify an update as material or cosmetic in Go — even a
+// title change can alter meaning, and classification would create a new
+// false-negative path. The trigger condition here mirrors
+// planStepUpdateRequiresDependentArtifactReview's own unconditional
+// len(fieldChanges) > 0 gate, not the description-review classifier.
+//
+// A step with NeedsReview==true (or no record at all) is what makes the
+// plan_drift_review Pulse module due — this is the mechanism that turns "we
+// edited a step" into "Pulse will now notice," without discarding the
+// step's last real review: Checks/ReviewedAt/ReviewedBy/
+// ReviewedThroughChangeID stay exactly as they were until a completed
+// plan_drift_review turn replaces them. The plan-mod tool's own call already
+// appends the changelog entry for this field change elsewhere in the same
+// turn — no separate changelog entry is needed here.
 func clearDriftReviewAfterPlanUpdate(ctx context.Context, workspacePath, stepID string, fieldChanges []PlanFieldChange, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) (bool, error) {
-	if !planStepUpdateInvalidatesDescriptionReview(fieldChanges) {
+	if len(fieldChanges) == 0 {
 		return false, nil
 	}
 
@@ -3740,9 +3933,16 @@ func clearDriftReviewAfterPlanUpdate(ctx context.Context, workspacePath, stepID 
 			continue
 		}
 		if configs[i].AgentConfigs == nil || configs[i].AgentConfigs.DriftReview == nil {
+			// No prior review to flag — a step with no drift_review record at
+			// all is already a plan_drift_review candidate on its own.
 			return false, nil
 		}
-		clearStepConfigField(&configs[i], "drift_review")
+		if configs[i].AgentConfigs.DriftReview.NeedsReview {
+			// Already flagged by an earlier edit in this same unreviewed window;
+			// nothing changed about due-ness, so this is not a new "cleared" event.
+			return false, nil
+		}
+		configs[i].AgentConfigs.DriftReview.NeedsReview = true
 		if err := writeStepConfigViaFileCallback(ctx, workspacePath, configs, writeFile); err != nil {
 			return false, err
 		}
@@ -3751,7 +3951,27 @@ func clearDriftReviewAfterPlanUpdate(ctx context.Context, workspacePath, stepID 
 	return false, nil
 }
 
-func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []PlanFieldChange, descriptionReviewCleared, driftReviewCleared bool) string {
+// clearDriftReviewAfterPlanUpdateRetried retries the flag write once before
+// giving up. The plan-mod tool's own field change has already landed by the
+// time this runs (it is a separate, earlier write against plan.json), so
+// true atomicity — rolling that back if this second write fails — is not
+// achievable without a transactional multi-file write mechanism this
+// codebase has nowhere else. A transient I/O error retried once, plus a
+// persistent failure surfaced loudly to the calling agent (not just logged)
+// instead of silently swallowed, is the pragmatic mitigation: it meaningfully
+// shrinks the window where a step changes but plan_drift_review never
+// notices, without pretending to solve the general problem.
+func clearDriftReviewAfterPlanUpdateRetried(ctx context.Context, workspacePath, stepID string, fieldChanges []PlanFieldChange, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, logger loggerv2.Logger) (cleared bool, persistentErr error) {
+	cleared, err := clearDriftReviewAfterPlanUpdate(ctx, workspacePath, stepID, fieldChanges, readFile, writeFile)
+	if err == nil {
+		return cleared, nil
+	}
+	logger.Warn(fmt.Sprintf("⚠️ Failed to flag drift_review.needs_review after updating step %s, retrying once: %v", stepID, err))
+	cleared, err = clearDriftReviewAfterPlanUpdate(ctx, workspacePath, stepID, fieldChanges, readFile, writeFile)
+	return cleared, err
+}
+
+func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []PlanFieldChange, descriptionReviewCleared, driftReviewCleared, driftReviewFlagFailed bool) string {
 	if !planStepUpdateRequiresDependentArtifactReview(fieldChanges) {
 		return ""
 	}
@@ -3777,7 +3997,10 @@ func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []Pl
 		b.WriteString("- Cleared step_config.agent_configs.description_reviewed because the reviewed step contract may now be stale.\n")
 	}
 	if driftReviewCleared {
-		b.WriteString("- Cleared step_config.agent_configs.drift_review — the plan_drift_review Pulse module will now treat this step as due until it (or the manual review-artifact-drift slash command) records fresh evidence via record_plan_drift_review.\n")
+		b.WriteString("- Flagged step_config.agent_configs.drift_review.needs_review=true — the plan_drift_review Pulse module will now treat this step as due until it (or the manual review-artifact-drift slash command) records fresh evidence via record_plan_drift_review.\n")
+	}
+	if driftReviewFlagFailed {
+		b.WriteString("- ⚠️ FAILED to flag drift_review.needs_review after two attempts — plan_drift_review may NOT notice this step changed until it happens to be re-edited later. Report this failure explicitly in your final response rather than treating the edit as fully clean; do not attempt to write drift_review yourself (it is not an update_step_config field — only record_plan_drift_review may set it).\n")
 	}
 	if seen["description"] || seen["validation_schema"] {
 		b.WriteString("- Description & schema quality: this edit touched description or validation_schema — call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/step-description.md\"}]) and apply it before finalizing.\n")
@@ -3801,11 +4024,13 @@ func handlePlanStepDependentArtifactReview(ctx context.Context, workspacePath, s
 	if err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to clear description_reviewed after updating step %s: %v", stepID, err))
 	}
-	driftReviewCleared, err := clearDriftReviewAfterPlanUpdate(ctx, workspacePath, stepID, fieldChanges, readFile, writeFile)
+	driftReviewCleared, err := clearDriftReviewAfterPlanUpdateRetried(ctx, workspacePath, stepID, fieldChanges, readFile, writeFile, logger)
+	driftReviewFlagFailed := false
 	if err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ Failed to clear drift_review after updating step %s: %v", stepID, err))
+		logger.Warn(fmt.Sprintf("⚠️ Failed to flag drift_review.needs_review after updating step %s (both attempts failed): %v", stepID, err))
+		driftReviewFlagFailed = true
 	}
-	return buildPlanStepDependentArtifactReviewNotice(stepID, fieldChanges, descriptionReviewCleared, driftReviewCleared)
+	return buildPlanStepDependentArtifactReviewNotice(stepID, fieldChanges, descriptionReviewCleared, driftReviewCleared, driftReviewFlagFailed)
 }
 
 func buildAddedStepArtifactSetupNotice(stepID, stepType string) string {
@@ -3823,7 +4048,7 @@ func buildAddedStepArtifactSetupNotice(stepID, stepType string) string {
 	return b.String()
 }
 
-func buildDeletedStepArtifactCleanupNotice(deletedIDs []string, prunedConfigIDs []string) string {
+func buildDeletedStepArtifactCleanupNotice(deletedIDs []string, prunedConfigIDs []string, driftReviewFlagFailed bool) string {
 	var b strings.Builder
 	b.WriteString("\n\nDeleted step artifact cleanup required")
 	if len(deletedIDs) > 0 {
@@ -3836,6 +4061,9 @@ func buildDeletedStepArtifactCleanupNotice(deletedIDs []string, prunedConfigIDs 
 	} else {
 		b.WriteString("- Step config: confirm no stale planning/step_config.json entries remain for the deleted IDs.\n")
 	}
+	if driftReviewFlagFailed {
+		b.WriteString("- ⚠️ FAILED to flag the workflow-level drift review record (" + WorkflowDriftReviewStepID + ") after two attempts — plan_drift_review has no other way to learn this deletion happened, since the deleted step's own drift_review record is already gone. Report this failure explicitly in your final response; do not treat the deletion's dependent-artifact fallout as tracked. Manually run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"" + strings.Join(deletedIDs, ", ") + "\") to cover the gap this pass.\n")
+	}
 	b.WriteString("- Plan wiring: remove or reroute next_step_id, routes, predefined_routes, and downstream context_dependencies that referenced deleted steps.\n")
 	b.WriteString("- Pre-validation: remove validation schemas that validate deleted-step outputs and update schemas that depended on them.\n")
 	b.WriteString("- Learnings/code: remove or archive stale learnings/<step-id>/ content and main.py scripts, unless intentionally kept as reusable docs.\n")
@@ -3845,7 +4073,7 @@ func buildDeletedStepArtifactCleanupNotice(deletedIDs []string, prunedConfigIDs 
 	return b.String()
 }
 
-func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string, descriptionReviewCleared, driftReviewCleared bool) string {
+func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string, descriptionReviewCleared, driftReviewCleared, driftReviewFlagFailed bool) string {
 	var b strings.Builder
 	b.WriteString("\n\nTodo route artifact review required for ")
 	b.WriteString(action)
@@ -3858,7 +4086,10 @@ func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string
 		b.WriteString("- Cleared the parent step description_reviewed flag because its orchestration contract changed.\n")
 	}
 	if driftReviewCleared {
-		b.WriteString("- Cleared the parent step drift_review flag — plan_drift_review will treat it as due again.\n")
+		b.WriteString("- Flagged the parent step's drift_review.needs_review=true — plan_drift_review will treat it as due again.\n")
+	}
+	if driftReviewFlagFailed {
+		b.WriteString("- ⚠️ FAILED to flag the parent step's drift_review.needs_review after two attempts — plan_drift_review may NOT notice this change. Report this failure explicitly rather than treating the route edit as fully clean.\n")
 	}
 	switch action {
 	case "added":
@@ -3881,11 +4112,13 @@ func handleTodoTaskRouteArtifactReview(ctx context.Context, workspacePath, paren
 	if err != nil {
 		logger.Warn(fmt.Sprintf("⚠️ Failed to clear description_reviewed after %s route %s on step %s: %v", action, routeID, parentStepID, err))
 	}
-	driftReviewCleared, err := clearDriftReviewAfterPlanUpdate(ctx, workspacePath, parentStepID, fieldChanges, readFile, writeFile)
+	driftReviewCleared, err := clearDriftReviewAfterPlanUpdateRetried(ctx, workspacePath, parentStepID, fieldChanges, readFile, writeFile, logger)
+	driftReviewFlagFailed := false
 	if err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ Failed to clear drift_review after %s route %s on step %s: %v", action, routeID, parentStepID, err))
+		logger.Warn(fmt.Sprintf("⚠️ Failed to flag drift_review.needs_review after %s route %s on step %s (both attempts failed): %v", action, routeID, parentStepID, err))
+		driftReviewFlagFailed = true
 	}
-	return buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action, descriptionReviewCleared, driftReviewCleared)
+	return buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action, descriptionReviewCleared, driftReviewCleared, driftReviewFlagFailed)
 }
 
 // createUpdateRegularStepExecutor edits the internal regular plan type exposed as update_scripted_step.
@@ -4276,19 +4509,23 @@ func createDeletePlanStepsExecutor(workspacePath string, logger loggerv2.Logger,
 
 		// Cascade-delete the matching entries from planning/step_config.json so
 		// the step's per-step config doesn't linger as an orphan after its plan
-		// entry is gone. Best-effort: a missing file or write failure is logged
-		// but doesn't fail the plan-deletion call (the plan was already written).
-		prunedConfigIDs := []string{}
-		if existingConfigs, cfgErr := readStepConfigViaFileCallback(ctx, workspacePath, readFile); cfgErr != nil {
-			logger.Warn(fmt.Sprintf("⚠️ Failed to read step_config.json for cascade-delete: %v", cfgErr))
-		} else if newConfigs, removed := pruneStepConfigsByID(existingConfigs, deletedSet); len(removed) > 0 {
-			if writeErr := writeStepConfigViaFileCallback(ctx, workspacePath, newConfigs, writeFile); writeErr != nil {
-				logger.Warn(fmt.Sprintf("⚠️ Failed to cascade-delete step_config entries %v: %v", removed, writeErr))
-			} else {
-				prunedConfigIDs = removed
-				logger.Info(fmt.Sprintf("🧹 Cascade-removed %d step_config entries: %v", len(removed), removed))
-			}
-		}
+		// entry is gone, and flag the workflow-level drift review record
+		// (WorkflowDriftReviewStepID) needs_review — a deleted step's own
+		// drift_review record is gone along with it, so CollectPlanDriftCandidates'
+		// per-step scan structurally cannot see anything requiring review for it;
+		// this is the durable signal that dependent-artifact fallout from THIS
+		// deletion still needs auditing. Both writes are combined into the same
+		// read-modify-write to avoid a lost update between two separate passes.
+		// Retried once on failure (same pattern as clearDriftReviewAfterPlanUpdateRetried):
+		// a transient failure here would otherwise leave neither the deleted
+		// step's own trigger (already gone) nor this workflow-level replacement,
+		// so plan_drift_review would have no way at all to learn the deletion
+		// happened. A persistent failure after the retry still doesn't fail the
+		// plan-deletion call (the plan was already written, and is the point of
+		// no return — this codebase has no transactional multi-file write
+		// mechanism to roll it back), but is surfaced loudly in the tool's own
+		// response rather than only logged, so it cannot be silently missed.
+		prunedConfigIDs, driftReviewFlagFailed := cascadeDeleteStepConfigsRetried(ctx, workspacePath, deletedSet, deletedIDs, readFile, writeFile, logger)
 
 		// Unlock learnings for all deleted steps (if unlock function provided)
 		// Use old step indices from before deletion
@@ -4304,7 +4541,7 @@ func createDeletePlanStepsExecutor(workspacePath string, logger loggerv2.Logger,
 			}
 		}
 
-		cleanupNotice := buildDeletedStepArtifactCleanupNotice(deletedIDs, prunedConfigIDs)
+		cleanupNotice := buildDeletedStepArtifactCleanupNotice(deletedIDs, prunedConfigIDs, driftReviewFlagFailed)
 
 		logger.Info(fmt.Sprintf("✅ Deleted %d steps from plan", len(deletedIDs)))
 		return fmt.Sprintf("Successfully deleted %d step(s) from the plan%s", len(deletedIDs), cleanupNotice), nil
@@ -4345,7 +4582,12 @@ func createCleanupOrphanStepConfigsExecutor(workspacePath string, logger loggerv
 		kept := make([]StepConfig, 0, len(configs))
 		var removed []string
 		for _, cfg := range configs {
-			if liveIDs[cfg.ID] {
+			// WorkflowDriftReviewStepID is never a real plan.json step, so it is
+			// never "live" by this check's own definition — but it also is not
+			// orphan garbage. It is the durable workflow-level drift review
+			// record deletion coverage depends on; removing it here would erase
+			// exactly the signal flagWorkflowDriftReviewOnDeletion just set.
+			if liveIDs[cfg.ID] || cfg.ID == WorkflowDriftReviewStepID {
 				kept = append(kept, cfg)
 				continue
 			}
@@ -4867,6 +5109,151 @@ func createUpdateBranchStepExecutor(workspacePath string, logger loggerv2.Logger
 	}
 }
 
+// getConvertRoutingBranchStepTypeSchema returns the JSON schema for
+// convert_routing_branch_step_type.
+func getConvertRoutingBranchStepTypeSchema() string {
+	return `{
+		"type": "object",
+		"properties": {
+			"existing_step_id": {
+				"type": "string",
+				"description": "The step's id field from plan.json. Must currently be a routing or branch step."
+			},
+			"target_type": {
+				"type": "string",
+				"enum": ["routing", "branch"],
+				"description": "The type to convert the step to. Must differ from its current type -- routing to convert a branch step into a routing step, branch to convert a routing step into a branch step."
+			}
+		},
+		"required": ["existing_step_id", "target_type"]
+	}`
+}
+
+// createConvertRoutingBranchStepTypeExecutor creates the executor for
+// convert_routing_branch_step_type: an atomic, in-place reclassification
+// between routing and branch that keeps the step's id unchanged. routing and
+// branch share the exact same routeSwitchStep shape (routes/default_route_id/
+// route_source_file, only the human-readable question field's name differs),
+// so this is a pure relabeling, not a data migration.
+//
+// Deliberately does NOT delete and recreate the step. An earlier guided-flow
+// doc (migrate-routing-to-branch.md) told the agent to reroute references,
+// delete the old step, then recreate it under the original id to "preserve
+// history" -- but delete_plan_steps prunes the deleted id's step_config.json
+// row (drift_review, execution_tier, etc.) before the id is ever reused, so
+// that claimed continuity was false. Keeping the same id throughout, in one
+// mutation, means step_config.json's row for it is never orphaned at all --
+// there is nothing to lose and nothing to restore.
+func createConvertRoutingBranchStepTypeExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
+	return func(ctx context.Context, args map[string]interface{}) (string, error) {
+		reason, err := requireReason(args)
+		if err != nil {
+			return "", err
+		}
+		stepID := strings.TrimSpace(asString(args["existing_step_id"]))
+		if stepID == "" {
+			return "", fmt.Errorf("existing_step_id is required")
+		}
+		targetType := strings.TrimSpace(asString(args["target_type"]))
+		if targetType != "routing" && targetType != "branch" {
+			return "", fmt.Errorf("target_type must be \"routing\" or \"branch\", got %q", targetType)
+		}
+
+		plan, err := readPlanForMutation(ctx, workspacePath, readFile)
+		if err != nil {
+			return "", fmt.Errorf("failed to read plan: %w", err)
+		}
+
+		stepIndex := -1
+		for i, step := range plan.Steps {
+			if step.GetID() == stepID {
+				stepIndex = i
+				break
+			}
+		}
+		if stepIndex == -1 {
+			return "", fmt.Errorf("step ID '%s' not found in existing plan", stepID)
+		}
+
+		var updated PlanStepInterface
+		var oldType string
+		switch s := plan.Steps[stepIndex].(type) {
+		case *RoutingPlanStep:
+			if targetType != "branch" {
+				return "", fmt.Errorf("step '%s' is already a routing step", stepID)
+			}
+			updated = &BranchPlanStep{
+				Type:             StepTypeBranch,
+				CommonStepFields: s.CommonStepFields,
+				BranchQuestion:   s.RoutingQuestion,
+				Routes:           s.Routes,
+				DefaultRouteID:   s.DefaultRouteID,
+				RouteSourceFile:  s.RouteSourceFile,
+			}
+			oldType = "routing"
+		case *BranchPlanStep:
+			if targetType != "routing" {
+				return "", fmt.Errorf("step '%s' is already a branch step", stepID)
+			}
+			updated = &RoutingPlanStep{
+				Type:             StepTypeRouting,
+				CommonStepFields: s.CommonStepFields,
+				RoutingQuestion:  s.BranchQuestion,
+				Routes:           s.Routes,
+				DefaultRouteID:   s.DefaultRouteID,
+				RouteSourceFile:  s.RouteSourceFile,
+			}
+			oldType = "branch"
+		default:
+			return "", fmt.Errorf("step '%s' is a %T, not a routing or branch step", stepID, plan.Steps[stepIndex])
+		}
+		plan.Steps[stepIndex] = updated
+
+		switch s := updated.(type) {
+		case *RoutingPlanStep:
+			if err := validateRoutingStepFieldsTyped(s); err != nil {
+				return "", fmt.Errorf("validation failed after conversion: %w", err)
+			}
+		case *BranchPlanStep:
+			if err := validateBranchStepFieldsTyped(s); err != nil {
+				return "", fmt.Errorf("validation failed after conversion: %w", err)
+			}
+		}
+		if err := validatePlanStepIDs(plan.Steps); err != nil {
+			return "", fmt.Errorf("plan validation failed after conversion: %w", err)
+		}
+		if err := validateStepIDUniqueness(plan); err != nil {
+			return "", fmt.Errorf("plan validation failed after conversion: %w", err)
+		}
+		if err := validateCrossPlanStepIDUniqueness(ctx, workspacePath, readFile, plan); err != nil {
+			return "", fmt.Errorf("plan validation failed after conversion: %w", err)
+		}
+
+		if err := writePlanToFile(ctx, workspacePath, plan, readFile, writeFile, logger); err != nil {
+			return "", fmt.Errorf("failed to write plan: %w", err)
+		}
+
+		fieldChanges := []PlanFieldChange{{StepID: stepID, Field: "type", OldValue: oldType, NewValue: targetType}}
+		logPlanChange(ctx, workspacePath, PlanChangelogEntry{
+			Tool:    "convert_routing_branch_step_type",
+			Reason:  reason,
+			StepIDs: []string{stepID},
+			Changes: fieldChanges,
+		}, readFile, writeFile, logger)
+
+		if unlockLearningsFunc != nil {
+			if err := unlockLearningsFunc(ctx, stepID, stepIndex); err != nil {
+				logger.Warn(fmt.Sprintf("⚠️ Failed to unlock learnings for converted step %s: %v", stepID, err))
+			}
+		}
+
+		dependentReviewNotice := handlePlanStepDependentArtifactReview(ctx, workspacePath, stepID, fieldChanges, readFile, writeFile, logger)
+
+		logger.Info(fmt.Sprintf("✅ Converted step '%s' from %s to %s (same id, step_config.json/drift-review history preserved)", stepID, oldType, targetType))
+		return fmt.Sprintf("Successfully converted step '%s' from %s to %s. The step id is unchanged, so its step_config.json and drift_review history remain continuous -- no separate cleanup needed.%s", stepID, oldType, targetType, dependentReviewNotice), nil
+	}
+}
+
 // createAddRegularStepExecutor creates the internal regular plan type exposed as add_scripted_step.
 func createAddRegularStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error, unlockLearningsFunc func(context.Context, string, int) error) func(context.Context, map[string]interface{}) (string, error) {
 	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "regular", unlockLearningsFunc)
@@ -5119,6 +5506,11 @@ func setStepIdentity(step PlanStepInterface, id, title string) error {
 			s.Title = title
 		}
 	case *RoutingPlanStep:
+		s.ID = id
+		if strings.TrimSpace(s.Title) == "" {
+			s.Title = title
+		}
+	case *BranchPlanStep:
 		s.ID = id
 		if strings.TrimSpace(s.Title) == "" {
 			s.Title = title
@@ -5690,6 +6082,21 @@ func registerPlanModificationTools(
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register update_branch_step tool: %w", err)
+	}
+
+	convertRoutingBranchSchema := getConvertRoutingBranchStepTypeSchema()
+	convertRoutingBranchParams, err := parseSchemaForToolParameters(convertRoutingBranchSchema)
+	if err != nil {
+		return fmt.Errorf("failed to parse convert_routing_branch_step_type schema: %w", err)
+	}
+	if err := mcpAgent.RegisterCustomTool(
+		"convert_routing_branch_step_type",
+		"Reclassify an existing routing step as branch, or an existing branch step as routing, in place. Both types share the exact same deterministic-switch shape (routes/default_route_id/route_source_file; only the human-readable question field's name differs) — this only relabels the step, it never deletes and recreates it, so the step's id is unchanged and its planning/step_config.json row (drift_review, execution_tier, etc.) stays continuous. Use this instead of manually deleting and re-adding a step to change its type — that approach loses step_config.json history for the deleted id. Provide existing_step_id and target_type (\"routing\" or \"branch\", must differ from the step's current type). The plan.json file is updated immediately when this tool is called.",
+		convertRoutingBranchParams,
+		createConvertRoutingBranchStepTypeExecutor(workspacePath, logger, readFile, writeFile, unlockLearningsFunc),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register convert_routing_branch_step_type tool: %w", err)
 	}
 
 	messageSequenceUpdateSchema := getUpdateMessageSequenceStepSchema()

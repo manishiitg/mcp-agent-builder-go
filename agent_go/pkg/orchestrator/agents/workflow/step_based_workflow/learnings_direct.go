@@ -59,14 +59,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) prepareDirectLearningTurn(agent agent
 			widenedRead := common.DeduplicateStrings(append(append([]string{}, prevSessionRead...), addedPaths...))
 			widenedWrite := common.DeduplicateStrings(append(append([]string{}, prevSessionWrite...), addedPaths...))
 			common.SetSessionFolderGuard(subSessionID, widenedRead, widenedWrite)
-			hcpo.grantSessionCDPHostDownloadsReadOnly(subSessionID)
+			hcpo.grantSessionCDPHostDownloadsReadWrite(subSessionID)
 			restoreFns = append(restoreFns, func() {
 				if hadPrevCfg {
 					common.SetSessionFolderGuard(subSessionID, prevSessionRead, prevSessionWrite)
 					if prevSessionWorkingDir != "" {
 						common.SetSessionWorkingDir(subSessionID, prevSessionWorkingDir)
 					}
-					hcpo.grantSessionCDPHostDownloadsReadOnly(subSessionID)
+					hcpo.grantSessionCDPHostDownloadsReadWrite(subSessionID)
 				} else {
 					common.ClearSessionShellConfig(subSessionID)
 				}

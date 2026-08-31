@@ -1340,6 +1340,10 @@ func cloneStepWithDelegationOverrides(
 		stepCopy := *s
 		applyDelegationOverridesToCommonFields(&stepCopy.CommonStepFields, instructions)
 		return &stepCopy, nil
+	case *BranchPlanStep:
+		stepCopy := *s
+		applyDelegationOverridesToCommonFields(&stepCopy.CommonStepFields, instructions)
+		return &stepCopy, nil
 	case *HumanInputPlanStep:
 		stepCopy := *s
 		applyDelegationOverridesToCommonFields(&stepCopy.CommonStepFields, instructions)

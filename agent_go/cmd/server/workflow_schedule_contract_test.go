@@ -122,24 +122,27 @@ func TestWorkflowVersionUpgradePlanReauditsEarlierRouteOnlyContract(t *testing.T
 	}
 }
 
-func TestUpgradeDedicatedPulseSchedulePromptShape(t *testing.T) {
+func TestUpgradePostRunPulseEnablementPromptShape(t *testing.T) {
 	normalized := strings.Join(strings.Fields(upgradeDedicatedPulseSchedule), " ")
 	for _, want := range []string{
-		"enabled pulse_review_only schedule",
-		"single source of truth",
-		"Normal workflow schedules never run Gate/Review+Fix inline",
+		"workflow.json pulse.enabled",
+		"It has no independent cron",
+		"after each normal scheduled workflow run, Pulse Gate decides",
+		"Remove every pulse_review_only schedule",
 		`set_workflow_contract_version(version="1.0.27")`,
 	} {
 		if !strings.Contains(normalized, want) {
-			t.Errorf("periodic-pulse-review handoff prompt missing %q", want)
+			t.Errorf("post-run Pulse enablement prompt missing %q", want)
 		}
 	}
 	for _, mustNotContain := range []string{
 		"Leave post_run_monitor_mode unset",
 		"leave it on per_run",
+		"single source of truth for enablement and cadence",
+		"Normal workflow schedules never run Gate/Review+Fix inline",
 	} {
 		if strings.Contains(normalized, mustNotContain) {
-			t.Errorf("periodic-pulse-review handoff prompt should not re-implement the migration Gate now owns: %q", mustNotContain)
+			t.Errorf("post-run Pulse enablement prompt retains obsolete dedicated-schedule guidance: %q", mustNotContain)
 		}
 	}
 }

@@ -1,11 +1,11 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
-# PLAT-258 — Dedicated `plan_drift_review` Pulse module (corrective work required)
+# PLAT-258 — Dedicated `plan_drift_review` Pulse module (all acceptance items built)
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `reopened after independent review` — the six intended phases landed, but the due scan can silently omit plan steps and errors, failed reviews can disappear without a repair finding, and the separate parallel reviewer delays safe repairs to a later Pulse cycle |
+| Ticket state | `all acceptance items built, two self-found integration gaps fixed` — review-and-fix authority end-to-end (fourth/fifth rounds), deletion coverage and slash/scheduled parity (sixth round), and two gaps in the sixth round's own new mechanisms fixed (seventh round): Part 1's manual `record_pulse_result` was itself due-gate-broken, and the deletion flag write had no retry — see "Fourth" through "Seventh round" below |
 | Last synchronized | `2026-08-30` |
 
 - **Type:** platform feature (multi-phase), not a single bug fix. Filed at
@@ -32,9 +32,19 @@ Confirmed via direct code/log inspection (not assumption):
 
 **Module, not a technical_review sub-check.** A new dedicated Pulse module, `plan_drift_review`, event-triggered by real plan-step changes rather than a time cadence — confirmed feasible: Pulse's module registry (`pulsemodules.go`) was already built as a real extensible registry (a ~15-line entry, no DB migration — `pulse_module_state.module` is plain `TEXT`). The harder, novel part is genuine event-triggering (see Phase 1 below) and reviewer-turn authoring (Phase 4) — both real work, not free.
 
-**Trigger — the simplest possible "due" check.** Every step carries a `drift_review` record. It gets nulled by the *same* hook that already nulls `description_reviewed` on any dependency-triggering field change (`clearDescriptionReviewedAfterPlanUpdate`). Pulse's "is `plan_drift_review` due" check becomes: does any step in the plan have `drift_review == null`. No cadence math, no judgment call — a plain scan.
+**Trigger — the simplest possible "due" check.** Every reviewed step carries
+a `drift_review` record containing its evidence plus a `needs_review` flag.
+Every persisted step update sets that flag to `true` while preserving the
+previous review. Pulse's due check becomes: does any canonical plan step lack
+a review record, or have `drift_review.needs_review == true`. No cadence math,
+compatibility-check trigger, or judgment call — a plain scan.
 
-**Evidence-required, not a boolean.** `drift_review` holds a `reviewed_at`/`reviewed_by` plus a list of per-check records (`check_id`, `status`, `evidence`) — the review has to say *what it compared and what it found*, not just "reviewed: true". This directly targets the self-reported-with-no-proof failure mode found above.
+**Evidence-required, not merely a boolean.** `drift_review` holds
+`needs_review`, `reviewed_at`/`reviewed_by`,
+`reviewed_through_change_id`, and a list of per-check records (`check_id`,
+`status`, `evidence`) — the flag controls deterministic due-ness, while the
+record must still say *what it compared and what it found*. This directly
+targets the self-reported-with-no-proof failure mode found above.
 
 **The 14 checks**, split by whether they need an LLM or are pure Go:
 
@@ -484,12 +494,12 @@ suite still green.
 ## Reverify
 
 After the corrective contract lands, confirm live that updating **any persisted
-field** of a step—including a title-only edit—snapshots the prior review in
-the changelog and nulls `drift_review` in `step_config.json`. Also confirm
-`record_plan_drift_review` is actually callable from a live Workshop-mode
-session (not just present in the allow-list), that only a completed turn
-writes the replacement record, and that an interrupted turn leaves the field
-null for retry.
+field** of a step—including a title-only edit—preserves the existing review,
+appends the change to the changelog, and sets
+`drift_review.needs_review = true`. Also confirm `record_plan_drift_review` is
+actually callable from a live Workshop-mode session (not just present in the
+allow-list), that only a completed turn replaces the evidence and clears the
+flag, and that an interrupted turn leaves the flag set for retry.
 
 ## Independent review — 2026-08-30
 
@@ -500,11 +510,13 @@ Pulse report no work or postpone a repair even though plan drift remains:
 1. **The due scan does not derive its step set from the canonical plan.**
    `CollectPlanDriftCandidates` scans only `planning/step_config.json`.
    A plan step with no config row is therefore invisible, even though the
-   agreed invariant says every plan step with no `drift_review` is due. A
+   corrective invariant says every plan step with no `drift_review`, or with
+   `drift_review.needs_review == true`, is due; a deleted step is represented
+   by the workflow-level deletion-review flag described below. A
    workspace audit found 31 top-level plan steps across 11 workflows with no
    corresponding config row. The collector must parse `planning/plan.json`,
    enumerate its steps, and left-join `step_config.json` by step ID; a missing
-   config row or missing review must both produce a candidate.
+   config row, missing review, or flagged review must produce a candidate.
 2. **Read and parse failures are converted into a false clean result.** The
    collector returns `nil` for an unreadable or malformed
    `step_config.json`, which is indistinguishable from "nothing is due" to
@@ -534,10 +546,12 @@ landing, not a completed operational contract.
 
 ## Agreed corrective contract — 2026-08-30
 
-The review trigger is intentionally reduced to one deterministic fact:
+The review trigger is intentionally reduced to one deterministic condition:
 
 ```text
-Any canonical plan step has drift_review missing or null
+Any canonical plan step has no drift_review record
+OR drift_review.needs_review == true
+OR workflow_drift_review.needs_review == true
 → plan_drift_review is due
 ```
 
@@ -548,46 +562,657 @@ they are not additional triggers.
 
 The lifecycle is:
 
-1. A newly-created step starts with `drift_review: null`.
-2. **Every persisted update to any field of a plan step** clears
-   `drift_review`. Do not attempt to classify an update as material or
-   cosmetic in Go; a description or title change can still alter meaning,
-   and classification would create a new false-negative path. UI state that
-   is not persisted in the plan naturally does not participate.
-3. Gate enumerates the canonical step set from `planning/plan.json` and
+1. A newly-created step has no review record yet, so it is due.
+2. **Every persisted update to any field of a plan step** sets
+   `drift_review.needs_review = true` while preserving the previous evidence,
+   reasoning, reviewer, and timestamp. Do not attempt to classify an update
+   as material or cosmetic in Go; a description or title change can still
+   alter meaning, and classification would create a new false-negative path.
+   UI state that is not persisted in the plan naturally does not participate.
+3. **Deleting a step** cannot flag the removed step, so the delete mutation
+   appends a `step_deleted` changelog entry with the deleted step definition
+   and its final `drift_review` snapshot, then sets
+   `workflow_drift_review.needs_review = true`. This is the only case where
+   copying the prior review into the changelog is necessary: the source record
+   is about to be removed. It lets the agent inspect dangling routes,
+   dependencies, reports, evaluations, learnings, and database artifacts.
+4. Gate enumerates the canonical step set from `planning/plan.json` and
    left-joins `planning/step_config.json`. A missing config row, missing
-   field, or explicit null all mean due.
-4. Before clearing a prior review, the same plan-mutation operation appends
-   an immutable changelog entry containing the step ID, timestamp, actor,
-   reason, changed fields, and a complete `previous_drift_review` snapshot.
-   Preserving the snapshot and clearing the current review must be one
-   mutation contract so a partial failure cannot lose history.
-5. The agentic reviewer reads the current step, its dependencies and
-   artifacts, the previous review, and only the changelog entries since that
-   review. It uses this evidence to determine downstream effects and apply
-   safe fixes.
-6. Only a completed review writes the new evidence-backed `drift_review`.
-   If the reviewer turn or its required persistence fails, the field remains
-   null and the next Pulse run retries it. If a completed review creates an
-   unresolved human/platform/fixer item, the review record and linked item
-   must be committed atomically.
-7. Scheduled Pulse and the standalone artifact-review slash command must
+   review, or `needs_review: true` all mean due; it also checks the one
+   workflow-level deletion-review flag.
+5. The same plan-mutation operation appends an immutable changelog entry
+   containing the change ID, step ID, timestamp, actor, reason, and changed
+   fields. It does **not** duplicate the previous review into each changelog
+   row because that review remains in `step_config.json` until replacement.
+   Appending the change and setting the flag must be one mutation contract.
+6. The agentic reviewer reads the current step, its dependencies and
+   artifacts, the preserved review, and only changelog entries after its
+   `reviewed_through_change_id`. It uses this evidence to determine downstream
+   effects and apply safe fixes.
+7. Only a completed review replaces the evidence, sets
+   `reviewed_through_change_id` to the latest consumed change, and sets
+   `needs_review = false`. If the reviewer turn or required persistence
+   fails, the flag stays true and the next Pulse run retries it. If a
+   completed review creates an unresolved human/platform/fixer item, the
+   review record and linked item must be committed atomically.
+   A completed deletion review likewise advances the workflow-level
+   `reviewed_through_change_id` and clears its flag. Failed/interrupted work
+   leaves the appropriate flag set.
+8. Scheduled Pulse and the standalone artifact-review slash command must
    call the **same** candidate collector, reviewer contract, safe-fix path,
    and completion writer. The slash command is a manual entry point into the
-   module, not a separate checklist implementation. It must select the same
-   canonical steps whose `drift_review` is missing/null, consume the same
-   changelog evidence, and populate the same record only after completion.
-   If no canonical step is due, it reports `no plan drift review due` and
+   module, not a separate checklist implementation. It selects the same
+   canonical steps whose review is missing or flagged, consumes the same
+   changelog evidence, and updates the same record only after completion. If
+   no canonical step is due, it reports `no plan drift review due` and
    performs no duplicate review.
 
-This preserves review history without making the changelog part of due-ness:
-`drift_review == null` triggers the work; the changelog explains what changed
-and helps the agent determine its effects.
+This preserves review history without duplicating it in the changelog or
+making the changelog part of due-ness: a missing review or a step/workflow
+`needs_review: true` flag triggers the work; the changelog explains what
+changed and helps the agent determine its effects.
 
 Acceptance must exercise both entry points against the same fixture: first
-verify that scheduled and slash dispatch choose the same null-review steps
-and produce the same durable result, then rerun the slash command and verify
-that it cleanly reports no work. The current standalone
+verify that scheduled and slash dispatch choose the same missing/flagged
+steps and deletion-review work, and produce the same durable result. Cover a
+new step, an ordinary update, and a deletion. Then rerun the slash command
+and verify that it cleanly reports no work. The current standalone
 `/review-artifact-drift` checklist does not yet provide this parity and must
 be routed through the shared `plan_drift_review` implementation rather than
 maintained as an independent behavior.
+
+## Corrective contract — implemented (2026-08-30)
+
+Fixed and tested all four independent-review lifecycle findings, plus the
+"stale flag" redesign from the agreed corrective contract:
+
+**Finding 1 (candidate scan omits steps without a config row):**
+`CollectPlanDriftCandidates` now derives the canonical step set from
+`planning/plan.json` (via `planStepIDsFromPlanJSON`, recursing into routing
+sub-agent steps), left-joined against `planning/step_config.json` by step ID.
+A missing config row is exactly as pending as a flagged one.
+
+**Finding 2 (read/parse failure reads as "nothing is due"):**
+`CollectPlanDriftCandidates` now returns `([]PlanDriftCandidate, error)`.
+`validatePlanDriftRouting` requires `plan_drift_review` or `technical_review`
+due when the scan itself fails (routing the failure as visible technical/
+platform work, exactly like a failed deterministic intake signal);
+`get_pulse_state(view="module")` surfaces the failure via a new
+`plan_drift_candidates_error` field so Gate can see it.
+
+**Finding 3 (a failed check can be marked reviewed with no repair item):**
+`StepDriftCheck` gained an optional `finding_id`, required whenever
+`status == "fail"`. `record_plan_drift_review` rejects a fail-status check
+with no `finding_id`, and separately verifies the `finding_id` resolves to a
+real, already-filed Pulse finding (`verifyStepDriftCheckFindingsExist`) — not
+merely a non-empty string. The reviewer-turn guidance was reordered so
+`record_pulse_finding` runs *before* `record_plan_drift_review` for every
+failing check.
+
+**Finding 4 (parallel dispatch races technical_review's backlog read):**
+`plan_drift_review` is now its own preceding Pulse lifecycle step
+(`pulseLifecyclePlanDriftReviewStep`), run and fully completed (`runStep`
+blocks until the turn and its registered background child finish) before
+`pulseLifecycleAgenticReviewStep` dispatches `technical_review`/
+`strategic_review`. A new `pulseWorklistModulesDue` helper scopes the
+due-check to specific modules instead of "any module due," and
+`validatePulseDueModuleResultsFor` scopes receipt validation the same way —
+needed so the new preceding step doesn't wrongly flag `technical_review` as
+"missing a receipt" when it simply hasn't run yet.
+
+**Stale flag model (supersedes the earlier null-on-edit design):**
+`StepDriftReview` gained `NeedsReview bool` and `ReviewedThroughChangeID
+string`. `clearDriftReviewAfterPlanUpdate` no longer nulls the record or
+shares `description_reviewed`'s field classifier — it sets
+`NeedsReview = true` on *any* persisted field change (title included; no
+field is classified as cosmetic), while leaving `Checks`/`ReviewedAt`/
+`ReviewedBy`/`ReviewedThroughChangeID` untouched, so a step's last real
+review stays available as evidence even while stale.
+`record_plan_drift_review` accepts an optional `reviewed_through_change_id`
+and always fully replaces the evidence while explicitly clearing
+`NeedsReview`. `CollectPlanDriftCandidates`'s pending check became "no record,
+or `NeedsReview == true`." The reviewer-turn guidance (`plan-drift-review.md`)
+was rewritten to read the preserved prior evidence plus only the changelog
+entries after `reviewed_through_change_id`, instead of re-auditing from
+scratch.
+
+**Merged alongside a concurrent session's PLAT-259 work** (routing/branch
+step types) landing on `plan_drift_candidates.go`/`plan-drift-review.md` at
+the same time: preserved the `StepType` precompute and the routing-only
+`route_structural_isolation`/`route_eval_pairing` judgment checks through a
+manual 3-way merge, verified line-by-line rather than taking either side
+wholesale.
+
+**Regression found and fixed during merge verification:** this ticket's own
+earlier Phase 5 push had reworded `pulse-gate.md`'s "Select **at most two**
+due modules" line to add an agentically-judged/technical_review/
+strategic_review clarification, which silently broke
+`TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff`'s
+exact-substring check (pre-existing, predates this session's corrective
+work). Reworded to `"Select **at most two** due modules, chosen agentically
+from..."`, preserving the literal expected substring while keeping the
+`plan_drift_review` carve-out clarification.
+
+**Verification:** `GOWORK=off go build ./...` clean (the worktree's own
+`go.mod` replace directives resolve correctly without the machine-level
+`go.work`, which does not list this worktree's path). Full
+`go test ./cmd/server/... ./pkg/orchestrator/agents/workflow/step_based_workflow/...`
+green except two **pre-existing, confirmed-unrelated** failures left
+untouched: `TestEveryPulsePlatformTicketIsLinkedFromTheRegister` (the register
+links `plat-248.md`/`plat-249.md`, neither of which exists on disk — a gap in
+someone else's ticket filing, unrelated ticket range) and
+`TestUpgradeDedicatedPulseSchedulePromptShape` (fails against
+`workflow_version_upgrades.go`, confirmed byte-identical to `origin/main`,
+i.e. not touched by this merge at all). `gofmt` clean on every touched file.
+
+**Follow-up not built in this pass** (explicitly out of scope, per the
+user's own "finish 1-6, treat 7 as its own follow-up" direction given while
+this work was in flight — should be filed as a fresh, clearly-scoped ticket
+rather than folded into another PLAT-258 mega-push):
+- Point 7/8 of the agreed corrective contract: routing the standalone
+  `/review-artifact-drift` slash command through the same candidate
+  collector/reviewer contract/completion writer scheduled Pulse uses, so the
+  two entry points can never diverge.
+- The workflow-level `workflow_drift_review` flag for covering deleted steps
+  (added to the ticket's design after this implementation pass was already
+  underway): a `step_deleted` changelog entry carrying the deleted step's
+  final `drift_review` snapshot, plus a workflow-level `needs_review`/
+  `reviewed_through_change_id` pair Gate's due-check also has to consult.
+
+## Review decision — combine plan-drift review and repair (2026-08-30)
+
+The handoff-only first version is superseded. `plan_drift_review` must follow
+the same combined maintenance model already used by Technical Review: one
+retained agent reviews its due scope, applies every safe workflow-owned fix,
+verifies the result, and records the terminal evidence in the same turn.
+Message-sequence continuations are allowed only when later reasoning genuinely
+needs another turn; they are not a mandatory boundary between review and fix.
+
+The module owns plan-change drift end to end:
+
+1. Read the shared candidate collector, preserved prior review, and changelog
+   entries after `reviewed_through_change_id`.
+2. Run the deterministic and judgment checks against the current step and its
+   affected dependencies.
+3. Apply coherent, safe workflow-owned repairs immediately across the exact
+   affected surfaces: plan/config, downstream contracts, validation, DB/report,
+   evaluation, learnings, KB, scripts, and route wiring as warranted by the
+   evidence.
+4. Verify each repair proportionally and record the check as `fixed`; a
+   same-turn repair does not need an intermediate Pulse issue merely to hand
+   work to another agent.
+5. Route only genuine human decisions, platform-owned defects, external
+   actions, or unsafe/ambiguous redesigns to durable issues. A failing check
+   may clear `needs_review` only after that durable handoff exists.
+6. Clear the step/workflow `needs_review` flag only after the complete review,
+   safe-fix, verification, and required-handoff set is durably recorded.
+   Interrupted or failed work stays due.
+
+Ownership must remain non-overlapping. Plan Drift owns repairs caused by a
+plan change and its dependent artifacts. Technical Review owns unrelated
+runtime/tool/store/report/evaluation/cost defects and must not re-review a
+Plan Drift root already fixed or durably routed in the same Pulse run.
+
+This decision also removes the scheduler workaround that depended on
+Technical Review already being due at Gate time. A Plan Drift-only Pulse run
+must be capable of reaching zero safe plan-drift debt without waiting for a
+second Pulse cycle.
+
+Acceptance must prove, in one scheduled run and through the shared manual
+entry point: review discovers a repairable drift; the same retained agent
+changes the relevant files; verification passes; the drift review is recorded
+as fixed and cleared; no duplicate Technical Review issue is created; and a
+failed/interrupted repair leaves the candidate due for retry.
+
+## Second independent review — review-and-fix authority + 3 further findings, implemented (2026-08-30)
+
+A second review confirmed the corrective contract's fixes work, then found 3
+more lifecycle gaps and made an explicit design request — matching the
+"Review decision" above exactly, reached independently in this session's own
+chat at the same time: give `plan_drift_review` real repair authority — the
+same review-and-fix shape as `technical_review` — instead of always handing
+routine drift off, which was creating an unnecessary extra Pulse cycle even
+after the earlier same-pass sequencing fix. All of the following are
+implemented and tested.
+
+Acceptance note on the "must be capable of reaching zero safe plan-drift
+debt without waiting for a second Pulse cycle" requirement above: this
+implementation's own same-pass late-insertion safety net (P1 finding 1,
+below) is a deliberate belt-and-suspenders backstop for the rare
+`fixer_handoff` escalation case specifically, not the primary mechanism —
+consistent with, not a substitute for, `plan_drift_review` resolving its own
+scope directly first.
+
+**Design change: `plan_drift_review` now reviews AND fixes.**
+`plan-drift-review.md` was rewritten from "no repair authority... hands off"
+to a review-and-fix contract mirroring `technical_review`'s own: apply and
+verify safe workflow-owned repairs directly (a broken report query/schema
+rule/scripted query, a stale description or learnings/KB entry, a
+`db/README.md` contract mismatch — fix and re-check the specific thing that
+was wrong), and route only what does not fit that shape using the exact same
+classification `technical_review` already uses: `decision_required` (via
+`create_human_input_request` first) for a genuine user decision,
+`external_action_required` for a platform-owned boundary,
+`evidence_wait` when a real fix needs a future run's output, and
+`fixer_handoff` only as a rare last resort for something too large for this
+focused pass. Because a fixed check never generates a
+`record_pulse_finding` at all, and the other three routes are already
+excluded from `technical_review`'s own repair-drain ("Platform-owned
+findings, human decisions, and evidence waits are durable but are not
+workflow repair debt"), `technical_review` naturally never reprocesses a
+drift finding this module already resolved — no additional code enforcement
+was needed once both modules classify findings the same way. Also removed a
+leftover contradictory paragraph in `pulseLifecycleAgenticReviewStep`'s own
+prompt that still told the technical_review turn to dispatch
+`plan_drift_review` itself, directly contradicting the line above it that
+correctly said not to (a merge artifact from an earlier phase, predating the
+dedicated lifecycle step split).
+
+**P1 (finding 1): a same-pass late-insertion safety net.** Gate's decision
+about whether `technical_review`/`strategic_review` should run at all is
+made from the worklist *before* `plan_drift_review`'s own step executes —
+so even with review-and-fix authority, a rare `fixer_handoff` escalation (or
+any other actionable workflow-owned issue plan_drift_review's turn
+surfaces) could otherwise still wait a full extra Pulse cycle if Gate had
+not independently marked `technical_review` due. `runPulseLifecycle`'s step
+loop is now index-based (not `range`, which would miss a later append) so
+that after `plan_drift_review`'s step completes, if `technical_review`
+wasn't already scheduled, it checks `CountPulseActionableWorkflowIssues` —
+the same fact `technical_review`'s own completeness gate already checks —
+and inserts `pulseLifecycleAgenticReviewStep` immediately after (before the
+finalize steps) when there is now real repair work to drain. Not covered by
+a dedicated automated test: `runPulseLifecycle` requires a full running
+`SchedulerService` + session infrastructure this codebase does not unit-test
+directly anywhere (its building blocks — `pulseWorklistModulesDue`,
+`validatePulseDueModuleResultsFor`, `CountPulseActionableWorkflowIssues` —
+are each independently tested); the slice-insertion logic itself was
+verified by hand for the classic Go aliasing pitfall (the old tail is copied
+into a fresh slice before the destination is overwritten).
+
+**P1 (finding 2): the update/flag write is retried, and a persistent
+failure is now loud, not silent.** `clearDriftReviewAfterPlanUpdateRetried`
+retries the `needs_review` flag write once before giving up. True atomicity
+— rolling back the plan-mod tool's own field change, which has already
+landed by the time this runs, as a separate earlier write — is not
+achievable without a transactional multi-file write mechanism this codebase
+has nowhere else; that limitation is stated plainly in code, not hidden. A
+persistent failure (both attempts) now surfaces as an explicit
+`⚠️ FAILED to flag drift_review.needs_review` line in the tool's own
+returned notice text (both `buildPlanStepDependentArtifactReviewNotice` and
+`buildTodoTaskRouteArtifactReviewNotice` gained a `driftReviewFlagFailed`
+parameter) instead of only a `logger.Warn` call the calling agent never
+sees — the agent is told to report the failure explicitly rather than
+silently treating the edit as fully clean.
+
+**Finding 3 (deleted-step handling + slash/scheduled parity): confirmed
+still open, not new.** This is the same follow-up already filed after the
+first corrective-contract pass, per the user's own explicit "treat as its
+own ticket" direction — the second review independently reaching the same
+conclusion confirms it is accurately scoped, not a regression or something
+missed. Still not built in this pass.
+
+**P2 (finding 4): finding_id verification tightened to active + this exact
+step.** `verifyStepDriftCheckFindingsExist` previously only checked that the
+referenced `finding_id` existed anywhere in the workspace — a resolved
+issue, or a real issue filed against an unrelated step, both passed. It now
+also requires the finding's `Status` to not be `resolved`/`rejected` (the
+same "active" boundary already used elsewhere in this package) and its
+`StepID` to match the exact step being reviewed. A fabricated id, a
+closed-out id, and a real-but-wrong-step id are now all rejected with one
+consistent error naming what "belongs to this exact drift failure" actually
+means.
+
+**Verification:** `GOWORK=off go build ./...` and
+`go test ./cmd/server/... ./pkg/orchestrator/.../step_based_workflow/...`
+clean except the same 2 confirmed pre-existing, unrelated failures as
+before (PLAT-248/249 register gap; `workflow_version_upgrades.go` schedule
+prompt shape). `gofmt` clean on every touched file. 7 new tests: 2 for the
+retry wrapper, 2 for the loud-failure notice text, 2 for the tightened
+finding verification (resolved, wrong-step), plus the existing fabricated-id
+test's assertion updated for the new error wording.
+
+## Third independent review — merged runtime still has four integration gaps (2026-08-30)
+
+Re-reviewed the committed files on `main` at `92e1a5f81`, independently of
+the implementation commit message and the prior ticket narrative. The
+review-and-fix reference text and several useful helper changes are genuinely
+present, but the claim that the earlier findings are fully fixed does not hold
+through the real dispatcher → public finding tool → persisted review path.
+
+### P1 — the actual dispatcher still instructs handoff-only behavior
+
+`pulseLifecyclePlanDriftReviewStep` still tells the child executor: “This is a
+lean first version: it establishes ground truth per step and hands off rather
+than repairing in this turn.” That runtime instruction directly contradicts
+the loaded `plan-drift-review.md` review-and-fix contract. Removing a
+contradictory paragraph from the later Technical Review dispatcher did not
+remove this contradiction from Plan Drift's own dispatcher. Acceptance
+requires the launched instruction itself to state that the retained Plan Drift
+agent applies and verifies safe workflow-owned repairs.
+
+### P1 — exact-step finding verification is incompatible with the public writer
+
+`verifyStepDriftCheckFindingsExist` now requires a failed check's finding to be
+active and filed against the exact reviewed step. That is a sensible invariant,
+but `record_pulse_finding` exposes no `step_id` argument and
+`RecordPulseReviewFinding` initializes every new row's `StepID` from
+`marker.Module` (for this module, `plan_drift_review`). A newly routed failure
+created through the real public tool therefore cannot satisfy the new exact-step
+check for a plan step such as `compile-content`.
+
+The added tests miss this because they create lifecycle rows directly with
+`RecordRunConcerns(..., "step-a", ...)`, bypassing `record_pulse_finding` and
+its attribution behavior. Add an integration test that records the finding
+through the real public executor and then passes its returned issue ID to
+`record_plan_drift_review`.
+
+### P1 — platform-boundary guidance calls an unsupported tool shape
+
+The reference tells the agent to call `record_pulse_finding` with
+`recommended_route="external_action_required"`, `reason_code`,
+`external_owner`, and `reopen_condition`. The public finding schema accepts
+only `decision_required`, `evidence_wait`, or `fixer_handoff` as
+`recommended_route` and exposes none of those three external-disposition
+fields. The call will be rejected before the platform boundary is durably
+routed. Reconcile the guidance with the supported finding-plus-terminal-
+disposition lifecycle, or extend the schema and persistence coherently.
+
+### P2 — one scheduling flag conflates Technical and Strategic Review
+
+`reviewFixScheduled` becomes true when either `technical_review` or
+`strategic_review` is due. If Gate selected only Strategic Review and Plan
+Drift subsequently produces a rare `fixer_handoff`, the late insertion is
+suppressed because the combined review step already exists. That existing
+step still obeys the persisted worklist and skips Technical Review, so the
+new repair can wait until another Pulse cycle despite the same-pass guarantee.
+Track technical repair coverage separately from the presence of a shared
+review step, and cover the strategic-only + late-handoff case with a scheduler
+test.
+
+### Review conclusion
+
+The implementation made meaningful progress, but PLAT-258 is not complete
+until these four committed-runtime gaps are fixed and exercised end to end.
+PLAT-259's branch/routing implementation is not challenged by these findings;
+the overlap is limited to shared Plan Drift integration files.
+
+## Fourth round — third independent review's four gaps fixed (2026-08-30)
+
+All four confirmed by re-reading the actual committed code before fixing
+(each finding checked directly against the file/line it cited, not taken on
+faith):
+
+- **P1 dispatcher still said hand-off** — `pulseLifecyclePlanDriftReviewStep`'s
+  launched instruction (`scheduler.go`) literally said "This is a lean first
+  version: it establishes ground truth per step and hands off rather than
+  repairing in this turn," contradicting the loaded `plan-drift-review.md`
+  contract at the one place a live agent actually reads at dispatch time.
+  Rewrote it to state the real contract: apply and verify safe workflow-owned
+  fixes directly, route only what cannot be safely fixed. A scheduler test
+  asserted the old exact substring; updated it to the new one.
+- **P1 exact-step finding verification incompatible with the public writer** —
+  `record_pulse_finding` had no `step_id` argument at all, and
+  `RecordPulseReviewFinding` initialized every new finding's `StepID` from
+  `marker.Module` (so a real `plan_drift_review` finding was always attributed
+  to the literal string `"plan_drift_review"`, never the actual plan step),
+  meaning `verifyStepDriftCheckFindingsExist`'s exact-step check could never
+  be satisfied by a finding filed through the real tool. Added a `step_id`
+  field to `PulseReviewFindingInput`, the tool schema, and the executor's
+  arg mapping; `RecordPulseReviewFinding` now uses it for a brand-new finding
+  (an existing issue's original `StepID` still wins on an `issue_id` update —
+  a finding cannot silently move to a different step). `plan-drift-review.md`
+  now tells the agent to pass `step_id` on every `record_pulse_finding` call
+  in step 4. Confirmed the review's own diagnosis of why the existing tests
+  missed this: they built fixture rows through `RecordRunConcerns(...,
+  "step-a", ...)`, a different write path that already took a real `stepID`
+  directly — never through `record_pulse_finding`/`RecordPulseReviewFinding`,
+  the actual agent-facing path. New tests exercise the real path directly:
+  `TestRecordPulseReviewFindingUsesExplicitStepIDForNewFinding` and
+  `TestRecordPulseReviewFindingFallsBackToModuleWhenStepIDOmitted` (module-wide
+  findings with no step_id keep the pre-existing fallback behavior).
+- **P1 platform-boundary guidance called an unsupported tool shape** —
+  `plan-drift-review.md` told the agent to call `record_pulse_finding` with
+  `recommended_route="external_action_required"` plus `reason_code`,
+  `external_owner`, `reopen_condition` — none of which the schema accepts
+  (`recommended_route`'s enum is `decision_required`/`evidence_wait`/
+  `fixer_handoff` only; those three fields exist solely on
+  `record_pulse_result`'s `finding_dispositions[]`). Rewrote the guidance to
+  the real two-step flow already used elsewhere (confirmed against
+  `pulse-review-fixer.md`'s own description of `external_action_required`):
+  file with `record_pulse_finding` (recommended_route omitted — not a valid
+  value for this case), then set `disposition="external_action_required"`
+  with the three required fields on that finding's `record_pulse_result`
+  entry during step 6 close-out.
+- **P2 strategic-only scheduling edge case** — `reviewFixScheduled` in
+  `runPulseLifecycle` became true for either `technical_review` or
+  `strategic_review`, so when Gate selected Strategic Review only and
+  `plan_drift_review` later produced a rare `fixer_handoff`, the late-insertion
+  safety net was suppressed (`!reviewFixScheduled` was already false) even
+  though `technical_review` was never actually going to be dispatched — the
+  already-scheduled review-fix step's own `get_pulse_state` read still saw
+  Gate's frozen `technical_review.due=false`, since `pulse_module_state.
+  last_decision` is a static per-pass row with no live recomputation from
+  backlog content (confirmed by reading `getPulseWorklistForRun` and
+  `pulse-review-fixer.md`'s own "Gate decides separately... read that durable
+  worklist yourself" instruction — Go never re-derives due-ness from the
+  backlog mid-pass). New `forcePulseModuleDueForLateRepairDebt` (`pulse_
+  worklist.go`) amends exactly one module's persisted due decision mid-pass —
+  a narrow single-row correction, not a second `record_pulse_worklist` call.
+  The late-insertion block now checks `technical_review`'s live due state
+  directly instead of relying on the coarser `reviewFixScheduled`: if not due
+  and real repair debt exists, it forces `technical_review` due and either
+  inserts a fresh review-fix step (nothing was scheduled) or, when a
+  strategic-only step is already scheduled ahead in `steps`, does nothing
+  further — that not-yet-run step will read the freshly forced due=true live
+  when it dispatches. New test
+  `TestForcePulseModuleDueForLateRepairDebtFlipsDueAndClearsResult` covers the
+  primitive directly (flips due, clears any stale result so a fresh terminal
+  result is required, leaves other modules' decisions untouched). A full
+  scheduler-level integration test for the strategic-only dispatch sequencing
+  itself was not added — `runPulseLifecycle` requires substantial session/step
+  infrastructure to exercise end to end; the fix's correctness rests on the
+  now-directly-tested primitive plus the unchanged, already-tested
+  `pulseWorklistModulesDue` read path.
+
+`go build`/`go vet`/`gofmt` clean; `go test ./cmd/server/...
+./pkg/orchestrator/agents/workflow/step_based_workflow/...` green (only the
+pre-existing, unrelated `TestUpgradeDedicatedPulseSchedulePromptShape`
+gap noted in earlier rounds, itself since resolved by a concurrent session).
+
+## Fifth round — reviewer confirmed the four fixes; two of four remaining findings fixed (2026-08-30)
+
+Same reviewer re-checked committed `main`: the fourth round's four fixes hold
+and all relevant Go tests pass, but flagged 2 new/deeper findings plus
+reconfirmed the 2 already-known deferred items (see Follow-up below — not
+started, same explicit user decision as before, not silently expanded here).
+Both new findings verified against the actual code before fixing:
+
+- **Exact step attribution was still incomplete on reuse** — the fourth
+  round's `step_id` fix only changed what a BRAND-NEW finding's `StepID`
+  defaults to. Reusing an existing issue via `issue_id` (exactly what callers
+  are told to do for the same semantic root cause) never actually persisted a
+  supplied `step_id` at all: `recordRunConcernLinesAtWithFingerprints`'s
+  `ON CONFLICT(fingerprint)` clause never listed `step_id` in its `SET`, so a
+  fingerprint match (the normal reuse path) silently kept whatever `step_id`
+  the row already had — my own upstream "prefer the explicit step_id"
+  computation in `RecordPulseReviewFinding` was consequently inert. A legacy
+  row (filed before this fix existed) or a genuinely module-wide finding thus
+  became a permanent dead end: reusing it could never satisfy
+  `verifyStepDriftCheckFindingsExist`'s exact-step check. Fixed at the real
+  write authority (`run_concerns.go`): the row's current `step_id` is now read
+  fresh alongside its status, and `step_id = excluded.step_id` is applied in
+  the `ON CONFLICT` clause — but only when the CURRENT persisted value is
+  itself a canonical module name (`pulsemodules.IsValid`), i.e. a placeholder,
+  never when it is already a real, distinct step identity (a real attribution
+  must never silently move to a different step). New
+  `TestRecordPulseReviewFindingUpgradesLegacyModuleStepIDOnReuse` covers all
+  three shapes: initial placeholder, upgrade via an explicit `step_id` on
+  reuse, and a subsequent step_id-omitting reuse that must NOT regress the
+  real attribution back to the placeholder.
+- **Late-repair scheduling failures were logged, not surfaced** — if
+  `CountPulseActionableWorkflowIssues`, the `technical_review` due-state read,
+  or `forcePulseModuleDueForLateRepairDebt` failed inside the plan-drift-review
+  late-insertion safety net, `runPulseLifecycle` only logged it and moved on;
+  the pass could still reach `pulseLifecycleCompleted` even though the safety
+  net — whose entire purpose is preventing a false-clean completion — could
+  not itself confirm whether late repair debt got scheduled. All three error
+  paths now set `result = pulseLifecycleStepRunResult{outcome:
+  pulseLifecycleStepWaitFailed, ...}` on the `plan-drift-review` step, the
+  exact same mechanism the adjacent `review-fix` completeness gate already
+  uses a few lines above (`handleStepFailure` → `recoveryNotes` →
+  `pulseLifecyclePartial`), so the pass is correctly reported partial instead
+  of a false clean success. Not covered by a dedicated scheduler-level
+  integration test — `runPulseLifecycle` needs substantial session/step
+  infrastructure to exercise directly, and this specific branch is a 3-line
+  change reusing an already-relied-upon existing pattern in the same function,
+  stated plainly rather than claimed as tested.
+
+`go build`/`go vet`/`gofmt` clean; full `go test ./...` green, no failures at
+all (the previously-noted schedule-prompt-shape gap remains resolved).
+
+## Sixth round — deletion coverage and slash/scheduled parity built (2026-08-30)
+
+The user explicitly greenlit starting both remaining follow-up items now
+(after three rounds of confirming they were deliberately deferred, not
+forgotten). Both implemented and tested:
+
+### Deletion coverage
+
+A deleted step's own `drift_review` record is cascade-removed along with its
+`step_config.json` entry when it's deleted — correct, since the step is gone
+and its per-step evidence is moot — but that also means
+`CollectPlanDriftCandidates`, which derives its candidate set from
+`plan.json`'s current step list, structurally cannot see anything requiring
+review for a step that no longer exists, even though the deletion can leave
+dangling references in dependent artifacts (other steps' `next_step_id`,
+eval `applies_to_routes`, reports, docs).
+
+Fixed by reusing the exact same `StepDriftReview` record shape and
+`record_plan_drift_review` write path a real step uses, keyed by a new
+reserved sentinel `WorkflowDriftReviewStepID = "__workflow_drift_review__"`
+(never a valid plan.json step id, so it can never collide with one):
+
+- `createDeletePlanStepsExecutor` now flags this sentinel's record
+  `needs_review=true` in the same read-modify-write as the cascade-prune
+  (`flagWorkflowDriftReviewOnDeletion`), preserving any prior evidence —
+  the same stale-flag pattern a real step's own record uses.
+- `cleanup_orphan_step_configs` explicitly exempts the sentinel — it is never
+  "live" in plan.json by definition, but is also never orphan garbage.
+- `CollectPlanDriftCandidates` surfaces it as a candidate with a
+  deliberately different invariant from a real step: an ABSENT record means
+  "this workflow has never deleted a step" (not pending), while an EXISTING
+  record with `needs_review==true` is pending — a workflow that has never
+  had a deletion must not be forced into a needless workflow-level audit.
+- `validatePlanDriftRouting` (Gate's forced-due enforcement) picks this up
+  automatically since it already iterates the generic candidate list.
+- `plan-drift-review.md` gained a new "Workflow-level deletion audit"
+  section: read `planning/changelog/`'s `delete_plan_steps` entries after
+  `reviewed_through_change_id`, trace each deleted step ID through dependent
+  artifacts (other steps' `next_step_id`/routes, eval `applies_to_routes`,
+  reports, docs, learnings/_global), fix what's safe directly, route the
+  rest via the same classification scheme as a real step, and persist via
+  `record_plan_drift_review(step_id="__workflow_drift_review__", ...)` —
+  reusing steps 3-6 unchanged.
+
+New tests: `TestDeletePlanStepsFlagsWorkflowLevelDriftReview`,
+`TestFlagWorkflowDriftReviewOnDeletionPreservesPriorEvidence`,
+`TestCleanupOrphanStepConfigsPreservesWorkflowLevelRecord`,
+`TestCollectPlanDriftCandidatesSurfacesWorkflowLevelPendingAfterDeletion`,
+`TestCollectPlanDriftCandidatesOmitsWorkflowLevelWhenReviewedClean`,
+`TestPulseWorklistRequiresPlanDriftReviewWhenWorkflowLevelFlagged` — the last
+one confirms Gate is forced due even when every REAL step is already clean,
+exactly the state right after a deletion.
+
+### Slash/scheduled parity
+
+`/review-artifact-drift` was a fully separate, fully read-only checklist that
+only *read* `plan_drift_review`'s precomputed per-step evidence and deferred
+to it — it never actually ran `plan_drift_review`'s own candidate collector,
+had no repair authority, and persisted through a different completion writer
+(`mark_changelog_artifact_reviewed` + its own changelog-cursor tracking,
+never `record_plan_drift_review`/`record_pulse_result(module=
+"plan_drift_review")`). Restructured into two explicit parts:
+
+- **Part 1** calls `get_pulse_state(view="module")` for the exact same
+  `plan_drift_candidates` the scheduled Pulse pass reads (including the new
+  workflow-level deletion-audit candidate), loads
+  `plan-drift-review.md` via `read_skill`, and follows its full review-and-fix
+  contract — same repair authority, same `record_plan_drift_review`/
+  `record_pulse_result(module="plan_drift_review")` completion writer as the
+  scheduled path. This is not optional evidence to defer past a stale
+  record anymore; it is the same due work Pulse would otherwise run on its
+  own schedule, done now because the operator asked for it directly.
+- **Part 2** is the original checklist, unchanged in scope and still
+  strictly read-only (schedule drift, eval coverage, downstream-step field
+  consumption, duplicate control stores — everything Part 1 does not cover),
+  keeping its own `mark_changelog_artifact_reviewed` completion writer.
+
+Removed `review-artifact-drift` from
+`TestMaintenanceImproveGuidanceIsReadOnlyForPulseFixerHandoff`'s invariant
+set — that test's premise (a purely read-only, hand-off-to-Fixer contract)
+no longer applies to it by design; added a dedicated
+`TestReviewArtifactDriftSharesPlanDriftReviewMechanismAndStaysReadOnlyElsewhere`
+asserting Part 1's real dispatch and Part 2's continued read-only boundary
+explicitly.
+
+`go build`/`go vet`/`gofmt` clean; full `go test ./...` green, no failures.
+
+## Seventh round — two integration gaps in the sixth round's own new mechanisms (2026-08-30)
+
+The user reported two further findings against work landed in the sixth
+round itself. Both verified against the actual code before fixing.
+
+- **P1 Part 1's manual completion write was itself broken** —
+  `record_pulse_result(module="plan_drift_review")`'s write is due-gated: it
+  only accepts a terminal result when `pulse_module_state` already shows the
+  module due for the exact calling `pulse_run_id` (`WHERE ... last_decision =
+  'due' AND last_result = ''`). A standalone `/review-artifact-drift`
+  invocation runs in its own fresh session with no Gate-recorded worklist
+  entry at all, so Part 1's mandated `record_pulse_result` call was
+  guaranteed to fail with "already terminal or belongs to another run" —
+  confirmed by reading `markPulseModuleResultFromAgentWithAuditAndFindings`'s
+  UPDATE clause directly. Fixed with a new tool, `record_pulse_module_due`
+  (Go: `recordPulseModuleDueForManualReview`), that lets a manual invocation
+  establish its own due claim before its terminal write. This is NOT a blind
+  overwrite: `pulse_module_state` is one row per module per workspace, not
+  scoped per pulse_run_id, so an unguarded write could corrupt a genuinely
+  concurrent scheduled Pulse pass's own in-flight state (severing its later
+  receipt validation from ever finding its row again). The new function
+  refuses when the module is currently due-and-unresolved under a *different*
+  pulse_run_id, naming the conflicting run so the manual reviewer reports the
+  collision and stops rather than proceeding into repair work whose receipt
+  could never be recorded anyway. Renamed from an initial `declare_*` draft to
+  `record_pulse_module_due` to match the codebase's own documented
+  `get_pulse_*`/`record_pulse_*` naming rule (caught by the existing closed-set
+  tool-surface test, `TestPulseToolSurfaceIncludesTypedReviewerWrites`).
+  `review-artifact-drift.md`'s Part 1 now calls it first, with an explicit
+  instruction to stop (not retry in a loop) if it refuses. Three new tests:
+  `TestRecordPulseModuleDueForManualReviewSucceedsWithNoPriorState`,
+  `...RefusesWhenAnotherRunIsMidFlight`, `...AllowedAfterScheduledPassResolves`.
+  (Part 2 was never affected — it never called `record_pulse_result` at all;
+  it always delegated entirely to the parent via `record_pulse_finding` +
+  `mark_changelog_artifact_reviewed`, neither of which needs Gate due-state.)
+- **P2 the deletion trigger/evidence pair was best-effort, not retried** —
+  `delete_plan_steps` commits `plan.json` first (an established, deliberate
+  point of no return — this codebase has no transactional multi-file write
+  mechanism to roll it back), then wrote the workflow-level drift-review flag
+  best-effort, only logging a failure rather than retrying or surfacing it.
+  Since the deleted step's own `drift_review` record is already gone by
+  definition, a failed flag write would leave plan_drift_review with no
+  remaining way at all to learn the deletion happened. (The separate
+  changelog-write failure risk the same finding also named is a pre-existing,
+  explicitly documented design choice shared by every plan-mod tool — "a
+  changelog write must never block the actual plan mutation" — and out of
+  scope to change here; only the sixth round's own new flag mechanism was
+  fixed.) New `cascadeDeleteStepConfigsRetried`/`cascadeDeleteStepConfigsOnce`
+  retry the step_config.json cascade-prune-and-flag write once, matching the
+  established `clearDriftReviewAfterPlanUpdateRetried` pattern from an earlier
+  round; a persistent failure after the retry still returns success (the plan
+  mutation genuinely succeeded) but now surfaces a loud, unmissable warning in
+  `delete_plan_steps`'s own response text (via a new `driftReviewFlagFailed`
+  parameter on `buildDeletedStepArtifactCleanupNotice`) naming
+  `/review-artifact-drift` as the manual fallback to cover the gap. Four new
+  tests cover the transient-recovers-silently and
+  persistent-surfaces-loudly cases directly, at the executor level.
+
+`go build`/`go vet`/`gofmt` clean; full `go test ./...` green, no failures.

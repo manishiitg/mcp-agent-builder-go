@@ -184,8 +184,13 @@ function ReportViewComponent({ workspacePath, onClose, focusTier }: ReportViewPr
 
   return (
     <ReportEmbedProvider value={runtime}>
-      <div className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
-        {onClose && <div className="flex shrink-0 justify-end border-b border-border/60 px-3 py-2"><button type="button" onClick={onClose} aria-label="Close report" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-lg text-muted-foreground hover:bg-muted hover:text-foreground">×</button></div>}
+      <div className="relative flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
+        <div className="absolute right-3 top-3 z-20 flex gap-1">
+          <button type="button" onClick={refresh} aria-label="Refresh report" title="Refresh report" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background/95 text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground">
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+          {onClose && <button type="button" onClick={onClose} aria-label="Close report" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background/95 text-lg text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground">×</button>}
+        </div>
         <div
           tabIndex={0}
           aria-label="Report content"

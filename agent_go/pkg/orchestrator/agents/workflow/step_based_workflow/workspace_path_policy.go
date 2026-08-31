@@ -23,7 +23,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) materializeWorkflowGuardPaths(readPat
 	seen := make(map[string]struct{}, len(writePaths)+1)
 	addManagedDirectory := func(path string) {
 		path = filepath.Clean(strings.TrimSpace(path))
-		if path == "" || path == "." {
+		// Absolute roots are user-attached, host-owned folders. They are already
+		// existence/canonicalization checked when folder_access is resolved and
+		// must never be created or forced beneath workspace-docs.
+		if path == "" || path == "." || filepath.IsAbs(path) {
 			return
 		}
 		if _, ok := seen[path]; ok {

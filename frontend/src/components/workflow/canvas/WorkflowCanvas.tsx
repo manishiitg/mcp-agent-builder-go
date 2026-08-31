@@ -10,11 +10,18 @@ import {
   type NodeChange,
   type OnNodeDrag
 } from '@xyflow/react'
-import { Braces, FileText, ListOrdered, Route, Settings, X } from 'lucide-react'
+import { Braces, FileText, ListOrdered, RefreshCw, Route, Settings, X } from 'lucide-react'
 import '@xyflow/react/dist/style.css'
 
 import { useModeStore } from '../../../stores/useModeStore'
 import { nodeTypes } from '../nodes'
+import {
+  HandoffHumanInputNode,
+  HandoffMessageSequenceNode,
+  HandoffRoutingNode,
+  HandoffStepNode,
+  HandoffTodoTaskNode,
+} from '../nodes/HandoffNodeWrappers'
 import { getExecutionModeVisuals } from '../nodes/executionModeVisuals'
 import { edgeTypes } from '../edges'
 import Workspace from '../../Workspace'
@@ -67,8 +74,9 @@ const PNG_EXPORT_MAX_SIDE = 16000
 const PNG_EXPORT_MAX_PIXELS = 64_000_000
 // Bump this whenever the auto-layout algorithm changes so stale saved layouts
 // (custom drag positions from the old editor) are dropped and the new computed
-// layout takes over. 2.1-dagre: dagre-only layout + routing branch-target edge fix.
-const WORKFLOW_LAYOUT_VERSION = '2.1-dagre'
+// layout takes over. 2.7-route-handoffs: branch continuations use lateral
+// handoffs, so their destination cards can sit beside the decision.
+const WORKFLOW_LAYOUT_VERSION = '2.7-route-handoffs'
 const FLOW_FIT_PADDING = 0.24
 const FLOW_FIT_MIN_ZOOM = 0.08
 const FLOW_FIT_MAX_ZOOM = 0.95
@@ -77,6 +85,16 @@ const FLOW_HEADER_NODE_HEIGHTS: Record<string, number> = {
   start: 40,
   variables: 160
 }
+
+const canvasNodeTypes = {
+  ...nodeTypes,
+  step: HandoffStepNode,
+  todo_task: HandoffTodoTaskNode,
+  human_input: HandoffHumanInputNode,
+  routing: HandoffRoutingNode,
+  branch: HandoffRoutingNode,
+  message_sequence: HandoffMessageSequenceNode,
+} as const
 
 function enforceWorkflowHeaderClearance(nodes: WorkflowNode[]): WorkflowNode[] {
   const startNode = nodes.find(node => node.id === 'start')
@@ -249,11 +267,6 @@ const WorkflowReportCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasPr
     ])
   }, [loadPlanRefresh, refreshWorkspaceState])
 
-  const handleReportRefresh = useCallback(async () => {
-    await handleRefresh()
-    window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_REFRESH_EVENT))
-  }, [handleRefresh])
-
   useImperativeHandle(ref, () => ({
     refresh: async () => {
       await handleRefresh()
@@ -283,7 +296,6 @@ const WorkflowReportCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasPr
             onCreatePlan={onCreatePlan || (() => {})}
             showChatArea={showChatArea}
             onToggleChatArea={onToggleChatArea}
-            onRefresh={handleReportRefresh}
             onExport={() => window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_EXPORT_EVENT))}
             chatTabsSlot={chatTabsSlot}
           />
@@ -379,7 +391,6 @@ const WorkflowFilesCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasPro
             onCreatePlan={onCreatePlan || (() => {})}
             showChatArea={showChatArea}
             onToggleChatArea={onToggleChatArea}
-            onRefresh={handleRefresh}
             chatTabsSlot={chatTabsSlot}
           />
         </div>
@@ -539,7 +550,6 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
             onCreatePlan={onCreatePlan || (() => {})}
             showChatArea={showChatArea}
             onToggleChatArea={onToggleChatArea}
-            onRefresh={handleRefresh}
             chatTabsSlot={chatTabsSlot}
           />
         </div>
@@ -1172,7 +1182,7 @@ function ReadOnlyStepDetailPanel({
         )}
 
         {(routingQuestion || routes?.length) && (
-          <DetailSection icon={Route} title="Routing">
+          <DetailSection icon={Route} title={step?.type === 'branch' ? 'Branch' : 'Routing'}>
             {routingQuestion && <p className="mb-2 text-sm text-foreground/85">{routingQuestion}</p>}
             {routes?.length ? (
               <div className="space-y-2">
@@ -1443,6 +1453,10 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
         const layout = JSON.parse(response.data.content)
         if (layout.version !== WORKFLOW_LAYOUT_VERSION) {
           console.log('[WorkflowCanvas] Ignoring saved layout from older algorithm:', layout.version || 'unknown')
+          // A live refresh otherwise restores the positions captured before the
+          // version change, defeating the new auto-layout until a full reload.
+          currentPositionsRef.current.clear()
+          currentOffsetsRef.current.clear()
           return null
         }
         const positions = new Map<string, { x: number; y: number }>()
@@ -1567,7 +1581,10 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   const evaluationPlan = evalData.evaluationPlan
   const refreshEvaluationPlan = evalData.refresh
 
-  const loading = planData.loading || evalData.loading
+  const [isRefreshingPlan, setIsRefreshingPlan] = React.useState(false)
+  // A manual Plan refresh still uses the canonical plan loader, but it must
+  // not replace the surrounding workflow surface with the initial-load screen.
+  const loading = (planData.loading && !isRefreshingPlan) || evalData.loading
   const error = planData.error
   const changes = planData.changes
 
@@ -1707,6 +1724,27 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
 
     console.log('[WorkflowCanvas] Refresh completed')
   }, [workspacePath, loadPlanRefresh, refreshEvaluationPlan, refreshWorkspaceState, setViewport])
+
+  // The in-canvas Plan control is intentionally narrower than the canvas-wide
+  // refresh used by the toolbar and imperative API: it only reloads the plan.
+  const handlePlanRefresh = useCallback(async () => {
+    if (isRefreshingPlan) return
+    setIsRefreshingPlan(true)
+    try {
+      const reloaded = await loadPlanRefresh()
+      if (!reloaded) {
+        throw new Error('Plan could not be reloaded')
+      }
+      useChatStore.getState().addToast('Plan reloaded', 'success')
+    } catch (err) {
+      useChatStore.getState().addToast(
+        err instanceof Error ? err.message : 'Failed to reload plan',
+        'error'
+      )
+    } finally {
+      setIsRefreshingPlan(false)
+    }
+  }, [isRefreshingPlan, loadPlanRefresh])
 
   // Workflow execution
   const {
@@ -2954,7 +2992,6 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
               onCreatePlan={onCreatePlan || (() => {})}
               showChatArea={showChatArea}
               onToggleChatArea={onToggleChatArea}
-              onRefresh={handleRefresh}
               chatTabsSlot={chatTabsSlot}
               openPulseOnMount={openPulseOnMount}
             />
@@ -3005,7 +3042,6 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
             onCreatePlan={onCreatePlan || (() => {})}
             showChatArea={showChatArea}
             onToggleChatArea={onToggleChatArea}
-            onRefresh={handleRefresh}
             chatTabsSlot={chatTabsSlot}
             openPulseOnMount={openPulseOnMount}
             onExport={effectiveCanvasViewMode === 'report'
@@ -3022,6 +3058,21 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
             {workspacePath && <ReportView workspacePath={workspacePath} focusTier={reportFocusTier} />}
           </div>
         ) : <div className="h-full min-h-0 relative flex">
+          <button
+            type="button"
+            onPointerDown={event => event.stopPropagation()}
+            onClick={event => {
+              event.stopPropagation()
+              void handlePlanRefresh()
+            }}
+            disabled={isRefreshingPlan}
+            className="absolute right-3 top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background/95 text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground"
+            aria-label="Refresh plan"
+            title="Refresh plan"
+            data-testid="refresh-plan"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isRefreshingPlan ? 'animate-spin' : ''}`} />
+          </button>
           <div className={`min-h-0 h-full transition-all duration-300 ${showVariablesSidebar ? 'mr-[450px]' : ''} ${previewDevice === 'desktop' ? 'flex-1' : previewDeviceShellClass(previewDevice)}`}>
         <ReactFlow
           className="w-full h-full bg-gray-50 dark:bg-gray-900"
@@ -3042,7 +3093,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
           edgesFocusable={false}
           onlyRenderVisibleElements={false}
           onViewportChange={onViewportChange}
-          nodeTypes={nodeTypes}
+          nodeTypes={canvasNodeTypes}
           edgeTypes={edgeTypes}
           fitView={false}
           fitViewOptions={{ padding: FLOW_FIT_PADDING, minZoom: FLOW_FIT_MIN_ZOOM, maxZoom: FLOW_FIT_MAX_ZOOM }}
@@ -3063,8 +3114,8 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
         {/* Batch Progress Header */}
         <BatchProgressHeader position="canvas" />
 
-        {/* Plan/report navigation, device width, export, refresh, and collapse
-            now live in the workflow-level toolbar. */}
+        {/* Plan-specific controls live inside the canvas; shared navigation and
+            workflow actions remain in the workflow-level toolbar. */}
         </div>
 
         {selectedFlowNode && (

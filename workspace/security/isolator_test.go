@@ -473,6 +473,72 @@ func TestDownloadsRequiresExplicitPermission(t *testing.T) {
 	}
 }
 
+// TestMacOSAuthorizedSiblingDirectory verifies the complete permission path
+// used by Builder attachments: an allowed directory below workspace-docs must
+// permit access to the directory node as well as its descendants. A subpath-
+// only rule permits existing child files but macOS still rejects listing the
+// directory and creating a new child with "Operation not permitted".
+func TestMacOSAuthorizedSiblingDirectory(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Skipping macOS-specific test")
+	}
+
+	projectRoot := t.TempDir()
+	baseDir := filepath.Join(projectRoot, "workspace-docs")
+	workDir := filepath.Join(baseDir, "Workflow", "jobsearch")
+	downloadsDir := filepath.Join(baseDir, "Downloads")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	if err := os.MkdirAll(downloadsDir, 0755); err != nil {
+		t.Fatalf("mkdir Downloads: %v", err)
+	}
+
+	isolator := &Isolator{
+		ReadPaths:  []string{"Workflow/jobsearch", "Downloads"},
+		WritePaths: []string{"Workflow/jobsearch", "Downloads"},
+		WorkDir:    workDir,
+		BaseDir:    baseDir,
+	}
+
+	canonicalDownloads := canonicalPath(downloadsDir)
+	profile := isolator.generateSandboxProfile()
+	if !strings.Contains(profile, fmt.Sprintf("(literal \"%s\")", sandboxQuoted(canonicalDownloads))) {
+		t.Fatalf("authorized directory node is missing its literal grant:\n%s", profile)
+	}
+	if !strings.Contains(profile, fmt.Sprintf("(subpath \"%s\")", sandboxQuoted(canonicalDownloads))) {
+		t.Fatalf("authorized directory descendants are missing their subpath grant:\n%s", profile)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	listCmd, listCleanup, err := isolator.ExecuteIsolated(ctx, "ls", []string{downloadsDir})
+	if listCleanup != nil {
+		defer listCleanup()
+	}
+	if err != nil {
+		t.Fatalf("ExecuteIsolated list failed: %v", err)
+	}
+	if output, err := listCmd.CombinedOutput(); err != nil {
+		t.Fatalf("authorized Downloads list failed: %v\nOutput: %s", err, output)
+	}
+
+	testFile := filepath.Join(downloadsDir, "builder-download-test.txt")
+	cmd, cleanup, err := isolator.ExecuteIsolated(ctx, "touch", []string{testFile})
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		t.Fatalf("ExecuteIsolated write failed: %v", err)
+	}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("authorized Downloads write failed: %v\nOutput: %s", err, output)
+	}
+	if _, err := os.Stat(testFile); err != nil {
+		t.Fatalf("authorized file was not created: %v", err)
+	}
+}
+
 func TestSandboxAllowPathsRejectWorkspaceSymlinkEscapes(t *testing.T) {
 	root := t.TempDir()
 	baseDir := filepath.Join(root, "workspace-docs")

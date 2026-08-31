@@ -80,6 +80,26 @@ func LoadAttachable(workspaceAPIURL string, selectedSkills []string) []*llmtypes
 	return LoadAttachableIn(workspaceAPIURL, "", selectedSkills)
 }
 
+// WithAgentBrowserCapability makes the product-owned browser skill part of an
+// agent's identity whenever that agent is actually given the managed browser
+// tool. Browser capability and its operating contract are one unit: callers
+// must not require every workflow or step to select the built-in skill again.
+//
+// A fresh slice is returned so request and persisted workflow configuration
+// remain unchanged. The built-in skill is appended only when absent.
+func WithAgentBrowserCapability(selectedSkills []string, hasAgentBrowser bool) []string {
+	if !hasAgentBrowser {
+		return selectedSkills
+	}
+	for _, name := range selectedSkills {
+		if strings.EqualFold(strings.TrimSpace(name), "agent-browser") {
+			return selectedSkills
+		}
+	}
+	out := append([]string(nil), selectedSkills...)
+	return append(out, "agent-browser")
+}
+
 // LoadAttachableIn resolves each skill against the given workspace first, then
 // the user-level skills folder. LoadGlobalSkill already took a workspace path;
 // attachment did not, so a workspace's own skills/ folder could never be found.

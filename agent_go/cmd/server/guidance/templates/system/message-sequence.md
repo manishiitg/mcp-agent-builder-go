@@ -41,7 +41,8 @@ Do not use it when:
 - A phase has an independent artifact, independently rerunnable validation/failure domain, model, credential, downstream consumer, or context that should be isolated.
 - Work is deterministic code; use a scripted regular step.
 - Work is a fixed API/SDK call, CLI command, data fetch, stable parse/normalize operation, or mechanical write; use a scripted regular step and consume its durable result here.
-- The workflow needs deterministic branching; use `routing`.
+- The workflow needs deterministic branching; use `branch` (small in-flow
+  decision) or `routing` (major sub-workflow fork).
 - Work should be delegated independently; use `todo_task` routes.
 
 ## MEMORY

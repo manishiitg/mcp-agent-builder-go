@@ -501,7 +501,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 	}
 
 	readPaths = appendAdditionalWorkflowReadPaths(readPaths, baseWorkspacePath, stepConfig)
-	readPaths = hcpo.appendCDPHostDownloadsReadPath(readPaths)
+	readPaths, writePaths, _, _ = appendWorkflowFolderAccess(baseWorkspacePath, readPaths, writePaths)
+	readPaths, writePaths = hcpo.appendCDPHostDownloadsPaths(readPaths, writePaths)
 	return common.DeduplicateStrings(readPaths), common.DeduplicateStrings(writePaths)
 }
 
@@ -988,8 +989,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) workflowStepShellWorkingDir() string 
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) configureSubAgentSessionGuard(sessionID string, agentKind string, stepID string, readPaths []string, writePaths []string) {
+	readPaths, writePaths, readOnlyPaths, folderEnv := appendWorkflowFolderAccess(hcpo.GetWorkspacePath(), readPaths, writePaths)
 	common.SetSessionFolderGuard(sessionID, readPaths, writePaths)
-	hcpo.grantSessionCDPHostDownloadsReadOnly(sessionID)
+	configureWorkflowFolderAccessSession(sessionID, hcpo.GetWorkspacePath(), readOnlyPaths, folderEnv)
+	hcpo.grantSessionCDPHostDownloadsReadWrite(sessionID)
 
 	// Set the child identity's cwd directly. The run cwd used to be recorded on
 	// httpSessionID, while shell calls carry this dedicated sessionID. Group
@@ -1239,6 +1242,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 		}
 		hcpo.GetLogger().Info(fmt.Sprintf("🔒 Message sequence folder guard override for execution agent - Read: %v Write: %v", readPaths, writePaths))
 	}
+	readPaths, writePaths, _, _ = appendWorkflowFolderAccess(hcpo.GetWorkspacePath(), readPaths, writePaths)
 
 	// Scripted code mode: add code/ subdir to the enforced write paths so the LLM can write main.py there.
 	// writePaths[0] is the step execution folder (e.g. execution/step-1); appending /code gives execution/step-1/code.

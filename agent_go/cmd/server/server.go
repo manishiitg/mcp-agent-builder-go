@@ -4123,8 +4123,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					[]string{workflowWorkspacePath},
 					[]string{workflowWorkspacePath},
 				)
-				if hostDownloads := common.GrantSessionCDPHostDownloadsReadOnly(sessionID, workflowBrowserMode); hostDownloads != "" {
-					log.Printf("[WORKFLOW EXECUTION] Added read-only CDP host Downloads: %s", hostDownloads)
+				if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, workflowBrowserMode); hostDownloads != "" {
+					log.Printf("[WORKFLOW EXECUTION] Added read-write CDP host Downloads: %s", hostDownloads)
 				}
 			}
 
@@ -4889,8 +4889,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						append([]string{profileWrite, perUserChatHistory}, profileReadOnly...),
 						[]string{profileWrite, perUserChatHistory},
 					)
-					if hostDownloads := common.GrantSessionCDPHostDownloadsReadOnly(sessionID, req.BrowserMode); hostDownloads != "" {
-						log.Printf("[AGENT PROFILE FOLDER GUARD] Added read-only CDP host Downloads: %s", hostDownloads)
+					if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, hostDownloadsBrowserMode(req)); hostDownloads != "" {
+						log.Printf("[AGENT PROFILE FOLDER GUARD] Added read-write CDP host Downloads: %s", hostDownloads)
 					}
 					log.Printf("[AGENT PROFILE FOLDER GUARD] Applied project restriction (profile=%s workspace=%s read-only=%v)", resolvedProfile.Definition.ID, profileWrite, profileReadOnly)
 				} else {
@@ -4908,8 +4908,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						readPaths,
 						append([]string{perUserChatsWrite, "Downloads/", perUserChatHistory}, additionalFolders...),
 					)
-					if hostDownloads := common.GrantSessionCDPHostDownloadsReadOnly(sessionID, req.BrowserMode); hostDownloads != "" {
-						log.Printf("[MULTI-AGENT FOLDER GUARD] Added read-only CDP host Downloads: %s", hostDownloads)
+					if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, hostDownloadsBrowserMode(req)); hostDownloads != "" {
+						log.Printf("[MULTI-AGENT FOLDER GUARD] Added read-write CDP host Downloads: %s", hostDownloads)
 					}
 					log.Printf("[MULTI-AGENT FOLDER GUARD] Applied per-user folder restriction (chats: %s, write: %v, read-only: %v, grants: %v)", perUserChatsWrite, additionalFolders, workflowReadOnlyFolders, resolvedGrants.AppliedNames)
 				}
@@ -4937,9 +4937,10 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if len(fileContextBlockedWriteFolders) > 0 {
 					workspace.SetSessionFolderGuardBlockedWritePaths(sessionID, fileContextBlockedWriteFolders)
 				}
-				if hostDownloads := common.GrantSessionCDPHostDownloadsReadOnly(sessionID, req.BrowserMode); hostDownloads != "" {
-					log.Printf("[WORKFLOW PHASE FOLDER GUARD] Added read-only CDP host Downloads: %s", hostDownloads)
+				if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, hostDownloadsBrowserMode(req)); hostDownloads != "" {
+					log.Printf("[WORKFLOW PHASE FOLDER GUARD] Added read-write CDP host Downloads: %s", hostDownloads)
 				}
+				todo_creation_human.RefreshWorkflowFolderAccessSession(sessionID, workflowPhaseFolder)
 				log.Printf("[WORKFLOW PHASE FOLDER GUARD] Applied workflow folder restriction (workflow writes: %v, chats read-only: %s, read-only: %v, blocked-write: %v)", writePaths, perUserChatsWrite, workflowReadOnlyFolders, fileContextBlockedWriteFolders)
 			}
 
@@ -5272,7 +5273,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// 2. CONTEXT — skills. Attaching a skill is not an instruction
 			//    section (AttachSkill, not AddInstructions), so it stays here
 			//    rather than in the prompt-section registry below.
-			if len(req.SelectedSkills) > 0 {
+			identitySkillNames := skills.WithAgentBrowserCapability(req.SelectedSkills, buildChatBrowserConfig(req).HasAgentBrowser)
+			if len(identitySkillNames) > 0 {
 				// Phase 3 rewire: skills are now first-class on the agent.
 				// mcpagent's ensureSystemPrompt auto-injects the progressive-
 				// disclosure listing (name + description); CLI transports
@@ -5290,13 +5292,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if underlying := llmAgent.GetUnderlyingAgent(); underlying != nil {
 					underlying.SetInstalledSkillResolver(installedSkillResolver(req.SelectedFolder))
 				}
-				if attached := skills.LoadAttachableIn(getWorkspaceAPIURL(), req.SelectedFolder, req.SelectedSkills); len(attached) > 0 {
+				if attached := skills.LoadAttachableIn(getWorkspaceAPIURL(), req.SelectedFolder, identitySkillNames); len(attached) > 0 {
 					attachedNames := make([]string, 0, len(attached))
 					for _, s := range attached {
 						_ = llmAgent.AttachSkill(s)
 						attachedNames = append(attachedNames, s.Name)
 					}
-					log.Printf("[SKILLS] Attached %d of %d skill(s): %v", len(attached), len(req.SelectedSkills), attachedNames)
+					log.Printf("[SKILLS] Attached %d of %d skill(s): %v", len(attached), len(identitySkillNames), attachedNames)
 				}
 			}
 
@@ -5418,9 +5420,10 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						phaseReadPaths,
 						[]string{phaseWorkspacePath, "Downloads"},
 					)
-					if hostDownloads := common.GrantSessionCDPHostDownloadsReadOnly(sessionID, req.BrowserMode); hostDownloads != "" {
-						log.Printf("[WORKFLOW_PHASE] Added read-only CDP host Downloads: %s", hostDownloads)
+					if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, hostDownloadsBrowserMode(req)); hostDownloads != "" {
+						log.Printf("[WORKFLOW_PHASE] Added read-write CDP host Downloads: %s", hostDownloads)
 					}
+					todo_creation_human.RefreshWorkflowFolderAccessSession(sessionID, phaseWorkspacePath)
 					if len(workflowReadOnlyFolders) > 0 {
 						log.Printf("[WORKFLOW_PHASE] Added read-only access for #workflow references: %v", workflowReadOnlyFolders)
 					}

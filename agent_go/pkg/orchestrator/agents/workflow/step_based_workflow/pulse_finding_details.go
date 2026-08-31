@@ -107,6 +107,13 @@ type PulseReviewFindingInput struct {
 	IssueID string `json:"issue_id,omitempty"`
 	Concern string `json:"concern"`
 	Module  string `json:"module"`
+	// StepID is the plan step this finding is about, e.g. what
+	// plan_drift_review's verifyStepDriftCheckFindingsExist requires a
+	// fail-status check's linked finding to be filed against. Optional: a
+	// module-wide finding (not about one specific step) legitimately omits
+	// it, and updating an existing issue by IssueID keeps that issue's
+	// original step identity regardless of what is passed here.
+	StepID string `json:"step_id,omitempty"`
 	// HumanInputID links a decision_required finding to the pending decision
 	// created by the reviewer before filing it.
 	HumanInputID string `json:"human_input_id,omitempty"`
@@ -185,7 +192,17 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 	}
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	fingerprint := ""
-	stepID := marker.Module
+	// A brand-new finding is attributed to the caller-supplied step_id when
+	// present; falling back to the module name here (rather than leaving it
+	// empty) previously meant every new finding recorded StepID="plan_drift_
+	// review" etc. instead of an actual plan step, silently defeating any
+	// caller that needs real step attribution (e.g. plan_drift_review's own
+	// verifyStepDriftCheckFindingsExist, which requires a fail-status check's
+	// linked finding to be filed against the exact step under review).
+	stepID := strings.TrimSpace(input.StepID)
+	if stepID == "" {
+		stepID = marker.Module
+	}
 	promotedObservation := false
 	promotedIssueID := ""
 	if issueID := strings.TrimSpace(input.IssueID); issueID != "" {
@@ -194,7 +211,18 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 			return PulseReviewFindingRecord{}, lookupErr
 		}
 		fingerprint = existing.Fingerprint
-		stepID = existing.StepID
+		// Prefer an explicit step_id on this call as the write's candidate
+		// value; otherwise fall back to whatever is already on record. This is
+		// only a candidate — recordRunConcernLinesAtWithFingerprints reads the
+		// row's CURRENT step_id fresh at write time and is the actual
+		// authority on whether a candidate may overwrite it (only when the
+		// persisted value is itself a placeholder module name, never a real
+		// step identity already on record — see its own doc comment).
+		if explicit := strings.TrimSpace(input.StepID); explicit != "" {
+			stepID = explicit
+		} else {
+			stepID = existing.StepID
+		}
 		promotedObservation = !IsPulseIssue(existing)
 		promotedIssueID = NewPulseIssue(existing).ID
 		// A PUL id is a reference to the existing lifecycle row, never a new

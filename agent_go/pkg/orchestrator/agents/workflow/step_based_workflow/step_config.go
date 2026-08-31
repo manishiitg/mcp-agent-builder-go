@@ -532,6 +532,8 @@ func ApplyStepConfigFromFile(
 				s.AgentConfigs = matchedConfig
 			case *RoutingPlanStep:
 				s.AgentConfigs = matchedConfig
+			case *BranchPlanStep:
+				s.AgentConfigs = matchedConfig
 			case *MessageSequencePlanStep:
 				s.AgentConfigs = matchedConfig
 			default:
@@ -570,6 +572,8 @@ func ApplyStepConfigFromFile(
 			case *EvaluationStep:
 				s.AgentConfigs = overrides
 			case *RoutingPlanStep:
+				s.AgentConfigs = overrides
+			case *BranchPlanStep:
 				s.AgentConfigs = overrides
 			case *MessageSequencePlanStep:
 				s.AgentConfigs = overrides
