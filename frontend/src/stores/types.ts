@@ -9,8 +9,9 @@ export interface ToolDefinition {
   description: string
   parameters: Record<string, unknown>
   status?: string
-  /** Connection ownership: 'connected' | 'available'. Distinct from status,
-   *  which reports reachability. See MCP_CONNECTOR_STATE_PLAN.md §5. */
+  /** Connection ownership: 'connected' | 'available' — "is this server mine?".
+   *  Distinct from `status`, which reports reachability. A connected server
+   *  that is down is 'connected' with status 'error'. */
   connection?: string
   error?: string
   server?: string

@@ -631,10 +631,12 @@ const (
 )
 
 // loadOverlayServerNames returns the set of server names present in the user
-// config overlay. Overlay membership is the definition of "connected" — see
-// MCP_CONNECTOR_STATE_PLAN.md §3. Callers that iterate many servers must read
-// this once and pass the result into connectionState rather than re-reading
-// the file per server.
+// config overlay. Overlay membership is the definition of "connected": the
+// base catalog is what we offer, the overlay is what the user took. OAuth
+// callbacks already write there on success, so this was already true for OAuth
+// servers before it was made explicit. Callers that iterate many servers must
+// read this once and pass the result into connectionState rather than
+// re-reading the file per server.
 func (api *StreamingAPI) loadOverlayServerNames() map[string]bool {
 	names := make(map[string]bool)
 	overlay, err := mcpclient.LoadConfig(api.getUserConfigPath(), api.logger)

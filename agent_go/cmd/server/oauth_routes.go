@@ -306,7 +306,9 @@ func (api *StreamingAPI) handleOAuthStart(w http.ResponseWriter, r *http.Request
 	}
 
 	// The oauth block is the sole authority. Its absence means the server is
-	// open, not that endpoints need discovering — see MCP_CONNECTOR_STATE_PLAN.md §6.
+	// open, not that endpoints need discovering. Probing here is what used to
+	// report false positives: a well-known lookup built from scheme+host alone
+	// found the *website's* OAuth metadata for servers that have none.
 	if serverConfig.OAuth == nil {
 		http.Error(w, fmt.Sprintf("Server '%s' is not an OAuth server", req.ServerName), http.StatusBadRequest)
 		return
@@ -323,7 +325,7 @@ func (api *StreamingAPI) handleOAuthStart(w http.ResponseWriter, r *http.Request
 	// Endpoints come from config. Fail loudly rather than falling back to a probe.
 	if serverConfig.OAuth.AuthURL == "" || serverConfig.OAuth.TokenURL == "" {
 		api.logger.Error(fmt.Sprintf("Server %s is missing auth_url or token_url in config", req.ServerName), nil)
-		http.Error(w, fmt.Sprintf("Server '%s' is missing auth_url or token_url in its oauth config. Endpoints are no longer discovered at runtime; add them to the MCP config (see MCP_CONNECTOR_STATE_PLAN.md §6.5).", req.ServerName), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Server '%s' is missing auth_url or token_url in its oauth config. Endpoints are not discovered at runtime; copy authorization_endpoint and token_endpoint from the provider's /.well-known/oauth-authorization-server metadata into the MCP config.", req.ServerName), http.StatusInternalServerError)
 		return
 	}
 
