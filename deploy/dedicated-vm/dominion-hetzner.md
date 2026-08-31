@@ -495,9 +495,9 @@ undocumented elsewhere only.
       Found while checking logs for an unrelated report, not yet
       root-caused — needs investigation on its own; may or may not be
       related to today's other fixes.
-- [ ] **Video Studio likely has the same logging gap** as "Logs are
-      required, not automatic" above (`createServerLogger()` ignoring
-      `--log-file` is shared code, not Dominion-specific) — unconfirmed.
-      Check `video-studio-agent`'s systemd unit for `StandardOutput=`/
-      `StandardError=` and whether its `logs/` is release-relative or
-      symlinked to something persistent.
+
+The logging gap this deployment found is shared code, not
+Dominion-specific, so the open item to check other rootless deployments for
+it (Video Studio) lives in
+[`../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md`](../ROOTLESS-LINUX-DEPLOYMENT-CHECKLIST.md#9-server-logs-must-actually-reach-a-file-the-service-account-can-read),
+not duplicated here.
