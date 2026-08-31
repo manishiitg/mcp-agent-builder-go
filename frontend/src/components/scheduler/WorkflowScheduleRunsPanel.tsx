@@ -992,6 +992,12 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
       })
   }, [panelJobs, activeFilter, normalizedSearch, presetMap, selectedWorkflowFilter])
 
+  // When the panel or explicit workflow filter already identifies one
+  // automation, repeating "Automation / <name>" on every schedule adds noise.
+  // Keep that identity only in the mixed-workflow list where it supplies
+  // information the surrounding UI does not.
+  const showWorkflowIdentityInScheduleRows = !isWorkflowScoped && selectedWorkflowFilter === 'all'
+
   const workflowGroups = useMemo<WorkflowScheduleGroup[]>(() => {
     const groups = new Map<string, WorkflowScheduleGroup>()
 
@@ -1738,7 +1744,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                     {summary.running} running
                   </span>
                 )}
-                {summary.missed > 0 && (
+                {summary.missed > 0 && !isWorkflowScoped && (
                   <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
                     {summary.missed} missed
                   </span>
@@ -1943,13 +1949,10 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
 
               {missedJobs.length > 0 && (
                 <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-3">
-                  <div className="flex items-center justify-between gap-3 mb-2">
+                  <div className="mb-2">
                     <div>
                       <div className="text-[11px] uppercase tracking-wide text-amber-600 dark:text-amber-400">Missed schedules</div>
                       <div className="text-sm font-medium text-foreground">Schedules that were due but have not run yet</div>
-                    </div>
-                    <div className="text-xs text-muted-foreground whitespace-nowrap">
-                      {summary.missed} missed
                     </div>
                   </div>
 
@@ -2447,14 +2450,9 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
 
                     {showMissedHeader && (
                       <div className="px-5 py-3 bg-amber-500/5 border-b border-amber-500/10">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-[11px] uppercase tracking-wide text-amber-600 dark:text-amber-400">Missed schedules</div>
-                            <div className="text-sm font-medium text-foreground">Schedules that were due, but never started at the scheduled time</div>
-                          </div>
-                          <div className="text-xs text-muted-foreground whitespace-nowrap">
-                            {summary.missed} missed
-                          </div>
+                        <div>
+                          <div className="text-[11px] uppercase tracking-wide text-amber-600 dark:text-amber-400">Missed schedules</div>
+                          <div className="text-sm font-medium text-foreground">Schedules that were due, but never started at the scheduled time</div>
                         </div>
                       </div>
                     )}
@@ -2472,22 +2470,26 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
 
                       {/* Main content */}
                       <div className="flex-1 min-w-0">
-                        <div className="min-w-0 pr-48">
-                          <div className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                            Automation
+                        {showWorkflowIdentityInScheduleRows && (
+                          <div className="min-w-0 pr-48">
+                            <div className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                              Automation
+                            </div>
+                            <div className="mt-0.5 flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate" title={workflowDisplayLabel}>
+                                {workflowDisplayLabel}
+                              </span>
+                            </div>
                           </div>
-                          <div className="mt-0.5 flex items-center gap-2 flex-wrap">
-                            <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate" title={workflowDisplayLabel}>
-                              {workflowDisplayLabel}
-                            </span>
-                          </div>
-                        </div>
+                        )}
 
-                        <div className="mt-1 flex items-center gap-2 flex-wrap pr-48">
-                          <span className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                            Schedule
-                          </span>
-                          <span className="text-xs font-medium text-gray-700 dark:text-gray-300 truncate" title={job.name}>
+                        <div className={`${showWorkflowIdentityInScheduleRows ? 'mt-1' : ''} flex items-center gap-2 flex-wrap pr-48`}>
+                          {showWorkflowIdentityInScheduleRows && (
+                            <span className="text-[11px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                              Schedule
+                            </span>
+                          )}
+                          <span className={`${showWorkflowIdentityInScheduleRows ? 'text-xs font-medium' : 'text-sm font-semibold'} text-gray-700 dark:text-gray-300 truncate`} title={job.name}>
                             {localizedJobName}
                           </span>
                           {isMissedJob && (
