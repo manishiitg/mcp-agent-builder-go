@@ -21,7 +21,6 @@ import { useMCPStore } from '../../stores'
  * `status` answers a different question — whether the server is currently
  * reachable — so a connected-but-down server is surfaced as an error against
  * the connected label rather than silently reading as not connected.
- * See MCP_CONNECTOR_STATE_PLAN.md §5.
  */
 const statusLabel = (connection: string | undefined, status: string | undefined) => {
   if (connection === 'connected') {
