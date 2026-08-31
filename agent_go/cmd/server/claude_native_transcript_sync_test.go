@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -231,6 +233,100 @@ func TestRefreshLatestBuilderConversationFromNativeTranscriptNoOpsWithoutClaudeC
 
 	if len(refreshed.ConversationHistory) != 1 {
 		t.Fatalf("expected no-op when runtime info is absent, got %d messages", len(refreshed.ConversationHistory))
+	}
+}
+
+func TestSyncWorkflowBuilderConversationFromNativeTranscriptUpdatesConversationAndIndex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	const workspacePath = "Workflow/salesoutreach"
+	const sessionID = "retained-live-input"
+	const nativeSessionID = "native-retained-live-input"
+	workingDir := filepath.Join(home, "workspace-docs", "Workflow", "salesoutreach")
+	transcriptDir := filepath.Join(home, ".claude", "projects", claudeNativeTranscriptProjectSlug(workingDir))
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTranscriptFixture(t, filepath.Join(transcriptDir, nativeSessionID+".jsonl"), []string{
+		`{"type":"user","timestamp":"2026-08-30T05:00:00Z","message":{"role":"user","content":"first live request"}}`,
+		`{"type":"assistant","timestamp":"2026-08-30T05:01:00Z","message":{"role":"assistant","content":[{"type":"text","text":"first live reply"}]}}`,
+	})
+
+	conversationPath := workspacePath + "/builder/conversation/2026-08-30/session-" + sessionID + "-conversation.json"
+	record := map[string]interface{}{
+		"session_id": sessionID,
+		"agent_mode": "workflow_phase",
+		"updated_at": "2026-08-30T05:00:00Z",
+		"conversation_history": []map[string]interface{}{
+			{"Role": "human", "Parts": []map[string]string{{"Text": "first live request"}}},
+		},
+		"runtime": map[string]interface{}{
+			"provider": "claude-code",
+			"agent_session_handle": map[string]interface{}{
+				"provider": map[string]interface{}{
+					"provider": "claude-code", "native_session_id": nativeSessionID, "working_dir": workingDir,
+				},
+			},
+		},
+	}
+	content, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := &mockWorkspaceAPI{files: map[string]string{conversationPath: string(content)}}
+	workspaceServer := httptest.NewServer(workspace)
+	defer workspaceServer.Close()
+	t.Setenv("WORKSPACE_API_URL", workspaceServer.URL)
+
+	api := &StreamingAPI{}
+	changed, supported := api.syncWorkflowBuilderConversationFromNativeTranscript(context.Background(), sessionID, workspacePath)
+	if !supported || !changed {
+		t.Fatalf("sync changed/supported = %v/%v, want true/true", changed, supported)
+	}
+
+	var persisted builderConversationLog
+	if err := json.Unmarshal([]byte(workspace.files[conversationPath]), &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted.ConversationHistory) != 2 || persisted.ConversationHistory[1].Parts[0].Text != "first live reply" {
+		t.Fatalf("persisted history = %+v, want the native assistant reply", persisted.ConversationHistory)
+	}
+	indexPath := workspacePath + "/builder/conversation/" + chatHistoryIndexFileName
+	if _, found := workspace.files[indexPath]; !found {
+		t.Fatalf("native sync did not update %s", indexPath)
+	}
+}
+
+func TestNativeTranscriptMergePreservesPersistedStructuredToolEntries(t *testing.T) {
+	record := map[string]interface{}{
+		"conversation_history": []map[string]interface{}{
+			{"Role": "human", "Parts": []map[string]string{{"Text": "original request"}}},
+			{"Role": "tool", "Parts": []map[string]interface{}{{"FunctionResponse": map[string]string{"Name": "inspect", "Result": "raw structured result"}}}},
+			{"Role": "ai", "Parts": []map[string]string{{"Text": "original response"}}},
+		},
+	}
+	persisted := []builderConversationMessage{
+		{Role: "human", Parts: []builderConversationPart{{Text: "original request"}}},
+		{Role: "tool"},
+		{Role: "ai", Parts: []builderConversationPart{{Text: "original response"}}},
+	}
+	native := []builderConversationMessage{
+		{Role: "human", Parts: []builderConversationPart{{Text: "original request"}}},
+		{Role: "ai", Parts: []builderConversationPart{{Text: "original response"}}},
+		{Role: "human", Parts: []builderConversationPart{{Text: "later live request"}}},
+		{Role: "ai", Parts: []builderConversationPart{{Text: "later live response"}}},
+	}
+
+	merged := mergeBuilderConversationRecordHistory(record, persisted, native)
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"FunctionResponse"`) || !strings.Contains(string(encoded), `"raw structured result"`) {
+		t.Fatalf("structured tool entry was lost: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"later live response"`) {
+		t.Fatalf("native reply was not added: %s", encoded)
 	}
 }
 

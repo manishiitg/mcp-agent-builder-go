@@ -16,7 +16,7 @@ import { useAppStore } from '../../stores/useAppStore'
 import { sanitizeDisplayNameForFolder } from '../../utils/workflowUtils'
 import { logger } from '../../utils/logger'
 import { startRestoredTransportTerminal } from '../../utils/restoredTerminal'
-import { isExternalReadOnlyWorkflowSession, isInternalChildSession } from '../../utils/workflowSessionKinds'
+import { isExternalReadOnlyWorkflowSession, isInternalChildSession, isScheduledSession } from '../../utils/workflowSessionKinds'
 import { activeWorkflowTabIdForPreset } from '../../utils/workflowTabOwnership'
 import { activateTab } from '../../utils/activateTab'
 import {
@@ -435,8 +435,45 @@ const WorkflowPreviousChatsPanel: React.FC<{
     autoRestoredRef.current = true
     void (async () => {
       try {
-        const { sessions } = await agentApi.listChatHistorySessions(1, 0, workspacePath, 'chat')
-        const [mostRecent] = sessions
+        // Do not choose the default solely from the lightweight history index.
+        // A warm coding-CLI conversation accepts later turns through live input;
+        // its saved JSON/index can therefore lag the CLI's own native
+        // transcript. The builder-session endpoint reconciles those transcripts
+        // before ranking candidates, then we recover the runtime metadata from
+        // the history list for the actual resume transport.
+        const builderSession = await agentApi.getWorkflowBuilderSession(activePresetId || undefined, workspacePath)
+        let mostRecent: ChatHistorySession | undefined
+        let reconciledEvents: PollingEvent[] | undefined
+        if (builderSession.source === 'workspace' && builderSession.session_id) {
+          const { sessions } = await agentApi.listChatHistorySessions(100, 0, workspacePath, 'chat')
+          mostRecent = sessions.find(session => session.session_id === builderSession.session_id)
+          if (!mostRecent) {
+            // The index is a cache and a very old session can fall beyond the
+            // metadata page even though the reconciled endpoint just proved it
+            // is newest. Keep that answer authoritative and use its display
+            // events; the next history refresh repairs the index naturally.
+            logger.warn('WorkflowLayout', 'Reconciled builder conversation was absent from chat-history index; using the reconciled transcript', {
+              workspacePath,
+              sessionId: builderSession.session_id,
+            })
+            mostRecent = {
+              session_id: builderSession.session_id,
+              agent_mode: 'workflow',
+              status: builderSession.status,
+              user_id: 'default',
+              workspace_path: workspacePath,
+              conversation_path: builderSession.conversation_path,
+              created_at: builderSession.updated_at || '',
+              updated_at: builderSession.updated_at || '',
+              message_count: builderSession.total || 0,
+            }
+            reconciledEvents = builderSession.events
+          }
+        }
+        if (!mostRecent) {
+          const { sessions } = await agentApi.listChatHistorySessions(1, 0, workspacePath, 'chat')
+          mostRecent = sessions[0]
+        }
         if (!mostRecent) return
         // Re-check right before applying: this fetch is async, and the
         // reconnect effect may have activated a live tab in the meantime.
@@ -446,11 +483,19 @@ const WorkflowPreviousChatsPanel: React.FC<{
         if (workflowTabAlreadyHasContent(latestTab, latestStore.tabEvents)) return
         if (latestTab.metadata?.skipWorkflowAutoRestore) return
         await resumeChatSessionIntoTab(mostRecent, activeTabId, chatHistoryOpenDisposition(mostRecent))
+        if (reconciledEvents?.length) {
+          const restoredStore = useChatStore.getState()
+          restoredStore.setTabEvents(mostRecent.session_id, reconciledEvents)
+          restoredStore.setTabLastEventIndex(
+            mostRecent.session_id,
+            builderSession.last_processed_index ?? reconciledEvents.length - 1,
+          )
+        }
       } catch (error) {
         logger.warn('WorkflowLayout', 'Failed to auto-restore the most recent conversation', { workspacePath, error })
       }
     })()
-  }, [activeTabId, workspacePath, resumeChatSessionIntoTab])
+  }, [activeTabId, activePresetId, workspacePath, resumeChatSessionIntoTab])
 
   return (
     <PreviousChatHistoryPanel
@@ -1525,9 +1570,16 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         const chatTabsById = useChatStore.getState().chatTabs
         for (const s of activeWorkflowSessions) {
           const registryRunning = runningWorkflowsBySession.get(s.session_id)
+          const scheduledSession = isScheduledSession({
+            sessionId: s.session_id,
+            triggeredBy: s.triggered_by,
+          }) || Boolean(registryRunning && isScheduledSession({
+            sessionId: registryRunning.session_id,
+            triggeredBy: registryRunning.triggered_by,
+          }))
           if (
-            isExternalReadOnlyActiveWorkflowSession(s) ||
-            (registryRunning && isExternalReadOnlyWorkflowEntry(registryRunning))
+            (isExternalReadOnlyActiveWorkflowSession(s) && !scheduledSession) ||
+            (registryRunning && isExternalReadOnlyWorkflowEntry(registryRunning) && !scheduledSession)
           ) {
             continue
           }
@@ -1560,13 +1612,20 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
             isActive: true,
             triggeredBy: s.triggered_by,
             botPlatform: s.bot_platform,
-            isScheduledRun: s.triggered_by === 'cron',
+            isScheduledRun: scheduledSession,
           })
         }
 
         for (const running of runningWorkflowsBySession.values()) {
           if (!running.session_id || queuedSessionIds.has(running.session_id)) continue
-          if (isExternalReadOnlyWorkflowEntry(running)) continue
+          const scheduledSession = isScheduledSession({
+            sessionId: running.session_id,
+            triggeredBy: running.triggered_by,
+          })
+          // Scheduled jobs are first-class parallel workflow tabs. Bots remain
+          // external-only, but skipping schedules here made a workflow boot
+          // open a blank Builder tab while the live schedule was invisible.
+          if (isExternalReadOnlyWorkflowEntry(running) && !scheduledSession) continue
           const belongsToPreset = runningWorkflowBelongsToPreset(running, activePresetId, workspacePath)
           if (!belongsToPreset) continue
           queuedSessionIds.add(running.session_id)
@@ -1579,7 +1638,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
             phaseId: running.phase_id,
             phaseName: running.phase_name,
             triggeredBy: running.triggered_by,
-            isScheduledRun: running.triggered_by === 'cron',
+            isScheduledRun: scheduledSession,
           })
         }
 
@@ -1725,7 +1784,11 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
             useChatStore.getState().beginWorkflowSessionRestore(session.sessionId)
             try {
               await withWorkflowRestoreTimeout(
-                restoreWorkflowStateFromEvents(session.sessionId),
+                // A scheduled run can outlive the server's EventStore. Its
+                // workspace conversation is durable, so use it as the
+                // immediate fallback instead of repeatedly restoring an empty
+                // volatile buffer and leaving the Schedule lane on a spinner.
+                restoreWorkflowStateFromEvents(session.sessionId, workspacePath, isScheduled),
                 `Restoring workflow events for ${session.sessionId}`
               )
               if (session.isActive || session.status === 'running') {
@@ -1895,7 +1958,11 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
             useChatStore.getState().beginWorkflowSessionRestore(running.session_id)
             try {
               await withWorkflowRestoreTimeout(
-                restoreWorkflowStateFromEvents(running.session_id, workspacePath),
+                restoreWorkflowStateFromEvents(
+                  running.session_id,
+                  workspacePath,
+                  projection.metadata.isScheduledRun === true,
+                ),
                 `Restoring workflow events for ${running.session_id}`
               )
             } catch (error) {

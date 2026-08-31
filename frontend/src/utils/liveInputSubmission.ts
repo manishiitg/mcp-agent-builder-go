@@ -44,18 +44,16 @@ export function shouldUseRetainedLiveInput({
   return !fullTurnStreaming || turnIsStreaming
 }
 
-// Product conversations deliberately reattach their SSE stream at the start of
-// every accepted message. A retained tmux process can outlive the EventSource
-// that observed its previous turn (for example after HMR, sleep, or a completed
-// turn). Merely finding an old connection object in Zustand is therefore not
-// enough to guarantee that the next completion reaches the clean transcript.
-// AgentWorks' default surface keeps its existing connect-only-when-missing
-// behavior; the stricter rule is scoped to full-turn product surfaces.
+// Reattach the event stream at the start of every accepted retained message.
+// A retained tmux process can outlive the EventSource that observed its prior
+// turn (for example after HMR, sleep, or a completed turn). The Zustand entry
+// only records the wrapper object; it does not prove that its underlying SSE
+// request is still live.
 export function shouldRefreshSessionEventStream(
-  fullTurnStreaming: boolean,
-  hasConnection: boolean,
+  _fullTurnStreaming: boolean,
+  _hasConnection: boolean,
 ): boolean {
-  return fullTurnStreaming || !hasConnection
+  return true
 }
 
 // The live-input endpoint records the durable user_message before returning its

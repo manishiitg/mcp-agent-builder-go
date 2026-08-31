@@ -504,6 +504,11 @@ type StreamingAPI struct {
 	// text, rendered as the same answer twice in a row.
 	retainedMainTurnCompletionEmitted map[string]time.Time
 	retainedMainTurnsMu               sync.Mutex
+	// nativeTranscriptSyncInFlight coalesces the post-completion durable sync
+	// for live coding-CLI turns. Guarded separately so transcript I/O never
+	// blocks the terminal/event observer.
+	nativeTranscriptSyncInFlight map[string]bool
+	nativeTranscriptSyncMu       sync.Mutex
 
 	// Pending completions queue — background agent IDs that finished while session was busy
 	pendingCompletions map[string][]string
@@ -1764,6 +1769,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		retainedMainTurnExecutionIDs:           make(map[string]string),
 		retainedMainTurnAdditionalExecutionIDs: make(map[string]map[string]struct{}),
 		retainedMainTurnWatchCancels:           make(map[string]context.CancelFunc),
+		nativeTranscriptSyncInFlight:           make(map[string]bool),
 		pendingCompletions:                     make(map[string][]string),
 		completionRetryScheduled:               make(map[string]bool),
 		pendingStartNotifications:              make(map[string][]string),
@@ -3965,6 +3971,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if workflowPhaseID == workflowtypes.WorkflowStatusWorkflowBuilder {
 					triggeredBy = "workflow_builder"
 				}
+				// Scheduler turns intentionally use the workflow-builder phase,
+				// but they are still cron work. Preserve that origin in the running
+				// registry so the frontend restores a Schedule lane rather than
+				// treating it as the user's interactive Builder chat.
+				if requestedTrigger := strings.TrimSpace(req.TriggeredBy); requestedTrigger != "" {
+					triggeredBy = requestedTrigger
+				}
 
 				runFolder := ""
 				if req.ExecutionOptions != nil {
@@ -3979,6 +3992,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					PhaseID:       workflowPhaseID,
 					Status:        "running",
 					UserID:        currentUserID,
+					Title:         req.SessionTitle,
 					Query:         req.Query,
 					TriggeredBy:   triggeredBy,
 					StartedAt:     time.Now(),
@@ -7441,6 +7455,11 @@ func (api *StreamingAPI) observeRetainedMainTurnEvent(sessionID string, event ev
 			api.completeTrackedExecution(id, trackedExecutionStatusCompleted, "", nil)
 		}
 	}
+	// A live retained CLI turn bypasses handleQuery's normal final-save block.
+	// Its provider transcript is now complete, so reconcile it asynchronously
+	// into the durable workflow conversation before a later restart can expose
+	// a user-only snapshot.
+	api.scheduleWorkflowBuilderNativeTranscriptSync(sessionID)
 	log.Printf("[RETAINED_TURN] Settled retained main-agent turn from structured %s event session=%s terminal=%s state=%s",
 		eventType, sessionID, snapshot.TerminalID, snapshot.State)
 }
@@ -9127,10 +9146,6 @@ func (api *StreamingAPI) buildWorkshopConfig(
 				if llmCfg.UseKnowledgebase != nil {
 					cfg.UseKnowledgebase = *llmCfg.UseKnowledgebase
 				}
-				if llmCfg.LockKnowledgebase != nil {
-					cfg.LockKnowledgebase = *llmCfg.LockKnowledgebase
-				}
-
 				// Tiered LLM allocation
 				if cfg.TieredConfig != nil {
 					cfg.LLMAllocationMode = "tiered"
@@ -9140,8 +9155,8 @@ func (api *StreamingAPI) buildWorkshopConfig(
 						workshopFormatAgentLLM(cfg.TieredConfig.Tier3))
 				}
 
-				log.Printf("[WORKSHOP] LLM config loaded: phase=%v pulse=%v tiered=%v kb=%v kbLock=%v",
-					cfg.PresetPhaseLLM != nil, cfg.PresetPulseLLM != nil, cfg.TieredConfig != nil, cfg.UseKnowledgebase, cfg.LockKnowledgebase)
+				log.Printf("[WORKSHOP] LLM config loaded: phase=%v pulse=%v tiered=%v kb=%v",
+					cfg.PresetPhaseLLM != nil, cfg.PresetPulseLLM != nil, cfg.TieredConfig != nil, cfg.UseKnowledgebase)
 			}
 		}
 	}

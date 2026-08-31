@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
 // claudeNativeTranscriptRuntime is the minimal subset of a persisted builder
@@ -40,6 +42,146 @@ type claudeTranscriptMessage struct {
 type claudeTranscriptContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+// scheduleWorkflowBuilderNativeTranscriptSync closes the persistence gap for
+// retained live-input turns. The turn-completion observer must stay fast, so
+// transcript I/O runs off-path and is coalesced per session. Claude normally
+// flushes its JSONL before it signals completion; the short retries cover the
+// small race where the completion event wins that flush.
+func (api *StreamingAPI) scheduleWorkflowBuilderNativeTranscriptSync(sessionID string) {
+	if api == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	api.sessionWorkspaceMu.RLock()
+	workspacePath := strings.TrimSpace(api.sessionWorkspaceFolders[sessionID])
+	api.sessionWorkspaceMu.RUnlock()
+	if workspacePath == "" {
+		return
+	}
+
+	api.nativeTranscriptSyncMu.Lock()
+	if api.nativeTranscriptSyncInFlight == nil {
+		api.nativeTranscriptSyncInFlight = make(map[string]bool)
+	}
+	if api.nativeTranscriptSyncInFlight[sessionID] {
+		api.nativeTranscriptSyncMu.Unlock()
+		return
+	}
+	api.nativeTranscriptSyncInFlight[sessionID] = true
+	api.nativeTranscriptSyncMu.Unlock()
+
+	go func() {
+		defer func() {
+			api.nativeTranscriptSyncMu.Lock()
+			delete(api.nativeTranscriptSyncInFlight, sessionID)
+			api.nativeTranscriptSyncMu.Unlock()
+		}()
+
+		for attempt, delay := range []time.Duration{0, 300 * time.Millisecond, time.Second} {
+			if delay > 0 {
+				time.Sleep(delay)
+			}
+			changed, supported := api.syncWorkflowBuilderConversationFromNativeTranscript(context.Background(), sessionID, workspacePath)
+			if changed || !supported {
+				return
+			}
+			log.Printf("[CHAT_HISTORY] Native transcript sync found no completed assistant reply yet; retrying session=%s attempt=%d", sessionID, attempt+1)
+		}
+	}()
+}
+
+// syncWorkflowBuilderConversationFromNativeTranscript reconciles one existing
+// workflow builder record, then updates its metadata index in the same pass.
+// The returned supported value is false for every provider except Claude Code,
+// avoiding needless retries for transcript formats this reader cannot parse.
+func (api *StreamingAPI) syncWorkflowBuilderConversationFromNativeTranscript(ctx context.Context, sessionID, workspacePath string) (changed, supported bool) {
+	raw, err := ReadChatHistoryConversation("default", sessionID, workspacePath)
+	if err != nil || len(raw) == 0 || !claudeNativeTranscriptSyncSupported(raw) {
+		return false, false
+	}
+	conversationPath, found, err := findWorkflowBuilderConversationPathForSession(ctx, sessionID, workspacePath)
+	if err != nil || !found || strings.TrimSpace(conversationPath) == "" {
+		return false, true
+	}
+
+	var current builderConversationLog
+	if err := json.Unmarshal(raw, &current); err != nil {
+		return false, true
+	}
+	refreshed := api.refreshLatestBuilderConversationFromNativeTranscript(ctx, conversationPath, string(raw), current)
+	if builderConversationHistoriesEqual(refreshed.ConversationHistory, current.ConversationHistory) && refreshed.UpdatedAt == current.UpdatedAt {
+		return false, true
+	}
+
+	// refreshLatest... writes the full record while preserving runtime and other
+	// opaque fields. Re-read that canonical result before rebuilding the index.
+	// If the write failed, do not advertise a transcript we did not persist.
+	persistedRaw, err := ReadChatHistoryConversation("default", sessionID, workspacePath)
+	if err != nil || len(persistedRaw) == 0 {
+		return false, true
+	}
+	var persistedRecord map[string]interface{}
+	if err := json.Unmarshal(persistedRaw, &persistedRecord); err != nil {
+		return false, true
+	}
+	var persistedHistory []llmtypes.MessageContent
+	if history, ok := persistedRecord["conversation_history"]; ok {
+		encoded, err := json.Marshal(history)
+		if err != nil || json.Unmarshal(encoded, &persistedHistory) != nil {
+			return false, true
+		}
+	}
+	if err := updatePersistedChatHistoryIndex(
+		"default",
+		sessionID,
+		stringFromRecord(persistedRecord, "agent_mode"),
+		persistedHistory,
+		runtimeFromRecord(persistedRecord),
+		conversationPath,
+		int64(len(persistedRaw)),
+		time.Now(),
+	); err != nil {
+		log.Printf("[CHAT_HISTORY] Native transcript sync: cannot update index for %s: %v", conversationPath, err)
+	}
+	return true, true
+}
+
+// findWorkflowBuilderConversationPathForSession normally resolves through the
+// history index. The folder-list fallback covers a newly written transcript
+// before that index exists (and remote workspace deployments without the local
+// directory fast path).
+func findWorkflowBuilderConversationPathForSession(ctx context.Context, sessionID, workspacePath string) (string, bool, error) {
+	if path, found, err := FindChatHistoryConversationPathForSession("default", sessionID, workspacePath); err != nil || found {
+		return path, found, err
+	}
+	listing, exists, err := listWorkspaceFolder(ctx, strings.Trim(strings.TrimSpace(workspacePath), "/")+"/builder/conversation", 3)
+	if err != nil || !exists {
+		return "", false, err
+	}
+	paths := []string{}
+	collectWorkspaceFilePaths(listing, &paths)
+	wantFileName := "session-" + sanitizeChatHistorySessionID(sessionID) + "-conversation.json"
+	for _, path := range paths {
+		if filepath.Base(path) == wantFileName && isWorkflowBuilderConversationLogPath(workspacePath, path) {
+			return path, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func claudeNativeTranscriptSyncSupported(raw []byte) bool {
+	var record struct {
+		Runtime claudeNativeTranscriptRuntime `json:"runtime"`
+	}
+	if json.Unmarshal(raw, &record) != nil {
+		return false
+	}
+	provider := strings.ToLower(strings.TrimSpace(record.Runtime.Provider))
+	if provider == "" && record.Runtime.AgentSessionHandle != nil && record.Runtime.AgentSessionHandle.Provider != nil {
+		provider = strings.ToLower(strings.TrimSpace(record.Runtime.AgentSessionHandle.Provider.Provider))
+	}
+	return provider == "claude-code"
 }
 
 // refreshLatestBuilderConversationFromNativeTranscript catches a persisted
@@ -104,9 +246,10 @@ func (api *StreamingAPI) refreshLatestBuilderConversationFromNativeTranscript(ct
 		return conv
 	}
 
-	previousCount := len(conv.ConversationHistory)
-	merged := mergeBuilderConversationHistory(conv.ConversationHistory, nativeMessages)
-	if builderConversationHistoriesEqual(merged, conv.ConversationHistory) {
+	persistedHistory := conv.ConversationHistory
+	previousCount := len(persistedHistory)
+	merged := mergeBuilderConversationHistory(persistedHistory, nativeMessages)
+	if builderConversationHistoriesEqual(merged, persistedHistory) {
 		return conv
 	}
 	conv.ConversationHistory = merged
@@ -114,7 +257,11 @@ func (api *StreamingAPI) refreshLatestBuilderConversationFromNativeTranscript(ct
 		conv.UpdatedAt = maxTimestamp.Format(time.RFC3339Nano)
 	}
 
-	record["conversation_history"] = conv.ConversationHistory
+	// Keep the original raw entries for persisted messages. builderConversationLog
+	// deliberately exposes only readable Role/Parts.Text fields; serializing it
+	// wholesale would erase structured tool calls/results from the durable record
+	// every time a retained live turn finishes.
+	record["conversation_history"] = mergeBuilderConversationRecordHistory(record, persistedHistory, nativeMessages)
 	record["updated_at"] = conv.UpdatedAt
 	if encoded, err := json.MarshalIndent(record, "", "  "); err == nil {
 		if err := writeRawFileToWorkspace(ctx, path, string(encoded)); err != nil {
@@ -183,6 +330,81 @@ func mergeBuilderConversationHistory(persisted, native []builderConversationMess
 	}
 	merged = append(merged, persisted[persistedCursor:]...)
 	return merged
+}
+
+// mergeBuilderConversationRecordHistory applies the same ordered union as the
+// readable-message merge, but retains each persisted entry as raw JSON. Native
+// messages are the only newly encoded entries. This preserves structured tool
+// calls/results and provider metadata in the canonical conversation file.
+func mergeBuilderConversationRecordHistory(record map[string]interface{}, persisted, native []builderConversationMessage) []json.RawMessage {
+	rawHistory, ok := builderConversationRawHistory(record)
+	if !ok || len(rawHistory) != len(persisted) {
+		return marshalBuilderConversationMessages(mergeBuilderConversationHistory(persisted, native))
+	}
+	if len(native) == 0 {
+		return rawHistory
+	}
+
+	positions := make(map[string][]int, len(persisted))
+	for index, message := range persisted {
+		key := builderConversationMessageKey(message)
+		positions[key] = append(positions[key], index)
+	}
+	firstNative, firstPersisted := -1, -1
+	for nativeIndex, message := range native {
+		if candidates := positions[builderConversationMessageKey(message)]; len(candidates) > 0 {
+			firstNative, firstPersisted = nativeIndex, candidates[0]
+			break
+		}
+	}
+	if firstNative < 0 {
+		return append(rawHistory, marshalBuilderConversationMessages(native)...)
+	}
+
+	merged := make([]json.RawMessage, 0, len(persisted)+len(native))
+	merged = append(merged, rawHistory[:firstPersisted]...)
+	merged = append(merged, marshalBuilderConversationMessages(native[:firstNative])...)
+	merged = append(merged, rawHistory[firstPersisted])
+	persistedCursor := firstPersisted + 1
+	for _, message := range native[firstNative+1:] {
+		candidates := positions[builderConversationMessageKey(message)]
+		candidateIndex := sort.SearchInts(candidates, persistedCursor)
+		if candidateIndex < len(candidates) {
+			matchedPersisted := candidates[candidateIndex]
+			merged = append(merged, rawHistory[persistedCursor:matchedPersisted+1]...)
+			persistedCursor = matchedPersisted + 1
+			continue
+		}
+		merged = append(merged, marshalBuilderConversationMessages([]builderConversationMessage{message})...)
+	}
+	return append(merged, rawHistory[persistedCursor:]...)
+}
+
+func builderConversationRawHistory(record map[string]interface{}) ([]json.RawMessage, bool) {
+	history, exists := record["conversation_history"]
+	if !exists {
+		return nil, false
+	}
+	encoded, err := json.Marshal(history)
+	if err != nil {
+		return nil, false
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		return nil, false
+	}
+	return raw, true
+}
+
+func marshalBuilderConversationMessages(messages []builderConversationMessage) []json.RawMessage {
+	encoded := make([]json.RawMessage, 0, len(messages))
+	for _, message := range messages {
+		messageJSON, err := json.Marshal(message)
+		if err == nil {
+			encoded = append(encoded, messageJSON)
+		}
+	}
+	return encoded
 }
 
 func builderConversationMessageKey(message builderConversationMessage) string {

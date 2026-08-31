@@ -4043,6 +4043,7 @@ func (s *SchedulerService) buildWorkshopRequest(ctx context.Context, sctx *Sched
 		"preset_query_id":             sctx.WorkflowID,
 		"selected_folder":             sctx.WorkspacePath,
 		"triggered_by":                "cron",
+		"session_title":               sctx.Schedule.Name,
 		"servers":                     sctx.Capabilities.SelectedServers,
 		"selected_tools":              sctx.Capabilities.SelectedTools,
 		"selected_skills":             sctx.Capabilities.SelectedSkills,
