@@ -1638,10 +1638,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                     {job.waiting_reason}
                   </div>
                 )}
-                <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <MessageSquare className="h-3.5 w-3.5" />
-                  <span>To change this schedule, ask the automation agent in Chat.</span>
-                </div>
               </div>
             </div>
           </div>
@@ -1888,6 +1884,12 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                         ? `${workflowGroups.length} automation${workflowGroups.length === 1 ? '' : 's'} · ${filteredJobs.length} schedule${filteredJobs.length === 1 ? '' : 's'} shown`
                         : `${filteredJobs.length} schedule${filteredJobs.length !== 1 ? 's' : ''} · ${activeFilterLabel}`}
                 </div>
+                {activeView === 'schedules' && (
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                    <span>To change a schedule, ask the automation agent in Chat.</span>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -2617,10 +2619,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                             {job.waiting_reason}
                           </div>
                         )}
-                        <div className="mt-2 flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-                          <MessageSquare className="w-3.5 h-3.5" />
-                          <span>To change this schedule, ask the automation agent in Chat.</span>
-                        </div>
                       </div>
 
                       {/* Keep the immediate operational action visible; secondary actions live in one menu. */}
