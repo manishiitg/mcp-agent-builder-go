@@ -150,13 +150,30 @@ func CheckReportQueryCompatibility(ctx context.Context, workspacePath string, re
 
 	var failures []string
 	for _, q := range queries {
-		if _, err := db.QueryContext(ctx, q); err != nil {
+		rows, err := db.QueryContext(ctx, q)
+		if err != nil {
 			preview := q
 			if len(preview) > 120 {
 				preview = preview[:120] + "..."
 			}
 			failures = append(failures, fmt.Sprintf("%q -> %v", preview, err))
+			continue
 		}
+		// A successful *sql.Rows holds its connection checked out of the
+		// pool until Close() is called -- Rows was previously discarded
+		// (assigned to `_`) here, never closed. With openPlanDriftQueryOnlyDB's
+		// SetMaxOpenConns(1), the first query in this loop that actually
+		// succeeded permanently exhausted the pool's only connection: every
+		// later db.QueryContext call in this same loop then blocked forever
+		// in database/sql's own connection-acquisition code, unblockable by
+		// anything except the caller's context expiring. Confirmed live on
+		// the Dominion deployment 2026-08-31 -- get_pulse_state(view=module)
+		// looked like an indefinite hang for days, but was reproducibly
+		// exactly this: it only ever returned once the calling curl's own
+		// --max-time cancelled the request out from under it, every single
+		// time, regardless of how long that timeout was (proven at 10s,
+		// 45s, and 90s in isolation -- it never once completed on its own).
+		rows.Close()
 	}
 
 	if len(failures) == 0 {

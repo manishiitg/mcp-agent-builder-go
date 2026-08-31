@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -188,6 +189,58 @@ func TestCheckReportQueryCompatibilityDoesNotMutateDB(t *testing.T) {
 	}
 	if status != "pending" {
 		t.Fatalf("status = %q, want unchanged %q — query_only guard did not hold", status, "pending")
+	}
+}
+
+// TestCheckReportQueryCompatibilityHandlesMultipleQueriesWithoutBlocking
+// covers a real bug found live on the Dominion deployment 2026-08-31:
+// db.QueryContext's returned *sql.Rows was discarded without Close() on a
+// successful query. openPlanDriftQueryOnlyDB caps the connection pool at
+// exactly 1 (SetMaxOpenConns(1)), so the first successful query in the loop
+// permanently held the pool's only connection — every query after it then
+// blocked forever in database/sql's own connection-acquisition code,
+// unblockable by anything except the caller's context expiring. A report
+// with a single query (the shape every other test here uses) can never
+// exercise this: the bug only shows once a second query needs a connection
+// after the first one already succeeded. Bounded by a 5s context so a
+// regression fails loudly instead of hanging the test suite.
+func TestCheckReportQueryCompatibilityHandlesMultipleQueriesWithoutBlocking(t *testing.T) {
+	dbPath := setupPlanDriftDBTest(t, "Workflow/drift-multi-query")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE emails(id INTEGER PRIMARY KEY, status TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE trades(id INTEGER PRIMARY KEY, symbol TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	readFile := func(_ context.Context, path string) (string, error) {
+		if path == "Workflow/drift-multi-query/db/reports/index.html" {
+			return `<script>
+window.report.query('SELECT id, status FROM emails')
+window.report.query('SELECT id, symbol FROM trades')
+window.report.query('SELECT id, status FROM emails WHERE id > 0')
+</script>`, nil
+		}
+		return "", os.ErrNotExist
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	check, err := CheckReportQueryCompatibility(ctx, "Workflow/drift-multi-query", readFile)
+	if err != nil {
+		t.Fatalf("CheckReportQueryCompatibility returned error: %v", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("hit the 5s test timeout instead of completing on its own — a query after the first successful one is blocked waiting for a connection the pool never releases; evidence=%s", check.Evidence)
+	}
+	if check.Status != "pass" {
+		t.Fatalf("status = %q, want pass (all 3 queries against matching schema); evidence=%s", check.Status, check.Evidence)
 	}
 }
 
