@@ -42,6 +42,13 @@ Do not guess a fal.ai model slug from memory or pattern-match one that
 A run whose model ID cannot be confirmed is a blocker to report, not a guess
 to make.
 
+**Video Studio reference-pack exception:** its system policy already selects
+`fal-ai/flux-2-max` for a new cinematic character/background master and
+`fal-ai/flux-2-max/edit` for an approved derivative. Verify those IDs and the
+live schema, then use them; do not ask the user to reselect a still-image
+model or silently substitute a cheaper route. A different still-image model
+requires the user's explicit approval.
+
 ## Authentication
 
 The user stores the fal.ai key as a workflow secret named `FAL_KEY` (via
