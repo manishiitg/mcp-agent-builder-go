@@ -2,33 +2,38 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Loader2,
   AlertCircle,
-  ChevronDown,
-  ChevronRight,
+  Check,
   Code2,
+  Download,
+  ScrollText,
   Search,
+  Wrench,
 } from 'lucide-react'
 import { OAuthStatusBadge } from '../OAuthStatusBadge'
-import { Checkbox } from '../ui/checkbox'
 import { isSelectedServer } from '../../utils/mcpServerAlias'
 import ConnectionIcon from './ConnectionIcon'
 import { brandSlugFor } from './brandSlug'
 import { descriptionFor } from './catalog'
 import { useMCPStore } from '../../stores'
+import { useToolSelectionStore } from '../../stores/useToolSelectionStore'
 import MCPConfigPopup from '../MCPConfigPopup'
 
 /**
- * The card label answers "is this mine?", which is what `connection` reports.
- * `status` answers a different question — whether the server is currently
- * reachable — so a connected-but-down server is surfaced as an error against
- * the connected label rather than silently reading as not connected.
+ * The card's status marker answers "is this mine?", which is what `connection`
+ * reports. `status` answers a different question — whether the server is
+ * currently reachable — so a connected-but-down server is surfaced as an
+ * amber dot against the connected state rather than silently reading as not
+ * connected. Rendered as a corner dot rather than a text line: it's the same
+ * information in a fraction of the card's vertical space, and the label was
+ * repeating what the connect/disconnect control already shows.
  */
-const statusLabel = (connection: string | undefined, status: string | undefined) => {
+const statusIndicator = (connection: string | undefined, status: string | undefined) => {
   if (connection === 'connected') {
-    if (status === 'error') return 'Connected — unreachable'
-    if (status === 'loading') return 'Connected — checking...'
-    return 'Connected'
+    if (status === 'error') return { dot: 'bg-amber-500', title: 'Connected — unreachable' }
+    if (status === 'loading') return { dot: 'bg-gray-400 animate-pulse', title: 'Connected — checking...' }
+    return { dot: 'bg-green-500', title: 'Connected' }
   }
-  return 'Not connected'
+  return { dot: 'bg-gray-300 dark:bg-gray-600', title: 'Not connected' }
 }
 
 type Filter = 'all' | 'connected' | 'available'
@@ -67,6 +72,21 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
 
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set())
   const [loadingLogs, setLoadingLogs] = useState<Set<string>>(new Set())
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
+  const loadServerTools = useToolSelectionStore(state => state.loadServerTools)
+  const getServerTools = useToolSelectionStore(state => state.getServerTools)
+  const toggleToolsDisclosure = (serverName: string) => {
+    setExpandedTools(current => {
+      const next = new Set(current)
+      if (next.has(serverName)) {
+        next.delete(serverName)
+      } else {
+        next.add(serverName)
+        void loadServerTools(serverName)
+      }
+      return next
+    })
+  }
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>(compact ? 'available' : 'all')
   // Local to this instance -- deliberately independent of the store's global
@@ -105,7 +125,7 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
   }
 
   useEffect(() => {
-    if (compact || expandedLogs.size === 0) return
+    if (expandedLogs.size === 0) return
 
     const interval = window.setInterval(() => {
       expandedLogs.forEach((serverName) => {
@@ -114,7 +134,7 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
     }, 3000)
 
     return () => window.clearInterval(interval)
-  }, [compact, expandedLogs, fetchServerLogs])
+  }, [expandedLogs, fetchServerLogs])
 
   const groups = getServerGroups()
 
@@ -237,6 +257,7 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
             const status = tools[0]?.status
             const connection = tools[0]?.connection
             const isOpen = expandedLogs.has(serverName)
+            const isToolsOpen = expandedTools.has(serverName)
 
             return (
               <div
@@ -244,15 +265,6 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
                 className="flex flex-col rounded-xl border border-gray-200 bg-white transition-colors hover:border-gray-300 dark:border-gray-800 dark:bg-gray-900/60 dark:hover:border-gray-700"
               >
                 <div className={`flex items-start gap-3 ${cardPadding}`}>
-                  {onToggleServer && connection === 'connected' && (
-                    <Checkbox
-                      id={`connectors-browser-add-${serverName}`}
-                      checked={isSelectedServer(selectedServers || [], serverName)}
-                      onCheckedChange={() => onToggleServer(serverName)}
-                      className="mt-3.5"
-                      aria-label={`${isSelectedServer(selectedServers || [], serverName) ? 'Remove' : 'Add'} ${serverName} for this workflow`}
-                    />
-                  )}
                   <ConnectionIcon
                     icon={brandSlugFor(serverName)}
                     name={serverName}
@@ -268,44 +280,84 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
                     <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
                       {descriptionFor(serverName)}
                     </p>
-                    <span className="mt-1.5 inline-block text-[11px] text-gray-400 dark:text-gray-500">
-                      {statusLabel(connection, status)}
-                    </span>
                   </div>
 
-                  <div className="flex shrink-0 items-center gap-1">
-                    <OAuthStatusBadge
-                      serverName={serverName}
-                      requiresOAuth={requiresOAuth}
-                      connection={connection}
-                      variant="icon"
-                      onAuthChange={() => {
-                        // Refresh on disconnect too — the card's status text
-                        // reads from the store, so skipping this left it
-                        // claiming "Connected" after the token was revoked.
-                        refreshTools()
-                      }}
-                    />
-                    {!compact && (
-                      <button
-                        onClick={() => toggleLogs(serverName)}
-                        className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-                        title="Connection logs"
-                        aria-label={`${isOpen ? 'Hide' : 'Show'} logs for ${serverName}`}
-                      >
-                        {isOpen ? (
-                          <ChevronDown className="h-3.5 w-3.5" />
-                        ) : (
-                          <ChevronRight className="h-3.5 w-3.5" />
-                        )}
-                      </button>
-                    )}
-                  </div>
+                  <span
+                    className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${statusIndicator(connection, status).dot}`}
+                    title={statusIndicator(connection, status).title}
+                    aria-label={statusIndicator(connection, status).title}
+                  />
+                </div>
+
+                {/* Action bar -- one row of equal-height controls, primary
+                    action stretched, secondary ones as matching icon squares. */}
+                <div className="mt-auto flex items-center gap-1.5 border-t border-gray-200 px-3 py-2 dark:border-gray-800">
+                  {onToggleServer && connection === 'connected' && (
+                    <button
+                      onClick={() => onToggleServer(serverName)}
+                      className={`flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                        isSelectedServer(selectedServers || [], serverName)
+                          ? 'border-blue-500/40 bg-blue-500/10 text-blue-600 hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-500 dark:text-blue-300'
+                          : 'border-gray-300 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-gray-100'
+                      }`}
+                      title={`${isSelectedServer(selectedServers || [], serverName) ? 'Remove' : 'Add'} ${serverName} for this workflow`}
+                    >
+                      {isSelectedServer(selectedServers || [], serverName) ? (
+                        <>
+                          <Check className="h-3.5 w-3.5" />
+                          <span>Added</span>
+                        </>
+                      ) : (
+                        <>
+                          <Download className="h-3.5 w-3.5" />
+                          <span>Add to workflow</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                  {connection === 'connected' && (
+                    <button
+                      onClick={() => toggleToolsDisclosure(serverName)}
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors ${
+                        isToolsOpen
+                          ? 'border-gray-400 bg-gray-100 text-gray-700 dark:border-gray-500 dark:bg-gray-800 dark:text-gray-200'
+                          : 'border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100'
+                      }`}
+                      title="Tools"
+                      aria-label={`${isToolsOpen ? 'Hide' : 'Show'} tools for ${serverName}`}
+                    >
+                      <Wrench className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => toggleLogs(serverName)}
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors ${
+                      isOpen
+                        ? 'border-gray-400 bg-gray-100 text-gray-700 dark:border-gray-500 dark:bg-gray-800 dark:text-gray-200'
+                        : 'border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100'
+                    }`}
+                    title="Connection logs"
+                    aria-label={`${isOpen ? 'Hide' : 'Show'} logs for ${serverName}`}
+                  >
+                    <ScrollText className="h-3.5 w-3.5" />
+                  </button>
+                  <OAuthStatusBadge
+                    serverName={serverName}
+                    requiresOAuth={requiresOAuth}
+                    connection={connection}
+                    variant="icon"
+                    onAuthChange={() => {
+                      // Refresh on disconnect too — the card's status text
+                      // reads from the store, so skipping this left it
+                      // claiming "Connected" after the token was revoked.
+                      refreshTools()
+                    }}
+                  />
                 </div>
 
                 {/* Connection Logs Panel */}
-                {!compact && isOpen && (
-                  <div className="mx-4 mb-4 rounded-md bg-gray-900 px-3 py-2 dark:bg-black">
+                {isOpen && (
+                  <div className="mx-3 mb-3 rounded-md bg-gray-900 px-3 py-2 dark:bg-black">
                     <div className="mb-2 flex items-center justify-between">
                       <h5 className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
                         Connection Logs
@@ -351,6 +403,44 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
                     </div>
                   </div>
                 )}
+
+                {/* Tools panel -- names as compact chips rather than a list of
+                    full descriptions. The name is what a user scans for; a
+                    paragraph per tool blows the card's height out and wraps
+                    badly in a narrow grid column. Descriptions stay one hover
+                    away. */}
+                {isToolsOpen && (() => {
+                  const serverTools = getServerTools(serverName)
+                  return (
+                    <div className="border-t border-gray-200 px-3 py-2.5 dark:border-gray-800">
+                      {serverTools === undefined ? (
+                        <div className="flex items-center gap-2 text-xs text-gray-400">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Loading tools...
+                        </div>
+                      ) : serverTools.length > 0 ? (
+                        <>
+                          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                            {serverTools.length} tool{serverTools.length === 1 ? '' : 's'}
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {serverTools.map(tool => (
+                              <span
+                                key={tool.name}
+                                title={tool.description || tool.name}
+                                className="cursor-default rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 font-mono text-[11px] text-gray-600 transition-colors hover:border-gray-300 hover:text-gray-900 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:text-gray-100"
+                              >
+                                {tool.name}
+                              </span>
+                            ))}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-xs text-gray-500">No tools reported by this server.</div>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
             )
           })}
