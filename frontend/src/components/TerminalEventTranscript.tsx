@@ -486,7 +486,12 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   }, [items, streamingStatus, streamingText.length])
   const followedUserMessageKeyRef = useRef(latestUserMessageKey)
   const followCurrentTurnRef = useRef(true)
-  const firstResponseUserMessageKeyRef = useRef(latestUserMessageKey)
+  // Keep this unset until the first effect runs. Initialising it to the latest
+  // user row made an in-progress turn restored after refresh look historical:
+  // the first streaming response then never armed Video Studio's one-time
+  // reveal and arrived below the composer.
+  const firstResponseUserMessageKeyRef = useRef<string | null>(null)
+  const initializedFirstResponseRevealRef = useRef(false)
   const revealFirstResponseRef = useRef(false)
   const suppressFirstResponseRevealRef = useRef(false)
   const assistantResponseAfterLatestUser = useMemo(() => {
@@ -559,10 +564,23 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   // inspect. AgentWorks keeps the existing full-turn follow behaviour above.
   useEffect(() => {
     if (autoScrollMode !== 'reveal-first-response') return
+    const isInitialTranscript = !initializedFirstResponseRevealRef.current
     const isNewUserMessage = Boolean(
-      latestUserMessageKey && firstResponseUserMessageKeyRef.current !== latestUserMessageKey,
+      !isInitialTranscript &&
+      latestUserMessageKey &&
+      firstResponseUserMessageKeyRef.current !== latestUserMessageKey,
     )
-    if (isNewUserMessage) {
+    if (isInitialTranscript) {
+      initializedFirstResponseRevealRef.current = true
+      firstResponseUserMessageKeyRef.current = latestUserMessageKey
+      // A page reload can reconnect while the agent is already thinking. Arm
+      // that live turn without treating a completed, restored conversation as
+      // a new response that should steal the reader's position.
+      revealFirstResponseRef.current = Boolean(
+        latestUserMessageKey && (streamingText.trim() || streamingStatus.trim()) && !assistantResponseAfterLatestUser,
+      )
+      suppressFirstResponseRevealRef.current = false
+    } else if (isNewUserMessage) {
       firstResponseUserMessageKeyRef.current = latestUserMessageKey
       revealFirstResponseRef.current = true
       suppressFirstResponseRevealRef.current = false
@@ -573,10 +591,19 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
 
     revealFirstResponseRef.current = false
     const targetIndex = Math.max(0, (streamingText || streamingStatus) ? items.length : items.length - 1)
-    const frame = window.requestAnimationFrame(() => {
-      virtuosoRef.current?.scrollToIndex({ index: targetIndex, align: 'end', behavior: 'smooth' })
-    })
-    return () => window.cancelAnimationFrame(frame)
+    // Reveal the opening of the assistant response once. Aligning its end
+    // could leave the first readable line hidden below the fixed composer for
+    // a long response; a second layout pass covers Virtuoso measuring the live
+    // row just after the first streaming chunk lands.
+    const reveal = () => {
+      virtuosoRef.current?.scrollToIndex({ index: targetIndex, align: 'start', behavior: 'auto' })
+    }
+    const frame = window.requestAnimationFrame(reveal)
+    const settledLayoutTimer = window.setTimeout(reveal, 160)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.clearTimeout(settledLayoutTimer)
+    }
   }, [assistantResponseAfterLatestUser, autoScrollMode, items.length, latestUserMessageKey, streamingStatus, streamingText])
 
   // Electron occasionally fails to route a physical wheel/trackpad gesture to
