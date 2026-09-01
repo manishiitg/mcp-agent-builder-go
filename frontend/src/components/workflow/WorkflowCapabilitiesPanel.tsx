@@ -219,11 +219,11 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
                     workflowPath={workspacePath || ''}
                   />
                 </div>
-                <div className="mt-3 flex min-h-0 flex-1 flex-col border-t border-border pt-3">
+                <div className="mt-3 flex min-h-0 flex-1 flex-col pt-1">
                   <div className="shrink-0 text-sm font-medium text-muted-foreground">
                     Manage secrets
                   </div>
-                  <div className="mt-3 min-h-0 flex-1">
+                  <div className="mt-3 flex min-h-0 flex-1 flex-col">
                     <SecretsManagerPanel compact />
                   </div>
                 </div>
