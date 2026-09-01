@@ -556,20 +556,10 @@ async function restoreReadOnlyWorkflowRunChat(
     })
   }
 
-  // A scheduled run is read-only, but it is still a conversation. Hydrate its
-  // bounded persisted event tail so restored schedules show the main-agent and
-  // child-agent work that already happened rather than an empty placeholder.
-  // The API strips raw terminal/stream events; this remains far smaller than a
-  // terminal restore and does not start polling.
-  try {
-    await hydrateTabEvents(session.session_id, {
-      workspacePath: workspacePath || undefined,
-      fallbackToChatHistory: true,
-      includeUiEvents: true,
-    })
-  } catch (error) {
-    console.warn('[WorkflowSessionRestore] could not hydrate saved schedule transcript', error)
-  }
+  // Reveal the tab IMMEDIATELY, same as the plain workflow-builder restore
+  // path (restoreWorkflowSessionChat) -- don't make the user stare at a blank
+  // switch while a scheduled run's transcript loads. Hydration below fills the
+  // tab in once it lands instead of gating the reveal on it.
   const isActive = isActiveWorkflowSession(session)
   chatStore.setTabStreaming(tabId, isActive)
   chatStore.setTabCompleted(tabId, !isActive)
@@ -581,6 +571,20 @@ async function restoreReadOnlyWorkflowRunChat(
     detail: { presetId, tabId, workspacePath }
   }))
   if (options.scrollToBottom !== false) requestChatScrollToBottom()
+
+  // A scheduled run is read-only, but it is still a conversation. Hydrate its
+  // bounded persisted event tail so restored schedules show the main-agent and
+  // child-agent work that already happened rather than an empty placeholder.
+  // The API strips raw terminal/stream events; this remains far smaller than a
+  // terminal restore and does not start polling. Not awaited: the tab above
+  // is already visible, this just fills it in when it lands.
+  void hydrateTabEvents(session.session_id, {
+    workspacePath: workspacePath || undefined,
+    fallbackToChatHistory: true,
+    includeUiEvents: true,
+  }).catch(error => {
+    console.warn('[WorkflowSessionRestore] could not hydrate saved schedule transcript', error)
+  })
 
   return tabId
   } finally {

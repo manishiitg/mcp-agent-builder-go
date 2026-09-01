@@ -120,9 +120,8 @@ type StepBasedWorkflowOrchestrator struct {
 	presetPulseLLM *AgentLLMConfig // Default for reviews, audits, KB upkeep, and Pulse agents.
 
 	// Preset-level feature toggles
-	useKnowledgebase  bool   // Whether to create and reference knowledgebase folder (default: true)
-	lockKnowledgebase bool   // When true, post-step KB update agent never enqueues — notes/ only mutates via explicit reorganize_knowledgebase calls. Reads unaffected.
-	kbShape           string // Legacy field. Only "notes-only" is supported; legacy "graph+notes" values collapse to notes-only at runtime (see workflowtypes.ResolveKBShape).
+	useKnowledgebase bool   // Whether to create and reference knowledgebase folder (default: true)
+	kbShape          string // Legacy field. Only "notes-only" is supported; legacy "graph+notes" values collapse to notes-only at runtime (see workflowtypes.ResolveKBShape).
 
 	// Tiered LLM allocation mode
 	tierResolver *TierResolver // nil when no tiered config
@@ -1170,17 +1169,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) GetType() string {
 // kill-switch.
 func (hcpo *StepBasedWorkflowOrchestrator) UseKnowledgebase() bool {
 	return true
-}
-
-// LockKnowledgebase returns whether the post-step KB update agent is frozen.
-// When true, notes/ only mutates via explicit reorganize_knowledgebase calls.
-func (hcpo *StepBasedWorkflowOrchestrator) LockKnowledgebase() bool {
-	return hcpo.lockKnowledgebase
-}
-
-// SetLockKnowledgebase toggles the lock_knowledgebase flag.
-func (hcpo *StepBasedWorkflowOrchestrator) SetLockKnowledgebase(v bool) {
-	hcpo.lockKnowledgebase = v
 }
 
 // KBShape returns the raw stored shape value. Retained for config compatibility;

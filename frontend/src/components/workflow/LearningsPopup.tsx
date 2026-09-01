@@ -39,14 +39,8 @@ interface LearningMetadata {
   // successful runs on an unchanged description, and a description change
   // resets the counter. They live here because the popup surfaces them.
   //
-  // The auto_locked_at / auto_lock_reason / auto_unlocked_at / auto_unlock_reason
-  // fields were removed: no Go code has ever set them. The only remaining
-  // reference (workflow.go:2638) CLEARS them on manual unlock, so every derived
-  // badge could render nothing but an empty state.
-
   // Step-config fields merged in by the backend
   use_code_execution_mode?: boolean
-  lock_learnings?: boolean
   learnings_access?: LearningsAccess
   learning_objective?: string
 
@@ -56,7 +50,7 @@ interface LearningMetadata {
 
 // Check if learnings folder exists
 // Returns true only if metadata contains actual learning data (not just step config fields)
-// Step config fields (use_code_execution_mode, lock_learnings) can exist
+// Step config fields (use_code_execution_mode, learnings_access) can exist
 // even when the folder doesn't exist, so we need to check for actual learning data fields
 function hasLearningsFolder(
   metadata: LearningMetadata | null,
@@ -448,21 +442,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
       
       if (!deleteResult.success) {
         throw new Error(deleteResult.message || 'Failed to delete learnings')
-      }
-
-      // Unlock learnings after deletion
-      const step = plan?.steps?.find(s => s.id === stepId)
-      const metadata = learnings[stepId]
-      const currentConfigs = step?.agent_configs || (metadata ? { lock_learnings: metadata.lock_learnings } : {})
-
-      try {
-        await agentApi.updateStepConfig(workspacePath, stepId, {
-          ...currentConfigs,
-          lock_learnings: false
-        })
-      } catch (unlockErr) {
-        console.warn('[LearningsPopup] Failed to unlock learnings after deletion:', unlockErr)
-        // Continue even if unlock fails - deletion was successful
       }
 
       // Remove from cache

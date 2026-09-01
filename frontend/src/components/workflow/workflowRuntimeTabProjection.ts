@@ -8,6 +8,26 @@ export interface WorkflowRuntimeTabProjection {
   autoActivate: boolean
 }
 
+/** Normalize current and persisted legacy names for the interactive workflow
+ * conversation. Runtime/schedule lanes keep their own explicit names. */
+export function workflowTabDisplayName(
+  tab: Pick<ChatTab, 'name' | 'metadata' | 'sessionId'>,
+): string {
+  // Finished schedule tabs are persisted until the user closes them and no
+  // longer pass through live runtime reconciliation. Normalize an older
+  // one-off Pulse lane from its durable session identity too.
+  if (tab.metadata?.isScheduledRun && isManualPulseSession(tab.sessionId)) {
+    return 'Manual Pulse'
+  }
+  if (
+    tab.metadata?.phaseId === 'workflow-builder' &&
+    (tab.name === 'Automation Builder' || tab.name === 'Workflow Builder')
+  ) {
+    return 'Chat'
+  }
+  return tab.name
+}
+
 const MANUAL_PULSE_SESSION_PREFIX = 'schedule-manual--manual-p_'
 
 /** The toolbar's one-off Pulse run uses the scheduler lane but is not a

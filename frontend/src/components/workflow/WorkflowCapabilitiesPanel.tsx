@@ -1,23 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { BrainCircuit, KeyRound, LoaderCircle, Monitor, Puzzle, Save, Server, X } from 'lucide-react'
+import { BrainCircuit, KeyRound, LoaderCircle, Monitor, Puzzle, Save, Server } from 'lucide-react'
 import { ToolSelectionSection } from '../ToolSelectionSection'
-import { SkillSelectionSection } from '../skills/SkillSelectionSection'
+import SkillsManagerPanel from '../skills/SkillsManagerPanel'
 import { SecretSelectionSection } from '../secrets/SecretSelectionSection'
+import SecretsManagerPanel from '../secrets/SecretsManagerPanel'
 import BrowserAutomationSettings, { type BrowserAutomationMode } from '../BrowserAutomationSettings'
 import WorkflowLLMConfigurationPanel from './WorkflowLLMConfigurationPanel'
+import LLMLibraryPanel from '../llm/LLMLibraryPanel'
+import ConnectorsBrowser from '../connectors/ConnectorsBrowser'
 import { agentApi, workflowManifestApi } from '../../services/api'
 import type { WorkflowCapabilities } from '../../services/api-types'
 import { useMCPStore } from '../../stores/useMCPStore'
 import { useWorkflowManifestStore } from '../../stores/useWorkflowManifestStore'
 import { useAuthStore } from '../../stores/useAuthStore'
 import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
+import { toggleServerSelection } from '../../utils/mcpServerAlias'
 
 export type WorkflowCapabilitySection = 'skills' | 'mcp' | 'secrets' | 'browser' | 'llm'
 
 interface WorkflowCapabilitiesPanelProps {
   section: WorkflowCapabilitySection
   workspacePath: string | null
-  onClose: () => void
 }
 
 const EMPTY_CAPABILITIES: WorkflowCapabilities = {
@@ -58,7 +61,7 @@ const SECTION_COPY: Record<WorkflowCapabilitySection, { title: string; descripti
   },
 }
 
-export default function WorkflowCapabilitiesPanel({ section, workspacePath, onClose }: WorkflowCapabilitiesPanelProps) {
+export default function WorkflowCapabilitiesPanel({ section, workspacePath }: WorkflowCapabilitiesPanelProps) {
   const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
   const [capabilities, setCapabilities] = useState<WorkflowCapabilities>(EMPTY_CAPABILITIES)
   const [loading, setLoading] = useState(true)
@@ -69,10 +72,28 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath, onCl
   const [cdpError, setCdpError] = useState<string | null>(null)
   const [cdpChecking, setCdpChecking] = useState(false)
   const toolList = useMCPStore(state => state.toolList)
-  const availableServers = useMemo(
-    () => [...new Set(toolList.map(tool => tool.server).filter((server): server is string => Boolean(server)))],
-    [toolList],
-  )
+  // "Available to select for this workflow" means connected -- you can't
+  // meaningfully pick tools from a server nobody has authenticated yet. A
+  // not-yet-connected server only belongs in the "Connect a new MCP server"
+  // browser below, not this checklist. Still include an already-selected
+  // server even if it's since been disconnected, so it stays visible/
+  // manageable here instead of silently vanishing from the workflow's config.
+  const availableServers = useMemo(() => {
+    const connected = toolList
+      .filter(tool => tool.connection === 'connected' && tool.server)
+      .map(tool => tool.server as string)
+    return [...new Set([...connected, ...capabilities.selected_servers])]
+  }, [toolList, capabilities.selected_servers])
+  // Lets the "Connect a new MCP server" browser add/remove an already-connected
+  // server from this workflow's selection directly, without needing the main
+  // (now selected-only) list above -- same alias-safe logic ToolSelectionSection
+  // itself uses for its own checkbox, via the shared toggleServerSelection util.
+  const handleToggleServerForWorkflow = useCallback((serverName: string) => {
+    setCapabilities(current => {
+      const { servers, tools } = toggleServerSelection(serverName, current.selected_servers, current.selected_tools)
+      return { ...current, selected_servers: servers, selected_tools: tools }
+    })
+  }, [])
   const copy = SECTION_COPY[section]
 
   const load = useCallback(async () => {
@@ -141,14 +162,6 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath, onCl
           <h2 className="text-sm font-semibold text-foreground">{copy.title}</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">{copy.description}</p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          aria-label="Close capability panel"
-        >
-          <X className="h-4 w-4" />
-        </button>
       </header>
 
       <div className={`min-h-0 flex-1 p-4 ${section === 'skills' || section === 'secrets' || section === 'mcp' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}>
@@ -160,37 +173,66 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath, onCl
           <>
             {error && <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
             {section === 'skills' && (
-              <div className="min-h-0 flex-1">
-                <SkillSelectionSection
+              <div className="flex min-h-0 flex-1 flex-col">
+                <SkillsManagerPanel
+                  compact
                   selectedSkills={capabilities.selected_skills}
-                  onSkillChange={(selected_skills) => setCapabilities(current => ({ ...current, selected_skills }))}
-                  fillAvailableHeight
+                  onToggleSkill={(folderName) => setCapabilities(current => ({
+                    ...current,
+                    selected_skills: current.selected_skills.includes(folderName)
+                      ? current.selected_skills.filter(s => s !== folderName)
+                      : [...current.selected_skills, folderName],
+                  }))}
                 />
               </div>
             )}
             {section === 'mcp' && (
-              <div className="min-h-0 flex-1">
-                <ToolSelectionSection
-                  availableServers={availableServers}
-                  selectedServers={capabilities.selected_servers}
-                  selectedTools={capabilities.selected_tools}
-                  onServerChange={(selected_servers) => setCapabilities(current => ({ ...current, selected_servers }))}
-                  onToolChange={(selected_tools) => setCapabilities(current => ({ ...current, selected_tools }))}
-                  agentMode="workflow"
-                  fillAvailableHeight
-                />
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="shrink-0 overflow-y-auto">
+                  <ToolSelectionSection
+                    availableServers={availableServers}
+                    selectedServers={capabilities.selected_servers}
+                    selectedTools={capabilities.selected_tools}
+                    onServerChange={(selected_servers) => setCapabilities(current => ({ ...current, selected_servers }))}
+                    onToolChange={(selected_tools) => setCapabilities(current => ({ ...current, selected_tools }))}
+                    agentMode="workflow"
+                    hideHeader
+                    showSelectedOnly
+                  />
+                </div>
+                <div className="mt-3 flex min-h-0 flex-1 flex-col border-t border-border pt-3">
+                  <div className="shrink-0 text-sm font-medium text-muted-foreground">
+                    Connect a new MCP server
+                  </div>
+                  <div className="mt-3 min-h-0 flex-1">
+                    <ConnectorsBrowser
+                      compact
+                      selectedServers={capabilities.selected_servers}
+                      onToggleServer={handleToggleServerForWorkflow}
+                    />
+                  </div>
+                </div>
               </div>
             )}
             {section === 'secrets' && (
-              <div className="min-h-0 flex-1">
-                <SecretSelectionSection
-                  selectedSecrets={capabilities.selected_secrets}
-                  onSecretChange={(selected_secrets) => setCapabilities(current => ({ ...current, selected_secrets }))}
-                  selectedGlobalSecrets={capabilities.selected_global_secret_names}
-                  onGlobalSecretChange={(selected_global_secret_names) => setCapabilities(current => ({ ...current, selected_global_secret_names }))}
-                  workflowPath={workspacePath || ''}
-                  fillAvailableHeight
-                />
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="shrink-0 overflow-y-auto">
+                  <SecretSelectionSection
+                    selectedSecrets={capabilities.selected_secrets}
+                    onSecretChange={(selected_secrets) => setCapabilities(current => ({ ...current, selected_secrets }))}
+                    selectedGlobalSecrets={capabilities.selected_global_secret_names}
+                    onGlobalSecretChange={(selected_global_secret_names) => setCapabilities(current => ({ ...current, selected_global_secret_names }))}
+                    workflowPath={workspacePath || ''}
+                  />
+                </div>
+                <div className="mt-3 flex min-h-0 flex-1 flex-col pt-1">
+                  <div className="shrink-0 text-sm font-medium text-muted-foreground">
+                    Manage secrets
+                  </div>
+                  <div className="mt-3 flex min-h-0 flex-1 flex-col">
+                    <SecretsManagerPanel compact />
+                  </div>
+                </div>
               </div>
             )}
             {section === 'browser' && (
@@ -209,11 +251,17 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath, onCl
               />
             )}
             {section === 'llm' && (
-              <WorkflowLLMConfigurationPanel
-                workspacePath={workspacePath}
-                llmConfig={capabilities.llm_config}
-                onChange={(llm_config) => setCapabilities(current => ({ ...current, llm_config }))}
-              />
+              <>
+                <WorkflowLLMConfigurationPanel
+                  workspacePath={workspacePath}
+                  llmConfig={capabilities.llm_config}
+                  onChange={(llm_config) => setCapabilities(current => ({ ...current, llm_config }))}
+                />
+                {/* LLMLibraryPanel renders its own "Model Library" heading. */}
+                <div className="mt-6">
+                  <LLMLibraryPanel />
+                </div>
+              </>
             )}
           </>
         )}

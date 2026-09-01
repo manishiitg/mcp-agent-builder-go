@@ -40,8 +40,6 @@ import (
 
 const maxCDPPortsPerWorkflow = 4
 
-const workshopFixedIteration = "iteration-0"
-
 const statusPollWindow = 60 * time.Second
 
 const statusPollNextAction = `**NEXT ACTION: End the current agent turn now.**
@@ -55,22 +53,6 @@ The background execution state has not changed since the previous status check. 
 **NEXT ACTION: End the current agent turn now.** Do not call query_step or list_executions again unless the user explicitly requests another status check.`
 
 var workshopStageAgentIdentityCounter atomic.Uint64
-
-const workshopLearningScaffoldTemplate = `---
-name: %s
-description: "Global HOW-to-run notes for this workflow."
-disable-model-invocation: true
-user-invocable: false
----
-
-# Overview
-
-This skill captures reusable workflow knowledge for future runs.
-
-## References
-
-- Add topic-specific notes under ` + "`references/`" + ` as patterns emerge.
-`
 
 func parseWorkshopIterationNumber(iteration string) int {
 	if iteration == "" {
@@ -342,17 +324,6 @@ func ValidatePulseReviewIdentity(reviewRunID, module string) error {
 	return nil
 }
 
-func normalizeWorkshopBuilderRunFolder(runFolder string) string {
-	if runFolder == "" {
-		return workshopFixedIteration
-	}
-	parts := strings.SplitN(runFolder, "/", 2)
-	if len(parts) == 2 {
-		return fmt.Sprintf("%s/%s", workshopFixedIteration, parts[1])
-	}
-	return workshopFixedIteration
-}
-
 func isMissingOrEmptyWorkspaceError(err error) bool {
 	if err == nil {
 		return false
@@ -361,105 +332,6 @@ func isMissingOrEmptyWorkspaceError(err error) bool {
 	return strings.Contains(errStr, "not found") ||
 		strings.Contains(errStr, "no such file") ||
 		strings.Contains(errStr, "no content found")
-}
-
-func (iwm *InteractiveWorkshopManager) readWorkflowLabelForBootstrap(ctx context.Context) string {
-	label := filepath.Base(strings.TrimSpace(iwm.controller.GetWorkspacePath()))
-	content, err := iwm.controller.ReadWorkspaceFile(ctx, "workflow.json")
-	if err != nil || strings.TrimSpace(content) == "" {
-		return label
-	}
-
-	var manifest struct {
-		Label string `json:"label"`
-	}
-	if err := json.Unmarshal([]byte(content), &manifest); err != nil {
-		return label
-	}
-	if strings.TrimSpace(manifest.Label) != "" {
-		return strings.TrimSpace(manifest.Label)
-	}
-	return label
-}
-
-func workshopGlobalLearningScaffold(workflowLabel string) string {
-	label := strings.TrimSpace(workflowLabel)
-	if label == "" {
-		label = "Workflow"
-	}
-	return stringsReplace(workshopLearningScaffoldTemplate, "%s", label, 1)
-}
-
-func (iwm *InteractiveWorkshopManager) ensureWorkshopStoreFoldersExist(ctx context.Context) error {
-	workspacePath := iwm.controller.GetWorkspacePath()
-
-	for _, folder := range []string{
-		DBFolderName,
-		filepath.Join(DBFolderName, DBAssetsFolderName),
-		KnowledgebaseFolderName,
-		filepath.Join(KnowledgebaseFolderName, KnowledgebaseContextFolderName),
-		filepath.Join(KnowledgebaseFolderName, KBNotesFolderName),
-		LearningsFolderName,
-		filepath.Join(LearningsFolderName, "_global"),
-		filepath.Join(LearningsFolderName, "_global", "references"),
-	} {
-		if err := createFolderViaAPI(ctx, folder, workspacePath); err != nil {
-			return fmt.Errorf("bootstrap folder %s: %w", folder, err)
-		}
-	}
-
-	if err := InitKBGraphFiles(ctx, iwm.controller.BaseOrchestrator, workspacePath, ""); err != nil {
-		return fmt.Errorf("bootstrap knowledgebase files: %w", err)
-	}
-
-	skillPath := filepath.Join(LearningsFolderName, "_global", "SKILL.md")
-	skillContent, err := iwm.controller.ReadWorkspaceFile(ctx, skillPath)
-	if err == nil && strings.TrimSpace(skillContent) != "" {
-		return nil
-	}
-	if err != nil && !isMissingOrEmptyWorkspaceError(err) {
-		return fmt.Errorf("read %s: %w", skillPath, err)
-	}
-
-	if err := iwm.controller.WriteWorkspaceFile(ctx, skillPath, workshopGlobalLearningScaffold(iwm.readWorkflowLabelForBootstrap(ctx))); err != nil {
-		return fmt.Errorf("bootstrap %s: %w", skillPath, err)
-	}
-	iwm.controller.GetLogger().Info("🆕 Bootstrapped learnings/_global/SKILL.md for workflow workshop")
-	return nil
-}
-
-// ensureWorkshopBootstrapFilesExist bootstraps plan and shared workflow stores for
-// brand-new workflows so the builder can start cleanly and edit those areas on the
-// first turn without hitting missing-path errors.
-func (iwm *InteractiveWorkshopManager) ensureWorkshopBootstrapFilesExist(ctx context.Context) error {
-	if iwm.controller.isEvaluationMode {
-		return nil
-	}
-
-	planContent, err := iwm.controller.ReadWorkspaceFile(ctx, "planning/plan.json")
-	if err == nil && strings.TrimSpace(planContent) != "" {
-		return iwm.ensureWorkshopStoreFoldersExist(ctx)
-	}
-
-	if err != nil {
-		if !isMissingOrEmptyWorkspaceError(err) {
-			return err
-		}
-	} else {
-		iwm.controller.GetLogger().Warn("⚠️ planning/plan.json is empty — bootstrapping an empty plan so the workshop can start")
-	}
-
-	emptyPlan := &PlanningResponse{}
-	data, marshalErr := json.MarshalIndent(emptyPlan, "", "  ")
-	if marshalErr != nil {
-		return fmt.Errorf("failed to marshal empty plan.json bootstrap: %w", marshalErr)
-	}
-	if writeErr := iwm.controller.writeManagedPlanningFile(ctx, "plan.json", string(data)); writeErr != nil {
-		return fmt.Errorf("failed to bootstrap empty planning/plan.json: %w", writeErr)
-	}
-
-	iwm.controller.GetLogger().Info("🆕 Bootstrapped empty planning/plan.json for workflow workshop")
-	return iwm.ensureWorkshopStoreFoldersExist(ctx)
 }
 
 // ============================================================================
@@ -1312,12 +1184,14 @@ func (iwm *InteractiveWorkshopManager) persistWorkflowConfigToManifest(ctx conte
 		delete(caps, "cdp_ports")
 	}
 
-	// Persist lock_knowledgebase under capabilities.llm_config
+	// Persist the remaining workflow-level KB configuration. Remove the retired
+	// workflow-wide lock whenever an older manifest is rewritten; KB write
+	// ownership is now entirely step-based.
 	llmCfg, _ := caps["llm_config"].(map[string]interface{})
 	if llmCfg == nil {
 		llmCfg = make(map[string]interface{})
 	}
-	llmCfg["lock_knowledgebase"] = iwm.controller.LockKnowledgebase()
+	delete(llmCfg, "lock_knowledgebase")
 	if shape := iwm.controller.KBShape(); shape != "" {
 		llmCfg["kb_shape"] = shape
 	} else {
@@ -2265,11 +2139,11 @@ For the full debugging playbook (workshop vs run investigation workflow steps, r
 {{if eq .WorkshopMode "workshop"}}
 ## Optimization
 
-Priority order when reviewing a step: (1) Correctness — description precision, validation schema completeness, context I/O wiring. (2) Knowledge — learnings quality, lock lifecycle. (3) Efficiency — tool-call waste, workflow structure (merge/split/reorder).
+Priority order when reviewing a step: (1) Correctness — description precision, validation schema completeness, context I/O wiring. (2) Knowledge — learnings quality and access ownership. (3) Efficiency — tool-call waste, workflow structure (merge/split/reorder).
 
-	Hard rules: `+"`validation_schema`"+` is the only automated gate (catch stale files, field completeness, constraints); default `+"`learnings_access`"+` = `+"`\"read\"`"+`; use `+"`\"read-write\"`"+` + `+"`learning_objective`"+` only for reusable execution HOW (browser selectors/timing/auth, API/MCP quirks, CLI/SDK command patterns, parsing/retry/recovery rules). Routing, validation, mechanical transforms, aggregation/report shaping, human approval, pure db/KB readers, and mature scripted steps should usually stay read-only. Every workflow step currently gets managed DB read-write access: agentic steps receive `+"`query_workflow_db`"+` plus `+"`mutate_workflow_db`"+`, while saved scripted code keeps `+"`$DB_PATH`"+` compatibility. Treat `+"`db_access`"+` as a compatibility field, not a tuning decision. Deterministic API/SDK/CLI data fetching, stable parsing/normalization/transforms, and mechanical persistence start `+"`scripted`"+`; author and test `+"`learnings/<step-id>/main.py`"+` immediately, then feed durable results to agentic processing. Judgment, adaptive discovery, and browser/UI work stay `+"`agentic`"+`. No run-history threshold is needed to declare a deterministic step scripted. `+"`lock_learnings=true`"+` is a deliberate Workshop/user decision, never a runtime side effect; `+"`lock_code=true`"+` still requires 10+ representative scenario-covering runs. Three locks: `+"`lock_learnings`"+` (per-step, freezes SKILL.md), `+"`lock_code`"+` (per-step scripted, freezes main.py), `+"`lock_knowledgebase`"+` (workflow-wide, freezes notes/ auto-updates).
+	Hard rules: `+"`validation_schema`"+` is the only automated gate (catch stale files, field completeness, constraints); default `+"`learnings_access`"+` = `+"`\"read\"`"+`; use `+"`\"read-write\"`"+` + `+"`learning_objective`"+` only for reusable execution HOW (browser selectors/timing/auth, API/MCP quirks, CLI/SDK command patterns, parsing/retry/recovery rules). Routing, validation, mechanical transforms, aggregation/report shaping, human approval, pure db/KB readers, and mature scripted steps should usually stay read-only. Every workflow step currently gets managed DB read-write access: agentic steps receive `+"`query_workflow_db`"+` plus `+"`mutate_workflow_db`"+`, while saved scripted code keeps `+"`$DB_PATH`"+` compatibility. Treat `+"`db_access`"+` as a compatibility field, not a tuning decision. Deterministic API/SDK/CLI data fetching, stable parsing/normalization/transforms, and mechanical persistence start `+"`scripted`"+`; author and test `+"`learnings/<step-id>/main.py`"+` immediately, then feed durable results to agentic processing. Judgment, adaptive discovery, and browser/UI work stay `+"`agentic`"+`. No run-history threshold is needed to declare a deterministic step scripted. `+"`lock_code=true`"+` still requires 10+ representative scenario-covering runs. KB writes are step-based: only `+"`knowledgebase_access=\"write\"`"+` or `+"`\"read-write\"`"+` together with a non-empty `+"`knowledgebase_contribution`"+` may write notes.
 
-For the full playbook (validation design, learning config, three-locks decision tree, scripted debugging, mode promotion gates, evidence-based locking, orchestrator design + fast path, KB curation modes): `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/optimize-playbook.md\"}])`"+`. For the per-step config knobs themselves — all store-access modes (`+"`learnings_access`"+` / `+"`knowledgebase_access`"+` / `+"`db_access`"+`), the three locks, execution mode/tier/model, and `+"`update_step_config`"+`/clear usage — load `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/step-config.md\"}])`"+`. When patching `+"`learnings/{step-id}/main.py`"+`: also load `+"`code-authoring`"+`.
+For the full playbook (validation design, learning access, scripted debugging, mode promotion gates, evidence-based code locking, orchestrator design + fast path, KB curation modes): `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/optimize-playbook.md\"}])`"+`. For the per-step config knobs themselves — all store-access modes (`+"`learnings_access`"+` / `+"`knowledgebase_access`"+` / `+"`db_access`"+`), the code lock, execution mode/tier/model, and `+"`update_step_config`"+`/clear usage — load `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/step-config.md\"}])`"+`. When patching `+"`learnings/{step-id}/main.py`"+`: also load `+"`code-authoring`"+`.
 {{end}}
 
 {{if eq .UseProjectedReferenceSkills "true"}}
@@ -2288,7 +2162,7 @@ The native `+"`api-bridge`"+` exposes `+"`execute_shell_command`"+`, `+"`diff_pa
 {{if eq .IsCodeExecutionMode "true"}}**Code execution mode:** Bridge-native tools: `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`agent_browser`"+`, `+"`get_api_spec`"+`, and intrinsic `+"`read_skill`"+` when skills are attached. All other workflow tools are available via the workflow API path — use `+"`get_api_spec(tool_name=\"...\")`"+` for their schemas. Do **not** hardcode raw HTTP requests.
 {{end}}
 
-This is the one-line-per-category map. For full signatures, parameters, when-to-use rules, and gotchas (especially Schedules and Secrets, which have multi-step flows), call **`+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}])`"+`**.
+This is the one-line-per-category map. For full signatures, parameters, when-to-use rules, and gotchas, call **`+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}])`"+`** — or, for the multi-step Schedules and Secrets flows specifically, `+"`references/schedules.md`"+` and `+"`references/secret-management.md`"+`.
 
 {{if or (eq .WorkshopMode "workshop") (eq .WorkshopMode "run")}}
 - **Step execution & inspection**: `+"`execute_step`"+`, `+"`query_step`"+`, `+"`send_step_message`"+`, `+"`debug_step`"+`, `+"`list_executions`"+`, `+"`stop_step`"+`, `+"`stop_all_executions`"+`, `+"`run_in_background`"+`, `+"`run_full_workflow`"+`. {{if eq .WorkshopMode "workshop"}}Workshop also exposes `+"`execute_step(..., fast_path_only=true)`"+` for scripted main.py fast-path testing.{{end}}
@@ -2299,7 +2173,7 @@ This is the one-line-per-category map. For full signatures, parameters, when-to-
 - **Read-only info**: `+"`get_step_prompts`"+`, `+"`get_workflow_config`"+`, `+"`get_llm_config`"+`{{if eq .WorkshopMode "workshop"}}, `+"`get_workflow_command_guidance(kind=\"review-artifact-drift\")`"+`{{else}}. Artifact drift reviews belong in Workshop — switch modes and run `+"`/review-artifact-drift`"+` if needed{{end}}.
 {{if eq .WorkshopMode "workshop"}}
 - **Plan modification**: `+"`create_plan`"+`, `+"`add_<type>_step`"+`, `+"`update_<type>_step`"+`, `+"`delete_plan_steps`"+`, `+"`cleanup_orphan_step_configs`"+`, todo-task route tools, `+"`update_validation_schema`"+`.
-- **Variables & config**: `+"`update_variable`"+`, `+"`add_group`"+`/`+"`update_group`"+`/`+"`delete_group`"+`, `+"`update_workflow_config`"+`. Use `+"`update_workflow_config`"+` for workflow MCP servers, workflow-level MCP tool allowlists, selected skills, selected secrets, the one-way Slack webhook secret reference, browser_mode, KB lock, run retention, and activation of an owner-approved advisor specialization decision. Recurring Pulse is configured only through an enabled `+"`pulse_review_only`"+` schedule. Do NOT edit `+"`workflow.json`"+` manually.
+- **Variables & config**: `+"`update_variable`"+`, `+"`add_group`"+`/`+"`update_group`"+`/`+"`delete_group`"+`, `+"`update_workflow_config`"+`. Use `+"`update_workflow_config`"+` for workflow MCP servers, workflow-level MCP tool allowlists, selected skills, selected secrets, the one-way Slack webhook secret reference, browser_mode, run retention, and activation of an owner-approved advisor specialization decision. Recurring Pulse is configured only through an enabled `+"`pulse_review_only`"+` schedule. Do NOT edit `+"`workflow.json`"+` manually.
 - **Schedule management**: `+"`list_schedules`"+`, `+"`create_schedule`"+`, `+"`create_calendar_schedule`"+`, `+"`update_schedule`"+`, `+"`delete_schedule`"+`, `+"`trigger_schedule`"+`, `+"`get_schedule_runs`"+`. Cron / message-authoring rules, normal Run schedules plus Pulse, the `+"`/pulse-setup`"+` setup path, and unattended-message discipline — all live in the `+"`workflow-tools`"+` ref doc. Workflow schedules always use the workshop path; do not create direct `+"`mode=\"workflow\"`"+` schedules. **Whenever you create a recurring schedule, also pair it with a backup** so unattended runs persist their state off-box — see `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/backup-strategy.md\"}])`"+`.
 {{end}}
 - **Shell & discovery**: `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`read_image`"+`, `+"`generate_text_llm`"+`, `+"`search_web_llm`"+`.
@@ -2318,12 +2192,10 @@ For the full layout (every log file's schema, timing-debug walkthrough, cost led
 
 ## CONSTRAINTS
 1. **Use step IDs**: Step IDs come from plan.json (e.g., "step-create-report"), not positional numbers.
-2. **Boolean config fields**: Only pass lock_learnings when explicitly changing it. Do NOT include it with false when updating other fields — this resets previously set values.
+2. **Boolean config fields**: Only pass lock_code when explicitly changing it. Do NOT include it with false when updating unrelated fields.
 3. **Never hardcode variables or secrets**: Use variable placeholders (e.g., {USER_ID}) in descriptions and learnings. Actual values belong in variables/variables.json / variable groups.
 4. **Back up recurring schedules**: Whenever you create or update a recurring schedule, also set up a backup so unattended runs persist their state off-box — a final backup message for `+"`workshop`"+`-mode schedules, or a backup step in the plan for `+"`workflow`"+`-mode schedules (there is no message queue to carry the instruction). Load `+"`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/backup-strategy.md\"}])`"+` for the playbook; confirm with the user before skipping.
 `)
-
-var interactiveWorkshopUserTemplate = MustRegisterTemplate("interactiveWorkshopUser", `{{if .UserRequest}}{{.UserRequest}}{{else}}What would you like to do in the workshop?{{end}}`)
 
 // ============================================================================
 // Custom Workshop Tools
@@ -2560,7 +2432,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// Tool 1: execute_step — start step in background
 	if err := mcpAgent.RegisterCustomTool(
 		"execute_step",
-		"Start a workflow step in the background, including a normal plan step, nested route step, or plan-local orphan utility step. Returns an execution_id immediately. You will be automatically notified when it completes. Idempotent while running: if the step already has a running execution, this returns that existing execution_id instead of starting a duplicate — use send_step_message with the returned execution_id to steer its currently active agent turn. Learnings follow the step's persistent config (`learnings_access`, `learning_objective`, `lock_learnings`). When learning writes are enabled, SKILL.md updates run as the step agent's direct post-completion continuation before the step is fully finalized. Workshop mode only: set fast_path_only=true to run ONLY the saved learnings/{step-id}/main.py script with no LLM fallback when testing scripted patches.",
+		"Start a workflow step in the background, including a normal plan step, nested route step, or plan-local orphan utility step. Returns an execution_id immediately. You will be automatically notified when it completes. Idempotent while running: if the step already has a running execution, this returns that existing execution_id instead of starting a duplicate — use send_step_message with the returned execution_id to steer its currently active agent turn. Learnings follow the step's persistent config (`learnings_access`, `learning_objective`). When learning writes are enabled, SKILL.md updates run as the step agent's direct post-completion continuation before the step is fully finalized. Workshop mode only: set fast_path_only=true to run ONLY the saved learnings/{step-id}/main.py script with no LLM fallback when testing scripted patches.",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -2834,7 +2706,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 
 				// Variables captured after execution for metadata
 				var isLockCode bool
-				var isLockLearnings bool
 				var lockCodeConsecutiveFailures int
 				var lockCodeNeedsReview bool
 				var workshopModeForMeta string
@@ -2849,9 +2720,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						}
 						if isLockCode {
 							execMeta["lock_code"] = "true"
-						}
-						if isLockLearnings {
-							execMeta["lock_learnings"] = "true"
 						}
 						if lockCodeConsecutiveFailures > 0 {
 							execMeta["lock_code_consecutive_failures"] = fmt.Sprintf("%d", lockCodeConsecutiveFailures)
@@ -2914,9 +2782,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						if sc.ID == stepID && sc.AgentConfigs != nil {
 							if sc.AgentConfigs.LockCode != nil && *sc.AgentConfigs.LockCode {
 								isLockCode = true
-							}
-							if sc.AgentConfigs.LockLearnings != nil && *sc.AgentConfigs.LockLearnings {
-								isLockLearnings = true
 							}
 							break
 						}
@@ -3450,18 +3315,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			learningFiles, _ := iwm.controller.readStepLearningFiles(ctx, learningsPath)
 
 			stepConfigs, _ := iwm.controller.ReadStepConfigs(ctx)
-			lockStatus := "unlocked"
+			learningAccess := LearningsAccessRead
 			for _, sc := range stepConfigs {
 				if sc.ID == resolvedID && sc.AgentConfigs != nil {
-					if sc.AgentConfigs.LockLearnings != nil && *sc.AgentConfigs.LockLearnings {
-						lockStatus = "locked"
-					}
-					// "disabled" in this summary means the step contributes NOTHING to
-					// global learnings — true only when learnings_access="none" or when
-					// the effective access is not write-capable.
-					if resolveLearningsAccess(sc.AgentConfigs) != LearningsAccessReadWrite {
-						lockStatus = "disabled"
-					}
+					learningAccess = resolveLearningsAccess(sc.AgentConfigs)
 					break
 				}
 			}
@@ -3473,12 +3330,12 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					fileNames = append(fileNames, f)
 				}
 				sort.Strings(fileNames)
-				result.WriteString(fmt.Sprintf("Files: %d | Status: %s | Path: %s\n", len(learningFiles), lockStatus, learningsPath))
+				result.WriteString(fmt.Sprintf("Files: %d | Access: %s | Path: %s\n", len(learningFiles), learningAccess, learningsPath))
 				for _, f := range fileNames {
 					result.WriteString(fmt.Sprintf("  - %s\n", f))
 				}
 			} else {
-				result.WriteString(fmt.Sprintf("No learnings yet | Status: %s | Path: %s\n", lockStatus, learningsPath))
+				result.WriteString(fmt.Sprintf("No learnings yet | Access: %s | Path: %s\n", learningAccess, learningsPath))
 			}
 			result.WriteString("\n")
 
@@ -3752,7 +3609,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"clear_fields": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "Field names to CLEAR (remove from step_config.json) so the step uses preset/default behavior again. Clearing enabled_skills removes explicit step skills; step execution does not inherit workflow-selected skills, so set enabled_skills explicitly when the step needs installed skills. Only fields with a corresponding setter in this tool are clearable. Valid names: execution_llm, execution_llm_reason, execution_tier, execution_tier_reason, lock_learnings_reason, servers, tools, enabled_custom_tools, enabled_skills, additional_read_paths, learning_objective, lock_learnings, lock_code, use_code_execution_mode, disable_parallel_tool_execution, coding_agent_tmux_lifecycle, description_reviewed, knowledgebase_access, knowledgebase_contribution, learnings_access, review_notes, declared_execution_mode, declared_execution_mode_reason, validation_schema. Unknown names are reported as errors; nothing else in the same call is applied.",
+					"description": "Field names to CLEAR (remove from step_config.json) so the step uses preset/default behavior again. Clearing enabled_skills removes explicit step skills; step execution does not inherit workflow-selected skills, so set enabled_skills explicitly when the step needs installed skills. Only fields with a corresponding setter in this tool are clearable. Valid names: execution_llm, execution_llm_reason, execution_tier, execution_tier_reason, servers, tools, enabled_custom_tools, enabled_skills, additional_read_paths, learning_objective, lock_code, use_code_execution_mode, disable_parallel_tool_execution, coding_agent_tmux_lifecycle, description_reviewed, knowledgebase_access, knowledgebase_contribution, learnings_access, review_notes, declared_execution_mode, declared_execution_mode_reason, validation_schema. Unknown names are reported as errors; nothing else in the same call is applied.",
 				},
 				"servers": map[string]interface{}{
 					"type":        "array",
@@ -3767,14 +3624,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"learning_objective": map[string]interface{}{
 					"type":        "string",
 					"description": "Extraction instruction for the step agent's direct post-completion learning turn. Use only for reusable execution HOW: browser selectors/timing/auth flows, API/MCP request and response quirks, CLI/SDK command patterns, parsing rules, retries, recovery, or file-format pitfalls. Do not use for facts/results, report data, routing decisions, validation-only steps, mechanical transforms, human approvals, pure db/KB readers, or mature scripted steps whose main.py already captures the method. Example: 'Capture the Buffer API create-update request shape, success fields, 401/429 handling, and output id parsing.' Required when learnings_access=\"read-write\" (the validator rejects write access with an empty objective).",
-				},
-				"lock_learnings": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Freeze this step's writes to the shared workflow skill. The skill still flows into its execution prompt — a locked step reads every other step's contributions and can never give anything back, so this is a real cost, not isolation. Runtime execution never auto-sets or auto-clears it. Setting true REQUIRES lock_learnings_reason; the call is rejected without one. Prefer learnings_access=\"read\" when the step simply has no reusable HOW to contribute — that is the ordinary way to say 'consumes but does not write', and it needs no reason. Does NOT affect saved main.py — use lock_code for that.",
-				},
-				"lock_learnings_reason": map[string]interface{}{
-					"type":        "string",
-					"description": "Why this step's contribution is frozen. Required whenever lock_learnings is set true. State the evidence, not the intent: what was reviewed, and why further contribution from this step would make the shared skill worse rather than better. Example: 'Selectors verified stable across 12 runs since 2026-06; its last four contributions all restated existing entries in browser-session.md.' A later reviewer must be able to judge the freeze from this line without re-deriving it.",
 				},
 				"lock_code": map[string]interface{}{
 					"type":        "boolean",
@@ -3987,22 +3836,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if val, ok := args["learning_objective"]; ok && val != nil {
 				if s, ok := val.(string); ok {
 					targetConfig.AgentConfigs.LearningObjective = strings.TrimSpace(s)
-				}
-			}
-			if val, ok := args["lock_learnings_reason"]; ok && val != nil {
-				if s, ok := val.(string); ok {
-					targetConfig.AgentConfigs.LockLearningsReason = strings.TrimSpace(s)
-				}
-			}
-			if val, ok := args["lock_learnings"]; ok && val != nil {
-				if b, ok := val.(bool); ok {
-					if err := validateLockLearningsChange(b, targetConfig.AgentConfigs.LockLearningsReason); err != nil {
-						return "", err
-					}
-					// Same protection: don't let accidental false overwrite a true value.
-					if b || targetConfig.AgentConfigs.LockLearnings == nil || !*targetConfig.AgentConfigs.LockLearnings {
-						targetConfig.AgentConfigs.LockLearnings = &b
-					}
 				}
 			}
 			if val, ok := args["lock_code"]; ok && val != nil {
@@ -4349,11 +4182,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if effectiveAccess == LearningsAccessReadWrite && !hasObjective {
 				errors = append(errors, "learnings_access=\"read-write\" requires a non-empty learning_objective. The direct learnings turn needs an extraction instruction; set learning_objective or drop access to \"read\"/\"none\".")
 			}
-			isLocked := targetConfig.AgentConfigs.LockLearnings != nil && *targetConfig.AgentConfigs.LockLearnings
-			if !hasObjective && isLocked {
-				errors = append(errors, "lock_learnings=true requires a non-empty learning_objective. Locking a step with no objective means learning never ran; set learning_objective first or unlock.")
-			}
-
 			// 6b. Validate execution_tier.
 			if rawExecutionTier := strings.TrimSpace(targetConfig.AgentConfigs.ExecutionTier); rawExecutionTier != "" {
 				if NormalizeTierOverride(rawExecutionTier) == "" {
@@ -5807,7 +5635,8 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				writeTierEntry("Tier 3 (low)", tc.Tier3)
 			}
 
-			// Knowledgebase lock state
+			// Knowledgebase state. Write ownership is configured per step through
+			// knowledgebase_access + knowledgebase_contribution.
 			sb.WriteString("\n**Knowledgebase**:\n")
 			sb.WriteString(fmt.Sprintf("- use_knowledgebase: %v\n", ctrl.UseKnowledgebase()))
 			sb.WriteString(fmt.Sprintf("- kb_shape: %s", workflowtypes.ResolveKBShape(ctrl.KBShape())))
@@ -5815,12 +5644,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				sb.WriteString(" (default — not explicitly set)")
 			}
 			sb.WriteString("\n")
-			sb.WriteString(fmt.Sprintf("- lock_knowledgebase: %v", ctrl.LockKnowledgebase()))
-			if ctrl.LockKnowledgebase() {
-				sb.WriteString(" — post-step KB update agent is FROZEN workflow-wide; use the /improve-knowledge checklist with a generic read-only reviewer and parent fixer for intentional note changes")
-			}
-			sb.WriteString("\n")
-
 			runRetentionCount := defaultRunRetentionCount
 			runRetentionNote := " (default)"
 			if content, err := ctrl.ReadWorkspaceFile(ctx, "workflow.json"); err == nil {
@@ -6072,10 +5895,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 							"items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"published_llm_id": map[string]interface{}{"type": "string"}, "provider": map[string]interface{}{"type": "string"}, "model_id": map[string]interface{}{"type": "string"}, "options": map[string]interface{}{"type": "object", "additionalProperties": true}}, "required": []string{"provider", "model_id"}},
 						},
 					},
-				},
-				"lock_knowledgebase": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Workflow-level freeze on the post-step KB update agent. When true, automatic notes/ writes stop; use the /improve-knowledge checklist with a generic read-only reviewer and parent fixer for intentional changes (reads unaffected). Set after KB is stable to save LLM cost per step.",
 				},
 				"browser_mode": map[string]interface{}{
 					"type":        "string",
@@ -7060,20 +6879,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				}
 			}
 
-			// --- Lock Knowledgebase ---
-			if raw, ok := args["lock_knowledgebase"]; ok && raw != nil {
-				if lockVal, ok := raw.(bool); ok {
-					iwm.controller.SetLockKnowledgebase(lockVal)
-					anyChanged = true
-					if lockVal {
-						sb.WriteString("\n### Knowledgebase Lock (enabled)\nPost-step KB update agent is now frozen workflow-wide. Use the `/improve-knowledge` checklist with a generic read-only reviewer and parent fixer for intentional `notes/` changes; reads are unaffected.\n")
-					} else {
-						sb.WriteString("\n### Knowledgebase Lock (disabled)\nPost-step KB update agent resumes for steps with `knowledgebase_contribution` set and write access.\n")
-					}
-					logger.Info(fmt.Sprintf("Updated workflow lock_knowledgebase=%v", lockVal))
-				}
-			}
-
 			// --- Browser mode ---
 			if raw, ok := args["browser_mode"]; ok && raw != nil {
 				mode, _ := raw.(string)
@@ -7296,7 +7101,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 
 			if !anyChanged {
-				return "No changes applied. Provide at least one of: add_servers, remove_servers, add_tools, remove_tools, add_skills, remove_skills, add_secrets, remove_secrets, run_notification_instructions, pulse_notification_instructions, run_notification_channels, pulse_notification_channels, slack_webhook_secret_name, update_tier_fallbacks, lock_knowledgebase, browser_mode, cdp_ports, run_retention_count, advisor_specialization_approval_input_id.", nil
+				return "No changes applied. Provide at least one of: add_servers, remove_servers, add_tools, remove_tools, add_skills, remove_skills, add_secrets, remove_secrets, run_notification_instructions, pulse_notification_instructions, run_notification_channels, pulse_notification_channels, slack_webhook_secret_name, update_tier_fallbacks, browser_mode, cdp_ports, run_retention_count, advisor_specialization_approval_input_id.", nil
 			}
 
 			// Persist config changes to workflow.json manifest (file-backed)
@@ -7441,7 +7246,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		// PLAT-262: skip create_schedule registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"create_schedule",
-		"Create a new cron schedule for this workflow. Workflow schedules use mode='workshop' with workshop_mode='run'. Messages are optional; when omitted, the scheduler asks Run mode to execute the full workflow. Continuous improvement, including Goal Advisor, is selected dynamically by Pulse after normal scheduled runs; do not create a separate optimizer schedule. For the full contract (collision/dependency policy design, when direct messages vs. route_selections is correct, resume_previous tradeoffs): read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}]).",
+		"Create a new cron schedule for this workflow. Workflow schedules use mode='workshop' with workshop_mode='run'. Messages are optional; when omitted, the scheduler asks Run mode to execute the full workflow. Continuous improvement, including Goal Advisor, is selected dynamically by Pulse after normal scheduled runs; do not create a separate optimizer schedule. For the full contract (collision/dependency policy design, when direct messages vs. route_selections is correct, resume_previous tradeoffs): read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/schedules.md\"}]).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -7612,7 +7417,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		// PLAT-262: skip create_calendar_schedule registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"create_calendar_schedule",
-		"Create a dated calendar schedule for this workflow, such as a full-month Instagram content calendar. Use this when the user provides specific dates/times instead of a repeating cron pattern. Workflow calendar schedules always run through the workshop builder path; omit mode or use mode='workshop'. For the full contract: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}]).",
+		"Create a dated calendar schedule for this workflow, such as a full-month Instagram content calendar. Use this when the user provides specific dates/times instead of a repeating cron pattern. Workflow calendar schedules always run through the workshop builder path; omit mode or use mode='workshop'. For the full contract: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/schedules.md\"}]).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -7700,7 +7505,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		// PLAT-262: skip update_schedule registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"update_schedule",
-		"Update an existing schedule. Only provided fields are changed; omitted fields keep their current values. For collision/dependency policy design and when direct messages vs. route_selections is correct: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workflow-tools.md\"}]).",
+		"Update an existing schedule. Only provided fields are changed; omitted fields keep their current values. For collision/dependency policy design and when direct messages vs. route_selections is correct: read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/schedules.md\"}]).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -8403,7 +8208,7 @@ func registerWorkshopLLMTools(iwm *InteractiveWorkshopManager, mcpAgent Definiti
 				"schema_version": workflowtypes.LLMConfigSchemaVersion,
 			}
 			for _, key := range []string{
-				"use_knowledgebase", "lock_knowledgebase", "kb_shape",
+				"use_knowledgebase", "kb_shape",
 				"enable_context_summarization", "enable_context_editing",
 				"enable_image_generation", "image_gen_provider", "image_gen_model_id",
 			} {
@@ -8552,7 +8357,7 @@ This is a **read-only review**:
 11. **Check KB discipline**: KB writes require a useful `+"`"+`knowledgebase_contribution`+"`"+` and correct read/write access. `+"`knowledgebase/context/`"+` should contain user-supplied runtime context; `+"`knowledgebase/notes/`"+` should contain workflow-discovered durable narrative observations, not execution recipes, raw rows, or volatile run state. If `+"`"+`knowledgebase/notes/_index.json`+"`"+` exists, it must point to coherent topic notes.
 12. **Check db discipline**: `+"`"+`db/db.sqlite`+"`"+` should be a clean relational surface: each table documented in `+"`"+`db/README.md`+"`"+` with DDL, PRIMARY KEY, upsert rule (`+"`INSERT ... ON CONFLICT`"+`), indexes, writer ownership, group separation, report consumers (the HTML report `+"`window.report.query`"+` SQL that reads it), and correct references to durable assets under `+"`db/assets/`"+`.
 13. **Check skill discipline**: Installed skills live under `+"`skills/{folder}/SKILL.md`"+` and are reusable capability instructions shared across workflows. Review workflow-selected skills and per-step `+"`enabled_skills`"+` against the actual plan. Flag missing needed skills, selected-but-unused skills, descriptions that reference skills not enabled for the execution agent, malformed skill folders, and skills that duplicate workflow-specific learnings or contain workflow-specific secrets/paths/run state. Do not assume workflow-level selected skills automatically reach step execution; verify step-level `+"`enabled_skills`"+` when runtime requires explicit scoping.
-14. **Check lock consistency**: Three locks freeze workflow state — `+"`"+`lock_learnings`+"`"+` (per-step: freezes SKILL.md writes), `+"`"+`lock_code`+"`"+` (per-step, scripted only: freezes `+"`"+`learnings/{step-id}/main.py`+"`"+` against fix-loop rewrites), `+"`"+`lock_knowledgebase`+"`"+` (workflow-level: freezes post-step KB update agent). Flag inconsistency like `+"`"+`lock_code=true`+"`"+` without the scripted evidence gate or `+"`"+`lock_learnings=true`+"`"+` with stale/mismatched learning metadata. If a step description has meaningfully changed since the last review, recommend clearing `+"`"+`description_reviewed`+"`"+` and re-reviewing before keeping the locks.
+14. **Check access and code-lock consistency**: `+"`"+`lock_code`+"`"+` freezes scripted `+"`"+`learnings/{step-id}/main.py`+"`"+` against fix-loop rewrites; flag it without the scripted evidence gate. Learning and KB write eligibility are access decisions, not locks: review `+"`"+`learnings_access`+"`"+` + `+"`"+`learning_objective`+"`"+`, and `+"`"+`knowledgebase_access`+"`"+` + `+"`"+`knowledgebase_contribution`+"`"+`. If a step description has meaningfully changed since the last review, recommend clearing `+"`"+`description_reviewed`+"`"+` and re-reviewing before keeping a code lock or write grant.
 
 ## STEP BOUNDARY STANDARD
 
@@ -8613,7 +8418,7 @@ Review these files/directories when present. Stay read-only:
 - `+"`variables/variables.json`"+`: check whether plan-visible hardcoded values should be variables and whether required variables are declared.
 - `+"`skills/{folder}/SKILL.md`"+`: read every skill selected at workflow level or enabled per step. Check whether the skill is actually needed, scoped to the right step(s), and not duplicating workflow-specific learnings.
 - `+"`learnings/_global/SKILL.md`"+`: check whether HOW-to-run learnings match current step descriptions and do not duplicate task instructions.
-- `+"`learnings/{step-id}/.learning_metadata.json`"+`: inspect for every step with learning writes or `+"`lock_learnings=true`"+`. Check `+"`successful_runs`"+`, `+"`description_hash_runs`"+`, and latest detection history. Flag locks that look stale, lack a clear builder/user rationale in review_notes, or contradict the current step description/config.
+- `+"`learnings/{step-id}/.learning_metadata.json`"+`: inspect for every step with learning writes. Check `+"`successful_runs`"+`, `+"`description_hash_runs`"+`, and latest detection history. Flag stale or unnecessary `+"`learnings_access=\"read-write\"`"+` grants that contradict the current step description/config or repeatedly produce no reusable HOW.
 - `+"`learnings/{step-id}/main.py`"+` and `+"`learnings/{step-id}/script_metadata.json`"+`: inspect for scripted steps. For `+"`agentic`"+` steps, verify `+"`learnings/{step-id}/main.py`"+` does NOT exist; if it does, flag it as a stale artifact that should be deleted because agentic never runs or maintains persistent main.py.
 - `+"`knowledgebase/context/context.md`"+`: check whether user-supplied runtime context is present when steps appear to rely on chat memory, and verify maintenance-owned notes did not absorb user-owned rules/preferences that belong here.
 - `+"`knowledgebase/notes/_index.json`"+` and relevant `+"`knowledgebase/notes/*.md`"+`: check topic registry, stale/duplicated notes, and whether steps that produce domain facts have matching KB contribution contracts.
@@ -9024,7 +8829,7 @@ For each step reviewed, output:
 - Drifted: N
 - No script: N
 - **Top priority fixes**: List the 3 most critical drifts that should be addressed first.
-- **Stale lock warning**: For every step marked `+"`"+`DRIFTED`+"`"+` whose `+"`"+`step_config`+"`"+` has `+"`"+`lock_code=true`+"`"+` or `+"`"+`lock_learnings=true`+"`"+`, explicitly call out that the lock is stale — the frozen main.py or SKILL.md no longer matches the description, and the builder should `+"`"+`update_step_config(step_id, lock_code=false, lock_learnings=false, description_reviewed=false)`+"`"+` before regenerating.
+- **Stale code-lock warning**: For every step marked `+"`"+`DRIFTED`+"`"+` whose `+"`"+`step_config`+"`"+` has `+"`"+`lock_code=true`+"`"+`, explicitly call out that the frozen main.py may no longer match the description, and the builder should `+"`"+`update_step_config(step_id, lock_code=false, description_reviewed=false)`+"`"+` before regenerating. Separately reassess whether `+"`"+`learnings_access`+"`"+` should remain `+"`"+`read-write`+"`"+`.
 `)
 
 var reviewStepCodeAgentUserTemplate = MustRegisterTemplate("reviewStepCodeAgentUser", `Review the saved main.py scripts against their step descriptions and report any drift.{{if .Focus}} Focus especially on: {{.Focus}}{{end}}
@@ -9285,7 +9090,7 @@ func (iwm *InteractiveWorkshopManager) runReviewWorkflowTimingAgent(ctx context.
 			mode := "agentic"
 			declaredMode := ""
 			successfulRuns := 0
-			lockLearnings := false
+			learningsAccess := LearningsAccessRead
 			lockCode := false
 			if sc.AgentConfigs != nil {
 				if isScriptedExecutionModeConfig(sc.AgentConfigs) {
@@ -9295,14 +9100,12 @@ func (iwm *InteractiveWorkshopManager) runReviewWorkflowTimingAgent(ctx context.
 				if sc.AgentConfigs.SuccessfulRuns != nil {
 					successfulRuns = *sc.AgentConfigs.SuccessfulRuns
 				}
-				if sc.AgentConfigs.LockLearnings != nil {
-					lockLearnings = *sc.AgentConfigs.LockLearnings
-				}
+				learningsAccess = resolveLearningsAccess(sc.AgentConfigs)
 				if sc.AgentConfigs.LockCode != nil {
 					lockCode = *sc.AgentConfigs.LockCode
 				}
 			}
-			sb.WriteString(fmt.Sprintf("- %s: mode=%s, declared_mode=%s, successful_runs=%d, lock_learnings=%v, lock_code=%v\n", sc.ID, mode, declaredMode, successfulRuns, lockLearnings, lockCode))
+			sb.WriteString(fmt.Sprintf("- %s: mode=%s, declared_mode=%s, successful_runs=%d, learnings_access=%s, lock_code=%v\n", sc.ID, mode, declaredMode, successfulRuns, learningsAccess, lockCode))
 		}
 		stepConfigSummary = sb.String()
 	}
@@ -9384,7 +9187,7 @@ func (iwm *InteractiveWorkshopManager) runReviewWorkflowCostsAgent(ctx context.C
 			mode := "agentic"
 			declaredMode := ""
 			successfulRuns := 0
-			lockLearnings := false
+			learningsAccess := LearningsAccessRead
 			lockCode := false
 			if sc.AgentConfigs != nil {
 				if isScriptedExecutionModeConfig(sc.AgentConfigs) {
@@ -9394,14 +9197,12 @@ func (iwm *InteractiveWorkshopManager) runReviewWorkflowCostsAgent(ctx context.C
 				if sc.AgentConfigs.SuccessfulRuns != nil {
 					successfulRuns = *sc.AgentConfigs.SuccessfulRuns
 				}
-				if sc.AgentConfigs.LockLearnings != nil {
-					lockLearnings = *sc.AgentConfigs.LockLearnings
-				}
+				learningsAccess = resolveLearningsAccess(sc.AgentConfigs)
 				if sc.AgentConfigs.LockCode != nil {
 					lockCode = *sc.AgentConfigs.LockCode
 				}
 			}
-			sb.WriteString(fmt.Sprintf("- %s: mode=%s, declared_mode=%s, successful_runs=%d, lock_learnings=%v, lock_code=%v\n", sc.ID, mode, declaredMode, successfulRuns, lockLearnings, lockCode))
+			sb.WriteString(fmt.Sprintf("- %s: mode=%s, declared_mode=%s, successful_runs=%d, learnings_access=%s, lock_code=%v\n", sc.ID, mode, declaredMode, successfulRuns, learningsAccess, lockCode))
 		}
 		stepConfigSummary = sb.String()
 	}

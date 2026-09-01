@@ -335,12 +335,12 @@ Apply this playbook to every Stores Health finding, including KB and DB purity:
    prove provenance/keys and downstream consumers, then remove the old copy.
    Re-run all three manifests and confirm no contradictory owner remains. A
    patch success or smaller file is not verification.
-5. **Lock only after cleanup.** Set `lock_learnings` or
-   `lock_knowledgebase` only when the complete relevant manifest is clean and
-   current-run evidence confirms stability. Decide learning locks per step from
-   that step's effective objective, description hash, successful-run evidence,
-   and `.learning_metadata.json`; shared `_global` content is insufficient.
-   Unlock on drift. Treat `lock_code` as a separate, stricter executable proof.
+5. **Reduce learning writes after cleanup.** Keep `learnings_access="read-write"`
+   only when the step has a current reusable-HOW objective and run evidence shows
+   its contributions remain useful. Change mature, redundant, or no-op contributors
+   to `"read"`. Treat `lock_code` as the separate, stricter executable proof.
+   KB write ownership is not a lock: make a mature/no-op contributor read-only
+   by changing that step's `knowledgebase_access` and contribution contract.
 
 Immediate semantic moves may be `fixed_verified` only when source removal,
 destination exactness, references, and the current consumer are all re-checked.

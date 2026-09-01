@@ -15,6 +15,7 @@ import {
   Bot,
   User,
   Split,
+  Route as RouteIcon,
   BookOpen,
   History,
   Filter,
@@ -839,6 +840,28 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
   const [expandedArchived, setExpandedArchived] = useState<Set<string>>(new Set())
   const [selectedRunFolder, setSelectedRunFolder] = useState<string>(() => getDefaultRunFolder(initialRunFolder, runFolders))
   const [stepSearchQueries, setStepSearchQueries] = useState<Record<string, string>>({})
+  // Route-wise grouping (PLAT-259 follow-up): distinct routing/branch
+  // ("route" major-fork concept) routes actually taken in this run, so
+  // steps can be filtered down to just one route's chain. Keyed by
+  // `${route_step_id}::${route_id}` rather than route_id alone, since
+  // route_id strings ("yes"/"no"/etc.) can collide across two unrelated
+  // routing/branch steps in the same plan.
+  const [routeFilterKey, setRouteFilterKey] = useState<string | null>(null)
+  const routingRouteGroups = useMemo(() => {
+    const seen = new Map<string, { key: string; routeStepTitle: string; routeName: string }>()
+    Object.values(logs?.steps || {}).forEach(stepLogs => {
+      if (stepLogs.route_kind !== 'routing' || !stepLogs.route_id || !stepLogs.route_step_id) return
+      const key = `${stepLogs.route_step_id}::${stepLogs.route_id}`
+      if (!seen.has(key)) {
+        seen.set(key, {
+          key,
+          routeStepTitle: stepLogs.route_step_title || stepLogs.route_step_id,
+          routeName: stepLogs.route_name || stepLogs.route_id,
+        })
+      }
+    })
+    return Array.from(seen.values())
+  }, [logs])
   
   // State for inline file viewing
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set())
@@ -865,6 +888,11 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
   useEffect(() => {
     setSelectedRunFolder(getDefaultRunFolder(initialRunFolder, localRunFolders))
   }, [initialRunFolder, localRunFolders, isOpen])
+
+  // A route filter from one run's routes rarely means anything for another run
+  useEffect(() => {
+    setRouteFilterKey(null)
+  }, [selectedRunFolder])
 
   useEffect(() => {
     if (isOpen && workspacePath && selectedRunFolder) {
@@ -2544,9 +2572,45 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                 </div>
               )}
 
+              {!focusedStepId && routingRouteGroups.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 pb-1">
+                  <button
+                    type="button"
+                    onClick={() => setRouteFilterKey(null)}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                      routeFilterKey === null
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-muted text-muted-foreground border-border hover:bg-accent'
+                    }`}
+                  >
+                    All steps
+                  </button>
+                  {routingRouteGroups.map(group => (
+                    <button
+                      key={group.key}
+                      type="button"
+                      onClick={() => setRouteFilterKey(group.key)}
+                      title={`Route "${group.routeName}" -- selected by ${group.routeStepTitle}`}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                        routeFilterKey === group.key
+                          ? 'bg-teal-600 text-white border-teal-600'
+                          : 'bg-muted text-muted-foreground border-border hover:bg-accent'
+                      }`}
+                    >
+                      <RouteIcon className="h-3 w-3" />
+                      {group.routeName}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {Object.entries(logs?.steps || {})
                 .sort(sortStepEntriesByExecution)
                 .filter(([stepId]) => !focusedStepId || stepId === focusedStepId)
+                .filter(([, stepLogs]) =>
+                  !routeFilterKey ||
+                  (stepLogs.route_kind === 'routing' && `${stepLogs.route_step_id}::${stepLogs.route_id}` === routeFilterKey)
+                )
                 .map(([stepId, stepLogs]) => {
                   const isExpanded = expandedSteps.has(stepId)
                   const displayId = stepLogs.original_id || stepId
@@ -2681,6 +2745,12 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                             <StepMetricChip title={`This route was dispatched by ${stepLogs.parent_step_title}${stepLogs.route_id ? ` (${stepLogs.route_id})` : ''}`}>
                               <Split className="h-3 w-3 text-sky-600 dark:text-sky-300" />
                               ↳ {stepLogs.parent_step_title}
+                            </StepMetricChip>
+                          )}
+                          {stepLogs.route_kind === 'routing' && stepLogs.route_name && (
+                            <StepMetricChip title={`Reached via the "${stepLogs.route_name}" route, selected by ${stepLogs.route_step_title || stepLogs.route_step_id}`}>
+                              <RouteIcon className="h-3 w-3 text-teal-600 dark:text-teal-300" />
+                              ↳ {stepLogs.route_name}
                             </StepMetricChip>
                           )}
                           <span className="whitespace-nowrap">

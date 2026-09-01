@@ -84,6 +84,19 @@ func TestNormalizePresetLLMConfigMigratesLegacyCodingAgentToProviderProfile(t *t
 	}
 }
 
+func TestNormalizePresetLLMConfigRemovesRetiredWorkflowKBLock(t *testing.T) {
+	locked := true
+	cfg := testExplicitConfig()
+	cfg.LegacyLockKnowledgebase = &locked
+
+	if !NormalizePresetLLMConfig(cfg) {
+		t.Fatal("NormalizePresetLLMConfig() changed = false")
+	}
+	if cfg.LegacyLockKnowledgebase != nil {
+		t.Fatalf("retired lock_knowledgebase survived normalization: %+v", cfg)
+	}
+}
+
 func TestResolveProviderProfileConfigUsesBuilderDefaults(t *testing.T) {
 	tests := []struct {
 		provider string

@@ -74,7 +74,7 @@ func BuildStepReflectionTurn(in StepReflectionTurnInput) string {
 	kb := in.writesKB()
 	// No store to write to means no turn. Emitting one purely for the concern
 	// outlet would add an LLM call to every step that contributes nothing —
-	// including every step in a lock_learnings workflow, where the old code
+	// including every read-only learning step, where the old code
 	// correctly emitted nothing at all. Pulse reviews retained execution output
 	// and deterministic receipts directly after the run.
 	if !learnings && !kb {

@@ -143,8 +143,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) messageSequenceClosingItems(ctx conte
 	// knowledgebase item. Appending them separately reproduced the same defect
 	// the regular-step path had: the agent chose a destination based on which
 	// turn it happened to be in rather than on which store owns the content.
-	learningsDue := shouldDirectWriteLearnings(cfg, seq, hcpo.isEvaluationMode) &&
-		!hcpo.shouldSkipDirectLearningsDueToLock(ctx, cfg, stepIndex)
+	learningsDue := shouldDirectWriteLearnings(cfg, seq, hcpo.isEvaluationMode)
 	kbAccess := resolveKnowledgebaseAccess(cfg, hcpo.UseKnowledgebase())
 	kbContribution := strings.TrimSpace(kbContributionForPrompt(cfg))
 	// Under write_method=agent the constraint layer strips KB from every item's
@@ -832,9 +831,6 @@ func formatMessageSequencePrevalidationFeedback(itemID string, results *Workspac
 
 func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceUserMessage(ctx context.Context, step *MessageSequencePlanStep, item MessageSequenceItem, stepIndex int, stepPath string, session *messageSequenceSession) (string, error) {
 	writeAccess := hcpo.resolveMessageSequenceItemWriteAccess(getAgentConfigs(step), item)
-	if writeAccess.Learnings && hcpo.shouldSkipDirectLearningsDueToLock(ctx, step.AgentConfigs, stepIndex) {
-		writeAccess.Learnings = false
-	}
 	readPaths, writePaths := hcpo.setupMessageSequenceFolderGuard(stepPath, step.GetID(), getAgentConfigs(step), writeAccess)
 	runtime, agentCtx, err := hcpo.getMessageSequenceRuntime(ctx, step, stepPath, session, readPaths, writePaths)
 	if err != nil {

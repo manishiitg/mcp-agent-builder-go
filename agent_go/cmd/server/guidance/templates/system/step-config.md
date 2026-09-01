@@ -16,15 +16,18 @@ A step's access to each store is independent and defaults differently. Grant the
 - **Rule of thumb:** routing, validation, mechanical transforms, aggregation/report-shaping, human approval, pure db/KB readers, and mature scripted steps should usually stay read-only on learnings. DB access is intentionally uniform and is not a per-step tuning decision right now.
 - Deep dive on what belongs in each store and the write contracts: `read_skill(skills=[{"name":"builder-reference","path":"references/stores.md"}])`.
 
-### The three locks
+### The per-step code lock
 
 | Lock | Scope | Effect | Set when |
 |---|---|---|---|
-| `lock_learnings` | per-step | Stops this step's post-run learning writes to `learnings/_global/SKILL.md` (writes still allowed while `_global/` is empty, to bootstrap). Reads unaffected | deliberate Workshop/user decision after reviewing stable evidence; runtime never auto-locks it. Since 1.0.22 the upgrade-time `upgrade-learnings-lock-audit` preflight reports (never clears) any locked step whose `review_notes` doesn't justify the freeze, via `record_pulse_finding` with `recommended_route="decision_required"` — **`lock_learnings_reason` is required** (PLAT-059): `update_step_config` rejects `lock_learnings=true` without it. Under the shared topic-organised skill a locked step reads every other step's contributions and can never give anything back, so state what was reviewed and why further contribution would make the skill worse. If the step simply has no reusable HOW to offer, use `learnings_access="read"` instead — that needs no reason. |
 | `lock_code` | per-step (scripted) | Freezes `learnings/{step}/main.py`, skips the fix loop | **user asks to lock** → allow it; **Workshop auto-locking on its own** → only after 10+ scenario-covering runs |
-| `lock_knowledgebase` | workflow-wide | Freezes `knowledgebase/notes/` auto-updates | when KB is curated and should stop auto-evolving |
 
-Only pass a lock field when you are explicitly changing it — passing `lock_learnings:false` while editing other fields resets a previously set value.
+Knowledge-base writes are controlled per step instead: `knowledgebase_access`
+must permit writes and `knowledgebase_contribution` must state what durable
+facts the step owns. Change a mature/no-op contributor to `read`; do not freeze
+unrelated KB writers workflow-wide.
+
+Only pass `lock_code` when explicitly changing it. Learning write eligibility is controlled only by `learnings_access`: use `read` to consume guidance without contributing.
 
 ### Execution mode + which model runs the step
 

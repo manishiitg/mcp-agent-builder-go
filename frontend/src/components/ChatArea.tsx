@@ -16,7 +16,6 @@ import { ChatInput } from './ChatInput'
 import { TerminalEventTranscript } from './TerminalEventTranscript'
 import { MainAgentTerminal } from './MainAgentTerminal'
 import { WorkflowModeHandler, type WorkflowModeHandlerRef } from './workflow'
-import { ToastContainer } from './ui/Toast'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { useAppStore, useLLMStore, useMCPStore, useChatStore, useGlobalPresetStore } from '../stores'
@@ -26,6 +25,7 @@ import { resolveChatSurface, resolveWorkflowChatSurface } from './resolveChatSur
 import { PresetSelectionOverlay } from './PresetSelectionOverlay'
 import { ModeSwitchDialog } from './ui/ModeSwitchDialog'
 import type { ChatTab } from '../stores/useChatStore'
+import { workflowTabAlreadyHasContent } from './workflow/workflowChatTabConversion'
 import type { CustomPreset } from '../types/preset'
 import { conversationToRestoredEvents, hydrateTabEvents, restoreSession } from '../utils/sessionRestore'
 import { logger } from '../utils/logger'
@@ -663,9 +663,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     currentWorkflowPhase,
     setCurrentWorkflowPhase,
     setCurrentWorkflowQueryId,
-    toasts,
     addToast,
-    removeToast,
     resetChatState,
     isAtBottom,
     switchTab,
@@ -692,9 +690,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     currentWorkflowPhase: state.currentWorkflowPhase,
     setCurrentWorkflowPhase: state.setCurrentWorkflowPhase,
     setCurrentWorkflowQueryId: state.setCurrentWorkflowQueryId,
-    toasts: state.toasts,
     addToast: state.addToast,
-    removeToast: state.removeToast,
     resetChatState: state.resetChatState,
     isAtBottom: state.isAtBottom,
     switchTab: state.switchTab,
@@ -1126,9 +1122,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     setPendingModeCategory(null)
   }
 
-
-  // Filter toasts to only include types supported by ToastContainer
-  const filteredToasts = toasts.filter((toast: { type: string }) => toast.type === 'success' || toast.type === 'info' || toast.type === 'error') as Array<{id: string, message: string, type: 'success' | 'info' | 'error'}>
 
   // Handle mode switch dialog confirmation
   const handleModeSwitchConfirm = () => {
@@ -2575,6 +2568,27 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       return false
     }
 
+    // A blank workflow builder tab shows the "New chat" landing screen; once
+    // it receives its first real message it's no longer blank, so rename it
+    // from that message (mirrors how the Recent list titles a session) and
+    // let a later "+ New chat" click open a genuinely new tab instead of
+    // reusing this one. Must run before this turn's events are recorded --
+    // workflowTabAlreadyHasContent would otherwise already see this tab as
+    // no-longer-blank.
+    if (
+      freshActiveTab?.metadata?.mode === 'workflow' &&
+      freshActiveTab.metadata?.phaseId === 'workflow-builder' &&
+      !workflowTabAlreadyHasContent(freshActiveTab, chatStore.tabEvents)
+    ) {
+      const normalized = trimmedQuery.replace(/\s+/g, ' ').trim()
+      const newName = normalized.length > 110 ? `${normalized.slice(0, 110)}...` : normalized
+      useChatStore.setState(state => {
+        const tab = state.chatTabs[freshActiveTab.tabId]
+        if (!tab) return state
+        return { chatTabs: { ...state.chatTabs, [freshActiveTab.tabId]: { ...tab, name: newName } } }
+      })
+    }
+
     if (submitModeCategory === 'workflow' && !isRequiredFolderSelected) {
       logger.error('ChatArea', 'Workflow folder required for workflow mode')
       return false
@@ -3661,11 +3675,8 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         />
       )}
 
-      {/* Toast notifications */}
-      <ToastContainer
-        toasts={filteredToasts}
-        onRemoveToast={removeToast}
-      />
+      {/* Toasts render from ToastHost at the app root, so they also appear on
+          surfaces that do not mount a chat. */}
     </div>
   )
 })

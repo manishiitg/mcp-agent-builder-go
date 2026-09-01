@@ -4,6 +4,12 @@ export interface EvaluationStepPlanDetails {
   id: string
   title?: string
   description?: string
+  // Which routing/branch step + route IDs this eval step is scoped to, if
+  // any (PLAT-259's route_eval_pairing field). Used to group/filter eval
+  // reports route-wise, matched against the actually-selected route for a
+  // given run (from Execution Logs' routing-evaluation.json, not this
+  // static plan declaration).
+  appliesToRoutes?: Array<{ routingStepId: string; routeIds: string[] }>
 }
 
 const FINAL_SCORING_DISABLED_REASONING =
@@ -66,10 +72,21 @@ export const parseEvaluationPlanDetails = (evaluationPlan?: string | null): Map<
       if (!rawStep || typeof rawStep !== 'object') continue
       const id = typeof rawStep.id === 'string' ? rawStep.id : ''
       if (!id) continue
+      const rawAppliesTo = Array.isArray(rawStep.applies_to_routes) ? rawStep.applies_to_routes : []
+      const appliesToRoutes = rawAppliesTo
+        .filter((entry: unknown): entry is { routing_step_id?: unknown; route_ids?: unknown } =>
+          !!entry && typeof entry === 'object')
+        .map((entry: { routing_step_id?: unknown; route_ids?: unknown }) => ({
+          routingStepId: typeof entry.routing_step_id === 'string' ? entry.routing_step_id : '',
+          routeIds: Array.isArray(entry.route_ids) ? entry.route_ids.filter((r: unknown): r is string => typeof r === 'string') : [],
+        }))
+        .filter((entry: { routingStepId: string; routeIds: string[] }) => entry.routingStepId)
+
       byId.set(id, {
         id,
         title: typeof rawStep.title === 'string' ? rawStep.title : undefined,
         description: typeof rawStep.description === 'string' ? rawStep.description : undefined,
+        appliesToRoutes: appliesToRoutes.length > 0 ? appliesToRoutes : undefined,
       })
     }
   } catch {

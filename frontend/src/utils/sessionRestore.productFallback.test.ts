@@ -85,6 +85,9 @@ describe('session restore chat-history fallback', () => {
     expect(getChatHistoryResumeConversation).toHaveBeenCalledWith(
       'video-studio:project:launch',
       workspacePath,
+      100,
+      0,
+      true,
     )
     expect(useChatStore.getState().getTabEvents('video-studio:project:launch').map((event) => event.type)).toEqual([
       'conversation_resumed',
@@ -145,6 +148,9 @@ describe('session restore chat-history fallback', () => {
     expect(getChatHistoryResumeConversation).toHaveBeenCalledWith(
       'video-studio:project:race',
       workspacePath,
+      100,
+      0,
+      true,
     )
     expect(useChatStore.getState().getTabEvents('video-studio:project:race').map((event) => event.type)).toEqual([
       'conversation_resumed',

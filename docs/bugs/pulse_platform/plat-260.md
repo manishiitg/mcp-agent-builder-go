@@ -1,12 +1,12 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-260 — Reflection write locks have no dependable Pulse lifecycle owner
+# PLAT-260 — Learning-write yield needs a dependable Pulse lifecycle owner
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `proposed` |
-| Last synchronized | `2026-08-30` |
+| Ticket state | `superseded by PLAT-263` |
+| Last synchronized | `2026-08-31` |
 
 - **Priority:** P2
 - **Owner:** Pulse post-run governance → Pulse Fixer
@@ -14,24 +14,40 @@
 
 ## Problem
 
-Reflections now write both reusable execution learnings and durable KB notes in
-one post-completion pass. The platform has two controls for stopping those
-writes: per-step `lock_learnings` and workflow-wide `lock_knowledgebase`.
+Reflections can write reusable execution learnings. Pulse needs to decide when
+per-step write access remains useful, but the original proposal modeled that
+decision through a second lock layered over `learnings_access`.
 
-Both controls work, but neither has a dependable lifecycle owner. Runtime
-never changes them. The user is not expected to discover or operate internal
-configuration flags. The Workshop Builder and Pulse Fixer *can* set them, but
+Runtime never changes it. The user is not expected to discover or operate an
+internal configuration flag. The Workshop Builder and Pulse Fixer *can* set it, but
 no Pulse module is responsible for deciding when to lock, retain, or reopen
-them. Consequently a stable workflow keeps paying for low-yield reflection
-writes indefinitely, while existing locks can remain stale after behavior
+it. Consequently a stable workflow keeps paying for low-yield learning
+writes indefinitely, while an existing lock can remain stale after behavior
 changes.
+
+The former workflow-wide `lock_knowledgebase` described by the original ticket
+was retired by PLAT-265. KB ownership is now deliberately step-based:
+`knowledgebase_access` plus `knowledgebase_contribution` decides which step may
+write, and a mature/no-op contributor becomes `read` without freezing unrelated
+writers.
 
 PLAT-059 deliberately made a learnings lock a considered, reasoned action; it
 did not supply the evidence-gathering process that should initiate that action.
 PLAT-258 reviews whether locks are appropriate during plan-drift work, but its
 current policy is recommendation-only and is not a reflection-lock lifecycle.
 
-## Required outcome
+## Superseding decision (PLAT-263)
+
+The second lock is removed. Pulse may inspect contribution yield and change a
+mature/no-op contributor from `learnings_access="read-write"` to `"read"`.
+Material drift may justify restoring `"read-write"` with a concrete updated
+`learning_objective`. This keeps one permission model and preserves the useful
+governance goal without a lock lifecycle.
+
+The remainder below is retained as historical design context and is no longer
+the active acceptance contract.
+
+## Original required outcome
 
 Pulse owns the lock lifecycle. It must evaluate reflection yield from durable
 evidence, apply safe freezes through the existing configuration tools, and
@@ -52,24 +68,23 @@ learning-objective, access-mode, or ownership change makes the evidence stale.
 It must never lock before the shared skill has bootstrapped, and must prefer
 `learnings_access="read"` when a step simply has no reusable HOW to contribute.
 
-### KB — workflow lifecycle
+### KB — per-step ownership review
 
-Pulse decides the KB lock only from workflow-wide evidence: the current
-ownership/notes manifest is clean, active KB contributors are stable, and
-automatic note writes have become low-yield. It then uses
-`update_workflow_config(lock_knowledgebase=true)`. A material plan, ownership,
-or KB-contribution change makes that lock due for review and allows Pulse to
-reopen it.
+Pulse may review whether an individual KB contributor remains useful. When its
+writes are demonstrably low-yield, it recommends or applies
+`knowledgebase_access="read"` and clears the contribution contract. It must not
+disable unrelated contributors workflow-wide.
 
 ## Design constraints
 
-- Retain the existing two flags; do not introduce `lock_reflections`.
+- Retain the per-step learning flag; do not introduce `lock_reflections` or a
+  workflow-wide KB lock.
 - Every action records reviewed runs/metadata/manifest, expected cost benefit,
   and risk of freezing new knowledge.
 - An inconclusive review leaves state unchanged and records a decision-required
   finding rather than inventing a rationale.
-- One destination's lock does not silence the other destination's reflection
-  write.
+- A learning lock does not silence that step's independently configured KB
+  contribution.
 - The lifecycle must work for unattended/scheduled Pulse, not only an
   interactive Builder turn.
 - Plan-drift review may supply evidence, but stable unchanged workflows also
@@ -78,9 +93,9 @@ reopen it.
 ## Acceptance criteria
 
 1. Manual and scheduled Pulse can evidence-lock eligible learnings per step.
-2. Pulse locks KB only after the complete relevant workflow-wide manifest is
-   clean.
-3. Material changes make a locked learning/KB surface due for reassessment;
-   Pulse can reopen it with an audit record.
+2. Pulse can make one mature/no-op KB contributor read-only without affecting
+   other contributors.
+3. Material changes make a locked learning or read-only KB ownership decision
+   due for reassessment; Pulse can reopen it with an audit record.
 4. Tests cover bootstrap protection, reason persistence, inconclusive no-op,
    stale-lock reopening, cross-store independence, and scheduled reachability.

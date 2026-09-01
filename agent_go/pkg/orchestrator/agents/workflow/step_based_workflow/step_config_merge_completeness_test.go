@@ -2,6 +2,7 @@ package step_based_workflow
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
@@ -32,6 +33,11 @@ func TestMergeAgentConfigFieldsCoversEveryField(t *testing.T) {
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
 		if !field.IsExported() {
+			continue
+		}
+		// Legacy migration inputs are normalized and cleared when step_config is
+		// read. They must never propagate into the active runtime config.
+		if strings.HasPrefix(field.Name, "Legacy") {
 			continue
 		}
 		if tv.Field(i).IsZero() && !sv.Field(i).IsZero() {

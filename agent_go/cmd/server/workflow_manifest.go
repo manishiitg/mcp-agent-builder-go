@@ -40,7 +40,7 @@ const workflowContractCompactPulseReportVersion = "1.0.18"
 const workflowContractLightweightPulseReportVersion = "1.0.19"
 const workflowContractExecutivePulseJournalVersion = "1.0.20"
 const workflowContractArtifactPurityVersion = "1.0.21"
-const workflowContractLearningsLockAuditVersion = "1.0.22"
+const workflowContractLegacy122Version = "1.0.22"
 const workflowContractDirectHTMLReportsVersion = "1.0.23"
 const workflowContractScheduledRouteVersion = "1.0.24"
 const workflowContractScheduleExecutionModelVersion = "1.0.25"
@@ -55,7 +55,7 @@ const workflowContractPulseBacklogTriageVersion = "1.0.33"
 const workflowContractPulseActionableBacklogVersion = "1.0.34"
 
 const (
-	DefaultRunRetentionCount = 3
+	DefaultRunRetentionCount = 10
 	MaxRunRetentionCount     = 50
 )
 

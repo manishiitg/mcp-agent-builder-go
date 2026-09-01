@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	_ "net/http/pprof" // Register pprof handlers
@@ -306,6 +307,7 @@ type ActiveSessionInfo struct {
 	PresetName                  string           `json:"preset_name,omitempty"`
 	PresetQueryID               string           `json:"preset_query_id,omitempty"`
 	PhaseID                     string           `json:"phase_id,omitempty"`
+	PhaseName                   string           `json:"phase_name,omitempty"`
 	WorkshopMode                string           `json:"workshop_mode,omitempty"`
 	BotPlatform                 string           `json:"bot_platform,omitempty"`
 	TriggeredBy                 string           `json:"triggered_by,omitempty"`
@@ -801,8 +803,12 @@ func buildWorkflowNotificationInstructionsPrompt(runInstructions, pulseInstructi
 func notificationDestinationFromQuery(req QueryRequest, userID string) *services.NotificationDestination {
 	platform := strings.ToLower(strings.TrimSpace(req.BotPlatform))
 	dest := &services.NotificationDestination{
-		UserID:       userID,
-		WorkflowName: workflowNameFromWorkspacePath(req.SelectedFolder),
+		UserID:        userID,
+		WorkflowName:  workflowNameFromWorkspacePath(req.SelectedFolder),
+		WorkspacePath: strings.TrimSpace(req.SelectedFolder),
+	}
+	if req.ExecutionOptions != nil && len(req.ExecutionOptions.RouteSelections) > 0 {
+		dest.RouteSelections = maps.Clone(req.ExecutionOptions.RouteSelections)
 	}
 	switch platform {
 	case "slack":
@@ -855,7 +861,7 @@ func notificationDestinationFromQuery(req QueryRequest, userID string) *services
 		}
 		dest.Gmail.BlockedRecipients = append(dest.Gmail.BlockedRecipients, req.NotificationBlockRecipients...)
 	}
-	if dest.UserID == "" && dest.Slack == nil && dest.SlackWebhook == nil && dest.WhatsApp == nil && dest.Gmail == nil &&
+	if dest.UserID == "" && dest.WorkspacePath == "" && dest.Slack == nil && dest.SlackWebhook == nil && dest.WhatsApp == nil && dest.Gmail == nil &&
 		len(dest.ExcludeChannels) == 0 && len(dest.RunSummaryRecipients) == 0 && len(dest.PulseSummaryRecipients) == 0 &&
 		len(dest.RunSummaryWebhooks) == 0 && len(dest.PulseSummaryWebhooks) == 0 {
 		return nil
@@ -1617,6 +1623,10 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	notificationManager := services.GetNotificationManager()
 	if notificationManager != nil {
+		// The Org Dashboard is an always-on internal notification destination.
+		// It persists classified workflow summaries independently of whether any
+		// external channel is configured or successfully delivers.
+		notificationManager.RegisterConnector(services.NewOrgDashboardConnector())
 		notificationManager.SetFeedbackResponseFunc(
 			func(uniqueID string, response string) error {
 				store := virtualtools.GetHumanFeedbackStore()
@@ -2026,6 +2036,10 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/mcp-config/status", api.handleGetMCPConfigStatus).Methods("GET")
 	apiRouter.HandleFunc("/mcp-config/logs", api.handleGetServerLogs).Methods("GET")
 
+	// Connector connection state (from oauth_routes.go)
+	apiRouter.HandleFunc("/mcp/connect", api.handleConnectServer).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/mcp/disconnect", api.handleDisconnectServer).Methods("POST", "OPTIONS")
+
 	// Secrets encryption API routes (from secrets_routes.go)
 	apiRouter.HandleFunc("/secrets/encrypt", api.handleEncryptSecret).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/secrets/decrypt", api.handleDecryptSecret).Methods("POST", "OPTIONS")
@@ -2072,6 +2086,9 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Active Session API routes (from polling.go)
 	apiRouter.HandleFunc("/sessions/active", api.handleGetActiveSessions).Methods("GET")
+	// Combined poll for the app header (ModePresetBar + GlobalActivityMonitor):
+	// active sessions + workflow schedule counts in one round trip.
+	apiRouter.HandleFunc("/header-summary", api.handleGetHeaderSummary).Methods("GET")
 	apiRouter.HandleFunc("/sessions/{session_id}/events", api.handleGetSessionEvents).Methods("GET")
 	apiRouter.HandleFunc("/sessions/{session_id}/events/stream", api.handleSSEStream).Methods("GET")
 	apiRouter.HandleFunc("/sessions/{session_id}/reconnect", api.handleReconnectSession).Methods("POST")
@@ -2354,6 +2371,7 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Auto-improvement framework — see docs/workflow/auto_improvement_framework.md
 	apiRouter.HandleFunc("/workflow/builder-doc", api.handleGetBuilderDoc).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/org-dashboard/notifications", api.handleGetOrgDashboardNotifications).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/plan-changelog", api.handleGetPlanChangelog).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/plan-changelog/prune", requireWorkflowWriteAccess(api.handlePrunePlanChangelog)).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/framework-health", api.handleGetFrameworkHealth).Methods("GET", "OPTIONS")
@@ -3031,14 +3049,22 @@ func (api *StreamingAPI) apiRequestLogMiddleware(next http.Handler) http.Handler
 
 // shouldTraceAPIRequest keeps normal logs focused on user actions and writes.
 // The frontend makes frequent successful GET requests for state refreshes; their
-// failures are still logged by apiRequestLogMiddleware.
+// failures are still logged by apiRequestLogMiddleware. Set
+// API_REQUEST_LOG_INCLUDE_GET=true to temporarily trace GET/HEAD too, e.g. to
+// measure real polling frequency from server logs instead of the browser
+// Network tab — remove this override once the investigation is done.
 func shouldTraceAPIRequest(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
-		return false
+		return apiRequestLogIncludeGET()
 	default:
 		return true
 	}
+}
+
+func apiRequestLogIncludeGET() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("API_REQUEST_LOG_INCLUDE_GET")))
+	return value == "true" || value == "1"
 }
 
 func shouldLogAPIRequests() bool {
@@ -5015,6 +5041,15 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if len(fileContextBlockedWriteFolders) > 0 {
 					workspace.SetSessionFolderGuardBlockedWritePaths(sessionID, fileContextBlockedWriteFolders)
 				}
+				// PLAT-221: the main Workflow Builder is a managed DB client just
+				// like its workshop children. Give the dedicated DB tools their
+				// trusted logical capability and hard-block raw db.sqlite/WAL/SHM
+				// access so a denied migration cannot fall back to the sqlite CLI.
+				todo_creation_human.ConfigureManagedWorkflowDBSession(
+					sessionID,
+					workflowPhaseFolder,
+					!currentUserIsReadOnly,
+				)
 				if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, hostDownloadsBrowserMode(req)); hostDownloads != "" {
 					log.Printf("[WORKFLOW PHASE FOLDER GUARD] Added read-write CDP host Downloads: %s", hostDownloads)
 				}
@@ -5506,6 +5541,14 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					workspace.SetSessionFolderGuard(sessionID,
 						phaseReadPaths,
 						[]string{phaseWorkspacePath, "Downloads"},
+					)
+					// The phase setup above rebuilds the long-lived Builder guard.
+					// Reapply the managed DB boundary on every setup/restore so old
+					// sessions cannot retain broad raw SQLite or sidecar access.
+					todo_creation_human.ConfigureManagedWorkflowDBSession(
+						sessionID,
+						phaseWorkspacePath,
+						!currentUserIsReadOnly,
 					)
 					if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, hostDownloadsBrowserMode(req)); hostDownloads != "" {
 						log.Printf("[WORKFLOW_PHASE] Added read-write CDP host Downloads: %s", hostDownloads)

@@ -234,7 +234,7 @@ func TestReflectionTurnOmitsSectionsThatDoNotApply(t *testing.T) {
 
 func TestReflectionTurnSkippedWhenNoStoreIsDue(t *testing.T) {
 	// Neither learnings nor KB due: emitting a turn purely for the concern
-	// outlet would add an LLM call to every step of a lock_learnings workflow
+	// outlet would add an LLM call to every read-only learning step
 	// (LinkedIn has 6 of 6 locked), where the previous code emitted nothing.
 	none := reflectionInput()
 	none.LearningObjective = ""

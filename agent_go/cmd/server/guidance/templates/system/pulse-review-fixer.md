@@ -257,6 +257,14 @@ step/attempt that differs or is suspicious; never bulk-read every conversation
 from every run. If fewer comparable retained runs exist, record that as an
 evidence limitation rather than inferring a trend.
 
+Treat inadequate run retention as a safe workflow-configuration repair. Compare
+the workflow's routes and schedule run frequency with its Pulse cadence. When
+`run_retention_count` could prune a route's evidence before Pulse can inspect it,
+use `update_workflow_config(run_retention_count=<count>)` to raise it to the
+smallest sufficient value (bounded by the platform maximum). Do not lower an
+explicit owner-selected value. Record the configuration change and its evidence
+coverage reason in the same maintenance pass.
+
 Strategic Review is one product/business sequence. Its child may run in
 parallel with the Engineering/Ops child.
 Do not mutate the same artifacts in competing children; the Engineering/Ops
@@ -371,10 +379,10 @@ authoritative owner across Soul, Plan/step config, Validation, Learnings,
 Knowledgebase, DB, and Pulse. The KB lens inventories every content-bearing
 note in `kb_purity_manifest`; the DB lens maps every relevant table and
 content-bearing TEXT/JSON column in `db_ownership_manifest`. Stable references
-to canonical records are valid; copied content is not. Lock recommendations are
-valid only after the complete relevant manifest is clean, with learning locks
-proven per step from its own objective, description hash, successful runs, and
-`.learning_metadata.json` rather than the shared global skill alone.
+to canonical records are valid; copied content is not. Learning-write reductions
+are valid only after the complete relevant manifest is clean, with read-only
+access justified per step from its own objective, description hash, successful
+runs, and `.learning_metadata.json` rather than the shared global skill alone.
 
 **Issue-register lifecycle.** A successfully applied repair closes its issue in
 the same Fixer pass. Reviews do not schedule or perform a separate verification

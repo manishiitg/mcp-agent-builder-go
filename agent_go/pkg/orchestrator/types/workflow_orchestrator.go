@@ -119,9 +119,8 @@ type WorkflowOrchestrator struct {
 	presetPulseLLM   *step_based_workflow.AgentLLMConfig // Default for review, maintenance, and Pulse agents.
 
 	// Preset-level feature toggles
-	useKnowledgebase  bool   // Whether to create and reference knowledgebase folder (default: true)
-	lockKnowledgebase bool   // When true, post-step KB update agent never fires; graph.json mutates only via explicit reorganize_knowledgebase calls
-	kbShape           string // "graph+notes" (default) | "notes-only"; controls which KB artifacts exist.
+	useKnowledgebase bool   // Whether to create and reference knowledgebase folder (default: true)
+	kbShape          string // "graph+notes" (default) | "notes-only"; controls which KB artifacts exist.
 
 	// Tiered LLM allocation mode
 	tieredConfig *step_based_workflow.TieredLLMConfig
@@ -193,16 +192,6 @@ func (wo *WorkflowOrchestrator) GetExecutionOptions() *step_based_workflow.Execu
 // UseKnowledgebase returns whether the knowledgebase feature is enabled
 func (wo *WorkflowOrchestrator) UseKnowledgebase() bool {
 	return wo.useKnowledgebase
-}
-
-// LockKnowledgebase returns whether the post-step KB update agent is frozen.
-func (wo *WorkflowOrchestrator) LockKnowledgebase() bool {
-	return wo.lockKnowledgebase
-}
-
-// SetLockKnowledgebase toggles the lock_knowledgebase flag.
-func (wo *WorkflowOrchestrator) SetLockKnowledgebase(v bool) {
-	wo.lockKnowledgebase = v
 }
 
 // KBShape returns the preset-declared KB shape (raw; empty = default "graph+notes").
@@ -375,10 +364,6 @@ func NewWorkflowOrchestrator(
 	if presetLLMConfig != nil && presetLLMConfig.UseKnowledgebase != nil {
 		useKnowledgebase = *presetLLMConfig.UseKnowledgebase
 	}
-	lockKnowledgebase := false
-	if presetLLMConfig != nil && presetLLMConfig.LockKnowledgebase != nil {
-		lockKnowledgebase = *presetLLMConfig.LockKnowledgebase
-	}
 	kbShape := ""
 	if presetLLMConfig != nil {
 		kbShape = presetLLMConfig.KBShape
@@ -392,13 +377,12 @@ func NewWorkflowOrchestrator(
 
 	// Create workflow orchestrator instance
 	wo := &WorkflowOrchestrator{
-		BaseOrchestrator:  baseOrchestrator,
-		presetBuilderLLM:  presetBuilderLLM,
-		presetPulseLLM:    presetPulseLLM,
-		useKnowledgebase:  useKnowledgebase,
-		lockKnowledgebase: lockKnowledgebase,
-		kbShape:           kbShape,
-		tieredConfig:      tieredConfig,
+		BaseOrchestrator: baseOrchestrator,
+		presetBuilderLLM: presetBuilderLLM,
+		presetPulseLLM:   presetPulseLLM,
+		useKnowledgebase: useKnowledgebase,
+		kbShape:          kbShape,
+		tieredConfig:     tieredConfig,
 	}
 
 	return wo, nil
@@ -542,8 +526,7 @@ func (wo *WorkflowOrchestrator) runEvaluationExecutionOnly(ctx context.Context, 
 		todoPlannerAgent.SetBrowserMode(wo.browserMode)
 	}
 
-	// Propagate knowledgebase lock flag + declared KB shape.
-	todoPlannerAgent.SetLockKnowledgebase(wo.lockKnowledgebase)
+	// Propagate the declared KB shape.
 	todoPlannerAgent.SetKBShape(wo.kbShape)
 
 	// Pass execution options if set
@@ -654,8 +637,7 @@ func (wo *WorkflowOrchestrator) runHumanControlledPlanning(ctx context.Context, 
 		todoPlannerAgent.SetBrowserMode(wo.browserMode)
 	}
 
-	// Propagate knowledgebase lock flag + declared KB shape.
-	todoPlannerAgent.SetLockKnowledgebase(wo.lockKnowledgebase)
+	// Propagate the declared KB shape.
 	todoPlannerAgent.SetKBShape(wo.kbShape)
 
 	// Pass execution options from WorkflowOrchestrator to the todo planner if set

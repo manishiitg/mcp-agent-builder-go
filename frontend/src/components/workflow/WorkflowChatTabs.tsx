@@ -6,8 +6,11 @@ import { agentApi } from '../../services/api'
 import { activateTab } from '../../utils/activateTab'
 import { useWorkflowStore } from '../../stores/useWorkflowStore'
 import { useGlobalPresetStore } from '../../stores/useGlobalPresetStore'
-import { convertObservedWorkflowTabToInteractive } from './workflowChatTabConversion'
-import { shouldDisplayWorkflowTab } from './workflowRuntimeTabProjection'
+import {
+  convertObservedWorkflowTabToInteractive,
+  isMisclassifiedRestoredWorkflowChat,
+} from './workflowChatTabConversion'
+import { shouldDisplayWorkflowTab, workflowTabDisplayName } from './workflowRuntimeTabProjection'
 import { useAuthStore } from '../../stores/useAuthStore'
 import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
 
@@ -42,10 +45,8 @@ const WorkflowTabItem = React.memo<WorkflowTabItemProps>(({
   onMakeInteractive,
   onStop,
 }) => {
-  const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
-  const displayName = tab.metadata?.phaseId === 'workflow-builder' && tab.name === 'Automation Builder'
-    ? 'Chat'
-    : tab.name
+	const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
+	const displayName = workflowTabDisplayName(tab)
 
   // Tabs are a product-level conversation switcher. Derive their small status
   // marker from the session's own lifecycle flags rather than polling the
@@ -172,6 +173,24 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
 
   const setShowChatArea = useWorkflowStore(state => state.setShowChatArea)
 
+  // Repair tabs already corrupted by the old Restore path. The durable
+  // restoredConversationPath marker proves this is an interactive restore,
+  // while isViewOnly proves it incorrectly retained Schedule/full-run state.
+  useEffect(() => {
+    const affected = Object.values(chatTabs).filter(isMisclassifiedRestoredWorkflowChat)
+    if (affected.length === 0) return
+    useChatStore.setState(state => {
+      const nextTabs = { ...state.chatTabs }
+      affected.forEach(tab => {
+        const current = nextTabs[tab.tabId]
+        if (current && isMisclassifiedRestoredWorkflowChat(current)) {
+          nextTabs[tab.tabId] = convertObservedWorkflowTabToInteractive(current)
+        }
+      })
+      return { chatTabs: nextTabs }
+    })
+  }, [chatTabs])
+
   const activePresetId = useGlobalPresetStore(state => state.activePresetIds.workflow)
   // Filter to workflow tabs for the active preset, but always keep the active
   // workflow tab visible. Scheduled-run restores can briefly lack a preset match
@@ -186,30 +205,11 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
     )
     const activeTab = activeTabId ? chatTabs[activeTabId] : undefined
     const activeWorkflowTab = activeTab?.metadata?.mode === 'workflow' ? activeTab : undefined
-    const isBuilderTab = (tab: ChatTab) => tab.metadata?.phaseId === 'workflow-builder'
-    const chooseVisibleBuilder = (tabs: ChatTab[]) => [...tabs].sort((a, b) => {
-      if (a.tabId === activeTabId) return -1
-      if (b.tabId === activeTabId) return 1
-      if (a.isStreaming !== b.isStreaming) return a.isStreaming ? -1 : 1
-      return b.createdAt - a.createdAt
-    })[0]
-
-    const matchedBuilders = matched.filter(isBuilderTab)
-    const visibleBuilder = chooseVisibleBuilder(matchedBuilders)
-    const visibleMatched = matched.filter(tab => !isBuilderTab(tab) || tab.tabId === visibleBuilder?.tabId)
-    const hasPresetBuilder = Boolean(visibleBuilder)
 
     const visibleById = new Map<string, ChatTab>()
-    visibleMatched.forEach(tab => visibleById.set(tab.tabId, tab))
+    matched.forEach(tab => visibleById.set(tab.tabId, tab))
     if (activeWorkflowTab) {
-      const isDuplicateBuilder =
-        isBuilderTab(activeWorkflowTab) &&
-        hasPresetBuilder &&
-        activeWorkflowTab.metadata?.presetQueryId !== activePresetId
-
-      if (!isDuplicateBuilder) {
-        visibleById.set(activeWorkflowTab.tabId, activeWorkflowTab)
-      }
+      visibleById.set(activeWorkflowTab.tabId, activeWorkflowTab)
     }
 
     const visible = visibleById.size > 0

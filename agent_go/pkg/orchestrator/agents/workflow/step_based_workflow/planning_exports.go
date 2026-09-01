@@ -598,7 +598,6 @@ type WorkshopConfig struct {
 	PresetPhaseLLM    *AgentLLMConfig
 	PresetPulseLLM    *AgentLLMConfig
 	UseKnowledgebase  bool
-	LockKnowledgebase bool
 	LLMAllocationMode string
 	TieredConfig      *TieredLLMConfig
 	Logger            loggerv2.Logger
@@ -729,9 +728,6 @@ func NewWorkshopChatSession(ctx context.Context, cfg *WorkshopConfig) (*Workshop
 		controller.SetSecrets(cfg.Secrets)
 		logger.Debug(fmt.Sprintf("[WORKSHOP] Set %d secrets", len(cfg.Secrets)))
 	}
-
-	// Propagate knowledgebase lock flag
-	controller.SetLockKnowledgebase(cfg.LockKnowledgebase)
 
 	// Propagate selected skills
 	if len(cfg.SelectedSkills) > 0 {
@@ -893,7 +889,6 @@ func (s *WorkshopChatSession) UpdatePresetSettings(
 	selectedTools []string, toolsParsed bool,
 	useCodeExecutionMode bool,
 	useKnowledgebase bool,
-	lockKnowledgebase bool,
 	selectedSkills []string, skillsParsed bool,
 	secrets []orchestrator.SecretEntry,
 ) {
@@ -903,7 +898,6 @@ func (s *WorkshopChatSession) UpdatePresetSettings(
 	}
 	s.controller.SetUseCodeExecutionMode(useCodeExecutionMode)
 	s.controller.useKnowledgebase = useKnowledgebase
-	s.controller.SetLockKnowledgebase(lockKnowledgebase)
 	if skillsParsed {
 		s.controller.SetSelectedSkills(selectedSkills)
 	}
@@ -918,7 +912,6 @@ func (s *WorkshopChatSession) UpdatePresetSettings(
 		}
 		s.config.UseCodeExecutionMode = useCodeExecutionMode
 		s.config.UseKnowledgebase = useKnowledgebase
-		s.config.LockKnowledgebase = lockKnowledgebase
 		s.config.Secrets = append([]orchestrator.SecretEntry(nil), secrets...)
 	}
 }
@@ -2263,7 +2256,7 @@ func RegisterPlanModificationTools(
 	moveFile func(context.Context, string, string) error,
 	agentName string,
 ) error {
-	return registerPlanModificationTools(mcpAgent, workspacePath, logger, readFile, writeFile, moveFile, agentName, nil)
+	return registerPlanModificationTools(mcpAgent, workspacePath, logger, readFile, writeFile, moveFile, agentName)
 }
 
 // ReadPlanFromWorkspace reads plan.json from the workspace and returns it as JSON string.

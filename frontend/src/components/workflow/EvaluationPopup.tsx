@@ -8,7 +8,8 @@ import {
   FileText,
   BarChart3,
   Target,
-  RefreshCw
+  RefreshCw,
+  Route as RouteIcon,
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { EvaluationReportEntry, EvaluationReportsResponse } from '../../services/api-types'
@@ -53,6 +54,16 @@ export const EvaluationReportsPanel: React.FC<EvaluationReportsPanelProps> = ({
   const [error, setError] = useState<string | null>(null)
   const [expandedReports, setExpandedReports] = useState<Set<string>>(new Set())
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set())
+  // Which route (routing/branch major-fork concept, PLAT-259) was actually
+  // selected for each routing step, per run folder -- fetched lazily from
+  // Execution Logs (the single source of truth for a run's real route
+  // selections) rather than re-deriving it here. An eval step's
+  // applies_to_routes (static plan data) only says which route IDs it's
+  // SCOPED to; this is what tells us which of those routes this run
+  // actually took.
+  const [routeSelectionsByRunFolder, setRouteSelectionsByRunFolder] = useState<Record<string, Record<string, string>>>({})
+  const [loadingRouteSelections, setLoadingRouteSelections] = useState<Set<string>>(new Set())
+  const [routeFilterByRunFolder, setRouteFilterByRunFolder] = useState<Record<string, string | null>>({})
   const loadReports = useCallback(async () => {
     if (!workspacePath) return
 
@@ -86,6 +97,37 @@ export const EvaluationReportsPanel: React.FC<EvaluationReportsPanelProps> = ({
     }
   }, [isActive, workspacePath, loadReports])
 
+  const loadRouteSelections = useCallback(async (runFolder: string) => {
+    if (!workspacePath) return
+    setLoadingRouteSelections(prevLoading => {
+      if (prevLoading.has(runFolder)) return prevLoading
+      const next = new Set(prevLoading)
+      next.add(runFolder)
+      return next
+    })
+    try {
+      const logsData = await agentApi.getExecutionLogs(workspacePath, runFolder)
+      const selections: Record<string, string> = {}
+      Object.values(logsData?.steps || {}).forEach(stepLogs => {
+        stepLogs.orchestration?.forEach(orch => {
+          const selectedRouteId = orch.source === 'routing_evaluation' ? orch.routing_evaluation?.selected_route_id : undefined
+          if (selectedRouteId) {
+            selections[stepLogs.original_id || stepLogs.step_id] = selectedRouteId
+          }
+        })
+      })
+      setRouteSelectionsByRunFolder(prev => ({ ...prev, [runFolder]: selections }))
+    } catch (err) {
+      console.error('Failed to load route selections for evaluation report:', err)
+    } finally {
+      setLoadingRouteSelections(prev => {
+        const next = new Set(prev)
+        next.delete(runFolder)
+        return next
+      })
+    }
+  }, [workspacePath])
+
   const toggleReport = (runFolder: string) => {
     setExpandedReports(prev => {
       const next = new Set(prev)
@@ -101,6 +143,19 @@ export const EvaluationReportsPanel: React.FC<EvaluationReportsPanelProps> = ({
   const evalStepDetailsById = useMemo(() => {
     return parseEvaluationPlanDetails(data?.evaluation_plan)
   }, [data?.evaluation_plan])
+
+  // Auto-expanding the first report (above) doesn't route through
+  // toggleReport, so it wouldn't otherwise trigger the route-selection
+  // fetch -- catch any already-expanded report whose selections aren't
+  // loaded yet (covers the initial auto-expand and any expand-all action).
+  useEffect(() => {
+    expandedReports.forEach(runFolder => {
+      if (!routeSelectionsByRunFolder[runFolder] && !loadingRouteSelections.has(runFolder)) {
+        loadRouteSelections(runFolder)
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedReports])
 
   const toggleStep = (stepKey: string) => {
     setExpandedSteps(prev => {
@@ -166,10 +221,30 @@ export const EvaluationReportsPanel: React.FC<EvaluationReportsPanelProps> = ({
                 {orderedReports.map((entry) => {
                   const isExpanded = expandedReports.has(entry.run_folder)
                   const report = entry.report
-                  const stepScores = Array.isArray(report?.step_scores) ? report.step_scores : []
+                  const allStepScores = Array.isArray(report?.step_scores) ? report.step_scores : []
                   const generatedAt = report?.generated_at
                     ? new Date(report.generated_at).toLocaleString()
                     : 'Unknown time'
+
+                  const routeSelections = routeSelectionsByRunFolder[entry.run_folder] || {}
+                  const routeFilterKey = routeFilterByRunFolder[entry.run_folder] || null
+                  const routeGroupsSeen = new Map<string, { key: string; routingStepId: string; routeId: string }>()
+                  allStepScores.forEach(step => {
+                    evalStepDetailsById.get(step.step_id)?.appliesToRoutes?.forEach(({ routingStepId, routeIds }) => {
+                      routeIds.forEach(routeId => {
+                        const key = `${routingStepId}::${routeId}`
+                        if (!routeGroupsSeen.has(key)) routeGroupsSeen.set(key, { key, routingStepId, routeId })
+                      })
+                    })
+                  })
+                  const routeGroups = Array.from(routeGroupsSeen.values())
+                  const stepScores = routeFilterKey
+                    ? allStepScores.filter(step =>
+                        evalStepDetailsById.get(step.step_id)?.appliesToRoutes?.some(({ routingStepId, routeIds }) =>
+                          routeIds.some(id => `${routingStepId}::${id}` === routeFilterKey)
+                        )
+                      )
+                    : allStepScores
 
                   return (
                     <div
@@ -219,7 +294,7 @@ export const EvaluationReportsPanel: React.FC<EvaluationReportsPanelProps> = ({
                           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted text-muted-foreground">
                             <FileText className="w-4 h-4" />
                             <span className="text-sm font-semibold">
-                              {stepScores.length} step{stepScores.length === 1 ? '' : 's'}
+                              {allStepScores.length} step{allStepScores.length === 1 ? '' : 's'}
                             </span>
                           </div>
                         </div>
@@ -231,11 +306,53 @@ export const EvaluationReportsPanel: React.FC<EvaluationReportsPanelProps> = ({
                           {/* Evaluation step outputs */}
                           <div className="p-4">
                             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-                              Evaluation Steps ({stepScores.length})
+                              Evaluation Steps ({stepScores.length}{routeFilterKey ? ` of ${allStepScores.length}` : ''})
                             </h4>
+                            {routeGroups.length > 0 && (
+                              <div className="flex flex-wrap items-center gap-1.5 mb-3">
+                                <button
+                                  type="button"
+                                  onClick={() => setRouteFilterByRunFolder(prev => ({ ...prev, [entry.run_folder]: null }))}
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                                    routeFilterKey === null
+                                      ? 'bg-primary text-primary-foreground border-primary'
+                                      : 'bg-muted text-muted-foreground border-border hover:bg-accent'
+                                  }`}
+                                >
+                                  All steps
+                                </button>
+                                {routeGroups.map(group => {
+                                  const takenThisRun = routeSelections[group.routingStepId] === group.routeId
+                                  return (
+                                    <button
+                                      key={group.key}
+                                      type="button"
+                                      onClick={() => setRouteFilterByRunFolder(prev => ({ ...prev, [entry.run_folder]: group.key }))}
+                                      title={`Eval steps scoped to route "${group.routeId}" of routing step "${group.routingStepId}"${
+                                        loadingRouteSelections.has(entry.run_folder)
+                                          ? ' (checking whether this run took it...)'
+                                          : takenThisRun ? ' -- taken this run' : ' -- NOT taken this run'
+                                      }`}
+                                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                                        routeFilterKey === group.key
+                                          ? 'bg-teal-600 text-white border-teal-600'
+                                          : takenThisRun
+                                            ? 'bg-teal-500/10 text-teal-700 dark:text-teal-300 border-teal-500/30 hover:bg-teal-500/20'
+                                            : 'bg-muted text-muted-foreground border-border hover:bg-accent opacity-70'
+                                      }`}
+                                    >
+                                      <RouteIcon className="h-3 w-3" />
+                                      {group.routeId}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            )}
                             {stepScores.length === 0 ? (
                               <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
-                                This evaluation report has no step_scores. It may be from an older or incomplete eval run.
+                                {routeFilterKey
+                                  ? 'No evaluation steps are scoped to this route.'
+                                  : 'This evaluation report has no step_scores. It may be from an older or incomplete eval run.'}
                               </div>
                             ) : (
                             <div className="space-y-2">
@@ -286,6 +403,28 @@ export const EvaluationReportsPanel: React.FC<EvaluationReportsPanelProps> = ({
                                               Score {scoreLabel}
                                             </span>
                                           )}
+                                          {stepDetails?.appliesToRoutes?.map(({ routingStepId, routeIds }) => {
+                                            const takenRouteId = routeSelections[routingStepId]
+                                            const coversTakenRoute = takenRouteId ? routeIds.includes(takenRouteId) : false
+                                            return (
+                                              <span
+                                                key={routingStepId}
+                                                title={`Scoped to route(s) ${routeIds.join(', ')} of routing step "${routingStepId}"${
+                                                  loadingRouteSelections.has(entry.run_folder)
+                                                    ? ''
+                                                    : coversTakenRoute ? ' -- matches the route taken this run' : ' -- does not match the route taken this run'
+                                                }`}
+                                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium border ${
+                                                  coversTakenRoute
+                                                    ? 'bg-teal-500/10 text-teal-700 dark:text-teal-300 border-teal-500/30'
+                                                    : 'bg-muted text-muted-foreground border-border'
+                                                }`}
+                                              >
+                                                <RouteIcon className="h-2.5 w-2.5" />
+                                                {routeIds.join(', ')}
+                                              </span>
+                                            )
+                                          })}
                                         </div>
 
                                       </div>

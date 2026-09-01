@@ -235,6 +235,14 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
     llm => llm.provider === provider.id && llm.model_id === selectedModel
   )
 
+  // claude-code and codex-cli already get every model x reasoning-effort
+  // combination auto-published server-side (see buildAutoPublishedCodingAgentLLMs
+  // in published_llm_store.go) -- manual publish for these two just adds
+  // near-duplicate clutter to the saved-configs list. cursor-cli isn't
+  // auto-published and has real model variation worth naming (Grok,
+  // Composer), so it keeps publish.
+  const canPublish = provider.id !== 'claude-code' && provider.id !== 'codex-cli'
+
   const savePiAuthKey = async () => {
     if (!piAuthSpec) return
     const value = piAuthKey.trim()
@@ -511,6 +519,7 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
       </Card>
 
       {/* Save reusable configuration */}
+      {canPublish && (
       <Card className="p-4">
         <h4 className="font-medium text-foreground mb-3">Save Configuration</h4>
 
@@ -583,6 +592,7 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
           </div>
         )}
       </Card>
+      )}
     </div>
   )
 }

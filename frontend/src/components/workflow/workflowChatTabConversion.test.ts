@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatTab } from '../../stores/useChatStore'
 import { userInteractiveContinuationFlag } from '../../utils/chatSubmitHelpers'
-import { convertObservedWorkflowTabToInteractive } from './workflowChatTabConversion'
+import {
+  convertObservedWorkflowTabToInteractive,
+  isMisclassifiedRestoredWorkflowChat,
+  reusableBlankWorkflowChatTabId,
+} from './workflowChatTabConversion'
 
 function observedTab(overrides: Partial<ChatTab> = {}): ChatTab {
   return {
@@ -72,5 +76,65 @@ describe('convertObservedWorkflowTabToInteractive', () => {
     expect(converted.sessionId).toBe('bot-whatsapp--abc')
     expect(converted.metadata?.isBotRun).toBe(false)
     expect(converted.metadata?.botPlatform).toBeUndefined()
+  })
+})
+
+describe('reusableBlankWorkflowChatTabId', () => {
+  it('chooses the untouched Chat placeholder instead of a read-only full-run tab', () => {
+    const scheduled = observedTab({
+      tabId: 'full-run-tab',
+      name: 'full-run [default / iteration-0]',
+    })
+    const chat = observedTab({
+      tabId: 'chat-tab',
+      sessionId: 'blank-chat-session',
+      name: 'Automation Builder',
+      createdAt: 2,
+      isCompleted: false,
+      metadata: {
+        mode: 'workflow',
+        phaseId: 'workflow-builder',
+        phaseName: 'Automation Builder',
+        presetQueryId: 'rts-latency',
+      },
+    })
+
+    expect(reusableBlankWorkflowChatTabId(
+      { [scheduled.tabId]: scheduled, [chat.tabId]: chat },
+      {},
+      'rts-latency',
+    )).toBe('chat-tab')
+  })
+
+  it('does not overwrite an interactive Chat tab that already has conversation content', () => {
+    const chat = observedTab({
+      tabId: 'chat-tab',
+      sessionId: 'existing-chat-session',
+      name: 'Automation Builder',
+      metadata: {
+        mode: 'workflow',
+        phaseId: 'workflow-builder',
+        phaseName: 'Automation Builder',
+        presetQueryId: 'rts-latency',
+      },
+    })
+
+    expect(reusableBlankWorkflowChatTabId(
+      { [chat.tabId]: chat },
+      { 'existing-chat-session': [{ type: 'user_message' }] as never },
+      'rts-latency',
+    )).toBeNull()
+  })
+})
+
+describe('isMisclassifiedRestoredWorkflowChat', () => {
+  it('recognizes an interactive restore that retained schedule metadata', () => {
+    expect(isMisclassifiedRestoredWorkflowChat(observedTab({
+      config: { restoredConversationPath: 'chat_history/session.json' } as ChatTab['config'],
+    }))).toBe(true)
+  })
+
+  it('does not reinterpret a legitimate read-only schedule transcript', () => {
+    expect(isMisclassifiedRestoredWorkflowChat(observedTab())).toBe(false)
   })
 })

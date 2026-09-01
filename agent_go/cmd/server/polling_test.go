@@ -42,6 +42,37 @@ func TestActiveSessionsIncludesTrackedWorkflowWithoutChatRow(t *testing.T) {
 	}
 }
 
+func TestActiveSessionsCarriesPhaseNameForTrackedWorkflowWithoutChatRow(t *testing.T) {
+	const sessionID = "workflow-phase-after-restart"
+	startedAt := time.Now().Add(-time.Minute).UTC()
+	api := &StreamingAPI{
+		runtimeCoordinator: NewRuntimeCoordinator(),
+		activeSessions:     map[string]*ActiveSessionInfo{},
+		trackedWorkflowExecutions: map[string]*TrackedWorkflowExecution{
+			"workflow-1": {
+				ExecutionID: "workflow-1", SessionID: sessionID,
+				Source: trackedExecutionSourceWorkflowRun, Kind: "workflow", Status: trackedExecutionStatusRunning,
+				WorkspacePath: "Workflow/daily-qa", StartedAt: startedAt,
+				PhaseID: "step-3", PhaseName: "Validate output",
+			},
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	api.handleGetActiveSessions(recorder, httptest.NewRequest("GET", "/api/sessions/active", nil))
+	var response GetActiveSessionsResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode active sessions: %v", err)
+	}
+	if len(response.ActiveSessions) != 1 {
+		t.Fatalf("active sessions = %#v, want one tracked workflow", response.ActiveSessions)
+	}
+	session := response.ActiveSessions[0]
+	if session.PhaseID != "step-3" || session.PhaseName != "Validate output" {
+		t.Fatalf("phase fields not carried through synthesis: phase_id=%q phase_name=%q", session.PhaseID, session.PhaseName)
+	}
+}
+
 func TestBuildActiveSessionInfoSummaryKeepsCompletedStatusForBackgroundAgents(t *testing.T) {
 	const sessionID = "session-bg-completed"
 

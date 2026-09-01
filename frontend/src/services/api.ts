@@ -23,6 +23,7 @@ import type {
   WorkflowConstantsResponse,
   WorkflowSelectedOptions,
   GetActiveSessionsResponse,
+  HeaderSummaryResponse,
   ReconnectSessionResponse,
   SessionStatusResponse,
   SessionExecutionTreeResponse,
@@ -85,6 +86,7 @@ import type {
   PulseImpactResponse,
   PulseContextResponse,
   PulseEvalResultsResponse,
+  OrgDashboardNotification,
 } from './api-types'
 import type { PlanStep, AgentConfigs } from '../utils/stepConfigMatching'
 
@@ -651,6 +653,13 @@ workspaceApi.interceptors.response.use(
 
 const coalesceRuntimeRead = createRequestCoalescer()
 const RUNTIME_READ_TIMEOUT_MS = 15_000
+// coalesceRuntimeRead only de-dupes truly concurrent calls (the in-flight
+// entry is removed the instant the request settles); it does nothing for
+// calls made moments apart, e.g. one per workflow switch. This short TTL
+// cache covers that gap. 15s comfortably clears every known caller's own
+// staleness tolerance (the least tolerant re-checks every 60s).
+let runningWorkflowsCache: { data: { running: RunningWorkflowInfo[] }; timestamp: number } | null = null
+const RUNNING_WORKFLOWS_CACHE_TTL_MS = 15_000
 // /api/terminals is intentionally disabled outside developer runtime
 // diagnostics. Remember that capability result so normal product surfaces do
 // not keep polling a route that is unavailable by design.
@@ -893,6 +902,16 @@ export const agentApi = {
   getActiveSessions: async (): Promise<GetActiveSessionsResponse> => {
     return coalesceRuntimeRead('active-sessions', async () => {
       const response = await api.get('/api/sessions/active', { timeout: RUNTIME_READ_TIMEOUT_MS })
+      return response.data
+    })
+  },
+
+  // Combined poll for the app header (ModePresetBar + GlobalActivityMonitor):
+  // active sessions + workflow schedule counts in one round trip, replacing
+  // what used to be two independently-timed requests.
+  getHeaderSummary: async (): Promise<HeaderSummaryResponse> => {
+    return coalesceRuntimeRead('header-summary', async () => {
+      const response = await api.get('/api/header-summary', { timeout: RUNTIME_READ_TIMEOUT_MS })
       return response.data
     })
   },
@@ -1889,11 +1908,17 @@ export const agentApi = {
     return response.data
   },
 
-  listRunningWorkflows: async (): Promise<{ running: RunningWorkflowInfo[] }> => {
-    return coalesceRuntimeRead('running-workflows', async () => {
+  listRunningWorkflows: async (forceRefresh = false): Promise<{ running: RunningWorkflowInfo[] }> => {
+    const now = Date.now()
+    if (!forceRefresh && runningWorkflowsCache && (now - runningWorkflowsCache.timestamp) < RUNNING_WORKFLOWS_CACHE_TTL_MS) {
+      return runningWorkflowsCache.data
+    }
+    const data = await coalesceRuntimeRead('running-workflows', async () => {
       const response = await api.get('/api/workflow/running', { timeout: RUNTIME_READ_TIMEOUT_MS })
       return response.data
     })
+    runningWorkflowsCache = { data, timestamp: now }
+    return data
   },
 
   updateRunningWorkflow: async (sessionId: string, patch: UpdateRunningWorkflowRequest): Promise<RunningWorkflowInfo> => {
@@ -2093,6 +2118,25 @@ export const agentApi = {
 
   getBuilderDoc: async (workspacePath: string, doc: 'soul' | 'card-health' | 'card-progress' | 'card-cost'): Promise<{ success: boolean; doc: string; path: string; exists: boolean; content: string; error?: string }> => {
     const response = await api.get('/api/workflow/builder-doc', { params: { workspace_path: workspacePath, doc } })
+    return response.data
+  },
+
+  getOrgDashboardNotifications: async (workspacePaths: string[], recentLimit = 10): Promise<{
+    success: boolean
+    workflows: Array<{
+      workspace_path: string
+      run_summary?: OrgDashboardNotification
+      pulse_summary?: OrgDashboardNotification
+      recent?: OrgDashboardNotification[]
+      error?: string
+    }>
+  }> => {
+    const response = await api.get('/api/org-dashboard/notifications', {
+      params: {
+        workspace_paths: workspacePaths.join(','),
+        recent_limit: recentLimit,
+      },
+    })
     return response.data
   },
   getPlanChangelog: async (workspacePath: string): Promise<import('./api-types').PlanChangelogResponse> => {

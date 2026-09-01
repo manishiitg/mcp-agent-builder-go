@@ -107,6 +107,13 @@ interface RunCosts {
       stepID: string        // Step ID (e.g., "fetch-pr-data" or phase name for phase-only agents)
       stepTitle: string     // Display title
       stepNum: number       // Step number (for sorting, 0 for non-step entries)
+      // Which route (routing/branch major-fork concept, PLAT-259) this step
+      // was reached through on this run, if any -- sourced from the same
+      // Execution Logs step data already fetched for title lookup below.
+      routeId?: string
+      routeName?: string
+      routeStepId?: string
+      routeStepTitle?: string
       execution: number
       learning: number
       reflection: number
@@ -301,6 +308,11 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
   const [expandedRunFolders, setExpandedRunFolders] = useState<Set<string>>(new Set())
   const [expandedCostModels, setExpandedCostModels] = useState<Set<string>>(new Set())
   const [costViewMode, setCostViewMode] = useState<Record<string, 'step' | 'model'>>({})
+  // Route filter (PLAT-259 follow-up), keyed per run folder since each run
+  // can take different routes. Same composite-key shape as ExecutionLogsPopup:
+  // `${routeStepId}::${routeId}`, since route_id strings can collide across
+  // unrelated routing/branch steps.
+  const [routeFilterByRunFolder, setRouteFilterByRunFolder] = useState<Record<string, string | null>>({})
   const [expandedDailyDate, setExpandedDailyDate] = useState<string | null>(null)
   const [costHistory, setCostHistory] = useState<{ hasMore: boolean; nextBefore?: string } | null>(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
@@ -337,6 +349,10 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
       stepID: string
       stepNum: number
       stepTitle: string
+      routeId?: string
+      routeName?: string
+      routeStepId?: string
+      routeStepTitle?: string
       execution: number
       learning: number
       reflection: number
@@ -375,8 +391,15 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
       }
     }
 
-    // Helper to find step number and title from stepID
-    const findStepInfo = (stepID: string): { stepNum: number, stepTitle: string } => {
+    // Helper to find step number, title, and route membership from stepID
+    const findStepInfo = (stepID: string): {
+      stepNum: number
+      stepTitle: string
+      routeId?: string
+      routeName?: string
+      routeStepId?: string
+      routeStepTitle?: string
+    } => {
       // Try to find the step in the steps data by matching the step ID
       if (steps) {
         for (const [key, stepData] of Object.entries(steps)) {
@@ -384,7 +407,18 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
             // Extract step number from key (e.g., "step-1" -> 1)
             const match = key.match(/step-(\d+)/)
             const stepNum = match ? parseInt(match[1], 10) : 0
-            return { stepNum, stepTitle: stepData.title || stepID }
+            return {
+              stepNum,
+              stepTitle: stepData.title || stepID,
+              ...(stepData.route_kind === 'routing' && stepData.route_id
+                ? {
+                    routeId: stepData.route_id,
+                    routeName: stepData.route_name,
+                    routeStepId: stepData.route_step_id,
+                    routeStepTitle: stepData.route_step_title,
+                  }
+                : {}),
+            }
           }
         }
       }
@@ -420,7 +454,8 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
         stageCosts[stageBucket] += cost
 
         // Step-wise costs - group by stepID
-        const { stepNum, stepTitle } = findStepInfo(stepID)
+        const stepInfo = findStepInfo(stepID)
+        const { stepNum, stepTitle } = stepInfo
         const stepKey = stepID  // Use stepID as the key
 
         if (!stepCosts[stepKey]) {
@@ -428,6 +463,10 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
             stepID,
             stepNum,
             stepTitle,
+            routeId: stepInfo.routeId,
+            routeName: stepInfo.routeName,
+            routeStepId: stepInfo.routeStepId,
+            routeStepTitle: stepInfo.routeStepTitle,
             execution: 0,
             learning: 0,
             reflection: 0,
@@ -459,13 +498,18 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
         const cost = Object.values(toolMap).reduce((sum, u) => sum + (u.total_cost_usd || 0), 0)
         const stageBucket = classifyPhase(phase)
         stageCosts[stageBucket] += cost
-        const { stepNum, stepTitle } = findStepInfo(stepID)
+        const stepInfo = findStepInfo(stepID)
+        const { stepNum, stepTitle } = stepInfo
         const stepKey = stepID || key
         if (!stepCosts[stepKey]) {
           stepCosts[stepKey] = {
             stepID: stepKey,
             stepNum,
             stepTitle: stepTitle || stepKey,
+            routeId: stepInfo.routeId,
+            routeName: stepInfo.routeName,
+            routeStepId: stepInfo.routeStepId,
+            routeStepTitle: stepInfo.routeStepTitle,
             execution: 0,
             learning: 0,
             reflection: 0,
@@ -529,7 +573,8 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
         })
 
         // Step-wise costs - group by stepID with "eval-" prefix
-        const { stepNum, stepTitle } = findStepInfo(stepID)
+        const stepInfo = findStepInfo(stepID)
+        const { stepNum, stepTitle } = stepInfo
         const stepKey = `eval-${stepID}`  // Prefix with eval- to distinguish from regular steps
 
         if (!stepCosts[stepKey]) {
@@ -537,6 +582,10 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
             stepID: stepKey,
             stepNum: stepNum > 0 ? stepNum + 1000 : 0, // Put eval steps after regular steps
             stepTitle: `[Eval] ${stepTitle}`,
+            routeId: stepInfo.routeId,
+            routeName: stepInfo.routeName,
+            routeStepId: stepInfo.routeStepId,
+            routeStepTitle: stepInfo.routeStepTitle,
             execution: 0,
             learning: 0,
             reflection: 0,
@@ -563,13 +612,18 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
         const parts = key.split(':')
         const stepID = parts[1] || parts[0]
         const cost = Object.values(toolMap).reduce((sum, u) => sum + (u.total_cost_usd || 0), 0)
-        const { stepNum, stepTitle } = findStepInfo(stepID)
+        const stepInfo = findStepInfo(stepID)
+        const { stepNum, stepTitle } = stepInfo
         const stepKey = `eval-${stepID}`
         if (!stepCosts[stepKey]) {
           stepCosts[stepKey] = {
             stepID: stepKey,
             stepNum: stepNum > 0 ? stepNum + 1000 : 0,
             stepTitle: `[Eval] ${stepTitle}`,
+            routeId: stepInfo.routeId,
+            routeName: stepInfo.routeName,
+            routeStepId: stepInfo.routeStepId,
+            routeStepTitle: stepInfo.routeStepTitle,
             execution: 0,
             learning: 0,
             reflection: 0,
@@ -923,6 +977,13 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
     setCostViewMode(prev => ({
       ...prev,
       [runFolder]: mode
+    }))
+  }
+
+  const setRouteFilterForRunFolder = (runFolder: string, filterKey: string | null) => {
+    setRouteFilterByRunFolder(prev => ({
+      ...prev,
+      [runFolder]: filterKey
     }))
   }
 
@@ -1627,6 +1688,53 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                   const costSummary = runCost.costSummary
                   const displayRunFolderName = getRunFolderDisplayName(runCost.runFolder)
                   const secondaryRunFolderLabel = getRunFolderSecondaryLabel(runCost)
+                  const routeFilterKey = routeFilterByRunFolder[runCost.runFolder] || null
+                  const routingRouteGroups: Array<{ key: string; routeStepTitle: string; routeName: string }> = []
+                  if (costSummary) {
+                    const seen = new Map<string, { key: string; routeStepTitle: string; routeName: string }>()
+                    costSummary.stepCosts.forEach(step => {
+                      if (!step.routeId || !step.routeStepId) return
+                      const key = `${step.routeStepId}::${step.routeId}`
+                      if (!seen.has(key)) {
+                        seen.set(key, {
+                          key,
+                          routeStepTitle: step.routeStepTitle || step.routeStepId,
+                          routeName: step.routeName || step.routeId,
+                        })
+                      }
+                    })
+                    routingRouteGroups.push(...seen.values())
+                  }
+                  const visibleStepCosts = costSummary
+                    ? costSummary.stepCosts.filter(step => !routeFilterKey || `${step.routeStepId}::${step.routeId}` === routeFilterKey)
+                    : []
+                  // When a route filter is active, the totals row should sum
+                  // only the visible (filtered) steps -- otherwise "Total"
+                  // would silently include cost from routes the user just
+                  // filtered out.
+                  const totalsRowSource = routeFilterKey
+                    ? visibleStepCosts.reduce((acc, step) => ({
+                        tokens: acc.tokens + step.inputTokens + step.outputTokens,
+                        execution: acc.execution + step.execution,
+                        learning: acc.learning + step.learning,
+                        knowledgebase: acc.knowledgebase + step.knowledgebase,
+                        routing: acc.routing + step.routing,
+                        workshop: acc.workshop + step.workshop,
+                        evaluation: acc.evaluation + step.evaluation,
+                        totalCost: acc.totalCost + step.totalCost,
+                      }), { tokens: 0, execution: 0, learning: 0, knowledgebase: 0, routing: 0, workshop: 0, evaluation: 0, totalCost: 0 })
+                    : costSummary
+                      ? {
+                          tokens: costSummary.totalTokens,
+                          execution: costSummary.stageCosts.execution,
+                          learning: costSummary.stageCosts.learning,
+                          knowledgebase: costSummary.stageCosts.knowledgebase,
+                          routing: costSummary.stageCosts.routing,
+                          workshop: costSummary.stageCosts.workshop,
+                          evaluation: costSummary.stageCosts.evaluation,
+                          totalCost: costSummary.totalCost,
+                        }
+                      : null
 
                   if (!costSummary) return null
 
@@ -1765,6 +1873,36 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                               {/* Step-wise Cost Breakdown View */}
                               {viewMode === 'step' && costSummary.stepCosts.length > 0 && (
                                 <div className="p-4 overflow-x-auto">
+                                  {routingRouteGroups.length > 0 && (
+                                    <div className="flex flex-wrap items-center gap-1.5 pb-3">
+                                      <button
+                                        type="button"
+                                        onClick={() => setRouteFilterForRunFolder(runCost.runFolder, null)}
+                                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                                          routeFilterKey === null
+                                            ? 'bg-primary text-primary-foreground border-primary'
+                                            : 'bg-muted text-muted-foreground border-border hover:bg-accent'
+                                        }`}
+                                      >
+                                        All steps
+                                      </button>
+                                      {routingRouteGroups.map(group => (
+                                        <button
+                                          key={group.key}
+                                          type="button"
+                                          onClick={() => setRouteFilterForRunFolder(runCost.runFolder, group.key)}
+                                          title={`Route "${group.routeName}" -- selected by ${group.routeStepTitle}`}
+                                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                                            routeFilterKey === group.key
+                                              ? 'bg-teal-600 text-white border-teal-600'
+                                              : 'bg-muted text-muted-foreground border-border hover:bg-accent'
+                                          }`}
+                                        >
+                                          {group.routeName}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
                                   <table className="w-full text-xs">
                                     <thead>
                                       <tr className="text-muted-foreground border-b border-border pb-2">
@@ -1780,7 +1918,7 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-border">
-                                      {costSummary.stepCosts.map((step) => (
+                                      {visibleStepCosts.map((step) => (
                                         <tr key={step.stepID} className="hover:bg-accent/50 transition-colors">
                                           <td className="py-2">
                                             <div className="font-medium text-foreground">
@@ -1802,6 +1940,14 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                                     </span>
                                                   )
                                               }
+                                              {step.routeId && step.routeName && (
+                                                <span
+                                                  className="ml-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-500/30"
+                                                  title={`Reached via the "${step.routeName}" route, selected by ${step.routeStepTitle || step.routeStepId}`}
+                                                >
+                                                  ↳ {step.routeName}
+                                                </span>
+                                              )}
                                             </div>
                                           </td>
                                           <td className="py-2 text-right font-mono text-muted-foreground">
@@ -1830,34 +1976,36 @@ const CostsPopup: React.FC<CostsPopupProps> = ({
                                           </td>
                                         </tr>
                                       ))}
-                                      {/* Total Row */}
-                                      <tr className="bg-muted/30 font-semibold">
-                                        <td className="py-2 text-foreground">Total</td>
-                                        <td className="py-2 text-right font-mono text-muted-foreground">
-                                          {costSummary.totalTokens.toLocaleString()}
-                                        </td>
-                                        <td className="py-2 text-right font-mono text-blue-600 dark:text-blue-400">
-                                          {formatUSD(costSummary.stageCosts.execution)}
-                                        </td>
-                                        <td className="py-2 text-right font-mono text-purple-600 dark:text-purple-400">
-                                          {formatUSD(costSummary.stageCosts.learning)}
-                                        </td>
-                                        <td className="py-2 text-right font-mono text-teal-600 dark:text-teal-400">
-                                          {formatUSD(costSummary.stageCosts.knowledgebase)}
-                                        </td>
-                                        <td className="py-2 text-right font-mono text-cyan-600 dark:text-cyan-400">
-                                          {formatUSD(costSummary.stageCosts.routing)}
-                                        </td>
-                                        <td className="py-2 text-right font-mono text-pink-600 dark:text-pink-400">
-                                          {formatUSD(costSummary.stageCosts.workshop)}
-                                        </td>
-                                        <td className="py-2 text-right font-mono text-amber-600 dark:text-amber-400">
-                                          {formatUSD(costSummary.stageCosts.evaluation)}
-                                        </td>
-                                        <td className="py-2 text-right font-bold text-green-600 dark:text-green-400">
-                                          {formatUSD(costSummary.totalCost)}
-                                        </td>
-                                      </tr>
+                                      {/* Total Row -- subtotal for the selected route when a route filter is active */}
+                                      {totalsRowSource && (
+                                        <tr className="bg-muted/30 font-semibold">
+                                          <td className="py-2 text-foreground">{routeFilterKey ? 'Total (this route)' : 'Total'}</td>
+                                          <td className="py-2 text-right font-mono text-muted-foreground">
+                                            {totalsRowSource.tokens.toLocaleString()}
+                                          </td>
+                                          <td className="py-2 text-right font-mono text-blue-600 dark:text-blue-400">
+                                            {formatUSD(totalsRowSource.execution)}
+                                          </td>
+                                          <td className="py-2 text-right font-mono text-purple-600 dark:text-purple-400">
+                                            {formatUSD(totalsRowSource.learning)}
+                                          </td>
+                                          <td className="py-2 text-right font-mono text-teal-600 dark:text-teal-400">
+                                            {formatUSD(totalsRowSource.knowledgebase)}
+                                          </td>
+                                          <td className="py-2 text-right font-mono text-cyan-600 dark:text-cyan-400">
+                                            {formatUSD(totalsRowSource.routing)}
+                                          </td>
+                                          <td className="py-2 text-right font-mono text-pink-600 dark:text-pink-400">
+                                            {formatUSD(totalsRowSource.workshop)}
+                                          </td>
+                                          <td className="py-2 text-right font-mono text-amber-600 dark:text-amber-400">
+                                            {formatUSD(totalsRowSource.evaluation)}
+                                          </td>
+                                          <td className="py-2 text-right font-bold text-green-600 dark:text-green-400">
+                                            {formatUSD(totalsRowSource.totalCost)}
+                                          </td>
+                                        </tr>
+                                      )}
                                     </tbody>
                                   </table>
                                 </div>

@@ -173,7 +173,13 @@ func CheckReportQueryCompatibility(ctx context.Context, workspacePath string, re
 		// --max-time cancelled the request out from under it, every single
 		// time, regardless of how long that timeout was (proven at 10s,
 		// 45s, and 90s in isolation -- it never once completed on its own).
-		rows.Close()
+		if err := rows.Close(); err != nil {
+			preview := q
+			if len(preview) > 120 {
+				preview = preview[:120] + "..."
+			}
+			failures = append(failures, fmt.Sprintf("%q -> close result set: %v", preview, err))
+		}
 	}
 
 	if len(failures) == 0 {

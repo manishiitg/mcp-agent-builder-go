@@ -1,7 +1,7 @@
 import React from 'react'
 import { 
   Loader2, CheckCircle, XCircle, ArrowRight, 
-  Code, GitBranch, Repeat, Lock, SkipForward, ShieldCheck,
+  Code, GitBranch, Repeat, SkipForward, ShieldCheck,
   HelpCircle
 } from 'lucide-react'
 import {
@@ -18,7 +18,6 @@ export const WorkflowLegend: React.FC = () => {
     { icon: <XCircle className="w-3.5 h-3.5 text-red-500" />, label: "Failed Step" },
     { icon: <ArrowRight className="w-3.5 h-3.5 text-muted-foreground" />, label: "Pending Step" },
     { icon: <Code className="w-3.5 h-3.5 text-blue-500" />, label: "Code Execution Mode" },
-    { icon: <Lock className="w-3.5 h-3.5 text-purple-500" />, label: "Learnings Locked" },
     { icon: <SkipForward className="w-3.5 h-3.5 text-indigo-500" />, label: "LLM Validation Skipped" },
     { icon: <ShieldCheck className="w-3.5 h-3.5 text-orange-500" />, label: "Validation Disabled" },
     { icon: <Repeat className="w-3.5 h-3.5 text-indigo-500" />, label: "Loop Step" },

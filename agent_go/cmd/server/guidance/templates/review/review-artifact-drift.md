@@ -153,7 +153,7 @@ Load `read_skill(skills=[{"name":"builder-reference","path":"references/assumpti
      when the runtime reads a different store.
 4. Record a finding only when evidence shows drift, including:
    - code, paths, fields, selectors, tool/API usage, or validation still implement an old contract
-   - stale code/learning locks after a material change without review evidence
+   - stale code locks or stale learning access after a material change without review evidence
    - learnings or KB preserve obsolete behavior or agent-inferred policy
    - DB writers, report consumers, or eval consumers disagree on schema or semantics
    - a change updated a plausible but non-canonical store, or duplicate control

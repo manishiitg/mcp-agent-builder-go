@@ -133,7 +133,7 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 			wants: []string{
 				"exactly once", "durable evidence", "automatic-notification prose", `get_pulse_state(view="backlog", detail="compact")`,
 				"normal Workflow Builder tools", "terminal", "cannot erase or block other due work", "priority-ordered Fix queue",
-				"one reconciled `ownership_manifest`", "`kb_purity_manifest`", "`db_ownership_manifest`", "Lock recommendations",
+				"one reconciled `ownership_manifest`", "`kb_purity_manifest`", "`db_ownership_manifest`", "read-only access justified per step",
 				"proposal_only", "exact non-empty `next_check`", "strategy-proposal-", "final sequence message owns",
 			},
 		},
@@ -636,7 +636,7 @@ func TestPulseGuidanceRequiresRuntimeAuthorityAndVisibleFreshness(t *testing.T) 
 		"one authoritative owner",
 		"`kb_purity_manifest`",
 		"`db_ownership_manifest`",
-		"Lock only after cleanup",
+		"Reduce learning writes after cleanup",
 		"Do not launder content through references",
 		"re-read every content-bearing Markdown file",
 		"`learnings_access=\"read-write\"`",
@@ -1476,7 +1476,7 @@ func TestPulseStoreFreshnessTriggerAndReviewerPass(t *testing.T) {
 		"one semantic item, one authoritative owner",
 		"`kb_purity_manifest`",
 		"`db_ownership_manifest`",
-		"Recommend `lock_learnings` or `lock_knowledgebase` only after",
+		"Recommend `learnings_access=\"read\"` for mature",
 	} {
 		if !strings.Contains(postRun, want) {
 			t.Fatalf("post-run-monitor missing freshness trigger %q", want)

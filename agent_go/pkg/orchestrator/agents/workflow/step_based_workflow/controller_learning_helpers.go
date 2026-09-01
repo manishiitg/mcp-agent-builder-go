@@ -84,24 +84,6 @@ func shouldDirectWriteLearnings(agentConfigs *AgentConfigs, step PlanStepInterfa
 	return canWriteLearnings(agentConfigs, step, isEvalMode)
 }
 
-// validateLockLearningsChange rejects a freeze that states no reason.
-//
-// PLAT-059. Under the shared topic-organised skill (PLAT-058) a locked step
-// still reads every other step's contributions and can never give anything
-// back, so a lock is a standing cost someone has to be able to re-judge later.
-// LinkedIn reached 6 of 6 steps locked with no recorded justification for any
-// of them; the pre-existing "include review_notes explaining why" convention
-// was advisory and was therefore skipped.
-//
-// Rejected rather than defaulted: only the caller knows the evidence, and a
-// synthesized reason would defeat the purpose. Unlocking never requires one.
-func validateLockLearningsChange(locking bool, reason string) error {
-	if !locking || strings.TrimSpace(reason) != "" {
-		return nil
-	}
-	return fmt.Errorf("lock_learnings=true requires lock_learnings_reason: a locked step still reads the whole shared workflow skill but can never contribute to it, so the freeze needs a justification a later reviewer can judge. State what was reviewed and why further contribution would make the skill worse (e.g. \"selectors stable across 12 runs since 2026-06; last four contributions all restated existing entries\"). If the step simply has no reusable HOW to offer, use learnings_access=\"read\" instead — that needs no reason")
-}
-
 // PLAT-060. Ops-owned config decisions must carry the reason that justified
 // them into step_config.json, which is what the *next* reviewer actually reads.
 //
@@ -152,28 +134,6 @@ func validateDeclaredExecutionModeChange(mode string, reason string) error {
 	}
 	return fmt.Errorf("declared_execution_mode=%q requires declared_execution_mode_reason: moving a step between scripted and agentic changes how it executes for every future run — scripted freezes the behaviour into main.py, agentic pays for judgment on every run. State what makes this step deterministic (or not), citing the owning finding and the evidence.%s",
 		strings.TrimSpace(mode), reasonEscapeHatch)
-}
-
-var directLearningsGlobalEmptyForLock = func(hcpo *StepBasedWorkflowOrchestrator, ctx context.Context) (bool, error) {
-	return hcpo.isStepLearningsFolderEmpty(ctx, GlobalLearningID, 0, "")
-}
-
-func (hcpo *StepBasedWorkflowOrchestrator) shouldSkipDirectLearningsDueToLock(ctx context.Context, agentConfigs *AgentConfigs, stepIndex int) bool {
-	if agentConfigs == nil || agentConfigs.LockLearnings == nil || !*agentConfigs.LockLearnings {
-		return false
-	}
-	globalEmpty, emptyErr := directLearningsGlobalEmptyForLock(hcpo, ctx)
-	if emptyErr != nil {
-		// Can't check — assume empty to allow first-run bootstrap.
-		hcpo.GetLogger().Info(fmt.Sprintf("🔒 lock_learnings=true on step %d but _global/ check failed (%v) — allowing direct-learnings turn to bootstrap", stepIndex+1, emptyErr))
-		return false
-	}
-	if globalEmpty {
-		hcpo.GetLogger().Info(fmt.Sprintf("🔒 lock_learnings=true on step %d but _global/ is empty — allowing direct-learnings turn to bootstrap initial skill", stepIndex+1))
-		return false
-	}
-	hcpo.GetLogger().Info(fmt.Sprintf("🔒 lock_learnings=true on step %d with existing _global/ content — skipping direct-learnings turn", stepIndex+1))
-	return true
 }
 
 // findStepInPlan recursively finds a step by ID in the plan structure

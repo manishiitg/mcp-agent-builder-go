@@ -365,6 +365,46 @@ func TestHandleNotifyUserUsesBotDestination(t *testing.T) {
 	}
 }
 
+func TestHandleNotifyUserBuildsChannelNeutralOrgDashboardSummary(t *testing.T) {
+	ch := make(chan *services.NotificationDestination, 1)
+	connector := &testUserNotificationConnector{name: "org_dashboard_contract", ch: ch}
+	manager := services.GetNotificationManager()
+	manager.RegisterConnector(connector)
+	t.Cleanup(func() { manager.UnregisterConnector(connector.Name()) })
+
+	ctx := context.WithValue(context.Background(), BotNotificationDestinationKey, &services.NotificationDestination{
+		WorkspacePath: "Workflow/demo",
+	})
+	_, err := handleNotifyUser(ctx, map[string]interface{}{
+		"message_for_user":  "Run completed with one warning.",
+		"notification_kind": "run_summary",
+		"summary_title":     "Daily run",
+		"summary_status":    "warning",
+		"summary_fields": []interface{}{
+			map[string]interface{}{"label": "Processed", "value": "12"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleNotifyUser returned error: %v", err)
+	}
+
+	select {
+	case dest := <-ch:
+		if dest == nil || dest.WorkspacePath != "Workflow/demo" || dest.Content == nil || dest.Content.Summary == nil {
+			t.Fatalf("neutral summary destination = %#v", dest)
+		}
+		summary := dest.Content.Summary
+		if summary.Kind != "run_summary" || summary.Title != "Daily run" || summary.Status != "warning" {
+			t.Fatalf("neutral summary = %#v", summary)
+		}
+		if len(summary.Fields) != 1 || summary.Fields[0].Value != "12" {
+			t.Fatalf("neutral summary fields = %#v", summary.Fields)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected Org Dashboard notification contract")
+	}
+}
+
 func TestHandleNotifyUserSendsWorkflowSlackWebhook(t *testing.T) {
 	original := sendRichSlackIncomingWebhook
 	t.Cleanup(func() { sendRichSlackIncomingWebhook = original })
@@ -906,5 +946,15 @@ func TestWebhookResultChannelLabel(t *testing.T) {
 	}
 	if got := webhookResultChannel(hook, true); got != "slack_webhook:SLACK_RUNS" {
 		t.Fatalf("multi-channel label = %q, want the qualified name", got)
+	}
+}
+
+func TestNotificationRouteFromSelections(t *testing.T) {
+	if got := notificationRouteFromSelections(map[string]string{"top-router": "publish-reddit"}); got != "publish-reddit" {
+		t.Fatalf("single route = %q", got)
+	}
+	got := notificationRouteFromSelections(map[string]string{"router-b": "email", "router-a": "slack"})
+	if got != "router-a=slack · router-b=email" {
+		t.Fatalf("multiple routes = %q", got)
 	}
 }

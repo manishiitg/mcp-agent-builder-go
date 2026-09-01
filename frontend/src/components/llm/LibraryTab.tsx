@@ -56,15 +56,16 @@ type LibraryTabProps = {
   providers: ProviderManifestEntry[]
   onSelectProvider: (provider: ProviderManifestEntry) => void
   isProviderLocked: (provider: string) => boolean
+  /** Hide the "Saved configurations" list -- for a host (the workflow
+   * capabilities panel) where this tab's only job is connecting a new
+   * provider; the workflow's own role pickers already surface saved
+   * configs via dropdown, so repeating the full account-wide list here
+   * (often 30+ entries, many auto-saved near-duplicates from CLI runs) is
+   * noise rather than a second way to use them. */
+  hideSavedConfigurations?: boolean
 }
 
 const providerSectionOrder: LLMIntegrationKind[] = ['coding_agent', 'api_model', 'audio_provider']
-
-const providerSectionIcon: Record<LLMIntegrationKind, typeof Terminal> = {
-  coding_agent: Terminal,
-  api_model: KeyRound,
-  audio_provider: AudioLines,
-}
 
 const providerStatus = (provider: ProviderManifestEntry, locked: boolean) => {
   if (locked) {
@@ -136,7 +137,7 @@ const groupSavedLLMsByProvider = (
     }))
 }
 
-export function LibraryTab({ providers, onSelectProvider, isProviderLocked }: LibraryTabProps) {
+export function LibraryTab({ providers, onSelectProvider, isProviderLocked, hideSavedConfigurations = false }: LibraryTabProps) {
   const { savedLLMs, deleteSavedLLM, defaultPublishedLLMsLocked, loadDefaultsFromBackend } = useLLMStore()
   const [metadataMap, setMetadataMap] = useState<Record<string, ModelMetadata>>({})
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -209,7 +210,9 @@ export function LibraryTab({ providers, onSelectProvider, isProviderLocked }: Li
         <div>
           <h3 className="text-lg font-semibold text-foreground">Model Library</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Installed providers, available defaults, and reusable configurations in one place.
+            {hideSavedConfigurations
+              ? 'Connect a provider or change its models.'
+              : 'Installed providers, available defaults, and reusable configurations in one place.'}
           </p>
         </div>
         <Button
@@ -237,15 +240,8 @@ export function LibraryTab({ providers, onSelectProvider, isProviderLocked }: Li
 
       <div className="space-y-4">
         {providerGroups.map(group => {
-          const sectionInfo = getProviderIntegrationInfo(group.providers[0].id, group.providers[0].default_model_id)
-          const SectionIcon = providerSectionIcon[group.kind]
           return (
             <section key={group.kind}>
-              <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase text-muted-foreground">
-                <SectionIcon className={`h-3.5 w-3.5 ${sectionInfo.toneClass}`} />
-                {sectionInfo.label}
-                <span className="font-normal text-muted-foreground/70">{group.providers.length}</span>
-              </div>
               <div className="divide-y divide-border overflow-hidden rounded-md border border-border">
                 {group.providers.map(provider => {
                   const status = providerStatus(provider, isProviderLocked(provider.id))
@@ -279,6 +275,7 @@ export function LibraryTab({ providers, onSelectProvider, isProviderLocked }: Li
         })}
       </div>
 
+      {!hideSavedConfigurations && (
       <section className="space-y-2">
         <div className="flex items-center justify-between">
           <div>
@@ -417,6 +414,7 @@ export function LibraryTab({ providers, onSelectProvider, isProviderLocked }: Li
         </div>
       )}
       </section>
+      )}
     </div>
   )
 }

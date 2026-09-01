@@ -1,698 +1,196 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Activity,
-  AlertTriangle,
-  ArrowRight,
-  Bug,
-  CheckCircle2,
-  CircleAlert,
-  CircleHelp,
-  DollarSign,
-  LayoutDashboard,
-  Loader2,
-  RefreshCw,
-  Target,
-  X,
+  Activity, AlertTriangle, CheckCircle2, CircleAlert, CircleHelp,
+  LayoutDashboard, Loader2, RefreshCw, Send, X,
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
-import type { ReportHumanInput } from '../../services/api-types'
+import type { OrgDashboardNotification, ReportHumanInput } from '../../services/api-types'
 import ModalPortal from '../ui/ModalPortal'
 
-type HealthStatus = 'healthy' | 'bug' | 'critical' | 'idle'
-type ProgressStatus = 'on-track' | 'at-risk' | 'off-goal' | 'idle'
-type CostStatus = 'normal' | 'elevated' | 'missing' | 'idle'
-
-interface CardData {
-  status: string
-  headline: string
-  goal: string
-  updated: string
-  title: string
-  metric: string
-  detail: string
-  fields: Record<string, string>
-}
+type SummaryStatus = OrgDashboardNotification['status']
 
 interface WorkflowDashEntry {
   workspacePath: string
   label: string
-  health: CardData | null
-  progress: CardData | null
-  cost: CardData | null
+  runSummary: OrgDashboardNotification | null
+  pulseSummary: OrgDashboardNotification | null
   pendingInputs: ReportHumanInput[]
   failed: boolean
 }
 
 interface OrgDashboardProps {
   workflows: Array<{ workspacePath: string; label: string }>
-  onOpenDecision: (workspacePath: string) => void
-}
-
-const HEALTH_VALUES: ReadonlySet<string> = new Set(['healthy', 'bug', 'critical'])
-const PROGRESS_VALUES: ReadonlySet<string> = new Set(['on-track', 'at-risk', 'off-goal'])
-const COST_VALUES: ReadonlySet<string> = new Set(['normal', 'elevated', 'missing'])
-
-function parseCard(content: string | undefined | null): CardData | null {
-  if (!content || !content.trim()) return null
-  try {
-    const doc = new DOMParser().parseFromString(content, 'text/html')
-    const el = doc.querySelector('[data-status]') || doc.querySelector('article') || doc.body.firstElementChild
-    if (!el) return null
-    const status = (el.getAttribute('data-status') || '').trim()
-    const goal = (el.getAttribute('data-goal') || '').trim()
-    const updated = (el.getAttribute('data-updated') || '').trim()
-    const title = (doc.querySelector('h1,h2,h3,h4')?.textContent || '').trim()
-    const fields: Record<string, string> = {}
-    doc.querySelectorAll('[data-field]').forEach((node) => {
-      const key = node.getAttribute('data-field')?.trim()
-      const value = (node.textContent || '').trim()
-      if (key && value && !fields[key]) fields[key] = value
-    })
-    const headline = fields.headline || ''
-    const metric = fields.metric || ''
-    const detail = fields.detail || ''
-    return { status, headline, goal, updated, title, metric, detail, fields }
-  } catch {
-    return null
-  }
-}
-
-function healthStatus(card: CardData | null): HealthStatus {
-  if (card && HEALTH_VALUES.has(card.status)) return card.status as HealthStatus
-  return 'idle'
-}
-
-function progressStatus(card: CardData | null): ProgressStatus {
-  if (card && PROGRESS_VALUES.has(card.status)) return card.status as ProgressStatus
-  return 'idle'
-}
-
-function costStatus(card: CardData | null): CostStatus {
-  if (card && COST_VALUES.has(card.status)) return card.status as CostStatus
-  return 'idle'
-}
-
-function latestUpdated(...cards: Array<CardData | null>): string {
-  let latest = ''
-  let latestMs = Number.NEGATIVE_INFINITY
-  for (const card of cards) {
-    const updated = card?.updated?.trim()
-    if (!updated) continue
-    const ms = new Date(updated).getTime()
-    if (Number.isNaN(ms)) {
-      if (!latest) latest = updated
-      continue
-    }
-    if (ms > latestMs) {
-      latestMs = ms
-      latest = updated
-    }
-  }
-  return latest
+  onOpenWorkflow: (workspacePath: string) => void
 }
 
 const PILL_BASE = 'font-runloop-mono inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em]'
-
-const HEALTH_PILL: Record<HealthStatus, { className: string; label: string; Icon: React.ComponentType<{ className?: string }> }> = {
-  healthy: { className: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300', label: 'Healthy', Icon: CheckCircle2 },
-  bug: { className: 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-300', label: 'Bug', Icon: Bug },
-  critical: { className: 'border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-300', label: 'Critical', Icon: CircleAlert },
-  idle: { className: 'border-border bg-muted/70 text-muted-foreground', label: 'No status', Icon: CircleHelp },
+const STATUS_PILL: Record<SummaryStatus, { className: string; label: string; Icon: React.ComponentType<{ className?: string }> }> = {
+  success: { className: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300', label: 'Healthy', Icon: CheckCircle2 },
+  warning: { className: 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-300', label: 'Needs attention', Icon: AlertTriangle },
+  danger: { className: 'border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-300', label: 'Critical', Icon: CircleAlert },
+  neutral: { className: 'border-border bg-muted/70 text-muted-foreground', label: 'Informational', Icon: CircleHelp },
 }
 
-const PROGRESS_PILL: Record<ProgressStatus, { className: string; label: string; Icon: React.ComponentType<{ className?: string }> }> = {
-  'on-track': { className: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300', label: 'On track', Icon: CheckCircle2 },
-  'at-risk': { className: 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-300', label: 'At risk', Icon: AlertTriangle },
-  'off-goal': { className: 'border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-300', label: 'Off goal', Icon: CircleAlert },
-  idle: { className: 'border-border bg-muted/70 text-muted-foreground', label: 'Not assessed', Icon: Target },
+const Pill: React.FC<{ status: SummaryStatus; label?: string }> = ({ status, label }) => {
+  const config = STATUS_PILL[status] || STATUS_PILL.neutral
+  return <span className={`${PILL_BASE} ${config.className}`}><config.Icon className="h-3 w-3" />{label || config.label}</span>
 }
-
-const COST_PILL: Record<CostStatus, { className: string; label: string; Icon: React.ComponentType<{ className?: string }> }> = {
-  normal: { className: 'border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-300', label: 'Cost ok', Icon: DollarSign },
-  elevated: { className: 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-300', label: 'Cost watch', Icon: AlertTriangle },
-  missing: { className: 'border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-300', label: 'Cost missing', Icon: CircleAlert },
-  idle: { className: 'border-border bg-muted/70 text-muted-foreground', label: 'No cost', Icon: DollarSign },
-}
-
-const HEALTH_DETAIL_FIELDS: Array<readonly [key: string, label: string]> = [
-  ['state', 'State'],
-  ['input', 'Needs input'],
-  ['fix', 'Fix'],
-  ['harden', 'Harden'],
-  ['artifact', 'Artifact review'],
-  ['backup', 'Backup'],
-  ['publish', 'Publish'],
-  ['cost', 'Cost/time'],
-  ['evidence', 'Evidence'],
-  ['next', 'Next'],
-]
 
 function relativeTime(iso: string): string {
-  if (!iso) return ''
   const then = new Date(iso).getTime()
   if (Number.isNaN(then)) return ''
-  const diffMs = Date.now() - then
-  if (diffMs < 0) return 'just now'
-  const mins = Math.floor(diffMs / 60000)
+  const mins = Math.floor((Date.now() - then) / 60000)
   if (mins < 1) return 'just now'
-  if (mins < 60) return `updated ${mins}m ago`
+  if (mins < 60) return `${mins}m ago`
   const hours = Math.floor(mins / 60)
-  if (hours < 24) return `updated ${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `updated ${days}d ago`
+  return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`
 }
 
 function absoluteTime(iso: string): string {
-  if (!iso) return ''
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso
-  return date.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return date.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-const Pill: React.FC<{ Icon: React.ComponentType<{ className?: string }>; className: string; label: string }> = ({ Icon, className, label }) => (
-  <span className={`${PILL_BASE} ${className}`}>
-    <Icon className="h-3 w-3" aria-hidden />
-    {label}
-  </span>
-)
-
-const TriageMetric: React.FC<{
-  label: string
-  value: number
-  Icon: React.ComponentType<{ className?: string }>
-  className: string
-}> = ({ label, value, Icon, className }) => (
-  <span className={`font-runloop-mono inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] ${className}`}>
-    <Icon className="h-3.5 w-3.5" />
-    <span>{label}</span>
-    <span className="text-foreground">{value}</span>
-  </span>
-)
-
-const DetailRow: React.FC<{ label: string; value?: string }> = ({ label, value }) => {
-  if (!value) return null
-  return (
-    <div className="grid gap-1">
-      <div className="font-runloop-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">
-        {label}
-      </div>
-      <div className="text-sm leading-6 text-foreground">{value}</div>
-    </div>
-  )
+function summaryNeedsAttention(summary: OrgDashboardNotification | null): boolean {
+  return summary?.status === 'warning' || summary?.status === 'danger'
 }
 
-const StatusDetail: React.FC<{
-  title: string
-  card: CardData | null
-  status: HealthStatus | ProgressStatus | CostStatus
-  pill: { className: string; label: string; Icon: React.ComponentType<{ className?: string }> }
-  extraFields?: Array<readonly [key: string, label: string]>
-}> = ({ title, card, status, pill, extraFields }) => (
+const SummaryDetail: React.FC<{ title: string; summary: OrgDashboardNotification | null }> = ({ title, summary }) => (
   <section className="rounded-lg border border-border bg-card/95 p-3">
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-      <div className="flex items-center gap-2">
-        <h3 className="text-sm font-semibold tracking-tight text-foreground">{title}</h3>
-        <Pill Icon={pill.Icon} className={pill.className} label={pill.label} />
-      </div>
-      <span className="font-runloop-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-        {status}
-      </span>
+      <div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-semibold text-foreground">{title}</h3>{summary && <Pill status={summary.status} />}{summary?.route && <span className={`${PILL_BASE} border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-300`}>Route · {summary.route}</span>}</div>
+      {summary && <span className="font-runloop-mono text-[10px] text-muted-foreground">{absoluteTime(summary.created_at)}</span>}
     </div>
-    {card ? (
-      <div className="space-y-4">
-        <DetailRow label="Headline" value={card.headline} />
-        <DetailRow label="Metric" value={card.metric} />
-        <DetailRow label="Detail" value={card.detail} />
-        {extraFields?.map(([key, label]) => (
-          <DetailRow key={key} label={label} value={card.fields[key]} />
-        ))}
-        <DetailRow label="Goal" value={card.goal} />
-        <DetailRow label="Updated" value={absoluteTime(card.updated)} />
-      </div>
-    ) : (
-      <p className="text-sm text-muted-foreground">No {title.toLowerCase()} card has been reported yet.</p>
-    )}
+    {summary ? <div className="space-y-4">
+      {summary.title && <h4 className="text-sm font-semibold text-foreground">{summary.title}</h4>}
+      <p className="text-sm leading-6 text-foreground/90">{summary.message}</p>
+      {!!summary.fields?.length && <div className="grid gap-2 sm:grid-cols-2">{summary.fields.map((field, index) => <div key={`${field.label}:${index}`} className="rounded-md border border-border bg-background/70 px-3 py-2"><div className="font-runloop-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{field.label}</div><div className="mt-1 text-sm text-foreground">{field.value}</div></div>)}</div>}
+      {!!summary.sections?.length && <div className="space-y-3">{summary.sections.map((section, index) => <div key={`${section.heading}:${index}`}><div className="font-runloop-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{section.heading}</div><p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground/90">{section.body}</p></div>)}</div>}
+    </div> : <p className="text-sm text-muted-foreground">No {title.toLowerCase()} notification has been recorded yet.</p>}
   </section>
 )
 
-const WorkflowDetailModal: React.FC<{
+const NotificationDetailModal: React.FC<{
   entry: WorkflowDashEntry
+  kind: 'run' | 'pulse'
   onClose: () => void
-}> = ({ entry, onClose }) => {
-  const h = healthStatus(entry.health)
-  const p = progressStatus(entry.progress)
-  const c = costStatus(entry.cost)
-  const updated = latestUpdated(entry.health, entry.progress, entry.cost)
-  const goalLabel = entry.health?.goal?.trim() || entry.progress?.goal?.trim() || entry.cost?.goal?.trim() || ''
-
+}> = ({ entry, kind, onClose }) => {
+  const title = kind === 'pulse' ? 'Pulse update' : 'Workflow run'
+  const summary = kind === 'pulse' ? entry.pulseSummary : entry.runSummary
   return (
-    <ModalPortal>
-      <div
-        className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/55 p-4"
-        onClick={(event) => {
-          if (event.target === event.currentTarget) onClose()
-        }}
-      >
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={`${entry.label} details`}
-          className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl"
-        >
-          <div className="flex items-start justify-between gap-3 border-b border-border bg-card/95 px-4 py-3">
-            <div className="min-w-0">
-              <div className="font-runloop-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-                Workflow status
-              </div>
-              <h2 className="mt-1 truncate text-lg font-semibold tracking-tight text-foreground">{entry.label}</h2>
-              {goalLabel && (
-                <p className="mt-1 flex items-center gap-1.5 truncate text-xs text-muted-foreground">
-                  <Target className="h-3.5 w-3.5 shrink-0" />
-                  {goalLabel}
-                </p>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close details"
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-auto p-4">
-            <div className="mb-4 grid gap-3 rounded-lg border border-border bg-card/60 p-3 sm:grid-cols-2">
-              <DetailRow label="Workspace path" value={entry.workspacePath} />
-              <DetailRow label="Latest update" value={updated ? `${absoluteTime(updated)} (${relativeTime(updated).replace(/^updated /, '')})` : ''} />
-            </div>
-            <div className="grid gap-3">
-              <StatusDetail title="Health" card={entry.health} status={h} pill={HEALTH_PILL[h]} extraFields={HEALTH_DETAIL_FIELDS} />
-              <StatusDetail title="Goal alignment" card={entry.progress} status={p} pill={PROGRESS_PILL[p]} />
-              <StatusDetail title="Cost and time" card={entry.cost} status={c} pill={COST_PILL[c]} />
-            </div>
-          </div>
-        </div>
-      </div>
-    </ModalPortal>
+  <ModalPortal><div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/55 p-4" onClick={event => { if (event.target === event.currentTarget) onClose() }}>
+    <div role="dialog" aria-modal="true" className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl">
+      <div className="flex items-start justify-between gap-3 border-b border-border bg-card/95 px-4 py-3"><div className="min-w-0"><div className="font-runloop-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">{title}</div><h2 className="mt-1 truncate text-lg font-semibold text-foreground">{entry.label}</h2><p className="mt-1 truncate text-xs text-muted-foreground">{entry.workspacePath}</p></div><button type="button" onClick={onClose} aria-label="Close details" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"><X className="h-4 w-4" /></button></div>
+      <div className="min-h-0 flex-1 overflow-auto p-4"><SummaryDetail title={title} summary={summary} /></div>
+    </div>
+  </div></ModalPortal>
   )
 }
 
-export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenDecision }) => {
+export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenWorkflow }) => {
   const [entries, setEntries] = useState<WorkflowDashEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [selectedEntry, setSelectedEntry] = useState<WorkflowDashEntry | null>(null)
+  const [selectedNotification, setSelectedNotification] = useState<{ entry: WorkflowDashEntry; kind: 'run' | 'pulse' } | null>(null)
 
   const load = useCallback(async () => {
-    setLoading(true)
-	setError(null)
-	try {
-		const humanInputs = await agentApi.listReportHumanInputsAggregate(
-			workflows.map(workflow => workflow.workspacePath),
-			'pending',
-		).catch(() => ({ success: false, inputs: [] as ReportHumanInput[] }))
-		const results = await Promise.all(
-        workflows.map(async (wf): Promise<WorkflowDashEntry> => {
-          try {
-			const [health, progress, cost] = await Promise.all([
-				agentApi.getBuilderDoc(wf.workspacePath, 'card-health'),
-				agentApi.getBuilderDoc(wf.workspacePath, 'card-progress'),
-				agentApi.getBuilderDoc(wf.workspacePath, 'card-cost'),
-			])
-            return {
-              workspacePath: wf.workspacePath,
-              label: wf.label,
-              health: health.success && health.exists ? parseCard(health.content) : null,
-              progress: progress.success && progress.exists ? parseCard(progress.content) : null,
-              cost: cost.success && cost.exists ? parseCard(cost.content) : null,
-				pendingInputs: humanInputs.success && Array.isArray(humanInputs.inputs)
-					? humanInputs.inputs.filter(input => input.workspace_path === wf.workspacePath)
-					: [],
-              failed: !humanInputs.success,
-            }
-          } catch {
-            return {
-              workspacePath: wf.workspacePath,
-              label: wf.label,
-              health: null,
-              progress: null,
-              cost: null,
-              pendingInputs: [],
-              failed: true,
-            }
-          }
-        })
-      )
+    setLoading(true); setError(null)
+    try {
+      const paths = workflows.map(workflow => workflow.workspacePath)
+      const [notifications, humanInputs] = await Promise.all([
+        paths.length ? agentApi.getOrgDashboardNotifications(paths, 10) : Promise.resolve({ success: true, workflows: [] }),
+        paths.length ? agentApi.listReportHumanInputsAggregate(paths, 'pending').catch(() => ({ success: false, inputs: [] as ReportHumanInput[] })) : Promise.resolve({ success: true, inputs: [] as ReportHumanInput[] }),
+      ])
+      const notificationByPath = new Map((notifications.workflows || []).map(item => [item.workspace_path, item]))
+      const results = workflows.map((workflow): WorkflowDashEntry => {
+        const notification = notificationByPath.get(workflow.workspacePath)
+        return {
+          workspacePath: workflow.workspacePath,
+          label: workflow.label,
+          runSummary: notification?.run_summary || null,
+          pulseSummary: notification?.pulse_summary || null,
+          pendingInputs: humanInputs.success ? humanInputs.inputs.filter(input => input.workspace_path === workflow.workspacePath) : [],
+          failed: !notifications.success || !humanInputs.success || !!notification?.error,
+        }
+      })
       setEntries(results)
-      if (results.some(r => r.failed)) {
-        setError('Some workflow dashboard data could not be loaded.')
-      }
-    } catch {
-      setError('Could not load the org dashboard.')
-    } finally {
-      setLoading(false)
-    }
+      if (results.some(result => result.failed)) setError('Some workflow notification data could not be loaded.')
+    } catch { setError('Could not load the Org Dashboard.') }
+    finally { setLoading(false) }
   }, [workflows])
 
   useEffect(() => { void load() }, [load])
-
   useEffect(() => {
-    if (!selectedEntry) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSelectedEntry(null)
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selectedEntry])
+    if (!selectedNotification) return
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setSelectedNotification(null) }
+    window.addEventListener('keydown', close); return () => window.removeEventListener('keydown', close)
+  }, [selectedNotification])
 
-  const triage = useMemo(() => {
-    let critical = 0, bug = 0, healthy = 0
-    let offGoal = 0, atRisk = 0, onTrack = 0
-    let costElevated = 0, costMissing = 0, costNormal = 0
-    let inputOpen = 0
-    for (const e of entries) {
-      const h = healthStatus(e.health)
-      if (h === 'critical') critical++
-      else if (h === 'bug') bug++
-      else if (h === 'healthy') healthy++
-      const p = progressStatus(e.progress)
-      if (p === 'off-goal') offGoal++
-      else if (p === 'at-risk') atRisk++
-      else if (p === 'on-track') onTrack++
-      const c = costStatus(e.cost)
-      if (c === 'elevated') costElevated++
-      else if (c === 'missing') costMissing++
-      else if (c === 'normal') costNormal++
-      inputOpen += e.pendingInputs?.length ?? 0
-    }
-    const needAttention = critical + bug + offGoal + atRisk + costElevated + costMissing + inputOpen
-    return { critical, bug, healthy, offGoal, atRisk, onTrack, costElevated, costMissing, costNormal, inputOpen, needAttention }
-  }, [entries])
+  const triage = useMemo(() => ({
+    attention: entries.filter(entry => summaryNeedsAttention(entry.runSummary) || summaryNeedsAttention(entry.pulseSummary) || entry.pendingInputs.length > 0).length,
+    critical: entries.filter(entry => [entry.runSummary, entry.pulseSummary].some(summary => summary?.status === 'danger')).length,
+    healthy: entries.filter(entry => !summaryNeedsAttention(entry.runSummary) && !summaryNeedsAttention(entry.pulseSummary) && [entry.runSummary, entry.pulseSummary].some(summary => summary?.status === 'success')).length,
+    awaiting: entries.filter(entry => !entry.runSummary && !entry.pulseSummary).length,
+    decisions: entries.reduce((count, entry) => count + entry.pendingInputs.length, 0),
+  }), [entries])
 
+  const decisionGroups = useMemo(() => entries
+    .filter(entry => entry.pendingInputs.length > 0)
+    .map(entry => ({
+      ...entry,
+      pendingInputs: [...entry.pendingInputs].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()),
+    }))
+    .sort((a, b) => new Date(b.pendingInputs[0].updated_at).getTime() - new Date(a.pendingInputs[0].updated_at).getTime()), [entries])
+  const pulseUpdates = useMemo(() => entries
+    .filter((entry): entry is WorkflowDashEntry & { pulseSummary: OrgDashboardNotification } => !!entry.pulseSummary)
+    .sort((a, b) => b.pulseSummary.created_at.localeCompare(a.pulseSummary.created_at)), [entries])
   const groups = useMemo(() => {
-    const ATTENTION_GROUP = 'Need attention'
-    const OK_GROUP = 'Healthy / on-track'
-    const map = new Map<string, WorkflowDashEntry[]>()
-    for (const e of entries) {
-      const h = healthStatus(e.health)
-      const p = progressStatus(e.progress)
-      const c = costStatus(e.cost)
-      const needsAttention = h === 'critical' || h === 'bug' || p === 'off-goal' || p === 'at-risk' || c === 'elevated' || c === 'missing' || (e.pendingInputs?.length ?? 0) > 0
-      const group = needsAttention ? ATTENTION_GROUP : OK_GROUP
-      const bucket = map.get(group)
-      if (bucket) bucket.push(e)
-      else map.set(group, [e])
-    }
-    // Need attention first, always.
-    return Array.from(map.entries()).sort(([a], [b]) => {
-      if (a === ATTENTION_GROUP) return -1
-      if (b === ATTENTION_GROUP) return 1
-      return a.localeCompare(b)
+    const grouped = new Map<string, WorkflowDashEntry[]>([['Needs attention', []], ['Healthy / completed', []], ['Latest activity', []], ['Awaiting first run', []]])
+    entries.forEach(entry => {
+      const group = summaryNeedsAttention(entry.runSummary)
+        ? 'Needs attention'
+        : entry.runSummary?.status === 'success'
+          ? 'Healthy / completed'
+          : entry.runSummary
+            ? 'Latest activity'
+            : 'Awaiting first run'
+      grouped.get(group)?.push(entry)
     })
+    return Array.from(grouped.entries()).filter(([, items]) => items.length)
   }, [entries])
 
-  const pendingDecisions = useMemo(() => {
-    const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2 }
-    return entries
-      .flatMap(entry => (entry.pendingInputs ?? [])
-        .map(input => ({
-          input,
-          workspacePath: entry.workspacePath,
-          workflowLabel: entry.label,
-        })))
-      .sort((a, b) => {
-        const priorityDiff = (priorityRank[a.input.priority] ?? 3) - (priorityRank[b.input.priority] ?? 3)
-        if (priorityDiff !== 0) return priorityDiff
-        return new Date(b.input.updated_at).getTime() - new Date(a.input.updated_at).getTime()
-      })
-  }, [entries])
+  const header = <div className="flex items-center justify-between gap-3 px-4 pt-4"><div className="flex items-center gap-2"><LayoutDashboard className="h-5 w-5 text-primary" /><h2 className="text-base font-semibold text-foreground">Org Dashboard</h2></div><button type="button" onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/90 px-2.5 py-1.5 text-xs font-medium text-muted-foreground shadow-sm hover:bg-muted disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />Refresh</button></div>
 
-  const hasAnyCard = useMemo(() => entries.some(e => e.health || e.progress || e.cost), [entries])
-  const hasDashboardContent = hasAnyCard || pendingDecisions.length > 0
+  if (loading && !entries.length) return <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 text-muted-foreground"><Loader2 className="h-6 w-6 animate-spin" /><p className="text-sm">Loading Org Dashboard…</p></div>
+  if (!workflows.length) return <div className="flex h-full min-h-[320px] flex-col">{header}<div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">No automations yet</div></div>
 
-  const refreshButton = (
-    <button
-      type="button"
-      onClick={() => void load()}
-      disabled={loading}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/90 px-2.5 py-1.5 text-xs font-medium text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-    >
-      <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-      Refresh
-    </button>
-  )
+  return <div className="flex h-full flex-col">{header}
+    {error && <div className="mx-4 mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600">{error}</div>}
+    <div className="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/95 px-3 py-2.5 shadow-sm"><span className="font-runloop-mono rounded-md border border-border bg-background/70 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground">Attention {triage.attention}</span><Pill status="danger" label={`Critical ${triage.critical}`} /><Pill status="success" label={`Healthy ${triage.healthy}`} /><Pill status="neutral" label={`Awaiting ${triage.awaiting}`} />{triage.decisions > 0 && <span className={`${PILL_BASE} border-violet-500/25 bg-violet-500/10 text-violet-600`}><CircleHelp className="h-3 w-3" />Decisions {triage.decisions}</span>}</div>
+    <div className="flex-1 space-y-6 overflow-auto px-4 py-4">
+      {!!decisionGroups.length && <section className="space-y-2">
+        <div className="flex items-center gap-2"><CircleHelp className="h-4 w-4 text-violet-500" /><h3 className="text-sm font-semibold text-foreground">Decisions required</h3><span className="font-runloop-mono text-[11px] text-muted-foreground">{triage.decisions} across {decisionGroups.length} workflow{decisionGroups.length !== 1 ? 's' : ''}</span></div>
+        <div className="grid gap-3 lg:grid-cols-2">{decisionGroups.map(entry => <article key={entry.workspacePath} className="overflow-hidden rounded-lg border border-violet-500/25 bg-card/95 shadow-sm">
+          <button type="button" onClick={() => onOpenWorkflow(entry.workspacePath)} className="flex w-full items-center justify-between gap-3 border-b border-violet-500/15 px-3 py-2.5 text-left hover:bg-violet-500/[0.06]"><span className="truncate text-sm font-semibold text-foreground">{entry.label}</span><span className={`${PILL_BASE} border-violet-500/25 bg-violet-500/10 text-violet-600`}>{entry.pendingInputs.length} open</span></button>
+          <div className="divide-y divide-border">{entry.pendingInputs.map(input => <button key={input.id} type="button" onClick={() => onOpenWorkflow(entry.workspacePath)} className="flex w-full items-start gap-3 px-3 py-3 text-left hover:bg-violet-500/[0.06]"><span className={`${PILL_BASE} mt-0.5 border-violet-500/25 bg-violet-500/10 text-violet-600`}>{input.priority}</span><span className="line-clamp-2 min-w-0 flex-1 text-sm text-foreground/90">{input.question}</span></button>)}</div>
+        </article>)}</div>
+      </section>}
 
-  const header = (
-    <div className="flex items-center justify-between gap-3 px-4 pt-4">
-      <div className="flex items-center gap-2">
-        <LayoutDashboard className="h-5 w-5 text-primary" />
-        <h2 className="text-base font-semibold tracking-tight text-foreground">Org Dashboard</h2>
-      </div>
-      {refreshButton}
-    </div>
-  )
+      <section className="space-y-2">
+        <div className="flex items-center gap-2"><Activity className="h-4 w-4 text-primary" /><h3 className="text-sm font-semibold text-foreground">Pulse updates</h3><span className="font-runloop-mono text-[11px] text-muted-foreground">{pulseUpdates.length} workflow{pulseUpdates.length !== 1 ? 's' : ''}</span></div>
+        {pulseUpdates.length ? <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{pulseUpdates.map(entry => <button key={entry.workspacePath} type="button" onClick={() => setSelectedNotification({ entry, kind: 'pulse' })} className="rounded-lg border border-primary/20 bg-card/95 p-3 text-left shadow-sm hover:border-primary/50"><div className="flex items-start justify-between gap-2"><h4 className="truncate text-sm font-semibold text-foreground">{entry.label}</h4><span className="font-runloop-mono shrink-0 text-[10px] text-muted-foreground">{relativeTime(entry.pulseSummary.created_at)}</span></div><div className="mt-2 flex flex-wrap gap-1.5"><Pill status={entry.pulseSummary.status} />{entry.pulseSummary.route && <span className={`${PILL_BASE} border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-300`}>Route · {entry.pulseSummary.route}</span>}</div><div className="mt-2 text-xs leading-5 text-muted-foreground"><p className="line-clamp-1 font-medium text-foreground/90">{entry.pulseSummary.title || 'Pulse update'}</p><p className="line-clamp-2">{entry.pulseSummary.message}</p></div></button>)}</div> : <div className="rounded-lg border border-dashed border-border px-3 py-5 text-center text-xs text-muted-foreground">No Pulse updates have been posted yet.</div>}
+      </section>
 
-  // Loading
-  if (loading && entries.length === 0) {
-    return (
-      <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 text-muted-foreground">
-        <Loader2 className="h-6 w-6 animate-spin" />
-        <p className="text-sm">Loading org dashboard…</p>
-      </div>
-    )
-  }
-
-  // No workflows at all
-  if (workflows.length === 0) {
-    return (
-      <div className="flex h-full min-h-[320px] flex-col">
-        {header}
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
-          <LayoutDashboard className="h-10 w-10 text-muted-foreground/50" />
-          <p className="text-sm font-medium text-foreground">No automations yet</p>
-          <p className="max-w-sm text-xs">No automations yet — create a workflow to see it here.</p>
-        </div>
-      </div>
-    )
-  }
-
-  // Workflows exist but no cards yet
-  if (!hasDashboardContent) {
-    return (
-      <div className="flex h-full flex-col">
-        {header}
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-12 text-center text-muted-foreground">
-          <Activity className="h-10 w-10 text-muted-foreground/50" />
-          <p className="text-sm font-medium text-foreground">Org dashboard is warming up</p>
-          <p className="max-w-md text-xs">
-            Org dashboard is warming up — status cards appear here after your workflows run their
-            Pulse (health/cost) and Goal Advisor (goal) loops.
-          </p>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex h-full flex-col">
-      {header}
-
-      {error && (
-        <div className="mx-4 mt-3 flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600">
-          <span className="inline-flex items-center gap-1.5">
-            <AlertTriangle className="h-3.5 w-3.5" />
-            {error}
-          </span>
-          {refreshButton}
-        </div>
-      )}
-
-      {/* Triage bar */}
-      <div className="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/95 px-3 py-2.5 shadow-sm">
-        <span className="font-runloop-mono rounded-md border border-border bg-background/70 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground">
-          Attention {triage.needAttention}
-        </span>
-        <TriageMetric label="Critical" value={triage.critical} Icon={CircleAlert} className="border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-300" />
-        <TriageMetric label="Bug" value={triage.bug} Icon={Bug} className="border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-300" />
-        <TriageMetric label="Healthy" value={triage.healthy} Icon={CheckCircle2} className="border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300" />
-        <span className="hidden h-5 w-px bg-border sm:block" />
-        <TriageMetric label="Off goal" value={triage.offGoal} Icon={CircleAlert} className="border-red-500/20 bg-background/60 text-muted-foreground" />
-        <TriageMetric label="At risk" value={triage.atRisk} Icon={AlertTriangle} className="border-amber-500/20 bg-background/60 text-muted-foreground" />
-        <TriageMetric label="On track" value={triage.onTrack} Icon={Target} className="border-emerald-500/20 bg-background/60 text-muted-foreground" />
-        <span className="hidden h-5 w-px bg-border sm:block" />
-        <TriageMetric label="Cost watch" value={triage.costElevated} Icon={AlertTriangle} className="border-amber-500/20 bg-background/60 text-muted-foreground" />
-        <TriageMetric label="Cost missing" value={triage.costMissing} Icon={CircleAlert} className="border-red-500/20 bg-background/60 text-muted-foreground" />
-        <TriageMetric label="Cost ok" value={triage.costNormal} Icon={DollarSign} className="border-sky-500/20 bg-background/60 text-muted-foreground" />
-        <span className="hidden h-5 w-px bg-border sm:block" />
-        <TriageMetric label="Input" value={triage.inputOpen} Icon={CircleHelp} className="border-violet-500/20 bg-background/60 text-muted-foreground" />
-      </div>
-
-      {/* Status groups */}
-      <div className="flex-1 space-y-5 overflow-auto px-4 py-4">
-
-        {pendingDecisions.length > 0 && (
-          <section className="space-y-2" aria-labelledby="org-decisions-heading">
-            <div className="flex items-center gap-2">
-              <CircleHelp className="h-4 w-4 text-violet-500" />
-              <h3 id="org-decisions-heading" className="text-sm font-semibold tracking-tight text-foreground">
-                Decisions required
-              </h3>
-              <span className="font-runloop-mono text-[11px] text-muted-foreground">
-                {pendingDecisions.length} open
-              </span>
-            </div>
-            <div className="overflow-hidden rounded-lg border border-violet-500/20 bg-card/95 shadow-sm divide-y divide-border">
-              {pendingDecisions.map(({ input, workspacePath, workflowLabel }) => {
-                const priority = input.priority.toLowerCase()
-                const priorityClass = priority === 'high'
-                  ? 'border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-300'
-                  : priority === 'low'
-                    ? 'border-border bg-muted/70 text-muted-foreground'
-                    : 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-300'
-                return (
-                  <button
-                    key={`${workspacePath}:${input.id}`}
-                    type="button"
-                    onClick={() => onOpenDecision(workspacePath)}
-                    className="group flex w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-violet-500/[0.06] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-ring/50"
-                    aria-label={`Open decision for ${workflowLabel}: ${input.question}`}
-                  >
-                    <span className={`${PILL_BASE} mt-0.5 shrink-0 ${priorityClass}`}>
-                      {priority}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                        <span className="text-xs font-semibold text-foreground">{workflowLabel}</span>
-                        <span className="font-runloop-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
-                          {input.source.replaceAll('_', ' ')}
-                        </span>
-                        <span className="font-runloop-mono text-[10px] text-muted-foreground/80">
-                          {relativeTime(input.updated_at).replace(/^updated /, '')}
-                        </span>
-                      </span>
-                      <span className="mt-1 block line-clamp-2 text-sm leading-5 text-foreground/90">
-                        {input.question}
-                      </span>
-                    </span>
-                    <ArrowRight className="mt-2 h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-                  </button>
-                )
-              })}
-            </div>
-          </section>
-        )}
-
-        {groups.map(([group, items]) => (
-          <section key={group} className="space-y-2">
-            <div className="flex items-center gap-2">
-              {group === 'Need attention' ? (
-                <AlertTriangle className="h-4 w-4 text-amber-500" />
-              ) : (
-                <Activity className="h-4 w-4 text-emerald-500" />
-              )}
-              <h3 className="text-sm font-semibold tracking-tight text-foreground">{group}</h3>
-              <span className="font-runloop-mono text-[11px] text-muted-foreground">
-                {items.length} workflow{items.length !== 1 ? 's' : ''}
-              </span>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {items.map(entry => {
-                const h = healthStatus(entry.health)
-                const p = progressStatus(entry.progress)
-                const c = costStatus(entry.cost)
-                const updated = latestUpdated(entry.health, entry.progress, entry.cost)
-                const rel = relativeTime(updated)
-                const goalLabel = entry.health?.goal?.trim() || entry.progress?.goal?.trim() || entry.cost?.goal?.trim() || ''
-                const inputOpen = entry.pendingInputs?.length ?? 0
-                const healthSecondary = entry.health?.fields.next || entry.health?.fields.fix || entry.health?.detail
-                const healthSecondaryLabel = entry.health?.fields.next ? 'Next' : entry.health?.fields.fix ? 'Fix' : 'Detail'
-                return (
-                  <div
-                    key={entry.workspacePath}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`Open ${entry.label} details`}
-                    onClick={() => setSelectedEntry(entry)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault()
-                        setSelectedEntry(entry)
-                      }
-                    }}
-                    className="cursor-pointer rounded-lg border border-border bg-card/95 p-3 text-left shadow-sm transition-colors hover:border-primary/40 hover:bg-card focus:outline-none focus:ring-2 focus:ring-ring/50"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <h4 className="min-w-0 truncate text-sm font-semibold text-foreground" title={entry.label}>
-                        {entry.label}
-                      </h4>
-                      {rel && <span className="font-runloop-mono shrink-0 text-[10px] text-muted-foreground/80">{rel.replace(/^updated /, '')}</span>}
-                    </div>
-                    {goalLabel && (
-                      <p className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-muted-foreground" title={goalLabel}>
-                        <Target className="h-3 w-3 shrink-0" />
-                        {goalLabel}
-                      </p>
-                    )}
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                      <Pill Icon={HEALTH_PILL[h].Icon} className={HEALTH_PILL[h].className} label={HEALTH_PILL[h].label} />
-                      <Pill Icon={PROGRESS_PILL[p].Icon} className={PROGRESS_PILL[p].className} label={PROGRESS_PILL[p].label} />
-                      <Pill Icon={COST_PILL[c].Icon} className={COST_PILL[c].className} label={COST_PILL[c].label} />
-                      {inputOpen > 0 && (
-                        <Pill Icon={CircleHelp} className="border-violet-500/25 bg-violet-500/10 text-violet-600 dark:text-violet-300" label="Needs input" />
-                      )}
-                    </div>
-                    <div className="mt-2 space-y-1.5 text-xs leading-5 text-muted-foreground">
-                      {entry.health?.headline && (
-                        <p className="line-clamp-2">
-                          <span className="font-runloop-mono mr-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">Health</span>
-                          {entry.health.headline}
-                        </p>
-                      )}
-                      {healthSecondary && (
-                        <p className="line-clamp-1">
-                          <span className="font-runloop-mono mr-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">{healthSecondaryLabel}</span>
-                          {healthSecondary}
-                        </p>
-                      )}
-                      {entry.progress?.headline && (
-                        <p className="line-clamp-2">
-                          <span className="font-runloop-mono mr-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">Goal</span>
-                          {entry.progress.headline}
-                        </p>
-                      )}
-                      {entry.cost?.headline && (
-                        <p className="line-clamp-2">
-                          <span className="font-runloop-mono mr-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">Cost</span>
-                          {entry.cost.headline}
-                        </p>
-                      )}
-                      {!entry.health?.headline && !entry.progress?.headline && !entry.cost?.headline && (
-                        <p className="italic">No status reported yet.</p>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </section>
-        ))}
-      </div>
-      {selectedEntry && (
-        <WorkflowDetailModal
-          entry={selectedEntry}
-          onClose={() => setSelectedEntry(null)}
-        />
-      )}
-    </div>
-  )
+      <section className="space-y-4">
+        <div className="flex items-center gap-2"><LayoutDashboard className="h-4 w-4 text-muted-foreground" /><h3 className="text-sm font-semibold text-foreground">All workflows</h3><span className="font-runloop-mono text-[11px] text-muted-foreground">{entries.length} total</span></div>
+        {groups.map(([group, items]) => <div key={group} className="space-y-2"><div className="flex items-center gap-2">{group === 'Needs attention' ? <AlertTriangle className="h-4 w-4 text-amber-500" /> : group === 'Awaiting first run' ? <CircleHelp className="h-4 w-4 text-muted-foreground" /> : <Activity className={`h-4 w-4 ${group === 'Latest activity' ? 'text-primary' : 'text-emerald-500'}`} />}<h4 className="text-xs font-semibold text-foreground">{group}</h4><span className="font-runloop-mono text-[10px] text-muted-foreground">{items.length}</span></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{items.map(entry => {
+          const summary = entry.runSummary
+          return <button key={entry.workspacePath} type="button" disabled={!summary} onClick={() => summary && setSelectedNotification({ entry, kind: 'run' })} className="rounded-lg border border-border bg-card/95 p-3 text-left shadow-sm enabled:hover:border-primary/40 disabled:cursor-default"><div className="flex justify-between gap-2"><h5 className="truncate text-sm font-semibold text-foreground">{entry.label}</h5>{summary && <span className="font-runloop-mono shrink-0 text-[10px] text-muted-foreground">{relativeTime(summary.created_at)}</span>}</div>{summary ? <><div className="mt-2"><Pill status={summary.status} label="Run" /></div><div className="mt-2 text-xs leading-5 text-muted-foreground"><p className="line-clamp-1 font-medium text-foreground/90">{summary.title || 'Workflow run'}</p><p className="line-clamp-2">{summary.message}</p></div></> : <p className="mt-2 flex items-center gap-1.5 text-xs italic text-muted-foreground"><Send className="h-3.5 w-3.5" />Waiting for the first run notification.</p>}</button>
+        })}</div></div>)}
+      </section>
+    </div>{selectedNotification && <NotificationDetailModal entry={selectedNotification.entry} kind={selectedNotification.kind} onClose={() => setSelectedNotification(null)} />}
+  </div>
 }
 
 export default OrgDashboard

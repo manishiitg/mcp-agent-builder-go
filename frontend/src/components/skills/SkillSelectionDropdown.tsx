@@ -102,7 +102,7 @@ export default function SkillSelectionDropdown({
               disabled={disabled}
               className={`group flex items-center gap-1 p-1.5 rounded-md border transition-all duration-200 ${
                 selectedSkills.length > 0
-                  ? 'bg-purple-100 dark:bg-purple-900/40 border-purple-400 dark:border-purple-600 text-purple-600 dark:text-purple-400'
+                  ? 'bg-primary/10 border-primary/40 text-primary'
                   : 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500'
               } ${iconOnly ? 'h-7 w-7 justify-center' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : iconOnly ? 'cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-700' : 'cursor-pointer hover:pr-2'}`}
             >
@@ -208,7 +208,7 @@ export default function SkillSelectionDropdown({
                         placeholder="Search skills..."
                         value={searchQuery}
                         onChange={e => setSearchQuery(e.target.value)}
-                        className="w-full pl-7 pr-2 py-1.5 text-xs rounded-md border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                        className="w-full pl-7 pr-2 py-1.5 text-xs rounded-md border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-primary"
                       />
                     </div>
                   )}
@@ -272,7 +272,7 @@ export default function SkillSelectionDropdown({
                           setIsOpen(false);
                           onImportClick();
                         }}
-                        className="text-purple-600 dark:text-purple-400 hover:text-purple-700 dark:hover:text-purple-300 hover:underline font-medium"
+                        className="text-primary hover:text-primary/80 hover:underline font-medium"
                       >
                         Import Skill
                       </button>

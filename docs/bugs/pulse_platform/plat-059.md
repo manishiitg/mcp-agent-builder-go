@@ -5,12 +5,17 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | `Claude Code` |
-| Ticket state | `implemented` |
+| Ticket state | `superseded by PLAT-263` |
 | Last synchronized | `2026-08-09` |
 
 - **Priority:** P2
 - **Owner:** `update_step_config` lock path
 - **Follows:** PLAT-058, which made the cost of a lock materially higher.
+
+> Historical note: this ticket documents the former learning-lock contract.
+> PLAT-263 removed that redundant control. `learnings_access="read"` is now the
+> sole way to consume shared guidance without contributing, and legacy lock
+> fields are migrated automatically.
 
 ## Problem
 

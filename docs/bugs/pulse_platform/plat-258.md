@@ -67,7 +67,7 @@ targets the self-reported-with-no-proof failure mode found above.
 11. Learnings *content* staleness (not just access mode) — does `learnings/<step-id>/main.py` still describe the step's current behavior.
 12. KB *content* relevance, same idea.
 14. **DB schema normalization/design quality** — informed by mechanical schema introspection (`PRAGMA table_info` across all tables), judged by the reviewer.
-+ **KB/learnings lock appropriateness** (folded into 6/7): is `lock_learnings`/the access mode the *right* choice given the step's current maturity, not just internally consistent.
++ **KB/learnings write appropriateness** (folded into 6/7): are the access modes the *right* choices given each step's current maturity, not just internally consistent. Learning write suppression is `learnings_access="read"`; there is no separate learning lock (PLAT-263).
 
 **Trust for the judgment checks (10, 11, 12, 14):** evidence-required records (above) + periodic independent spot-check verification (a second pass re-checks a sample, same pattern as this session's own adversarial code-review flow) + outcome-based tracking (if a later mechanical check catches something a judgment review should have caught, that's a logged review-quality failure, not just a missed finding).
 
@@ -1216,3 +1216,41 @@ round itself. Both verified against the actual code before fixing.
   persistent-surfaces-loudly cases directly, at the executor level.
 
 `go build`/`go vet`/`gofmt` clean; full `go test ./...` green, no failures.
+
+## Eighth round — managed dependency-audit timeout fixed (2026-08-30)
+
+The first real post-migration dependency audit for `build-in-public` exposed
+a resource leak in `CheckReportQueryCompatibility`: each successful
+`db.QueryContext` result was discarded without closing its `*sql.Rows`.
+Workflows with report queries could therefore retain SQLite read resources
+until the managed review request was cancelled, leaving the migration applied
+but its plan-drift sign-off incomplete. The audit retried at 30, 120, and 240
+seconds and hit the same deterministic leak each time.
+
+The check now closes every successful result set immediately and reports a
+close failure as failed compatibility evidence. A regression test runs two
+successful report queries and then performs an immediate SQLite write with a
+short busy timeout, proving the audit left no read lock behind. The complete
+step-based-workflow package test suite passes.
+
+## Ninth round — type-specific step reviews (2026-08-31)
+
+Plan drift previously checked specialized steps' descriptions, output
+contracts, stores, and retained evidence, but did not explicitly compare their
+design with the canonical step-type references. Added reference-backed agentic
+checks for scripted `regular`, `message_sequence`, `todo_task` orchestrators,
+`routing`, and `branch`: `scripted_best_practices`,
+`message_sequence_best_practices`, `todo_task_best_practices`,
+`routing_best_practices`, and `branch_best_practices`. The sequence check covers
+coherent shared context, complete → evidence → repair structure, separation of
+deterministic work, minimal intermediate prevalidation, durable handoffs and
+proof, and appropriately narrowed write access. The regular check covers
+scripted eligibility, code/config alignment, deterministic I/O, idempotency,
+fail-closed errors, and real-output proof. The others enforce their own
+eligibility, route/child ownership, deterministic selection, isolation,
+fallthrough prevention, convergence, retry, and completion contracts.
+
+This is enforced rather than prompt-only: `record_plan_drift_review` rejects a
+step receipt that omits its matching check. Contract version 3 requeues
+supported steps whose stored receipt is still version 2. The manual
+`/review-artifact-drift` path shares the same requirement.

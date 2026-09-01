@@ -5,10 +5,10 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `third independent review's findings resolved` — the canonical workshop prompt and every named reference doc now offer `branch` as the fixed-choice alternative to `routing`, with a guidance-contract test locking both in; Execution Logs now reports a branch run's real step type instead of hardcoding `routing`; the platform's generic plan add/update HTTP API (distinct from the Builder-native tools) now accepts branch steps. Frontend per-route reporting tabs and live manual reverify remain the only open items |
-| Last synchronized | `2026-08-30` |
+| Ticket state | `frontend per-route reporting implemented across Execution Logs, Costs, and Evaluation` — the canonical workshop prompt and every named reference doc offer `branch` as the fixed-choice alternative to `routing`; Execution Logs retains the executed type; generic plan APIs accept branch steps; the atomic routing/branch conversion tool publishes the changelog `reason` its executor requires; and every step reached through a run's actually-selected route is now tagged and filterable by route in Execution Logs, Costs, and Evaluation. A successful live manual rerun of `/verify-branch-step`/`/migrate-routing-to-branch` remains the one open item |
+| Last synchronized | `2026-08-31` |
 
-- **Type:** platform feature (design only, no code changed). Filed at the
+- **Type:** implemented platform feature. Originally filed at the
   user's explicit request immediately after the design converged, to record
   the full negotiated shape before implementation starts.
 - **Origin:** the user opened a design discussion, not a bug report: today's
@@ -512,7 +512,7 @@ PLAT-259 is still not complete for three newly confirmed integration reasons:
    `branch` from the step-type list and explicitly tells the agent to use
    deterministic `routing` for fixed branch choices. The same stale direction
    remains in `plan-design.md`, `planning-steps.md`, `message-sequence.md`,
-   `regular.md`, and parts of `workflow-tools.md`. Normal plan creation can
+   `scripted.md`, and parts of `workflow-tools.md`. Normal plan creation can
    therefore keep producing routing steps for the small decisions PLAT-259
    introduced `branch` to represent. Update every canonical entry point and
    add a guidance-contract test that requires both types and their distinction.
@@ -551,7 +551,7 @@ Addressed all three findings:
    list and the per-step-deep-dive doc list. Extended the same fix to
    every other canonical entry point the review named:
    `plan-design.md`, `planning-steps.md`, `message-sequence.md`,
-   `regular.md`, and `workflow-tools.md` (which was also missing
+   `scripted.md`, and `workflow-tools.md` (which was also missing
    `add_branch_step`/`update_branch_step` from its tool lists entirely).
    Two new regression tests lock this in:
    `TestCanonicalWorkshopPromptOffersBranchForFixedChoices`
@@ -688,3 +688,114 @@ All fixes verified: `go build ./...`, `gofmt -l` clean; `go test
 ./pkg/orchestrator/agents/workflow/step_based_workflow/...`,
 `./cmd/server/...`, `./cmd/server/guidance/...` green (only the same
 pre-existing unrelated `virtual-tools` failure).
+
+## Live migration contract failure fixed (2026-08-30)
+
+The first real `/migrate-routing-to-branch` run against `build-in-public`
+proved the new atomic conversion tool could not be called: its executor used
+the standard `requireReason(args)` changelog guard, but
+`getConvertRoutingBranchStepTypeSchema` exposed only `existing_step_id` and
+`target_type`. Omitting `reason` therefore failed in the handler, while
+supplying it was rejected as an unknown field by the bridge. The run correctly
+made no workflow changes and recorded the platform finding `PUL-4E3281CD`.
+
+Fixed the contract at its source:
+
+- the tool schema now publishes and requires `reason`;
+- the registered tool description and both relevant guidance documents show
+  the complete three-argument contract;
+- `TestConvertRoutingBranchStepTypeSchemaPublishesReason` locks the published
+  schema to the executor requirement, preventing another handler/schema split.
+
+The `build-in-public` plan remains unchanged by this platform repair. Rerun
+the migration after deploying/restarting the updated server; the four proposed
+conversions still require a fresh classification pass, and the existing
+route-evaluation finding `PUL-4D0912A3` remains separate workflow work.
+
+## Plan-canvas distinction added (2026-08-30)
+
+Routing and branch already persisted and executed as separate types, but the
+plan canvas reused an indistinguishable node presentation. The shared node now
+renders routing with a teal `Route` icon and visible `Route` label, while a
+branch renders with a violet `GitBranch` icon and visible `Branch` label.
+Execution-mode iconography remains available separately, so making the step
+type visible does not discard scripted/agentic/direct execution information.
+The production frontend build passes.
+
+## Frontend per-route reporting — implemented (2026-08-31)
+
+Closes the "Explicitly not done" item above: the plan schema and executor
+already knew a step could belong to a route (Phase A), but nothing computed
+which route a *downstream* step actually belonged to for a *given run*, so
+none of Execution Logs, Costs, or Evaluation could group or filter by route.
+Route membership is a per-run fact (the same plan can take a different route
+on a different run), not a static plan property, so it has to be derived
+from that run's actual `selected_route_id`, not merely the routes the plan
+declares.
+
+**Backend** (`agent_go/cmd/server/workflow.go`), computed once and reused by
+all three surfaces rather than re-derived per surface:
+
+- `collectSelectedRoutes` — a lightweight pre-pass over the same step-log
+  folder tree `processLogsFolder` walks (mirrors its wrapper-folder
+  recursion), reading each routing/branch step's `routing-evaluation.json`
+  for this run's real `selected_route_id`. Has to run before any
+  `stepsLogs` entries are created, since those seed from `stepMetadata` on
+  first creation and downstream folders can be visited before or after
+  their owning routing step's folder.
+- `computeRouteMembership` — for each routing/branch step with a recorded
+  selection, walks from the selected route's `next_step_id` to a
+  convergence point (generalizes `routeSegmentEndIndex` from
+  `planning_exports.go`, which only ever handled the first routing step for
+  validation pruning), tagging every step in that segment with
+  `route_id`/`route_name`/`route_kind:"routing"`/`route_step_id`/
+  `route_step_title`. Bounded on the other side by the nearest sibling
+  route's own entry point (`siblingBoundary`), so an untaken sibling route's
+  steps are never swept in by the walk — caught by a regression test before
+  shipping (the untaken route's step was initially tagged with the taken
+  route's info). Per the user's explicit choice, a step where sibling routes
+  legitimately converge is tagged with whichever route this run actually
+  took, not left unlabeled.
+- `/api/workflow/logs` now returns these fields per step. Kept field-
+  distinct from the pre-existing, unrelated `route_id`/`parent_step_id`
+  pair (the `todo_task` orchestrator's `predefined_routes[].sub_agent_step`
+  case) via `route_kind`, per the user's explicit choice to keep the two
+  mechanisms visually separate rather than unify them.
+- New regression test `TestHandleGetExecutionLogsTagsDownstreamStepsWithSelectedRoute`
+  (`workflow_execution_logs_test.go`): a routing step with two routes,
+  only one selected; asserts the selected route's downstream step is
+  tagged and the untaken sibling's step is not.
+
+**Frontend**, all three reusing the same Execution Logs response instead of
+each re-deriving route logic:
+
+- `ExecutionLogsPopup.tsx` — route filter pill bar (teal, matching the
+  canvas's `Route` icon convention above) above the step list, plus a
+  per-step "↳ route name" chip, visually distinct from the existing
+  orchestrator sub-agent-route chip.
+- `CostsPopup.tsx` — the same route filter on the "By Step" cost breakdown
+  view (it already fetched Execution Logs for step-title lookup, so route
+  data came for free), a route badge per step row, and the Total row
+  becomes a route-scoped subtotal when a filter is active rather than
+  silently showing the whole run's total.
+- `EvaluationPopup.tsx` — surfaces `applies_to_routes`, a real field on
+  `EvaluationStep` (`route_eval_pairing`'s own field, Phase B) that reached
+  the frontend's raw `evaluation_plan` JSON but was previously parsed out
+  and discarded by `parseEvaluationPlanDetails`. Now kept, and
+  cross-referenced against each run's actual route selections (fetched
+  lazily from Execution Logs when a report expands) to show, per eval
+  step, which route(s) it's scoped to and whether that route was actually
+  taken this run — plus a route filter bar mirroring the other two
+  surfaces.
+
+**Verification:** `GOWORK=off go build ./...` and `gofmt -l` clean; full
+`cmd/server` package suite passes (only the same pre-existing, unrelated
+`virtual-tools` and `scheduler_test.go` findings already on record for this
+ticket remain). `cd frontend && npm run build` (`tsc -b && vite build`)
+clean.
+
+Landed at `b87736573` on `main`.
+
+Still open, unchanged: the live manual reverify against a real workflow run
+(the two temporary operator commands from the section above), which this
+work did not touch.

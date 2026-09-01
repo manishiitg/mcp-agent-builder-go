@@ -12,6 +12,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
+	workspacepkg "github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
 	mcpllm "github.com/manishiitg/mcpagent/llm"
 	loggerv2 "github.com/manishiitg/mcpagent/logger/v2"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
@@ -91,6 +92,68 @@ func TestConfigureWorkflowDBSessionRetainsScriptedCompatibility(t *testing.T) {
 	cfg := common.GetSessionShellConfig(sessionID)
 	if cfg == nil || len(cfg.BlockedPaths) != 0 {
 		t.Fatalf("scripted compatibility unexpectedly blocked: %+v", cfg)
+	}
+}
+
+func TestConfigureManagedWorkflowDBSessionProtectsBuilderSQLiteAndSidecars(t *testing.T) {
+	const (
+		sessionID     = "managed-workflow-builder-db"
+		workspacePath = "Workflow/demo"
+	)
+	t.Cleanup(func() { common.ClearSessionShellConfig(sessionID) })
+
+	// Match the main Workflow Builder's broad workflow-folder grant. The
+	// managed DB boundary must still win for the database and both WAL files.
+	common.SetSessionFolderGuard(sessionID, []string{workspacePath}, []string{workspacePath})
+	common.SetSessionFolderGuardBlockedWritePaths(sessionID, []string{workspacePath + "/planning"})
+	ConfigureManagedWorkflowDBSession(sessionID, workspacePath, true)
+
+	cfg := common.GetSessionShellConfig(sessionID)
+	if cfg == nil || cfg.Env[workflowDBAccessEnv] != DBAccessReadWrite {
+		t.Fatalf("Builder managed DB access not recorded: %+v", cfg)
+	}
+	if !slices.Contains(cfg.BlockedWritePaths, workspacePath+"/planning") {
+		t.Fatalf("managed DB setup discarded the planning write deny: %+v", cfg.BlockedWritePaths)
+	}
+
+	client := workspacepkg.NewClient("http://unused")
+	ctx := context.WithValue(context.Background(), common.ChatSessionIDKey, sessionID)
+	for _, path := range []string{
+		workspacePath + "/db/db.sqlite",
+		workspacePath + "/db/db.sqlite-wal",
+		workspacePath + "/db/db.sqlite-shm",
+	} {
+		if err := client.ValidatePathWithContext(ctx, path, false); err == nil {
+			t.Fatalf("Builder retained raw read access to %q", path)
+		}
+		if err := client.ValidatePathWithContext(ctx, path, true); err == nil {
+			t.Fatalf("Builder retained raw write access to %q", path)
+		}
+	}
+
+	// Adjacent managed artifacts remain available: agents still author the
+	// migration file and use the dedicated tool to apply it.
+	for _, path := range []string{
+		workspacePath + "/db/migrations/add-table.sql",
+		workspacePath + "/db/README.md",
+		workspacePath + "/db/assets/export.json",
+	} {
+		if err := client.ValidatePathWithContext(ctx, path, true); err != nil {
+			t.Fatalf("managed DB boundary over-blocked %q: %v", path, err)
+		}
+	}
+}
+
+func TestConfigureManagedWorkflowDBSessionKeepsReadOnlyBuilderFailClosed(t *testing.T) {
+	const sessionID = "read-only-workflow-builder-db"
+	t.Cleanup(func() { common.ClearSessionShellConfig(sessionID) })
+	common.SetSessionFolderGuard(sessionID, []string{"Workflow/demo"}, nil)
+
+	ConfigureManagedWorkflowDBSession(sessionID, "Workflow/demo", false)
+
+	cfg := common.GetSessionShellConfig(sessionID)
+	if cfg == nil || cfg.Env[workflowDBAccessEnv] != DBAccessRead {
+		t.Fatalf("read-only Builder DB access = %+v, want %q", cfg, DBAccessRead)
 	}
 }
 

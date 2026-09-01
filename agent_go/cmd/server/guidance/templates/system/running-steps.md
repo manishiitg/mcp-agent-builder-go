@@ -30,8 +30,7 @@ When running a step or the full workflow:
      envelope uses `result` (and may also expose `data.execution_id`); a jq
      projection that keeps only unrelated fields can discard a valid
      execution ID after the step has already started.
-2. `execute_step` follows the step's persistent learnings config
-   (`learnings_access`, `lock_learnings`).
+2. `execute_step` follows the step's persistent `learnings_access` config.
 3. **Human input steps**: Pass `human_input` parameter with the
    appropriate answer from your conversation context. This prevents
    blocking for manual UI input.

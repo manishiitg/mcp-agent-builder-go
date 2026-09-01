@@ -34,6 +34,7 @@ func ParseStepConfigContent(content string) ([]StepConfig, error) {
 	if err := json.Unmarshal([]byte(content), &configFile); err != nil {
 		return nil, fmt.Errorf("failed to parse step_config.json: expected format { \"steps\": [...] }, got error: %w", err)
 	}
+	normalizeLegacyLearningLocks(configFile.Steps)
 
 	if err := validateStepConfigs(configFile.Steps); err != nil {
 		return nil, err
@@ -80,7 +81,31 @@ func repairStepConfigs(configs []StepConfig) ([]StepConfig, bool) {
 		}
 		repaired = append(repaired, config)
 	}
+	if normalizeLegacyLearningLocks(repaired) {
+		changed = true
+	}
 	return repaired, changed
+}
+
+// normalizeLegacyLearningLocks retires the redundant lock_learnings fields.
+// A true legacy lock meant "keep reading but stop writing", which is exactly
+// learnings_access="read". Preserve an explicit "none" because migration must
+// never widen access. False locks and their reasons are simply removed.
+func normalizeLegacyLearningLocks(configs []StepConfig) bool {
+	changed := false
+	for i := range configs {
+		ac := configs[i].AgentConfigs
+		if ac == nil || (ac.LegacyLockLearnings == nil && ac.LegacyLockLearningsReason == "") {
+			continue
+		}
+		if ac.LegacyLockLearnings != nil && *ac.LegacyLockLearnings && resolveLearningsAccess(ac) != LearningsAccessNone {
+			ac.LearningsAccess = LearningsAccessRead
+		}
+		ac.LegacyLockLearnings = nil
+		ac.LegacyLockLearningsReason = ""
+		changed = true
+	}
+	return changed
 }
 
 func readAndRepairStepConfigs(ctx context.Context, bo *orchestrator.BaseOrchestrator, path, content string) ([]StepConfig, error) {
@@ -226,6 +251,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) WriteStepConfigsToSubdir(ctx context.
 	if configSubdir == "" {
 		configSubdir = "planning"
 	}
+	// Never persist the retired learning lock. This also protects typed callers
+	// that constructed AgentConfigs from a legacy payload without reading first.
+	normalizeLegacyLearningLocks(configs)
+
 	// Use relative path only - WriteWorkspaceFile auto-prepends workspacePath
 	configPath := filepath.Join(configSubdir, "step_config.json")
 	if err := validateStepConfigs(configs); err != nil {
@@ -380,12 +409,6 @@ func MergeAgentConfigFields(target *AgentConfigs, source *AgentConfigs, stepID s
 	if source.UseCodeExecutionMode != nil {
 		target.UseCodeExecutionMode = source.UseCodeExecutionMode
 		logger.Info(fmt.Sprintf("🔧 Using step config (ID: %s) - use_code_execution_mode: %v", stepID, *source.UseCodeExecutionMode))
-	}
-	if source.LockLearnings != nil {
-		target.LockLearnings = source.LockLearnings
-	}
-	if source.LockLearningsReason != "" {
-		target.LockLearningsReason = source.LockLearningsReason
 	}
 	if source.LearningObjective != "" {
 		target.LearningObjective = source.LearningObjective

@@ -343,7 +343,6 @@ func TestUpgradeQueriesNeverNamePlatTickets(t *testing.T) {
 	queries := map[string]string{
 		"upgradeMessageSequenceCode":        upgradeMessageSequenceCode,
 		"upgradeCurrentArtifactContract":    upgradeCurrentArtifactContract,
-		"upgradeLearningsLockAudit":         upgradeLearningsLockAudit,
 		"upgradeDirectHTMLReports":          upgradeDirectHTMLReports,
 		"upgradeDedicatedPulseSchedule":     upgradeDedicatedPulseSchedule,
 		"upgradeSchedulePromptContract":     upgradeSchedulePromptContract,

@@ -57,13 +57,6 @@ func clearStepConfigField(sc *StepConfig, name string) bool {
 	// keep_learning_full) since clearing what can't be set is a no-op from the agent's side.
 	case "learning_objective":
 		ac.LearningObjective = ""
-	case "lock_learnings":
-		// Clearing the lock clears its justification too — a reason left behind
-		// would attach to a freeze that no longer exists.
-		ac.LockLearnings = nil
-		ac.LockLearningsReason = ""
-	case "lock_learnings_reason":
-		ac.LockLearningsReason = ""
 	case "lock_code":
 		ac.LockCode = nil
 	case "use_code_execution_mode":
@@ -104,7 +97,7 @@ func isKnownAgentConfigClearField(name string) bool {
 	switch name {
 	case "execution_llm", "execution_tier",
 		"servers", "tools", "enabled_custom_tools", "enabled_skills", "additional_read_paths",
-		"learning_objective", "lock_learnings", "lock_learnings_reason", "lock_code",
+		"learning_objective", "lock_code",
 		"execution_llm_reason", "execution_tier_reason",
 		"use_code_execution_mode",
 		"disable_parallel_tool_execution",
@@ -140,6 +133,8 @@ var retiredStepConfigClearFields = map[string]string{
 	"enable_context_offloading":     "retired in PLAT-061 — never settable, never used",
 	"todo_task_orchestrator_tier":   "retired in PLAT-061 — use execution_llm to override",
 	"learn_code_max_fix_iterations": "retired in PLAT-061 — every stored value was a migration artifact; use lock_code to skip script repair",
+	"lock_learnings":                "retired in PLAT-263 — use learnings_access=\"read\" to allow reads without writes",
+	"lock_learnings_reason":         "retired with lock_learnings in PLAT-263",
 }
 
 // isRetiredStepConfigClearField reports whether a clear_fields name refers to a

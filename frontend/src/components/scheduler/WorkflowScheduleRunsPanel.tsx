@@ -1,28 +1,25 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import ReactDOM from 'react-dom'
 import cronstrue from 'cronstrue'
 import {
-  X, Play, Trash2, Clock, CheckCircle, XCircle, PauseCircle, Minus, Loader,
-  Terminal, Pause, Calendar, ClipboardCheck, AlertTriangle,
-  ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Square, Radio, Search, FileText, MessageSquare, MoreHorizontal
+  X, Play, Trash2, Clock, CheckCircle, XCircle, Minus, Loader,
+  Pause, Calendar, AlertTriangle,
+  ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Square, Radio, Search, MessageSquare, MoreHorizontal
 } from 'lucide-react'
 import { schedulerApi } from '../../api/scheduler'
 import { agentApi } from '../../services/api'
 import { useGlobalPresetStore } from '../../stores/useGlobalPresetStore'
 import { useChatStore } from '../../stores/useChatStore'
+import { useModeStore } from '../../stores/useModeStore'
+import { useWorkflowStore } from '../../stores/useWorkflowStore'
 import { activateTab } from '../../utils/activateTab'
 import { selectWorkflowPreset } from '../../utils/workflowNavigation'
-import { useWorkflowStore } from '../../stores/useWorkflowStore'
-import { useModeStore } from '../../stores/useModeStore'
-import type { ScheduledJob, ScheduledJobRun, SchedulerConfig, RunFolderInfo, RunMetadataModels, TokenUsageFile } from '../../services/api-types'
-import CostsPopup from '../workflow/CostsPopup'
-import ExecutionLogsPopup from '../workflow/ExecutionLogsPopup'
-import EvaluationPopup from '../workflow/EvaluationPopup'
-import { ReportViewer } from '../workflow/ReportViewer'
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '../ui/tooltip'
 import { scheduleTabLabel } from '../../utils/scheduleTabLabel'
+import type { ScheduledJob, ScheduledJobRun, SchedulerConfig } from '../../services/api-types'
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '../ui/tooltip'
 import { useAuthStore } from '../../stores/useAuthStore'
 import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
+import { ScheduleExecutionHistoryList } from '../ScheduleExecutionHistoryList'
 
 interface WorkflowScheduleRunsPanelProps {
   onClose: () => void
@@ -35,16 +32,8 @@ interface WorkflowScheduleRunsPanelProps {
   }
 }
 
-type ActivePopup = 'costs' | 'logs' | 'eval' | 'report' | null
 type JobFilter = 'running' | 'enabled' | 'paused' | 'missed' | 'issues' | 'all'
 type SchedulePanelView = 'overview' | 'calendar' | 'by-workflow' | 'schedules'
-
-// RUN_HISTORY_VISIBLE_ROWS is how many rows fit in the run-history scroll box
-// (max-h-48 = 12rem, ~27px per row). It only drives the "scroll for all" hint
-// and the bottom fade, so being a row out either way costs nothing — but with
-// no affordance at all the list reads as truncated, which is how a correct
-// count of 10 alongside 7 visible rows looked like a bug.
-const RUN_HISTORY_VISIBLE_ROWS = 7
 
 const isScheduleIssueStatus = (status?: ScheduledJob['last_status']) =>
   status === 'error' || status === 'partial' || status === 'interrupted'
@@ -79,62 +68,6 @@ type CalendarEntry = {
   note?: string
   sourceTime?: string
   timezone?: string
-}
-
-interface JobPopupState {
-  workspacePath: string
-  runFolders: string[]
-  popup: ActivePopup
-  selectedRunFolder?: string
-  startedAt?: string
-}
-
-type RunCostData = {
-  cost: number
-  tokens: number
-  tierTokens?: Array<{ label: 'T1' | 'T2' | 'T3'; tokens: number }>
-}
-
-function getResolvedRunFolder(
-  run: ScheduledJobRun,
-  runIndex: number,
-  inferredRunFolders: Record<string, string>,
-  latestRunFolderForJob?: string
-): string {
-  if (run.run_folder) return run.run_folder
-  if (inferredRunFolders[run.id]) return inferredRunFolders[run.id]
-  if (runIndex === 0 && latestRunFolderForJob) return latestRunFolderForJob
-  return ''
-}
-
-function getRunFolderIterationNumber(folderName: string): number {
-  const match = folderName.match(/iteration-(\d+)/)
-  return parseInt(match?.[1] ?? '-1', 10)
-}
-
-function getRunFolderActivityTime(folder: RunFolderInfo): number {
-  const activityTimestamp =
-    folder.metadata?.completed_at ||
-    folder.metadata?.created_at ||
-    ''
-
-  const parsed = Date.parse(activityTimestamp)
-  return Number.isNaN(parsed) ? 0 : parsed
-}
-
-function getMostRelevantRunFolder(folders: RunFolderInfo[]): string {
-  if (folders.length === 0) return ''
-
-  return [...folders]
-    .sort((a, b) => {
-      const activityDiff = getRunFolderActivityTime(b) - getRunFolderActivityTime(a)
-      if (activityDiff !== 0) return activityDiff
-
-      const iterationDiff = getRunFolderIterationNumber(b.name) - getRunFolderIterationNumber(a.name)
-      if (iterationDiff !== 0) return iterationDiff
-
-      return b.name.localeCompare(a.name)
-    })[0]?.name ?? ''
 }
 
 function parseCronField(field: string, min: number, max: number, normalize?: (n: number) => number): number[] | null {
@@ -335,94 +268,6 @@ function formatDuration(ms?: number): string {
   const hrs = Math.floor(mins / 60)
   const remMins = mins % 60
   return `${hrs}h ${remMins}m`
-}
-
-function formatCost(usd: number): string {
-  if (usd === 0) return '$0'
-  if (usd < 0.01) return `$${usd.toFixed(4)}`
-  if (usd < 1) return `$${usd.toFixed(3)}`
-  return `$${usd.toFixed(2)}`
-}
-
-function formatTokens(n: number): string {
-  if (n < 1000) return `${n}`
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`
-  return `${(n / 1_000_000).toFixed(2)}M`
-}
-
-function normalizeModelIdentifier(value?: string): string {
-  return (value || '').trim().toLowerCase()
-}
-
-function buildModelVariants(value?: string): Set<string> {
-  const variants = new Set<string>()
-  const normalized = normalizeModelIdentifier(value)
-  if (!normalized) return variants
-
-  variants.add(normalized)
-
-  const slashPart = normalized.split('/').pop()
-  if (slashPart) variants.add(slashPart)
-
-  const colonPart = normalized.split(':').pop()
-  if (colonPart) variants.add(colonPart)
-
-  return variants
-}
-
-function getTierLabelForUsage(modelKey: string, usageProvider: string | undefined, models?: RunMetadataModels): 'T1' | 'T2' | 'T3' | null {
-  if (models?.allocation_mode !== 'tiered') return null
-
-  const usageVariants = buildModelVariants(modelKey)
-  const normalizedProvider = normalizeModelIdentifier(usageProvider)
-
-  const tierEntries: Array<{ label: 'T1' | 'T2' | 'T3'; model?: { provider?: string; model_id?: string } }> = [
-    { label: 'T1', model: models.tier_1 },
-    { label: 'T2', model: models.tier_2 },
-    { label: 'T3', model: models.tier_3 },
-  ]
-
-  for (const entry of tierEntries) {
-    const tierModel = entry.model
-    if (!tierModel?.model_id) continue
-
-    const tierProvider = normalizeModelIdentifier(tierModel.provider)
-    if (tierProvider && normalizedProvider && tierProvider !== normalizedProvider) continue
-
-    const tierVariants = buildModelVariants(tierModel.model_id)
-    for (const variant of usageVariants) {
-      if (tierVariants.has(variant)) {
-        return entry.label
-      }
-    }
-  }
-
-  return null
-}
-
-function calculateTierTokenBreakdown(tokenUsage: TokenUsageFile | undefined, models?: RunMetadataModels): Array<{ label: 'T1' | 'T2' | 'T3'; tokens: number }> {
-  if (!tokenUsage?.by_model || models?.allocation_mode !== 'tiered') return []
-
-  const totals: Record<'T1' | 'T2' | 'T3', number> = { T1: 0, T2: 0, T3: 0 }
-
-  for (const [modelKey, usage] of Object.entries(tokenUsage.by_model)) {
-    const tierLabel = getTierLabelForUsage(modelKey, usage.provider, models)
-    if (!tierLabel) continue
-    totals[tierLabel] += (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
-  }
-
-  return (['T1', 'T2', 'T3'] as const)
-    .map(label => ({ label, tokens: totals[label] }))
-    .filter(entry => entry.tokens > 0)
-}
-
-function formatRunTime(dateStr: string): string {
-  const d = new Date(dateStr)
-  const now = new Date()
-  const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400000)
-  if (diffDays === 0) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  if (diffDays < 7) return d.toLocaleDateString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 function formatTimeUntil(dateStr?: string): string {
@@ -651,7 +496,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
   const [jobs, setJobs] = useState<ScheduledJob[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [expandedJobIds, setExpandedJobIds] = useState<string[]>([])
   const [openActionMenuJobId, setOpenActionMenuJobId] = useState<string | null>(null)
   const [expandedWorkflowKeys, setExpandedWorkflowKeys] = useState<string[]>([])
   const isWorkflowScoped = !!workflowScope
@@ -666,15 +510,13 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
   const [bulkUpdatingGroupKey, setBulkUpdatingGroupKey] = useState<string | null>(null)
 
   const [triggering, setTriggering] = useState<string | null>(null)
-  const [popupState, setPopupState] = useState<JobPopupState | null>(null)
-  // Run history per job
-  const [jobRuns, setJobRuns] = useState<Record<string, ScheduledJobRun[]>>({})
-  const [loadingRunIds, setLoadingRunIds] = useState<Record<string, boolean>>({})
-  // Cost summary per run_folder: { totalCost, totalTokens }
-  const [runCosts, setRunCosts] = useState<Record<string, RunCostData | null>>({})
-  // For running runs without run_folder, we detect the latest iteration folder
-  const [runningRunFolders, setRunningRunFolders] = useState<Record<string, string>>({})
-  const [latestRunFoldersByJob, setLatestRunFoldersByJob] = useState<Record<string, string>>({})
+
+  // Execution history — only wired up in the per-workflow scoped (embedded)
+  // view; the global cross-workflow popup does not show this.
+  const [expandedRunHistoryJobIds, setExpandedRunHistoryJobIds] = useState<Set<string>>(new Set())
+  const [runsByJob, setRunsByJob] = useState<Record<string, ScheduledJobRun[]>>({})
+  const [runsLoadingJobIds, setRunsLoadingJobIds] = useState<Set<string>>(new Set())
+  const [deletingRunSessionIds, setDeletingRunSessionIds] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (!openActionMenuJobId) return
@@ -705,27 +547,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     if (!isWorkflowScoped) return 'Automation Schedules'
     return `Schedules for ${getWorkflowScopeLabel(workflowScope, presetMap)}`
   }, [isWorkflowScoped, workflowScope, presetMap])
-
-  // Keep a running schedule expanded so its live run history stays visible.
-  useEffect(() => {
-    const runningJobIds = panelJobs
-      .filter(j => j.last_status === 'running')
-      .map(j => j.id)
-
-    if (runningJobIds.length === 0) return
-
-    setExpandedJobIds(prev => {
-      const next = [...prev]
-      let changed = false
-      runningJobIds.forEach((jobId) => {
-        if (!next.includes(jobId)) {
-          next.push(jobId)
-          changed = true
-        }
-      })
-      return changed ? next : prev
-    })
-  }, [panelJobs])
 
   useEffect(() => {
     const runningWorkflowKeys = new Set(
@@ -770,140 +591,10 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     refreshPresets()
   }, [loadJobs, refreshPresets])
 
-  const loadRunsForJob = useCallback(async (jobId: string) => {
-    setLoadingRunIds(prev => ({ ...prev, [jobId]: true }))
-    try {
-      const resp = await schedulerApi.getJobRuns(jobId, 20)
-      setJobRuns(prev => ({ ...prev, [jobId]: resp.runs ?? [] }))
-    } catch {
-      setJobRuns(prev => ({ ...prev, [jobId]: [] }))
-    } finally {
-      setLoadingRunIds(prev => {
-        const next = { ...prev }
-        delete next[jobId]
-        return next
-      })
-    }
-  }, [])
-
-  // Load cost summary for runs that have a run_folder (or detected running folder)
-  const loadCostsForRuns = useCallback(async (jobId: string, runs: ScheduledJobRun[]) => {
-    const job = jobs.find(j => j.id === jobId)
-    const preset = presetMap.get(job?.preset_query_id ?? '')
-    const workspacePath = job?.workspace_path || preset?.workspacePath
-    if (!workspacePath) return
-
-    const latestRunFolderForJob = latestRunFoldersByJob[jobId]
-    const foldersToLoad = runs
-      .map((run, index) => getResolvedRunFolder(run, index, runningRunFolders, latestRunFolderForJob))
-      .filter((f): f is string => !!f && !(f in runCosts))
-
-    if (foldersToLoad.length === 0) return
-
-    // Fetch in parallel (limit to 5 to avoid overload)
-    const batch = foldersToLoad.slice(0, 5)
-    const runFoldersResp = await agentApi.getRunFolders(workspacePath).catch(() => null)
-    const runFolderInfoMap = new Map<string, RunFolderInfo>(
-      (runFoldersResp?.folders || []).map(folder => [folder.name, folder])
-    )
-    const workspaceCosts = await agentApi.getCosts(workspacePath).catch(() => null)
-    const costByRunFolder = new Map(
-      (workspaceCosts?.runs || []).map(entry => [entry.run_folder, entry])
-    )
-
-    const newCosts: Record<string, RunCostData | null> = {}
-    batch.forEach((folder) => {
-      const result = costByRunFolder.get(folder)
-      if (result?.token_usage?.by_model) {
-        let totalCost = 0
-        let totalTokens = 0
-        for (const model of Object.values(result.token_usage.by_model)) {
-          totalCost += model.total_cost_usd ?? 0
-          totalTokens += (model.input_tokens ?? 0) + (model.output_tokens ?? 0)
-        }
-        for (const tool of Object.values(result.token_usage.by_tool || {})) {
-          totalCost += tool.total_cost_usd ?? 0
-        }
-        // Also add evaluation costs if present
-        if (result.evaluation_token_usage?.by_model) {
-          for (const model of Object.values(result.evaluation_token_usage.by_model)) {
-            totalCost += model.total_cost_usd ?? 0
-            totalTokens += (model.input_tokens ?? 0) + (model.output_tokens ?? 0)
-          }
-        }
-        if (result.evaluation_token_usage?.by_tool) {
-          for (const tool of Object.values(result.evaluation_token_usage.by_tool)) {
-            totalCost += tool.total_cost_usd ?? 0
-          }
-        }
-        const tierTokens = calculateTierTokenBreakdown(
-          result.token_usage,
-          runFolderInfoMap.get(folder)?.metadata?.models
-        )
-        newCosts[folder] = {
-          cost: totalCost,
-          tokens: totalTokens,
-          tierTokens: tierTokens.length > 0 ? tierTokens : undefined,
-        }
-      } else {
-        newCosts[folder] = null
-      }
-    })
-    setRunCosts(prev => ({ ...prev, ...newCosts }))
-  }, [presetMap, jobs, runCosts, runningRunFolders, latestRunFoldersByJob])
-
-  // Auto-load runs when a job is expanded
-  useEffect(() => {
-    if (expandedJobIds.length === 0) return
-    expandedJobIds.forEach((jobId) => {
-      loadRunsForJob(jobId)
-    })
-  }, [expandedJobIds, loadRunsForJob])
-
-  // Detect the latest run folder so the newest completed run keeps its artifacts
-  // even if the explicit run_folder arrives slightly after the run status update.
-  const detectRunFolders = useCallback(async (jobId: string, runs: ScheduledJobRun[]) => {
-    const djob = jobs.find(j => j.id === jobId)
-    const preset = presetMap.get(djob?.preset_query_id ?? '')
-    const workspacePath = djob?.workspace_path || preset?.workspacePath
-    if (!workspacePath) return
-
-    try {
-      const resp = await agentApi.getRunFolders(workspacePath)
-      const folders = resp.folders ?? []
-      if (folders.length > 0) {
-        const latestFolder = getMostRelevantRunFolder(folders)
-        setLatestRunFoldersByJob(prev => (
-          prev[jobId] === latestFolder ? prev : { ...prev, [jobId]: latestFolder }
-        ))
-
-        const newMap: Record<string, string> = {}
-        runs
-          .filter((run, index) => !run.run_folder && (run.status === 'running' || index === 0))
-          .forEach((run) => { newMap[run.id] = latestFolder })
-
-        if (Object.keys(newMap).length > 0) {
-          setRunningRunFolders(prev => ({ ...prev, ...newMap }))
-        }
-      }
-    } catch { /* ignore */ }
-  }, [presetMap, jobs])
-
-  // Auto-refresh while any schedule is running: jobs list + runs + costs (every 5s)
+  // Auto-refresh while any schedule is running: jobs list (every 5s)
   const hasRunningJob = panelJobs.some(j => j.last_status === 'running')
   const activeScheduleCount = panelJobs.filter(j => j.enabled).length
   const isSchedulerPaused = !!schedulerConfig?.globally_paused
-
-  const previousHasRunningJobRef = useRef(hasRunningJob)
-
-  useEffect(() => {
-    if (previousHasRunningJobRef.current && !hasRunningJob && expandedJobIds.length > 0) {
-      expandedJobIds.forEach((jobId) => {
-        loadRunsForJob(jobId)
-      })
-    }
-    previousHasRunningJobRef.current = hasRunningJob
-  }, [hasRunningJob, expandedJobIds, loadRunsForJob])
 
   const workflowScheduleSummary = useMemo(() => {
     const workflowKeys = new Set<string>()
@@ -1177,69 +868,11 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
 
   useEffect(() => {
     if (!hasRunningJob) return
-    const interval = setInterval(async () => {
+    const interval = setInterval(() => {
       loadJobs()
-      await Promise.all(expandedJobIds.map(async (jobId) => {
-        await loadRunsForJob(jobId)
-        const runs = jobRuns[jobId] ?? []
-        const latestRunFolderForJob = latestRunFoldersByJob[jobId]
-        const runningFolders = runs
-          .filter(r => r.status === 'running')
-          .map((run, index) => getResolvedRunFolder(run, index, runningRunFolders, latestRunFolderForJob))
-          .filter((f): f is string => !!f)
-        if (runningFolders.length > 0) {
-          setRunCosts(prev => {
-            const next = { ...prev }
-            runningFolders.forEach(f => delete next[f])
-            return next
-          })
-        }
-        detectRunFolders(jobId, runs)
-      }))
     }, 5000)
     return () => clearInterval(interval)
-  }, [hasRunningJob, loadJobs, expandedJobIds, jobRuns, runningRunFolders, latestRunFoldersByJob, detectRunFolders, loadRunsForJob])
-
-  // Auto-load costs when runs are loaded
-  useEffect(() => {
-    expandedJobIds.forEach((jobId) => {
-      const runs = jobRuns[jobId]
-      if (!runs || runs.length === 0) return
-      loadCostsForRuns(jobId, runs)
-      detectRunFolders(jobId, runs)
-    })
-  }, [expandedJobIds, jobRuns, loadCostsForRuns, detectRunFolders])
-
-  // Auto-refresh costs for running jobs (every 10s)
-  useEffect(() => {
-    const runningFoldersByJob = expandedJobIds
-      .map((jobId) => {
-        const runs = jobRuns[jobId]
-        const latestRunFolderForJob = latestRunFoldersByJob[jobId]
-        const runningFolders = (runs ?? [])
-          .filter(r => r.status === 'running')
-          .map((run, index) => getResolvedRunFolder(run, index, runningRunFolders, latestRunFolderForJob))
-          .filter((f): f is string => !!f)
-        return { jobId, runs, runningFolders }
-      })
-      .filter(({ runningFolders }) => runningFolders.length > 0)
-    if (runningFoldersByJob.length === 0) return
-    const interval = setInterval(() => {
-      // Clear cached costs for running runs to force re-fetch
-      setRunCosts(prev => {
-        const next = { ...prev }
-        runningFoldersByJob.forEach(({ runningFolders }) => {
-          runningFolders.forEach(f => delete next[f])
-        })
-        return next
-      })
-      // Also re-detect folders for runs that still don't have one
-      runningFoldersByJob.forEach(({ jobId, runs }) => {
-        if (runs) detectRunFolders(jobId, runs)
-      })
-    }, 10000)
-    return () => clearInterval(interval)
-  }, [expandedJobIds, jobRuns, runningRunFolders, latestRunFoldersByJob, detectRunFolders])
+  }, [hasRunningJob, loadJobs])
 
   const handleToggle = async (job: ScheduledJob) => {
     try {
@@ -1316,17 +949,64 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     finally { setTriggering(null) }
   }
 
-  const openScheduledRunInChat = useCallback(async (
-    sessionId: string,
-    jobName: string,
-    presetQueryId?: string,
-  ) => {
+  const handleStopRun = async (job: ScheduledJob) => {
+    if (!window.confirm('Stop this running execution?')) return
+    try {
+      await schedulerApi.stopJob(job.id)
+      // Refresh after a brief delay to let status propagate
+      setTimeout(() => {
+        loadJobs()
+      }, 1500)
+    } catch (e) {
+      console.error('Failed to stop run:', e)
+    }
+  }
+
+  const toggleRunHistory = useCallback(async (job: ScheduledJob) => {
+    const alreadyOpen = expandedRunHistoryJobIds.has(job.id)
+    if (alreadyOpen) {
+      setExpandedRunHistoryJobIds(current => {
+        const next = new Set(current)
+        next.delete(job.id)
+        return next
+      })
+      return
+    }
+
+    setExpandedRunHistoryJobIds(current => new Set(current).add(job.id))
+    if (runsByJob[job.id]) return
+    setRunsLoadingJobIds(current => new Set(current).add(job.id))
+    try {
+      const response = await schedulerApi.getJobRuns(job.id, 200)
+      setRunsByJob(current => ({ ...current, [job.id]: response.runs || [] }))
+    } catch {
+      setExpandedRunHistoryJobIds(current => {
+        const next = new Set(current)
+        next.delete(job.id)
+        return next
+      })
+      useChatStore.getState().addToast(`Could not load execution history for ${job.name}`, 'error')
+    } finally {
+      setRunsLoadingJobIds(current => {
+        const next = new Set(current)
+        next.delete(job.id)
+        return next
+      })
+    }
+  }, [expandedRunHistoryJobIds, runsByJob])
+
+  // Opens a scheduled run's session directly from run.session_id — no session
+  // list to fetch first, unlike PreviousChatHistoryPanel's onSelectSession
+  // (which resolves a ChatHistorySession because it's browsing durable chat
+  // history broadly, not one workflow's own schedule runs).
+  const openScheduledRun = useCallback(async (run: ScheduledJobRun, job: ScheduledJob) => {
+    const sessionId = run.session_id
     if (!sessionId) return
 
     const chatStore = useChatStore.getState()
     const existingTab = Object.values(chatStore.chatTabs).find(t => t.sessionId === sessionId)
 
-    let effectivePresetQueryId = presetQueryId || existingTab?.metadata?.presetQueryId
+    let effectivePresetQueryId = job.preset_query_id || existingTab?.metadata?.presetQueryId
     if (!effectivePresetQueryId) {
       try {
         const running = await agentApi.getRunningWorkflow(sessionId)
@@ -1343,7 +1023,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     useModeStore.getState().setModeCategory('workflow')
     useWorkflowStore.getState().setShowChatArea(true)
 
-    const desiredName = scheduleTabLabel(jobName)
+    const desiredName = scheduleTabLabel(job.name)
     const metadata = {
       mode: 'workflow' as const,
       phaseId: undefined,
@@ -1351,11 +1031,10 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
       ...(effectivePresetQueryId ? { presetQueryId: effectivePresetQueryId } : {}),
       isViewOnly: true,
       isScheduledRun: true,
-      scheduledJobName: jobName,
+      scheduledJobName: job.name,
     }
 
     if (existingTab) {
-      // Rebind the tab to this preset and surface the schedule badge.
       chatStore.setTabMetadata(existingTab.tabId, metadata)
       if (existingTab.name !== desiredName) {
         useChatStore.setState((state) => {
@@ -1397,11 +1076,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
       return
     }
 
-    const tabId = await chatStore.createChatTab(
-      desiredName,
-      metadata,
-      sessionId,
-    )
+    const tabId = await chatStore.createChatTab(desiredName, metadata, sessionId)
     try {
       const response = await agentApi.getRecentSessionEvents(sessionId)
       if (response.events.length > 0) {
@@ -1427,19 +1102,25 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     onClose()
   }, [onClose])
 
-  const handleStopRun = async (job: ScheduledJob) => {
-    if (!window.confirm('Stop this running execution?')) return
+  const deleteScheduledRunSession = useCallback(async (run: ScheduledJobRun) => {
+    const sessionId = run.session_id
+    if (!sessionId || !workflowScope?.workspacePath) return
+    if (!window.confirm('Delete this conversation record? The schedule execution itself remains.')) return
+
+    setDeletingRunSessionIds(current => new Set(current).add(sessionId))
     try {
-      await schedulerApi.stopJob(job.id)
-      // Refresh after a brief delay to let status propagate
-      setTimeout(() => {
-        loadJobs()
-        loadRunsForJob(job.id)
-      }, 1500)
-    } catch (e) {
-      console.error('Failed to stop run:', e)
+      await agentApi.deleteChatHistorySession(sessionId, workflowScope.workspacePath)
+      useChatStore.getState().addToast('Deleted conversation record', 'success')
+    } catch {
+      useChatStore.getState().addToast('Failed to delete conversation record', 'error')
+    } finally {
+      setDeletingRunSessionIds(current => {
+        const next = new Set(current)
+        next.delete(sessionId)
+        return next
+      })
     }
-  }
+  }, [workflowScope?.workspacePath])
 
   const handleToggleGlobalPause = async () => {
     setIsUpdatingSchedulerPause(true)
@@ -1456,45 +1137,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     }
   }
 
-  const openPopup = async (job: ScheduledJob, popup: ActivePopup, selectedRunFolder?: string) => {
-    const preset = presetMap.get(job.preset_query_id ?? '')
-    const workspacePath = job.workspace_path || preset?.workspacePath || null
-    if (!workspacePath) return
-
-    const resolveStartedAt = (folder?: string): string | undefined => {
-      const runs = jobRuns[job.id] ?? []
-      if (folder) {
-        const iterationKey = folder.includes('/') ? folder.split('/')[0] : folder
-        const match = runs.find(r => r.run_folder === folder || r.run_folder === iterationKey)
-        if (match?.started_at) return match.started_at
-      }
-      if (job.last_status === 'running' && runs[0]?.started_at) return runs[0].started_at
-      return job.last_run_at
-    }
-
-    // Load run folders and filter to the specific iteration
-    try {
-      const resp = await agentApi.getRunFolders(workspacePath)
-      const allFolders = resp.folders?.map(f => f.name) ?? []
-      // If selectedRunFolder is an iteration (e.g. "iteration-10"), filter to only its group sub-folders
-      // e.g. "iteration-10/group-1", "iteration-10/group-2"
-      let runFolders = allFolders
-      if (selectedRunFolder && !selectedRunFolder.includes('/')) {
-        runFolders = allFolders.filter(f =>
-          f === selectedRunFolder || f.startsWith(selectedRunFolder + '/')
-        )
-        // If we have group sub-folders, use the first group as the selected folder for logs
-        const groupFolders = runFolders.filter(f => f.startsWith(selectedRunFolder + '/'))
-        if (groupFolders.length > 0 && popup === 'logs') {
-          selectedRunFolder = groupFolders[0]
-        }
-      }
-      setPopupState({ workspacePath, runFolders, popup, selectedRunFolder, startedAt: resolveStartedAt(selectedRunFolder) })
-    } catch {
-      setPopupState({ workspacePath, runFolders: [], popup, selectedRunFolder, startedAt: resolveStartedAt(selectedRunFolder) })
-    }
-  }
-
   const toggleWorkflowGroup = useCallback((workflowKey: string) => {
     setExpandedWorkflowKeys(prev => (
       prev.includes(workflowKey)
@@ -1507,15 +1149,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     const workflowKey = getWorkflowFilterMeta(job, presetMap).value
     setSelectedWorkflowFilter(workflowKey)
     setExpandedWorkflowKeys(prev => prev.includes(workflowKey) ? prev : [...prev, workflowKey])
-    setExpandedJobIds(prev => prev.includes(job.id) ? prev : [...prev, job.id])
     setActiveView('by-workflow')
-  }, [presetMap])
-
-  const showScheduleDetails = useCallback((job: ScheduledJob) => {
-    const workflowKey = getWorkflowFilterMeta(job, presetMap).value
-    setSelectedWorkflowFilter(workflowKey)
-    setExpandedJobIds(prev => prev.includes(job.id) ? prev : [...prev, job.id])
-    setActiveView('schedules')
   }, [presetMap])
 
   const renderWorkflowScheduleRow = (job: ScheduledJob) => {
@@ -1704,9 +1338,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                       <Pause className="h-3.5 w-3.5" /> Pause schedule
                     </button>
                   )}
-                  <button type="button" role="menuitem" onClick={() => { setOpenActionMenuJobId(null); showScheduleDetails(job) }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-popover-foreground hover:bg-muted">
-                    <ChevronRight className="h-3.5 w-3.5" /> Show details
-                  </button>
                   {!isReadOnlyUser && (
                     <button type="button" role="menuitem" onClick={() => { setOpenActionMenuJobId(null); handleDelete(job) }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-red-600 hover:bg-red-500/10 dark:text-red-400">
                       <Trash2 className="h-3.5 w-3.5" /> Delete schedule
@@ -1717,6 +1348,20 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
             </div>
           </div>
         </div>
+
+        {isWorkflowScoped && (
+          <ScheduleExecutionHistoryList
+            job={job}
+            runs={runsByJob[job.id] ?? []}
+            historyOpen={expandedRunHistoryJobIds.has(job.id)}
+            historyLoading={runsLoadingJobIds.has(job.id)}
+            recordedRunCount={job.run_count ?? (runsByJob[job.id]?.length ?? 0)}
+            onToggle={() => void toggleRunHistory(job)}
+            onOpen={run => void openScheduledRun(run, job)}
+            onDelete={isReadOnlyUser ? undefined : run => void deleteScheduledRunSession(run)}
+            deletingRunIds={deletingRunSessionIds}
+          />
+        )}
       </div>
     )
   }
@@ -2442,11 +2087,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                 const cronDesc = describeCron(job.cron_expression)
                 const localizedJobName = getLocalizedJobName(job)
                 const workflowDisplayLabel = preset?.label || job.workflow_label || job.name
-                const isExpanded = expandedJobIds.includes(job.id)
                 const executionScope = getScheduleExecutionScope(job)
-                const hasWorkspace = !!job.workspace_path || !!preset?.workspacePath
-                const runs = jobRuns[job.id] ?? []
-                const isLoadingThis = !!loadingRunIds[job.id]
                 const previousJob = index > 0 ? jobsList[index - 1] : null
                 const isRunningJob = job.last_status === 'running'
                 const isWaitingJob = isScheduleWaitingStatus(job.last_status)
@@ -2699,20 +2340,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                                   <Pause className="h-3.5 w-3.5" /> Pause schedule
                                 </button>
                               )}
-                              {job.last_status !== 'running' && (
-                                <button
-                                  type="button"
-                                  role="menuitem"
-                                  onClick={() => {
-                                    setOpenActionMenuJobId(null)
-                                    setExpandedJobIds((ids) => isExpanded ? ids.filter((id) => id !== job.id) : [...ids, job.id])
-                                  }}
-                                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-popover-foreground hover:bg-muted"
-                                >
-                                  {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                                  {isExpanded ? 'Hide details' : 'Show details'}
-                                </button>
-                              )}
                               {!isReadOnlyUser && (
                                 <button
                                   type="button"
@@ -2728,232 +2355,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                         </div>
                       </div>
                     </div>
-
-                    {/* Expanded: run history */}
-                    {isExpanded && (
-                      <div className="mt-3 ml-5">
-                        {!hasWorkspace ? (
-                          <span className="text-xs text-gray-400 italic">Workspace path not available — re-save the preset to fix.</span>
-                        ) : isLoadingThis && runs.length === 0 ? (
-                          <span className="text-xs text-gray-400">Loading run history...</span>
-                        ) : runs.length === 0 ? (
-                          <span className="text-xs text-gray-400 italic">No runs recorded yet. Trigger a run to see history.</span>
-                        ) : (
-                          <div className="space-y-1">
-                            <div className="text-xs text-gray-400 dark:text-gray-500 mb-1.5">
-                              Run history ({runs.length} runs
-                              {runs.length > RUN_HISTORY_VISIBLE_ROWS && (
-                                <span className="text-gray-400 dark:text-gray-500"> · scroll for all {runs.length}</span>
-                              )}
-                              ):
-                            </div>
-                            {/* The list scrolls inside a fixed height, which with no
-                                affordance reads as a truncated list — the count said 10
-                                while 7 were visible and nothing indicated the rest. */}
-                            <div className="relative">
-                              <div className="space-y-1 max-h-48 overflow-y-auto">
-                              {runs.map((run, runIndex) => {
-                                const effectiveFolder = getResolvedRunFolder(
-                                  run,
-                                  runIndex,
-                                  runningRunFolders,
-                                  latestRunFoldersByJob[job.id]
-                                )
-                                const currentSessionId =
-                                  run.session_id || (run.status === 'running' ? job.last_session_id : undefined)
-                                // iteration-0 is the live slot and is REUSED: every historical
-                                // run records it as its folder, but its contents belong to the
-                                // most recent run alone. Offering logs/eval/report on an older
-                                // run therefore opened today's artifacts under that run's
-                                // timestamp — worse than showing nothing. Rotated folders
-                                // (iteration-N, N>0) are stable per-run identities and stay
-                                // correct. The conversation button is unaffected: run.session_id
-                                // is genuinely per-run.
-                                const runOwnsItsFolder =
-                                  Boolean(effectiveFolder) &&
-                                  (getRunFolderIterationNumber(effectiveFolder) > 0 || runIndex === 0)
-                                return (
-                                <div
-                                  key={run.id}
-                                  className="flex items-center gap-2 text-xs py-1 px-2 rounded hover:bg-gray-100 dark:hover:bg-gray-700/50 cursor-pointer"
-                                  onClick={(e) => {
-                                    // Only open logs if the click wasn't on one of the action buttons
-                                    if ((e.target as HTMLElement).closest('button')) return
-                                    if (effectiveFolder) openPopup(job, 'logs', effectiveFolder)
-                                  }}
-                                >
-                                  {/* Status icon */}
-                                  {run.status === 'running' ? (
-                                    <Loader className="w-3 h-3 text-amber-500 animate-spin flex-shrink-0" />
-                                  ) : run.status === 'success' ? (
-                                    <CheckCircle className="w-3 h-3 text-green-500 flex-shrink-0" />
-                                  ) : run.status === 'waiting_for_capacity' ? (
-                                    /* Suspended, not failed: the run holds completed steps and
-                                       resumes itself when the provider window reopens. A red
-                                       cross here reads as a defect and invites a manual re-run
-                                       that would replay those steps' side effects. */
-                                    <PauseCircle className="w-3 h-3 text-amber-500 flex-shrink-0" />
-                                  ) : (
-                                    <XCircle className="w-3 h-3 text-red-500 flex-shrink-0" />
-                                  )}
-
-                                  {/* Time */}
-                                  <span className="text-gray-500 dark:text-gray-400 w-28 flex-shrink-0">
-                                    {formatRunTime(run.started_at)}
-                                  </span>
-
-                                  {/* Iteration / group folder */}
-                                  {effectiveFolder ? (
-                                    <span className="font-mono text-gray-600 dark:text-gray-400 min-w-[6rem] max-w-[12rem] flex-shrink-0 truncate" title={effectiveFolder}>
-                                      {effectiveFolder}
-                                    </span>
-                                  ) : (
-                                    <span className="text-gray-300 dark:text-gray-600 min-w-[6rem] flex-shrink-0">
-                                      {run.status === 'running' ? '...' : '—'}
-                                    </span>
-                                  )}
-
-                                  {/* Duration */}
-                                  <span className="text-gray-400 w-16 flex-shrink-0">
-                                    {run.status === 'running' ? '' : formatDuration(run.duration_ms)}
-                                  </span>
-
-                                  {/* Cost & tokens inline */}
-                                  {effectiveFolder && (() => {
-                                    const costData = runCosts[effectiveFolder]
-                                    if (costData === undefined) return <span className="text-gray-300 dark:text-gray-600 w-24 flex-shrink-0">...</span>
-                                    if (costData === null) return <span className="text-gray-300 dark:text-gray-600 w-24 flex-shrink-0">—</span>
-                                    return (
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <button
-                                            onClick={() => openPopup(job, 'costs', effectiveFolder)}
-                                            className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 flex-shrink-0 transition-colors"
-                                          >
-                                            <span>{formatCost(costData.cost)}</span>
-                                            <span className="text-gray-400 dark:text-gray-500">{formatTokens(costData.tokens)}t</span>
-                                            {costData.tierTokens && costData.tierTokens.length > 0 && (
-                                              <span className="flex items-center gap-1 text-[10px] text-gray-400 dark:text-gray-500">
-                                                {costData.tierTokens.map((tier) => (
-                                                  <span
-                                                    key={`${effectiveFolder}-${tier.label}`}
-                                                    className="rounded border border-amber-200/60 bg-amber-50 px-1 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
-                                                  >
-                                                    {tier.label} {formatTokens(tier.tokens)}
-                                                  </span>
-                                                ))}
-                                              </span>
-                                            )}
-                                          </button>
-                                        </TooltipTrigger>
-                                        <TooltipContent side="left">
-                                          {costData.tierTokens && costData.tierTokens.length > 0
-                                            ? `Click for full cost breakdown. Tier tokens: ${costData.tierTokens.map(tier => `${tier.label} ${formatTokens(tier.tokens)}`).join(' · ')}`
-                                            : 'Click for full cost breakdown'}
-                                        </TooltipContent>
-                                      </Tooltip>
-                                    )
-                                  })()}
-
-                                  {/* Groups */}
-                                  {run.group_names && run.group_names.length > 0 && (
-                                    <span className="text-gray-400 truncate" title={`Groups: ${run.group_names.join(', ')}`}>
-                                      [{run.group_names.length}g]
-                                    </span>
-                                  )}
-
-                                  {/* Error (truncated) */}
-                                  {run.status === 'waiting_for_capacity' && run.error && (
-                                    <span className="text-amber-500 truncate flex-1" title={run.error}>
-                                      {run.error}
-                                    </span>
-                                  )}
-                                  {run.status === 'error' && run.error && (
-                                    <span className="text-red-400 truncate flex-1" title={run.error}>
-                                      {run.error.length > 50 ? run.error.slice(0, 50) + '...' : run.error}
-                                    </span>
-                                  )}
-
-                                  {/* Action buttons */}
-                                  <div className="flex items-center gap-2 ml-auto flex-shrink-0">
-                                    {/* Open the scheduled run itself as a read-only chat tab.
-                                        Hidden (not just disabled) for a read-only-access user —
-                                        this already opens view-only for every user, but the icon
-                                        looked interactive enough to cause confusion, so it's cut
-                                        from this role entirely as a UX nicety. No server-side
-                                        capability changes with this — see PLAT-262. */}
-                                    {currentSessionId && !isReadOnlyUser && (
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <button
-                                            onClick={() => openScheduledRunInChat(currentSessionId, job.name, job.preset_query_id)}
-                                            className="p-1 text-blue-500 hover:text-blue-400 transition-colors"
-                                          >
-                                            <MessageSquare className="w-3 h-3" />
-                                          </button>
-                                        </TooltipTrigger>
-                                        <TooltipContent side="left">
-                                          {run.status === 'running'
-                                            ? 'Open run in chat (read-only)'
-                                            : 'Restore to chat (read-only)'}
-                                        </TooltipContent>
-                                      </Tooltip>
-                                    )}
-                                    {/* Logs button */}
-                                    {runOwnsItsFolder && run.status !== 'running' && (
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <button
-                                            onClick={() => openPopup(job, 'logs', effectiveFolder)}
-                                            className="p-1 text-gray-300 dark:text-gray-600 hover:text-blue-500 transition-colors"
-                                          >
-                                            <Terminal className="w-3 h-3" />
-                                          </button>
-                                        </TooltipTrigger>
-                                        <TooltipContent side="left">Execution logs</TooltipContent>
-                                      </Tooltip>
-                                    )}
-                                    {/* Evaluation button */}
-                                    {runOwnsItsFolder && run.status !== 'running' && (
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <button
-                                            onClick={() => openPopup(job, 'eval', effectiveFolder)}
-                                            className="p-1 text-gray-300 dark:text-gray-600 hover:text-emerald-500 transition-colors"
-                                          >
-                                            <ClipboardCheck className="w-3 h-3" />
-                                          </button>
-                                        </TooltipTrigger>
-                                        <TooltipContent side="left">Evaluation scores</TooltipContent>
-                                      </Tooltip>
-                                    )}
-                                    {/* Report button */}
-                                    {runOwnsItsFolder && run.status !== 'running' && (
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <button
-                                            onClick={() => openPopup(job, 'report', effectiveFolder)}
-                                            className="p-1 text-gray-300 dark:text-gray-600 hover:text-purple-500 transition-colors"
-                                          >
-                                            <FileText className="w-3 h-3" />
-                                          </button>
-                                        </TooltipTrigger>
-                                        <TooltipContent side="left">Latest archived report</TooltipContent>
-                                      </Tooltip>
-                                    )}
-                                  </div>
-                                </div>
-                                )
-                              })}
-                            </div>
-                              {runs.length > RUN_HISTORY_VISIBLE_ROWS && (
-                                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-white to-transparent dark:from-gray-900" />
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
                     </div>
                   </React.Fragment>
                 )
@@ -2962,52 +2363,6 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
           )}
         </div>
       </div>
-
-      {/* Cost popup */}
-      {popupState?.popup === 'costs' && (
-        <CostsPopup
-          isOpen
-          onClose={() => setPopupState(null)}
-          workspacePath={popupState.workspacePath}
-          runFolders={popupState.runFolders}
-          selectedRunFolder={popupState.selectedRunFolder ?? popupState.runFolders[popupState.runFolders.length - 1] ?? null}
-          startedAt={popupState.startedAt}
-        />
-      )}
-
-      {/* Execution logs popup */}
-      {popupState?.popup === 'logs' && (
-        <ExecutionLogsPopup
-          isOpen
-          onClose={() => setPopupState(null)}
-          workspacePath={popupState.workspacePath}
-          runFolder={popupState.selectedRunFolder ?? popupState.runFolders[popupState.runFolders.length - 1] ?? null}
-          runFolders={popupState.runFolders}
-          startedAt={popupState.startedAt}
-        />
-      )}
-
-      {/* Evaluation popup */}
-      {popupState?.popup === 'eval' && (
-        <EvaluationPopup
-          isOpen
-          onClose={() => setPopupState(null)}
-          workspacePath={popupState.workspacePath}
-          selectedRunFolder={popupState.selectedRunFolder ?? popupState.runFolders[popupState.runFolders.length - 1] ?? null}
-          runFolders={popupState.runFolders}
-          startedAt={popupState.startedAt}
-        />
-      )}
-
-      {/* Dynamic report viewer (replaces the deleted static FinalOutputPopup).
-          The report is workspace-scoped now — runFolders/selectedRunFolder are ignored. */}
-      {popupState?.popup === 'report' && (
-        <ReportViewer
-          isOpen
-          onClose={() => setPopupState(null)}
-          workspacePath={popupState.workspacePath}
-        />
-      )}
 
     </div>
     </TooltipProvider>

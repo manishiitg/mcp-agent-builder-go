@@ -61,7 +61,7 @@ HTTP URL.
 
 - **Create steps**: `create_plan`, `add_scripted_step`, `add_message_sequence_step`, `add_human_input_step`, `add_todo_task_step`, `add_routing_step`, `add_branch_step`, `delete_plan_steps`, `cleanup_orphan_step_configs`.
 - **Update steps**: `update_scripted_step`, `update_message_sequence_step`, `update_human_input_step`, `update_routing_step`, `update_branch_step`, `update_todo_task_step`. For a saved legacy `regular` step whose `declared_execution_mode` is absent or non-scripted, call `update_message_sequence_step`; the harness atomically upgrades it to its effective `message_sequence` runtime type while applying the edit. Never use `update_scripted_step` for that compatibility case.
-- **Reclassify routing/branch**: `convert_routing_branch_step_type(existing_step_id, target_type)` atomically relabels an existing `routing` step as `branch` or vice versa — same id, same routes, only the question-field name changes. Never use `add_branch_step`/`add_routing_step` + `delete_plan_steps` to do this by hand: deleting the old step prunes its `step_config.json` row (`drift_review`, `execution_tier`, etc.) before the id can be reused, so it does not actually preserve history.
+- **Reclassify routing/branch**: `convert_routing_branch_step_type(existing_step_id, target_type, reason)` atomically relabels an existing `routing` step as `branch` or vice versa — same id, same routes, only the question-field name changes. `reason` is the one-sentence classification rationale written to the plan changelog. Never use `add_branch_step`/`add_routing_step` + `delete_plan_steps` to do this by hand: deleting the old step prunes its `step_config.json` row (`drift_review`, `execution_tier`, etc.) before the id can be reused, so it does not actually preserve history.
 - **Todo task routes**: `add_todo_task_route`, `update_todo_task_route`, `delete_todo_task_route`. For todo_task routes, choose one pattern per route: inline `sub_agent_step` for a route-specific agent, or `orphan_step_ref` to reuse a shared orphan step already allowlisted via `shared_with.orchestrator_ids`. Do not set both.
 - **Validation**: `update_validation_schema`.
 - **Graph integrity is atomic**: every plan mutation validates all routing/branch routes, todo/message-sequence `next_step_id` fields, and human-input branches before saving. `PLAN_GRAPH_INVALID` means nothing was saved. Repair every reference listed in the error with the appropriate `update_*_step` tool (target an existing step ID or `end`), then retry the original mutation. In particular, reroute inbound references before deleting their target step.
@@ -88,14 +88,6 @@ HTTP URL.
   5. This is independent of the interactive Slack bot (Socket Mode, @mentions, threads, and replies).
 - **`update_workflow_config(add_servers?, remove_servers?, add_tools?, remove_tools?, add_skills?, remove_skills?, add_secrets?, remove_secrets?, run_notification_instructions?, pulse_notification_instructions?, slack_webhook_secret_name?, browser_mode?, cdp_ports?, run_retention_count?, advisor_specialization_approval_input_id?)`** — Update workflow MCP servers, workflow-level MCP tool allowlist, skills, secrets, scoped notification content preferences, one-way Slack webhook reference, browser mode/profile ports, run/eval backup retention, or activate the exact owner-approved Strategy Auditor + Goal Advisor specialization proposal. Advisor specialization activation accepts only an answered `advisor-specialization-*` decision whose selected option is `activate`; it resolves both texts from that durable decision and writes them together to `workflow.json`.
 
-## Schedule Management (Workshop mode)
-
-For the operational cheat sheet on creating / editing / deleting schedules
-(cron syntax and workshop run payload shape), see this section.
-
-- **Tools**: `list_schedules`, `create_schedule`, `create_calendar_schedule`, `update_schedule`, `delete_schedule`, `trigger_schedule`, `get_schedule_runs`.
-- To view existing schedules, call `list_schedules`; it includes schedule IDs, type, mode, workshop mode, cron/calendar shape, timezone, enabled state, groups, and recent runtime state. `get_workflow_config` also includes a Schedules section when you are already inspecting broader workflow settings.
-- **Entry shape**:
   ```
   { "id": "...", "name": "...", "description": "...",
     "cron_expression": "0 9 * * 1-5", "timezone": "UTC",
@@ -143,7 +135,7 @@ Workflow schedules always use the workshop builder execution path. Do not create
 
 **Pulse never runs inline with a normal scheduled run.** A normal scheduled run does backup, execution-report publish, and run-summary notification only; Gate/Review/Fix/Finalize run separately, on the review schedule's own cadence, over whatever run backlog has accumulated. This applies regardless of how often the workflow runs: long Pulse-adjacent sessions reused across runs have caused real reliability problems independent of run frequency.
 
-Read this workflow's intended run frequency (or, for an existing workflow, its actual `get_schedule_runs` history) to choose the review schedule's INTERVAL — that remains a judgment call, balancing review latency against genuinely batched evidence; when in doubt, prefer more frequent over less, since Gate's own backlog reasoning already handles reviewing several accumulated runs in one pass cheaply. Check `run_retention_count` (workflow.json, default 3) against the interval chosen: if the workflow could produce more runs between reviews than retention preserves, raise it, since a rotated run folder beyond `run_retention_count` is permanently deleted. The lightweight per-run pass itself keeps re-checking this cadence on an ongoing basis as actual run volume changes — this is the one-time setup version of that same responsibility, not the only time it happens.
+Read this workflow's intended run frequency (or, for an existing workflow, its actual `get_schedule_runs` history) to choose the review schedule's INTERVAL — that remains a judgment call, balancing review latency against genuinely batched evidence; when in doubt, prefer more frequent over less, since Gate's own backlog reasoning already handles reviewing several accumulated runs in one pass cheaply. Check `run_retention_count` (workflow.json, default 10) against the interval chosen: if the workflow could produce more runs between reviews than retention preserves, raise it, since a rotated run folder beyond `run_retention_count` is permanently deleted. The lightweight per-run pass itself keeps re-checking this cadence on an ongoing basis as actual run volume changes — this is the one-time setup version of that same responsibility, not the only time it happens.
 
 ### Back up scheduled workflows
 
@@ -175,10 +167,6 @@ Confirm with the user before skipping backup on a recurring schedule.
 - **Good**: `"Review runs/iteration-0 for group-1, collect read-only reliability evidence, then let the parent fixer choose a bounded repair, an approved plan change, a Goal Advisor proposal, or no action."`
 
 Pulse module cadence is not encoded in schedule JSON. Pulse Gate stores module state in `db/db.sqlite` and decides which modules are due after each normal run.
-
-Do not create new `workshop_mode="optimizer"` schedules. Existing saved legacy
-values are handled by migration/backend compatibility; new continuous
-improvement uses normal Run mode plus Pulse.
 
 ## Shell & Discovery
 

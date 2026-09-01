@@ -158,7 +158,6 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 
 					// LLM config
 					refreshedKnowledgebase := true
-					refreshedLockKnowledgebase := false
 					log.Printf("[WORKFLOW_PHASE] Refresh LLMConfig: isNil=%v", caps.LLMConfig == nil)
 					if caps.LLMConfig != nil {
 						log.Printf("[WORKFLOW_PHASE] Refresh LLMConfig details: mode=%q tieredConfig=%v",
@@ -177,9 +176,6 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 						if caps.LLMConfig.UseKnowledgebase != nil {
 							refreshedKnowledgebase = *caps.LLMConfig.UseKnowledgebase
 						}
-						if caps.LLMConfig.LockKnowledgebase != nil {
-							refreshedLockKnowledgebase = *caps.LLMConfig.LockKnowledgebase
-						}
 					}
 
 					workshopSession.UpdatePresetSettings(
@@ -187,13 +183,12 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 						refreshedTools, toolsParsed,
 						caps.UseCodeExecutionMode,
 						refreshedKnowledgebase,
-						refreshedLockKnowledgebase,
 						refreshedSkills, skillsParsed,
 						secretEntries,
 					)
-					log.Printf("[WORKFLOW_PHASE] Refreshed settings from manifest: servers=%d tools=%d codeExec=%v kb=%v kbLock=%v skills=%d secrets=%d",
+					log.Printf("[WORKFLOW_PHASE] Refreshed settings from manifest: servers=%d tools=%d codeExec=%v kb=%v skills=%d secrets=%d",
 						len(selectedServers), len(refreshedTools), caps.UseCodeExecutionMode,
-						refreshedKnowledgebase, refreshedLockKnowledgebase, len(refreshedSkills), len(secretEntries))
+						refreshedKnowledgebase, len(refreshedSkills), len(secretEntries))
 				}
 			}
 		} else {

@@ -8,13 +8,15 @@ package services
 // A nil *NotificationDestination is equivalent to "no hints, do whatever your
 // configured default is" and preserves the pre-routing behavior.
 type NotificationDestination struct {
-	Slack        *SlackDest           // Slack bot channel/thread hint
-	SlackWebhook *SlackWebhookDest    // workflow-scoped one-way Incoming Webhook
-	WhatsApp     *WhatsAppDest        // WhatsApp recipient hint
-	Gmail        *GmailDest           // Gmail recipient hint
-	UserID       string               // workspace user ID, used to look up per-user preferences
-	WorkflowName string               // workflow identity added to workflow-scoped rich notifications
-	Content      *NotificationContent // optional typed per-channel content (nil = plain message only)
+	Slack           *SlackDest           // Slack bot channel/thread hint
+	SlackWebhook    *SlackWebhookDest    // workflow-scoped one-way Incoming Webhook
+	WhatsApp        *WhatsAppDest        // WhatsApp recipient hint
+	Gmail           *GmailDest           // Gmail recipient hint
+	UserID          string               // workspace user ID, used to look up per-user preferences
+	WorkflowName    string               // workflow identity added to workflow-scoped rich notifications
+	WorkspacePath   string               // trusted workflow workspace used by internal durable connectors
+	RouteSelections map[string]string    // trusted routing-step ID -> selected top-level route ID
+	Content         *NotificationContent // optional typed per-channel content (nil = plain message only)
 
 	// ExcludeChannels lists account-level connector names ("gmail", "slack",
 	// "whatsapp") to skip for this notification. Sourced from the workflow's
