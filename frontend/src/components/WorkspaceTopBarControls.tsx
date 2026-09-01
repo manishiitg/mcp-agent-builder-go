@@ -1,18 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { BrainCircuit, ChevronLeft, Download, MoreHorizontal, WandSparkles, X } from 'lucide-react'
+import { BrainCircuit, Download, MoreHorizontal } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 import LlmModalHost from './topbar/LlmModalHost'
 import RuntimeHealthControl from './topbar/RuntimeHealthControl'
 import NotificationsControl from './topbar/NotificationsControl'
 import AccountControl from './topbar/AccountControl'
 import { iconButtonClass } from './ui/IconPopover'
-import { SkillsSection } from './skills'
 import { useLLMStore } from '../stores'
 import { useIsElectron } from './topbar/useIsElectron'
-
-// Secrets moved into the workflow capabilities panel (alongside MCP), so this
-// menu no longer hosts them.
-type ToolPanel = 'skills'
 
 function ToolMenuItem({
   icon,
@@ -42,53 +37,6 @@ function ToolMenuItem({
   )
 }
 
-function FloatingToolPanel({
-  panel,
-  onBack,
-  onClose,
-}: {
-  panel: ToolPanel
-  onBack: () => void
-  onClose: () => void
-}) {
-  const config = {
-    skills: {
-      title: 'Skills',
-      icon: <WandSparkles className="h-4 w-4" />,
-      content: <SkillsSection />,
-    },
-  }[panel]
-
-  return (
-    <div className="fixed right-4 top-14 z-[45] w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-gray-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-800">
-      <div className="flex items-center justify-between gap-2 border-b border-gray-200 px-3 py-2 dark:border-slate-700">
-        <button
-          type="button"
-          onClick={onBack}
-          className="flex items-center gap-2 rounded-md px-2 py-1 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-slate-700"
-        >
-          <ChevronLeft className="h-4 w-4" />
-          <span className="flex items-center gap-2">
-            {config.icon}
-            {config.title}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-slate-700 dark:hover:text-gray-200"
-          aria-label="Close tools panel"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-      <div className="max-h-[75vh] overflow-y-auto p-3">
-        {config.content}
-      </div>
-    </div>
-  )
-}
-
 /**
  * WorkspaceTopBarControls - the config/account controls relocated from the
  * former left WorkspaceSidebar. A slim container that composes one focused
@@ -96,7 +44,6 @@ function FloatingToolPanel({
  */
 export default function WorkspaceTopBarControls() {
   const [menuOpen, setMenuOpen] = useState(false)
-  const [activePanel, setActivePanel] = useState<ToolPanel | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const setShowLLMModal = useLLMStore(s => s.setShowLLMModal)
   const llmCount = useLLMStore(s => s.savedLLMs.length)
@@ -119,11 +66,6 @@ export default function WorkspaceTopBarControls() {
       document.removeEventListener('keydown', onKeyDown)
     }
   }, [menuOpen])
-
-  const openPanel = (panel: ToolPanel) => {
-    setActivePanel(panel)
-    setMenuOpen(false)
-  }
 
   return (
     <TooltipProvider delayDuration={400}>
@@ -165,12 +107,6 @@ export default function WorkspaceTopBarControls() {
                     setShowLLMModal(true)
                   }}
                 />
-                <ToolMenuItem
-                  icon={<WandSparkles className="h-4 w-4" />}
-                  label="Skills"
-                  detail="Installed capabilities"
-                  onClick={() => openPanel('skills')}
-                />
                 {!isElectron && (
                   <a
                     href="https://github.com/manishiitg/coding-agent-loop/releases/latest"
@@ -193,16 +129,6 @@ export default function WorkspaceTopBarControls() {
           )}
         </div>
       </div>
-      {activePanel && (
-        <FloatingToolPanel
-          panel={activePanel}
-          onBack={() => {
-            setActivePanel(null)
-            setMenuOpen(true)
-          }}
-          onClose={() => setActivePanel(null)}
-        />
-      )}
     </TooltipProvider>
   )
 }

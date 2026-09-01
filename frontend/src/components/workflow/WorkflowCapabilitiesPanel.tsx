@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { BrainCircuit, KeyRound, LoaderCircle, Monitor, Puzzle, Save, Server } from 'lucide-react'
 import { ToolSelectionSection } from '../ToolSelectionSection'
 import { SkillSelectionSection } from '../skills/SkillSelectionSection'
+import SkillsManagerPanel from '../skills/SkillsManagerPanel'
 import { SecretSelectionSection } from '../secrets/SecretSelectionSection'
 import SecretsManagerPanel from '../secrets/SecretsManagerPanel'
 import BrowserAutomationSettings, { type BrowserAutomationMode } from '../BrowserAutomationSettings'
@@ -172,12 +173,21 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
           <>
             {error && <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
             {section === 'skills' && (
-              <div className="min-h-0 flex-1">
-                <SkillSelectionSection
-                  selectedSkills={capabilities.selected_skills}
-                  onSkillChange={(selected_skills) => setCapabilities(current => ({ ...current, selected_skills }))}
-                  fillAvailableHeight
-                />
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="shrink-0 overflow-y-auto">
+                  <SkillSelectionSection
+                    selectedSkills={capabilities.selected_skills}
+                    onSkillChange={(selected_skills) => setCapabilities(current => ({ ...current, selected_skills }))}
+                  />
+                </div>
+                <div className="mt-3 flex min-h-0 flex-1 flex-col pt-1">
+                  <div className="shrink-0 text-sm font-medium text-muted-foreground">
+                    Manage skills
+                  </div>
+                  <div className="mt-3 flex min-h-0 flex-1 flex-col">
+                    <SkillsManagerPanel compact />
+                  </div>
+                </div>
               </div>
             )}
             {section === 'mcp' && (
