@@ -168,12 +168,23 @@ type ToolBinding struct {
 	Presentation *PresentationBinding `json:"presentation,omitempty" yaml:"presentation,omitempty"`
 }
 
-// PresentationBinding names the presentation kind a tool produces. The kind
-// must match a renderer registered on the frontend (getPresentationRenderer)
-// and is the same string a future product's own tool would declare — one
-// contract, reused, not one bespoke wiring per product.
+// PresentationBinding names the presentation kind a tool produces and the
+// compact activity row that accompanies its update in the transcript. Keeping
+// both facts beside the tool declaration means a future presentation cannot
+// accidentally fall through to an unrecognised raw event card in the UI.
 type PresentationBinding struct {
-	Kind string `json:"kind" yaml:"kind"`
+	Kind     string                       `json:"kind" yaml:"kind"`
+	Activity *PresentationActivityBinding `json:"activity" yaml:"activity"`
+}
+
+// PresentationActivityBinding is product-owned copy for the shared activity
+// row. It deliberately contains display text, not a frontend component name:
+// the platform owns the consistent row while product.yaml owns what happened
+// and where the user can inspect it.
+type PresentationActivityBinding struct {
+	Label       string `json:"label" yaml:"label"`
+	Destination string `json:"destination" yaml:"destination"`
+	Detail      string `json:"detail" yaml:"detail"`
 }
 
 // CommandBinding is a slash command a product ships with itself. The platform

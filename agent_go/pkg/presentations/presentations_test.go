@@ -47,6 +47,7 @@ func validPresentation() Presentation {
 		Title:         "Launch video",
 		WorkspacePath: "Chats/Video Studio/projects/demo",
 		SessionID:     "video-studio:project:demo",
+		Activity:      &orchestratorevents.PresentationActivity{Label: "Video ready", Destination: "Videos panel", Detail: "Ready to review"},
 		Payload:       map[string]interface{}{"path": "outputs/final.mp4", "verdict": "pass"},
 		Resources:     []map[string]string{{"kind": "workspace.file", "path": "outputs/final.mp4", "role": "primary"}},
 	}
@@ -155,7 +156,7 @@ func TestUpsertReturnsEnoughToRenderWithoutASecondFetch(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 	if event.PresentationID == "" || event.Kind != "media.video" || event.Title == "" ||
-		event.WorkspacePath == "" || len(event.Payload) == 0 {
+		event.WorkspacePath == "" || len(event.Payload) == 0 || event.Activity == nil || event.Activity.Destination != "Videos panel" {
 		t.Fatalf("event is missing fields a listener needs: %+v", event)
 	}
 }

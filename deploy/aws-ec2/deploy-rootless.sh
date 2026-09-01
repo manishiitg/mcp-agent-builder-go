@@ -52,6 +52,7 @@ else
 fi
 (cd "$WORKSPACE_ROOT" && GOWORK="$DEPLOY_GOWORK" GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o "$BUILD_DIR/bin/video-studio-workspace" "$BUILDER_REPO_ROOT/workspace")
 (cd "$WORKSPACE_ROOT" && GOWORK="$DEPLOY_GOWORK" GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o "$BUILD_DIR/bin/video-studio-landlock-runner" "$BUILDER_REPO_ROOT/workspace/cmd/landlock-runner")
+(cd "$WORKSPACE_ROOT" && GOWORK="$DEPLOY_GOWORK" GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$BUILD_DIR/bin/workspace-security.test" "$BUILDER_REPO_ROOT/workspace/security")
 (cd "$WORKSPACE_ROOT" && GOWORK="$DEPLOY_GOWORK" GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o "$BUILD_DIR/bin/mcpbridge" ./mcpagent/cmd/mcpbridge)
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o "$BUILD_DIR/bin/video-studio-gateway" "$SCRIPT_DIR/server/auth-gateway.go"
 if [[ ! -x "$REPO_ROOT/frontend/node_modules/.bin/tsc" ]]; then
@@ -73,6 +74,7 @@ aws_rts secretsmanager get-secret-value --secret-id "$GLOBAL_SECRETS_SECRET_ID" 
 SSH=(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i "$SSH_KEY_PATH" "video-studio@$HOST_IP")
 REMOTE_APP="/var/lib/video-studio/video-studio"
 REMOTE_RELEASE="$REMOTE_APP/releases/$RELEASE_ID"
+REMOTE_TOOLS_DIR="/var/lib/video-studio/.local"
 REMOTE_BROWSER_PATH="$("${SSH[@]}" "set -e; export HOME=/var/lib/video-studio; npx --yes 'hyperframes@$HYPERFRAMES_VERSION' browser ensure >/dev/null; npx --yes 'hyperframes@$HYPERFRAMES_VERSION' browser path | tail -n 1")"
 case "$REMOTE_BROWSER_PATH" in
   /var/lib/video-studio/.cache/hyperframes/chrome/*/chrome-headless-shell) ;;
@@ -81,6 +83,42 @@ esac
 "${SSH[@]}" "test -x '$REMOTE_BROWSER_PATH'; command -v agent-browser >/dev/null"
 rsync -az -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i $SSH_KEY_PATH" "$BUILD_DIR/" "video-studio@$HOST_IP:$REMOTE_RELEASE/"
 rsync -az --chmod=ugo=,u=rw -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i $SSH_KEY_PATH" "$GLOBAL_FILE" "video-studio@$HOST_IP:/var/lib/video-studio/video-studio/.globals-$RELEASE_ID"
+"${SSH[@]}" bash -s -- "$REMOTE_RELEASE" "$REMOTE_APP" "$REMOTE_TOOLS_DIR" "$RELEASE_ID" <<'REMOTE_PREFLIGHT'
+set -euo pipefail
+remote_release="$1"
+remote_app="$2"
+tools_dir="$3"
+release_id="$4"
+env_file="$remote_app/.env"
+global_file="$remote_app/.globals-$release_id"
+
+install -d -m 0755 "$HOME/Downloads" "$remote_app/logs" /data/video-studio/docs/Downloads
+ln -sfn "$remote_app/logs" "$remote_release/logs"
+test -x "$remote_release/bin/video-studio-landlock-runner"
+# This is stronger than checking the host sysctl: it proves that the scoped
+# AppArmor exception and the fallback itself both work for this release.
+"$remote_release/bin/workspace-security.test" -test.run TestMountNamespaceFallbackEnforcesLandlockRejectedOverlapPolicy -test.v
+
+# The normal release step retains MCP_API_URL, so correct it before that
+# idempotent merge instead of trusting an older, Docker-only value.
+awk '!/^MCP_API_URL=/' "$env_file" > "$env_file.next"
+echo 'MCP_API_URL=http://127.0.0.1:8000' >> "$env_file.next"
+chmod 600 "$env_file.next"
+mv "$env_file.next" "$env_file"
+
+printf 'prefix=%s\n' "$tools_dir" > "$HOME/.npmrc"
+if ! test -x "$tools_dir/bin/claude"; then
+  npm install -g --prefix "$tools_dir" @anthropic-ai/claude-code
+fi
+PATH="$tools_dir/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH
+test "$(HOME="$HOME" npm config get prefix)" = "$tools_dir"
+token="$(sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' "$global_file" | head -n 1)"
+test -n "$token"
+CLAUDE_CODE_OAUTH_TOKEN="$token" claude -p --output-format json <<< 'say OK' | jq -e '.is_error == false' >/dev/null
+REMOTE_PREFLIGHT
 "${SSH[@]}" "set -e; browser_dir='$(dirname "$REMOTE_BROWSER_PATH")'; browser_wrapper=\"\$browser_dir/agentworks-chrome-headless\"; install -m 0755 '$REMOTE_RELEASE/browser/agentworks-chrome-headless' \"\$browser_wrapper\"; env_file='$REMOTE_APP/.env'; global_file='$REMOTE_APP/.globals-$RELEASE_ID'; awk '!/^GLOBAL_SECRET_|^CLAUDE_CODE_OAUTH_TOKEN=|^AGENT_BROWSER_EXECUTABLE_PATH=/' \"\$env_file\" > \"\$env_file.next\"; echo \"AGENT_BROWSER_EXECUTABLE_PATH=\$browser_wrapper\" >> \"\$env_file.next\"; grep -q '^MCP_API_URL=' \"\$env_file.next\" || echo 'MCP_API_URL=http://127.0.0.1:8000' >> \"\$env_file.next\"; cat \"\$global_file\" >> \"\$env_file.next\"; chmod 600 \"\$env_file.next\"; mv \"\$env_file.next\" \"\$env_file\"; rm -f \"\$global_file\"; find /data/video-studio/docs/_users -type d -path '*/Chats/Video Studio/projects' -print0 | while IFS= read -r -d '' projects_root; do find \"\$projects_root\" -mindepth 1 -maxdepth 1 -type d -print0 | while IFS= read -r -d '' project; do install -d -m 0755 \"\$project/.claude/skills\"; rsync -a --delete '$REMOTE_RELEASE/claude-skills/' \"\$project/.claude/skills/\"; rm -rf \"\$project/skills/video-studio\"; done; done; install -d -m 0755 \"\$HOME/.config/systemd/user\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-workspace.service' \"\$HOME/.config/systemd/user/video-studio-workspace.service\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-agent.service' \"\$HOME/.config/systemd/user/video-studio-agent.service\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-gateway.service' \"\$HOME/.config/systemd/user/video-studio-gateway.service\"; systemctl --user daemon-reload; ln -sfn '$REMOTE_RELEASE' '$REMOTE_APP/current'; systemctl --user restart video-studio-workspace video-studio-agent video-studio-gateway; systemctl --user is-active video-studio-agent video-studio-workspace video-studio-gateway; grep -Fq 'apiBaseUrl: "",' '$REMOTE_APP/current/frontend/runtime-config.js'; grep -Fq 'workspaceApiBaseUrl: "/api/wp",' '$REMOTE_APP/current/frontend/runtime-config.js'"
+
+"${SSH[@]}" "set -e; test -s '$REMOTE_APP/logs/agent.log'; tail -n 5 '$REMOTE_APP/logs/agent.log'"
 
 echo "Rootless Video Studio release deployed: https://video.realtrainingsys.com"

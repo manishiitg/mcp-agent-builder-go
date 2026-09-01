@@ -1478,6 +1478,12 @@ export interface PresentationUpdatedEvent {
   payload?: {
     [k: string]: unknown;
   };
+  activity?: PresentationActivity;
+}
+export interface PresentationActivity {
+  label?: string;
+  destination?: string;
+  detail?: string;
 }
 export interface StepTokenUsageEvent {
   timestamp?: string;

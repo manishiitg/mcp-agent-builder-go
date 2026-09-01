@@ -110,6 +110,24 @@ const result = await fal.subscribe("<resolved-model-id>", {
 });
 ```
 
+### Long-running video jobs: use a durable request, not a short blocking call
+
+Video generation is asynchronous provider work, not an instant shell command.
+For a single H3 shot, budget up to **15 minutes** when the calling tool permits
+it, surface queue/progress updates, and keep one request alive rather than
+creating another paid job. Do not declare a job failed merely because a short
+local command or tool wait expires.
+
+For a video job, prefer the submit/poll flow even when only one shot is in
+flight: it gives the production a durable `request_id` to resume. Persist the
+model ID, request ID, input, and submission timestamp in `production.json`
+immediately after submission. Poll the same request at a measured interval
+(for example, 5--10 seconds), report meaningful state changes (`IN_QUEUE`,
+`IN_PROGRESS`, `COMPLETED`), and retrieve the result exactly once when it is
+complete. If a local wait times out or the chat reconnects, resume with that
+request ID; never submit a replacement until fal reports this request failed
+or the user expressly approves a paid retry.
+
 For several independent jobs in flight at once (e.g. generating multiple
 shots in parallel), use the non-blocking submit/poll pair instead so one slow
 job does not serialize the rest:
@@ -118,15 +136,17 @@ job does not serialize the rest:
 const { request_id } = await fal.queue.submit("<resolved-model-id>", {
   input: { /* ... */ },
 });
-// fal.queue.status(modelId, { requestId: request_id }) to poll, then
+// Save request_id durably before waiting. Then use
+// fal.queue.status(modelId, { requestId: request_id }) to poll, and
 // fal.queue.result(modelId, { requestId: request_id }) once completed;
 // confirm the exact method names against the installed package version,
 // since client APIs move independently of this skill.
 ```
 
-Treat a job that errors or times out as a real failure to report with the
-request ID and error payload -- do not silently retry with different input
-hoping one succeeds, and do not fabricate a result if generation fails.
+Treat a provider-reported failure as a real failure to report with the request
+ID and error payload -- do not silently retry with different input hoping one
+succeeds, and do not fabricate a result if generation fails. A local timeout
+is not a provider failure: rejoin and poll the existing request first.
 
 ## Sending a local file as input
 

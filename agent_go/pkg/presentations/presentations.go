@@ -50,6 +50,10 @@ type Presentation struct {
 	Title         string
 	WorkspacePath string
 	SessionID     string
+	// Activity is copied from the tool's product.yaml declaration into the
+	// transient event. It is intentionally not persisted with the presentation
+	// row: it describes the announcement, not the durable media/document data.
+	Activity *orchestratorevents.PresentationActivity
 	// Payload, Resources, Actions are product-owned shapes specific to Kind.
 	// This package does not interpret them; it stores and forwards them
 	// verbatim, the same way the frontend's kind-keyed renderer registry
@@ -198,5 +202,6 @@ func Upsert(ctx context.Context, client *workspace.Client, p Presentation) (Even
 		Title:          title,
 		WorkspacePath:  workspacePath,
 		Payload:        payload,
+		Activity:       p.Activity,
 	}, nil
 }

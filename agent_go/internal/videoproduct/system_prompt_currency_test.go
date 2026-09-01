@@ -33,13 +33,6 @@ func TestSystemPromptMatchesTheProductItDescribes(t *testing.T) {
 		}
 	}
 
-	// Every routable pipeline must be named, or the agent cannot offer it.
-	for _, pipeline := range pipelineRegistry {
-		if !strings.Contains(text, "`"+pipeline.ID+"`") {
-			t.Fatalf("the system prompt does not name the %s workflow, so it is unreachable in conversation", pipeline.ID)
-		}
-	}
-
 	// The panel name is user-facing: the prompt tells the agent to say where
 	// the video is, and naming a panel that no longer exists sends the user
 	// looking for a tab that is not there.
@@ -55,12 +48,27 @@ func TestSystemPromptMatchesTheProductItDescribes(t *testing.T) {
 	if !strings.Contains(strings.ToLower(text), "approval of a storyboard is not approval to spend") {
 		t.Fatal("the system prompt no longer warns that an approved plan is not approval to spend")
 	}
-	if !strings.Contains(text, "project base estimate") || !strings.Contains(text, "approved retry allowance") {
-		t.Fatal("the system prompt no longer requires a costed model choice before paid generation")
+	if !strings.Contains(text, "live H3 rate") || !strings.Contains(text, "bounded H3 estimate") || !strings.Contains(text, "approved retry allowance") {
+		t.Fatal("the system prompt no longer requires a bounded, live-rate H3 estimate before paid generation")
+	}
+	for _, timingContract := range []string{
+		"H3 waiting rule",
+		"up to 15 minutes",
+		"save the request ID immediately",
+		"never resubmit, abandon, or call the clip failed merely because a short tool wait elapsed",
+	} {
+		if !strings.Contains(text, timingContract) {
+			t.Fatalf("the system prompt lost the H3 async timing contract: missing %q", timingContract)
+		}
 	}
 
-	if strings.Contains(text, "run_full_workflow") || !strings.Contains(text, "execute_step") {
-		t.Fatal("Video Studio must describe individual stage execution only")
+	for _, forbidden := range []string{
+		"run_full_workflow", "execute_step", "query_step", "send_step_message",
+		"stop_step", "stop_all_executions", "list_executions",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("Video Studio must not describe workflow tool %q", forbidden)
+		}
 	}
 	if !strings.Contains(text, "MCP-only in this browser product") ||
 		!strings.Contains(text, "terminal-style selectors") ||
@@ -79,7 +87,7 @@ func TestSystemPromptMatchesTheProductItDescribes(t *testing.T) {
 		}
 	}
 	for _, audioContract := range []string{
-		"For both direct chat and individual workflow steps",
+		"Use this production order in direct chat",
 		"video-look-sound",
 		"locations/backgrounds",
 		"native synchronized dialogue",
@@ -98,14 +106,14 @@ func TestSystemPromptMatchesTheProductItDescribes(t *testing.T) {
 			t.Fatalf("the system prompt lost the direct-chat look/sound contract: missing %q", audioContract)
 		}
 	}
-	for _, contract := range []string{"specialist skills", "context dependencies", "validation schema", "human_input", "Do not ask the user for a step ID or group name"} {
+	for _, contract := range []string{"direct chat", "relevant attached skills", "Do not expose, offer, or ask the user to choose workflow machinery"} {
 		if !strings.Contains(text, contract) {
-			t.Fatalf("the system prompt no longer explains execute_step's recipe contract: missing %q", contract)
+			t.Fatalf("the system prompt no longer requires skill-led direct chat: missing %q", contract)
 		}
 	}
-	for _, source := range []string{"planning/plan.json", "planning/step_config.json", "validation_schema.files", "enabled_skills"} {
-		if !strings.Contains(text, source) {
-			t.Fatalf("the system prompt no longer gives the agent a source-of-truth step discovery query: missing %q", source)
+	for _, tool := range []string{"read_image", "search_web_llm", "photoreal cinematic video", "Instagram/Reel brief"} {
+		if !strings.Contains(text, tool) {
+			t.Fatalf("the system prompt lost Video Studio's cinematic research contract: missing %q", tool)
 		}
 	}
 }

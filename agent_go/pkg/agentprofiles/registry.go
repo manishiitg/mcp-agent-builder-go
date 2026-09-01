@@ -181,6 +181,10 @@ func cloneProfile(profile Profile) Profile {
 		cloned.Tools[i].Config = append(json.RawMessage(nil), binding.Config...)
 		if binding.Presentation != nil {
 			presentation := *binding.Presentation
+			if binding.Presentation.Activity != nil {
+				activity := *binding.Presentation.Activity
+				presentation.Activity = &activity
+			}
 			cloned.Tools[i].Presentation = &presentation
 		}
 	}

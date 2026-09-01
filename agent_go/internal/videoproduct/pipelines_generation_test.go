@@ -20,11 +20,13 @@ func TestEverySpendingStageCarriesTheApprovalGate(t *testing.T) {
 		"longform-narration":           true,
 		"longform-anchor-shot":         true,
 		"longform-next-shot":           true,
+		"longform-seam-bridge":         true,
 		"shortform-characters":         true,
 		"shortform-visual-development": true,
 		"shortform-narration":          true,
 		"shortform-anchor-shot":        true,
 		"shortform-next-shot":          true,
+		"shortform-seam-bridge":        true,
 	}
 
 	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
@@ -65,6 +67,8 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 		{"shortform-shotlist", "shortform-anchor-shot"},
 		{"shortform-anchor-shot", "shortform-next-shot"},
 		{"shortform-next-shot", "shortform-seam-proof"},
+		{"shortform-seam-proof", "shortform-seam-bridge"},
+		{"shortform-seam-bridge", "shortform-stitch-plan"},
 		{"shortform-seam-proof", "shortform-stitch-plan"},
 		{"shortform-stitch-plan", "shortform-assemble"},
 		{"shortform-assemble", "shortform-check"},
@@ -125,9 +129,15 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 		}
 	}
 	seamProof := shortformPipeline.Stages[index["shortform-seam-proof"]]
-	for _, required := range []string{"two-clip seam-preview MP4", "show_video", "Only a passing proof"} {
+	for _, required := range []string{"two-clip seam-preview MP4", "show_video", "Only a passing proof", "hard cut or crossfade"} {
 		if !strings.Contains(seamProof.Description, required) {
 			t.Fatalf("short-form seam-proof step is missing %q", required)
+		}
+	}
+	seamBridge := shortformPipeline.Stages[index["shortform-seam-bridge"]]
+	for _, required := range []string{"minimax/h3/image-to-video", "image_url", "end_image_url", "prompt_expansion_mode: \"quality\"", "rerun Prove the latest seam"} {
+		if !strings.Contains(seamBridge.Description, required) {
+			t.Fatalf("short-form seam-bridge step is missing %q", required)
 		}
 	}
 
@@ -230,6 +240,8 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 		{"longform-shotlist", "longform-anchor-shot"},
 		{"longform-anchor-shot", "longform-next-shot"},
 		{"longform-next-shot", "longform-seam-proof"},
+		{"longform-seam-proof", "longform-seam-bridge"},
+		{"longform-seam-bridge", "longform-stitch-plan"},
 		{"longform-seam-proof", "longform-stitch-plan"},
 		{"longform-stitch-plan", "longform-assemble"},
 		{"longform-assemble", "longform-check"},
@@ -264,9 +276,15 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 		}
 	}
 	seamProof := longformPipeline.Stages[index["longform-seam-proof"]]
-	for _, required := range []string{"two-clip seam-preview MP4", "show_video", "Only a passing proof"} {
+	for _, required := range []string{"two-clip seam-preview MP4", "show_video", "Only a passing proof", "hard cut or crossfade"} {
 		if !strings.Contains(seamProof.Description, required) {
 			t.Fatalf("long-form seam-proof step is missing %q", required)
+		}
+	}
+	seamBridge := longformPipeline.Stages[index["longform-seam-bridge"]]
+	for _, required := range []string{"minimax/h3/image-to-video", "image_url", "end_image_url", "prompt_expansion_mode: \"quality\"", "rerun Prove the latest seam"} {
+		if !strings.Contains(seamBridge.Description, required) {
+			t.Fatalf("long-form seam-bridge step is missing %q", required)
 		}
 	}
 }

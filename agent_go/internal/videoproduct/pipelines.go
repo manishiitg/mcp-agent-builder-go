@@ -126,6 +126,12 @@ func qualityReviewDescription(candidateSource, markdownOutput string) string {
 // inside these pipelines, not a separate product/infographic route.
 var pipelineRegistry = []*Pipeline{shortformPipeline, longformPipeline, qualityPipeline}
 
+// Every cinematic workflow stage receives the same route invariant. Some
+// older stage prose still discusses generic model-selection tradeoffs for the
+// benefit of historical plan readers; this current policy is appended after
+// that prose so the executable contract cannot drift back to another model.
+const h3ReferenceWorkflowInvariant = "\n\nVideo Studio route invariant: every paid generated-video clip uses MiniMax H3 on Fal at default `resolution: \"480P\"` with `prompt_expansion_mode: \"quality\"`. Use `768P` only when the user explicitly requests and approves its higher cost. Anchors and normal continuations use `minimax/h3/reference-to-video`: send approved reference images and, for a continuation, the accepted immediate predecessor in `reference_video_urls` as Video 1. A seam bridge is the single exception: only after a direct-cut seam proof visibly fails, use `minimax/h3/image-to-video` with its verified `image_url` and `end_image_url` boundary-frame fields to generate a reviewable bridge. Do not choose another provider, model, H3 route, or resolution. Never use a hard cut, crossfade, or a bridge to conceal unrelated clips; a failed seam remains failed until the replacement boundary passes review."
+
 func init() {
 	// Attach descriptions by stage id so the definitions above stay scannable.
 	// Keep the retired infographic definition initialized only so legacy-plan
@@ -146,6 +152,9 @@ func init() {
 					pipeline.Stages[i].Description = text
 					break
 				}
+			}
+			if (pipeline.ID == "shortform" || pipeline.ID == "longform") && pipeline.Stages[i].Description != "" {
+				pipeline.Stages[i].Description += h3ReferenceWorkflowInvariant
 			}
 		}
 	}

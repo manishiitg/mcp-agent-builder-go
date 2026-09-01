@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -111,7 +112,12 @@ func (api *StreamingAPI) handleAgentProfileChatQuery(w http.ResponseWriter, r *h
 	// This is the migration seam: product clients now have a stable minimal API;
 	// the shared turn runner can be extracted from handleQuery behind this seam
 	// without another frontend migration.
-	forwarded := r.Clone(r.Context())
+	// The rootless product gateway identifies its loopback caller as the
+	// product (for example "video-studio"), while a single-user deployment's
+	// durable workspace remains owned by DEFAULT_USER_ID. Keep that gateway
+	// identity out of the shared query path so the folder guard, project
+	// initializer, history and registry all address the same project files.
+	forwarded := r.Clone(productWorkspaceContext(r.Context()))
 	forwarded.Body = io.NopCloser(bytes.NewReader(encoded))
 	forwarded.ContentLength = int64(len(encoded))
 	forwarded.Header = r.Header.Clone()
@@ -181,10 +187,7 @@ func (api *StreamingAPI) handleRotateAgentProfileConversation(w http.ResponseWri
 		writeAgentProfileError(w, http.StatusServiceUnavailable, "agent profiles are unavailable")
 		return
 	}
-	userID := GetUserIDFromContext(r.Context())
-	if userID == "" {
-		userID = "default"
-	}
+	userID := productWorkspaceUserID(r.Context())
 	profile, err := api.agentProfiles.Resolve(strings.TrimSpace(mux.Vars(r)["id"]), 0, userID)
 	if err != nil {
 		writeAgentProfileError(w, http.StatusNotFound, "agent profile not found")
@@ -208,10 +211,7 @@ func (api *StreamingAPI) handleRotateAgentProfileConversation(w http.ResponseWri
 }
 
 func (api *StreamingAPI) resolveAgentProfileConversation(r *http.Request, profile agentprofiles.Profile, requestedKey string) (ProductConversationRecord, error) {
-	userID := GetUserIDFromContext(r.Context())
-	if userID == "" {
-		userID = "default"
-	}
+	userID := productWorkspaceUserID(r.Context())
 	binding, err := resolveProductConversationBinding(r.Context(), userID, profile, requestedKey)
 	if err != nil {
 		return ProductConversationRecord{}, err
@@ -237,6 +237,34 @@ func (api *StreamingAPI) resolveAgentProfileConversation(r *http.Request, profil
 		return ProductConversationRecord{}, fmt.Errorf("product conversation session belongs to another user")
 	}
 	return record, nil
+}
+
+// productWorkspaceUserID preserves true per-user isolation where it is
+// enabled. A dedicated single-user product deployment is different: its
+// gateway uses an internal product principal for the reverse-proxy JWT, but
+// all durable project data belongs to the configured default owner.
+func productWorkspaceUserID(ctx context.Context) string {
+	if !IsMultiUserMode() {
+		return GetDefaultUserID()
+	}
+	return GetUserIDFromContext(ctx)
+}
+
+// productWorkspaceContext makes the downstream shared /query path use the
+// same owner chosen by productWorkspaceUserID. It deliberately leaves every
+// other claim intact (including access level), changing only the workspace
+// namespace in the single-user gateway case.
+func productWorkspaceContext(ctx context.Context) context.Context {
+	if IsMultiUserMode() {
+		return ctx
+	}
+	claims := GetUserFromContext(ctx)
+	if claims == nil {
+		return ctx
+	}
+	copy := *claims
+	copy.UserID = GetDefaultUserID()
+	return context.WithValue(ctx, UserContextKey, &copy)
 }
 
 func listAgentProfilesHandler(registry *agentprofiles.Registry) http.HandlerFunc {

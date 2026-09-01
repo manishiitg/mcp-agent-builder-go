@@ -181,9 +181,17 @@ func TestValidateRejectsAMalformedPresentationKind(t *testing.T) {
 
 func TestValidateAcceptsADottedLowercasePresentationKind(t *testing.T) {
 	profile := validProfile()
-	profile.Tools[0].Presentation = &PresentationBinding{Kind: "media.video"}
+	profile.Tools[0].Presentation = &PresentationBinding{Kind: "media.video", Activity: &PresentationActivityBinding{Label: "Video ready", Destination: "Videos panel", Detail: "Ready to review"}}
 	if err := Validate(profile); err != nil {
 		t.Fatalf("valid presentation kind was rejected: %v", err)
+	}
+}
+
+func TestValidateRequiresTranscriptActivityForAPresentation(t *testing.T) {
+	profile := validProfile()
+	profile.Tools[0].Presentation = &PresentationBinding{Kind: "media.video"}
+	if err := Validate(profile); err == nil || !strings.Contains(err.Error(), "activity.label") {
+		t.Fatalf("presentation without its YAML activity should be rejected, got %v", err)
 	}
 }
 
@@ -193,7 +201,7 @@ func TestValidateAcceptsADottedLowercasePresentationKind(t *testing.T) {
 // — the same aliasing risk the existing Config clone already guards against.
 func TestClonedProfileDoesNotAliasThePresentationBinding(t *testing.T) {
 	profile := validProfile()
-	profile.Tools[0].Presentation = &PresentationBinding{Kind: "media.video"}
+	profile.Tools[0].Presentation = &PresentationBinding{Kind: "media.video", Activity: &PresentationActivityBinding{Label: "Video ready", Destination: "Videos panel", Detail: "Ready to review"}}
 	cloned := cloneProfile(profile)
 	if cloned.Tools[0].Presentation == profile.Tools[0].Presentation {
 		t.Fatal("clone shares the original's *PresentationBinding pointer")
@@ -201,6 +209,10 @@ func TestClonedProfileDoesNotAliasThePresentationBinding(t *testing.T) {
 	cloned.Tools[0].Presentation.Kind = "media.image"
 	if profile.Tools[0].Presentation.Kind != "media.video" {
 		t.Fatal("mutating the clone's Presentation changed the original")
+	}
+	cloned.Tools[0].Presentation.Activity.Label = "Image ready"
+	if profile.Tools[0].Presentation.Activity.Label != "Video ready" {
+		t.Fatal("mutating the clone's Presentation activity changed the original")
 	}
 }
 

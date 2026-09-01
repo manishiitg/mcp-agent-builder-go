@@ -5,6 +5,12 @@ import { buildCleanConversationItems, buildProductionActivityTurns } from '../ut
 import type { ProductionActivityItem, ProductionActivityTurn } from '../utils/cleanConversation'
 import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
 
+// The agent's foreground and background status travel in separate event
+// updates. During a hand-off both can briefly read false even though work is
+// still underway. Keep the product-facing working row mounted through that
+// hand-off so it does not jump in and out of the conversation.
+const WORKING_INDICATOR_HIDE_DELAY_MS = 900
+
 export interface CleanConversationSurfaceProps {
   events: PollingEvent[]
   isStreaming: boolean
@@ -85,8 +91,22 @@ export function CleanConversationSurface({
 }: CleanConversationSurfaceProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [retryingFailureId, setRetryingFailureId] = useState<string | null>(null)
+  const [showWorkingIndicator, setShowWorkingIndicator] = useState(isStreaming)
   const items = useMemo(() => buildCleanConversationItems(events), [events])
   const activityTurns = useMemo(() => buildProductionActivityTurns(events), [events])
+
+  useEffect(() => {
+    if (isStreaming) {
+      setShowWorkingIndicator(true)
+      return
+    }
+
+    const hideTimer = window.setTimeout(
+      () => setShowWorkingIndicator(false),
+      WORKING_INDICATOR_HIDE_DELAY_MS,
+    )
+    return () => window.clearTimeout(hideTimer)
+  }, [isStreaming])
 
   // Each turn's activity renders after that turn's messages and before the
   // next thing the user typed, so a new message no longer takes the previous
@@ -222,14 +242,14 @@ export function CleanConversationSurface({
 
         {trailingActivity ? <ProductionActivityDetails items={trailingActivity.items} /> : null}
 
-        {isStreaming && !streamingText.trim() ? (
+        {showWorkingIndicator && !streamingText.trim() ? (
           <div className="flex items-center gap-2 text-xs text-slate-400" role="status" aria-live="polite" data-testid="clean-working-indicator">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-400" />
             <span>Working…</span>
           </div>
         ) : null}
 
-        {isStreaming && streamingText.trim() ? (
+        {showWorkingIndicator && streamingText.trim() ? (
           <article className="flex w-full items-start gap-3" data-testid="clean-working-message">
             <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300"><Sparkles className="h-4 w-4" /></span>
             <div className="min-w-0 flex-1 rounded-2xl rounded-tl-md border border-slate-800 bg-slate-900 px-4 py-3 shadow-sm">

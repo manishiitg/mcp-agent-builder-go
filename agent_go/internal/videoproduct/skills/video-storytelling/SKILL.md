@@ -198,12 +198,11 @@ overlay that region. Do not "say goodbye"; tease what's next instead.
 
 ## Where this fits
 
-- Use `video-creation` to plan the shot list and own the overall brief.
+- Use `longform-cinematic-video` to plan the shot list and own the overall brief.
 - Use this skill to structure the narrative arc and pacing before writing a
   shot-by-shot storyboard.
-- Use `video-model-selection` to choose a model per shot, and
-  `video-cinematography` to turn each beat into camera/lighting/consistency
-  direction, once the arc from this skill is in place.
+- Use `video-cinematography` to turn each beat into camera/lighting/consistency
+  direction for MiniMax H3 once the arc from this skill is in place.
 - Use `video-editing` to assemble the results according to the chapter/beat
   structure planned here, `video-quality` before presenting any version as
   complete.

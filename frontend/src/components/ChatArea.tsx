@@ -423,6 +423,11 @@ export interface ChatContentRendererProps {
   isStreaming: boolean
   isRestoring: boolean
   streamingText: string
+  streamingStatus?: string
+  hasOlder?: boolean
+  loadingOlder?: boolean
+  historyError?: string
+  onLoadOlder?: () => void
   landingContent?: ReactNode
   onRetryLastMessage?: () => void | Promise<void>
 }
@@ -3476,7 +3481,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           around the fixed-height terminal box. */}
       <div ref={chatContentRef} className={`flex-1 ${shouldUseFullHeightContent ? 'overflow-hidden' : 'overflow-y-auto'} overflow-x-hidden min-w-0 relative overscroll-y-none ${compact ? 'text-sm' : ''}`} style={{ scrollBehavior: 'auto' }}>
 
-        <div className={`min-w-0 ${shouldUseFullHeightContent ? 'flex h-full flex-col' : 'min-h-full'} ${compact ? 'px-2 pb-2' : 'px-3 pb-4'}`}>
+        <div className={`min-w-0 ${shouldUseFullHeightContent ? 'flex h-full flex-col' : 'min-h-full'} ${EffectiveContentRenderer ? '' : compact ? 'px-2 pb-2' : 'px-3 pb-4'}`}>
           {/* Loading indicator for historical events */}
           {!EffectiveContentRenderer && isLoadingHistory && (
             <div className={`flex items-center justify-center ${compact ? 'py-4' : 'py-8'}`}>
@@ -3521,10 +3526,15 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
         {EffectiveContentRenderer && selectedModeCategory !== 'workflow' ? (
           <EffectiveContentRenderer
-            events={displayEvents}
+            events={transcriptEvents}
             isStreaming={activeTabBusy}
             isRestoring={multiAgentSurface === 'restoring'}
             streamingText={activeStreamingText}
+            streamingStatus={streamingStatus}
+            hasOlder={historyPagination?.hasMore ?? false}
+            loadingOlder={olderHistory.sessionId === activeSessionId && olderHistory.loading}
+            historyError={olderHistory.sessionId === activeSessionId ? olderHistory.error : undefined}
+            onLoadOlder={historyPagination?.hasMore ? loadOlderConversationPage : undefined}
             landingContent={landingContent}
             onRetryLastMessage={retryLastProductMessage}
           />

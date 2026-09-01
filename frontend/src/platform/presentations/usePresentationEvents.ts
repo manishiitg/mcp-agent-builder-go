@@ -10,7 +10,12 @@ export type PresentationUpdatedEvent = {
   kind: string
   title: string
   workspacePath: string
-  payload: Record<string, unknown>
+	payload: Record<string, unknown>
+	activity: {
+		label: string
+		destination: string
+		detail: string
+	}
 }
 
 function asString(value: string | undefined): string {
@@ -37,8 +42,13 @@ export function parsePresentationUpdatedEvent(event: PollingEvent): Presentation
     presentationId: data.presentation_id,
     kind: data.kind,
     title: asString(data.title),
-    workspacePath: asString(data.workspace_path),
-    payload: (data.payload as Record<string, unknown> | undefined) ?? {},
+		workspacePath: asString(data.workspace_path),
+		payload: (data.payload as Record<string, unknown> | undefined) ?? {},
+		activity: {
+			label: asString(data.activity?.label),
+			destination: asString(data.activity?.destination),
+			detail: asString(data.activity?.detail),
+		},
   }
 }
 

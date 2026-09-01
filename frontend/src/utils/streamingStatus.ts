@@ -137,11 +137,25 @@ export function appendStreamingText(
 ): string {
   if (!incoming) return currentText
   if (!currentText) return incoming
-  if (isDelta !== false) return currentText + incoming
+  if (isDelta !== false) return currentText + deltaSeparator(currentText, incoming) + incoming
   // Block chunk: skip an exact repeat of what we already end with, then ensure
   // it starts on its own line so markdown blocks (tables, lists, fences) parse.
   if (currentText.endsWith(incoming)) return currentText
   return currentText + blockSeparator(currentText, incoming) + incoming
+}
+
+/**
+ * A few structured providers occasionally mark complete narration blocks as
+ * deltas. True token deltas must remain verbatim because they may split a
+ * word, but a finished sentence followed immediately by a capitalised word is
+ * unambiguously a missing whitespace boundary ("generation.No Gemini"), not
+ * a word split. Keep that live preview readable until the final event arrives.
+ */
+function deltaSeparator(currentText: string, incoming: string): string {
+  const previous = currentText.at(-1)
+  const next = incoming.at(0)
+  if (previous && next && /[.!?]/.test(previous) && /[A-Z]/.test(next)) return ' '
+  return ''
 }
 
 /**

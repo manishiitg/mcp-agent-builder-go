@@ -4512,6 +4512,21 @@
       "additionalProperties": false,
       "type": "object"
     },
+    "PresentationActivity": {
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "destination": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
     "PresentationUpdatedEvent": {
       "properties": {
         "timestamp": {
@@ -4562,6 +4577,9 @@
         },
         "payload": {
           "type": "object"
+        },
+        "activity": {
+          "$ref": "#/$defs/PresentationActivity"
         }
       },
       "additionalProperties": false,
