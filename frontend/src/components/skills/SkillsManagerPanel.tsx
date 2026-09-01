@@ -11,9 +11,14 @@ interface SkillsManagerPanelProps {
    * full-width block with no column assumptions, so the list itself doesn't
    * need a layout change -- just less padding around it. */
   compact?: boolean
+  // When provided (the workflow-panel embedding), each card also gets an
+  // add/remove-from-workflow action -- the point of surfacing skill
+  // management here in the first place, mirroring ConnectorsBrowser.
+  selectedSkills?: string[]
+  onToggleSkill?: (folderName: string) => void
 }
 
-export default function SkillsManagerPanel({ compact = false }: SkillsManagerPanelProps) {
+export default function SkillsManagerPanel({ compact = false, selectedSkills, onToggleSkill }: SkillsManagerPanelProps) {
   const [skills, setSkills] = useState<Skill[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -123,6 +128,8 @@ export default function SkillsManagerPanel({ compact = false }: SkillsManagerPan
                 key={skill.file_path || skill.folder_name}
                 skill={skill}
                 onDelete={() => handleDelete(skill.folder_name)}
+                selected={onToggleSkill ? (selectedSkills || []).includes(skill.folder_name) : undefined}
+                onToggleSelect={onToggleSkill ? () => onToggleSkill(skill.folder_name) : undefined}
               />
             ))}
           </div>

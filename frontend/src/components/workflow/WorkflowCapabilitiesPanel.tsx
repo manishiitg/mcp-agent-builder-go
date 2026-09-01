@@ -178,14 +178,25 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
                   <SkillSelectionSection
                     selectedSkills={capabilities.selected_skills}
                     onSkillChange={(selected_skills) => setCapabilities(current => ({ ...current, selected_skills }))}
+                    hideHeader
+                    showSelectedOnly
                   />
                 </div>
                 <div className="mt-3 flex min-h-0 flex-1 flex-col pt-1">
                   <div className="shrink-0 text-sm font-medium text-muted-foreground">
-                    Manage skills
+                    Add a skill
                   </div>
                   <div className="mt-3 flex min-h-0 flex-1 flex-col">
-                    <SkillsManagerPanel compact />
+                    <SkillsManagerPanel
+                      compact
+                      selectedSkills={capabilities.selected_skills}
+                      onToggleSkill={(folderName) => setCapabilities(current => ({
+                        ...current,
+                        selected_skills: current.selected_skills.includes(folderName)
+                          ? current.selected_skills.filter(s => s !== folderName)
+                          : [...current.selected_skills, folderName],
+                      }))}
+                    />
                   </div>
                 </div>
               </div>

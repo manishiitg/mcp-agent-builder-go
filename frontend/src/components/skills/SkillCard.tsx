@@ -1,12 +1,17 @@
-import { Trash2, Wrench, FileText, ExternalLink } from 'lucide-react'
+import { Check, Download, Trash2, Wrench, FileText, ExternalLink } from 'lucide-react'
 import type { Skill } from '../../types/skills'
 
 interface SkillCardProps {
   skill: Skill
   onDelete: () => void
+  // When provided (the workflow-panel embedding), the card also gets an
+  // add/remove-from-workflow action -- same role as ConnectorsBrowser's
+  // "Add to workflow" button on a connected MCP server card.
+  selected?: boolean
+  onToggleSelect?: () => void
 }
 
-export default function SkillCard({ skill, onDelete }: SkillCardProps) {
+export default function SkillCard({ skill, onDelete, selected, onToggleSelect }: SkillCardProps) {
   const { frontmatter, folder_name, source_url } = skill
 
   return (
@@ -53,6 +58,29 @@ export default function SkillCard({ skill, onDelete }: SkillCardProps) {
         </div>
 
         <div className="flex items-center gap-1 ml-4">
+          {onToggleSelect && (
+            <button
+              onClick={onToggleSelect}
+              className={`flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs font-medium transition-colors ${
+                selected
+                  ? 'border-blue-500/40 bg-blue-500/15 text-blue-600 hover:border-red-500/40 hover:bg-red-500/15 hover:text-red-500 dark:text-blue-300'
+                  : 'border-gray-300 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-gray-100'
+              }`}
+              title={`${selected ? 'Remove' : 'Add'} ${frontmatter.name} for this workflow`}
+            >
+              {selected ? (
+                <>
+                  <Check className="h-3.5 w-3.5" />
+                  <span>Added</span>
+                </>
+              ) : (
+                <>
+                  <Download className="h-3.5 w-3.5" />
+                  <span>Add to workflow</span>
+                </>
+              )}
+            </button>
+          )}
           <button
             onClick={onDelete}
             className="p-2 text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400 transition-colors"
