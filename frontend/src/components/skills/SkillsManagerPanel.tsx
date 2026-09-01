@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { WandSparkles, Loader2, AlertCircle, Plus, RefreshCw } from 'lucide-react'
+import { useEffect, useCallback, useMemo, useState } from 'react'
+import { WandSparkles, Loader2, AlertCircle, Plus, RefreshCw, Search } from 'lucide-react'
 import { skillsApi } from '../../api/skills'
 import type { Skill } from '../../types/skills'
 import SkillCard from './SkillCard'
@@ -20,6 +20,7 @@ interface SkillsManagerPanelProps {
 
 export default function SkillsManagerPanel({ compact = false, selectedSkills, onToggleSkill }: SkillsManagerPanelProps) {
   const [skills, setSkills] = useState<Skill[]>([])
+  const [query, setQuery] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showImportDialog, setShowImportDialog] = useState(false)
@@ -69,11 +70,23 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
     loadSkills()
   }
 
+  const visibleSkills = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return skills
+    return skills.filter(skill =>
+      skill.frontmatter.name.toLowerCase().includes(q) ||
+      skill.folder_name.toLowerCase().includes(q) ||
+      (skill.frontmatter.description || '').toLowerCase().includes(q)
+    )
+  }, [skills, query])
+
   return (
     <div className={`flex min-h-0 flex-1 flex-col ${compact ? 'gap-2' : 'gap-3'}`}>
       <div className="flex shrink-0 items-center justify-between">
         <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-          {skills?.length || 0} {(skills?.length || 0) === 1 ? 'Skill' : 'Skills'}
+          {query.trim()
+            ? `${visibleSkills.length} of ${skills.length}`
+            : `${skills.length} ${skills.length === 1 ? 'Skill' : 'Skills'}`}
         </span>
         <div className="flex items-center gap-1">
           <button
@@ -92,6 +105,20 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
           </button>
         </div>
       </div>
+
+      {skills.length > 0 && (
+        <div className="relative shrink-0">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search skills"
+            aria-label="Search skills"
+            className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-10 pr-3 text-sm text-gray-900 placeholder-gray-400 transition-colors focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+          />
+        </div>
+      )}
 
       {error && (
         <div className="flex shrink-0 items-center gap-2 text-sm text-red-500 dark:text-red-400">
@@ -121,9 +148,13 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
               Import
             </button>
           </div>
+        ) : visibleSkills.length === 0 ? (
+          <p className="py-8 text-center text-sm text-gray-500 dark:text-gray-400">
+            No skills match "{query}".
+          </p>
         ) : (
           <div className={`grid ${compact ? 'gap-2' : 'gap-4'}`}>
-            {(skills || []).map((skill) => (
+            {visibleSkills.map((skill) => (
               <SkillCard
                 key={skill.file_path || skill.folder_name}
                 skill={skill}
