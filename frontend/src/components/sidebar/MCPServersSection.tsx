@@ -13,7 +13,7 @@ import MCPConfigPopup from '../MCPConfigPopup'
 import { OAuthStatusBadge } from '../OAuthStatusBadge'
 import ConnectionIcon from '../connectors/ConnectionIcon'
 import { brandSlugFor } from '../connectors/brandSlug'
-import { descriptionFor } from '../connectors/catalog'
+import { CATEGORY_ORDER, categoryFor, descriptionFor } from '../connectors/catalog'
 import { useMCPStore } from '../../stores'
 
 /**
@@ -123,6 +123,31 @@ export default function MCPServersSection() {
         return aOk - bOk || aName.localeCompare(bName)
       })
   }, [groups, query, filter])
+
+  // Group into directory sections, keeping the connected-first order inside
+  // each one. Only sections holding a visible connector are rendered, so a
+  // search matching two services does not leave four empty headings behind.
+  const sections = useMemo(() => {
+    const byCategory = new Map<string, typeof visible>()
+    visible.forEach((entry) => {
+      const category = categoryFor(entry[0])
+      const bucket = byCategory.get(category)
+      if (bucket) {
+        bucket.push(entry)
+      } else {
+        byCategory.set(category, [entry])
+      }
+    })
+
+    const rank = (category: string) => {
+      const i = CATEGORY_ORDER.indexOf(category)
+      return i === -1 ? CATEGORY_ORDER.length : i
+    }
+
+    return [...byCategory.entries()].sort(
+      ([a], [b]) => rank(a) - rank(b) || a.localeCompare(b)
+    )
+  }, [visible])
 
   const total = Object.keys(groups).length
 
@@ -242,8 +267,13 @@ export default function MCPServersSection() {
                 </p>
               )}
 
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                {visible.map(([serverName, tools]) => {
+              {sections.map(([category, entries]) => (
+                <section key={category} className="mb-6 last:mb-0">
+                  <h4 className="mb-3 border-b border-gray-200 pb-2 text-sm font-semibold text-gray-900 dark:border-gray-800 dark:text-gray-100">
+                    {category}
+                  </h4>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    {entries.map(([serverName, tools]) => {
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   const requiresOAuth = (tools[0] as any).requires_oauth as boolean | undefined
                   const status = tools[0]?.status
@@ -353,9 +383,11 @@ export default function MCPServersSection() {
                         </div>
                       )}
                     </div>
-                  )
-                })}
-              </div>
+                      )
+                    })}
+                  </div>
+                </section>
+              ))}
             </div>
           </div>
         </div>

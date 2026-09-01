@@ -329,6 +329,21 @@ func (api *StreamingAPI) handleOAuthStart(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// A server with no client_id in config either issues one through Dynamic
+	// Client Registration or needs one registered by hand. Try DCR first, so
+	// only the genuinely manual servers reach the prompt below.
+	if serverConfig.OAuth.ClientID == "" && serverConfig.OAuth.RegistrationEndpoint != "" {
+		client, regErr := api.ensureRegisteredClient(userID, req.ServerName, serverConfig.OAuth.RegistrationEndpoint, redirectURI)
+		if regErr != nil {
+			// Fall through to the prompt: a hand-registered client_id still works.
+			api.logger.Error(fmt.Sprintf("Dynamic client registration failed for %s: %v", req.ServerName, regErr), regErr)
+		} else {
+			serverConfig.OAuth.ClientID = client.ClientID
+			serverConfig.OAuth.ClientSecret = client.ClientSecret
+			api.logger.Info(fmt.Sprintf("🪪 Using DCR client_id for %s: %s", req.ServerName, client.ClientID))
+		}
+	}
+
 	// Instead of hard-failing, return a discovery response prompting for client_id
 	if serverConfig.OAuth.ClientID == "" {
 		api.logger.Info(fmt.Sprintf("No client_id for %s, returning needs_client_id response", req.ServerName))
@@ -861,4 +876,59 @@ func ensureUserTokenDir(userID string) (string, error) {
 // getUserTokenFilePath returns the token file path for a specific user and server
 func getUserTokenFilePath(userID, serverName string) string {
 	return fmt.Sprintf("~/.config/mcpagent/tokens/%s/%s.json", userID, serverName)
+}
+
+// registeredClient is a client_id issued by Dynamic Client Registration. It is
+// cached per user and server so reconnecting reuses the existing registration
+// instead of creating a new client on the provider every time.
+type registeredClient struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret,omitempty"`
+	RedirectURI  string `json:"redirect_uri"`
+}
+
+// getUserClientFilePath returns the DCR client file path for a user and server.
+// It sits beside the token file so removing a user's token directory clears the
+// registration with it.
+func getUserClientFilePath(userID, serverName string) string {
+	return fmt.Sprintf("~/.config/mcpagent/tokens/%s/%s.client.json", userID, serverName)
+}
+
+// ensureRegisteredClient returns the DCR client for a server, registering one on
+// first use. The redirect URI forms part of a registration, so a callback URL
+// that no longer matches forces a fresh registration rather than an
+// invalid_redirect_uri failure later in the flow.
+func (api *StreamingAPI) ensureRegisteredClient(userID, serverName, registrationEndpoint, redirectURI string) (*registeredClient, error) {
+	clientFile := expandPath(getUserClientFilePath(userID, serverName))
+
+	if data, err := os.ReadFile(clientFile); err == nil {
+		var cached registeredClient
+		if json.Unmarshal(data, &cached) == nil && cached.ClientID != "" && cached.RedirectURI == redirectURI {
+			return &cached, nil
+		}
+	}
+
+	resp, err := oauth.RegisterClient(registrationEndpoint, redirectURI)
+	if err != nil {
+		return nil, fmt.Errorf("dynamic client registration failed: %w", err)
+	}
+
+	client := &registeredClient{
+		ClientID:     resp.ClientID,
+		ClientSecret: resp.ClientSecret,
+		RedirectURI:  redirectURI,
+	}
+
+	data, err := json.Marshal(client)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode client registration: %w", err)
+	}
+	// 0600: the record can carry a client_secret.
+	if err := os.WriteFile(clientFile, data, 0600); err != nil {
+		// The registration itself succeeded, so continue with it and accept
+		// re-registering on the next connect.
+		api.logger.Error(fmt.Sprintf("Failed to cache client registration for %s: %v", serverName, err), err)
+	}
+
+	return client, nil
 }
