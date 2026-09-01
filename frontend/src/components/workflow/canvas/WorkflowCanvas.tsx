@@ -525,7 +525,7 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
       onClose={closeInspector}
     />
   ) : workflowWorkspaceView === 'skills' || workflowWorkspaceView === 'mcp' || workflowWorkspaceView === 'secrets' || workflowWorkspaceView === 'browser' || workflowWorkspaceView === 'llm' ? (
-    <WorkflowCapabilitiesPanel section={workflowWorkspaceView} workspacePath={workspacePath} onClose={closeInspector} />
+    <WorkflowCapabilitiesPanel section={workflowWorkspaceView} workspacePath={workspacePath} />
   ) : workflowWorkspaceView === 'folders' ? (
     <WorkflowFolderAccessPopup isOpen embedded workspacePath={workspacePath} onClose={closeInspector} />
   ) : (
