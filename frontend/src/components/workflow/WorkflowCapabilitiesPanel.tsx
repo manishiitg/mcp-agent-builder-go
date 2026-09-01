@@ -7,6 +7,7 @@ import { SecretSelectionSection } from '../secrets/SecretSelectionSection'
 import SecretsManagerPanel from '../secrets/SecretsManagerPanel'
 import BrowserAutomationSettings, { type BrowserAutomationMode } from '../BrowserAutomationSettings'
 import WorkflowLLMConfigurationPanel from './WorkflowLLMConfigurationPanel'
+import LLMLibraryPanel from '../llm/LLMLibraryPanel'
 import ConnectorsBrowser from '../connectors/ConnectorsBrowser'
 import { agentApi, workflowManifestApi } from '../../services/api'
 import type { WorkflowCapabilities } from '../../services/api-types'
@@ -266,11 +267,21 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
               />
             )}
             {section === 'llm' && (
-              <WorkflowLLMConfigurationPanel
-                workspacePath={workspacePath}
-                llmConfig={capabilities.llm_config}
-                onChange={(llm_config) => setCapabilities(current => ({ ...current, llm_config }))}
-              />
+              <>
+                <WorkflowLLMConfigurationPanel
+                  workspacePath={workspacePath}
+                  llmConfig={capabilities.llm_config}
+                  onChange={(llm_config) => setCapabilities(current => ({ ...current, llm_config }))}
+                />
+                <div className="mt-3">
+                  <div className="shrink-0 text-sm font-medium text-muted-foreground">
+                    Model library
+                  </div>
+                  <div className="mt-3">
+                    <LLMLibraryPanel />
+                  </div>
+                </div>
+              </>
             )}
           </>
         )}
