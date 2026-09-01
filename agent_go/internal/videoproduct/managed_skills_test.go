@@ -132,7 +132,7 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		{"kling-video", []string{"multi_prompt", "@Element1", "motion-transfer", "show_video"}},
 		{"seedance-video", []string{"@Image1", "bytedance/seedance-2.0", "bytedance/seedance-2.5", "30-second", "show_video"}},
 		{"veo-video", []string{"fal-ai/veo3.1/lite/image-to-video", "4s", "6s", "8s", "first plus last frame", "previously generated Veo", "long-running", "show_video"}},
-		{"minimax-h3-video", []string{"minimax/h3/reference-to-video", "reference_video_urls", "Video 1", "resolution: \"480P\"", "show_video"}},
+		{"minimax-h3-video", []string{"minimax/h3-max/reference-to-video", "reference_video_urls", "Video 1", "resolution: \"480P\"", "show_video"}},
 		{"gemini-omni-video", []string{"google/gemini-omni-flash", "<IMAGE_REF_0>", "fal-ai", "show_video"}},
 		{"video-model-selection", []string{"video-cinematography", "fal-ai", "google-ai", "seeddance-api", "model-capabilities.md", "Shot count vs. budget", "Present a costed choice", "least-expensive option", "Veo 3.1 Lite", "Seedance 2.5", "maximum cost", "visible native dialogue", "off-camera TTS voiceover", "must never silently turn"}},
 		{"video-cinematography", []string{"dolly is not zoom", "reference-image conditioning", "minimax-h3-video"}},
@@ -244,8 +244,8 @@ func TestGenerationPipelinesAttachCapabilityDiscoveryBeforePaidVideo(t *testing.
 func TestCinematicWorkflowStagesCarryTheH3ReferenceRouteInvariant(t *testing.T) {
 	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
 		for _, stage := range pipeline.Stages {
-			if !strings.Contains(stage.Description, "minimax/h3/reference-to-video") || !strings.Contains(stage.Description, "minimax/h3/image-to-video") || !strings.Contains(stage.Description, "resolution: \"480P\"") || !strings.Contains(stage.Description, "prompt_expansion_mode: \"quality\"") {
-				t.Fatalf("%s stage %q is missing the MiniMax H3 480P seam-bridge route invariant", pipeline.ID, stage.ID)
+			if !strings.Contains(stage.Description, "minimax/h3-max/reference-to-video") || !strings.Contains(stage.Description, "minimax/h3-max/image-to-video") || !strings.Contains(stage.Description, "resolution: \"480P\"") || !strings.Contains(stage.Description, "prompt_expansion_mode: \"balanced\"") {
+				t.Fatalf("%s stage %q is missing the MiniMax H3 Max 480P seam-bridge route invariant", pipeline.ID, stage.ID)
 			}
 		}
 	}

@@ -135,7 +135,7 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 		}
 	}
 	seamBridge := shortformPipeline.Stages[index["shortform-seam-bridge"]]
-	for _, required := range []string{"minimax/h3/image-to-video", "image_url", "end_image_url", "prompt_expansion_mode: \"quality\"", "rerun Prove the latest seam"} {
+	for _, required := range []string{"minimax/h3-max/image-to-video", "image_url", "end_image_url", "prompt_expansion_mode: \"balanced\"", "rerun Prove the latest seam"} {
 		if !strings.Contains(seamBridge.Description, required) {
 			t.Fatalf("short-form seam-bridge step is missing %q", required)
 		}
@@ -282,7 +282,7 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 		}
 	}
 	seamBridge := longformPipeline.Stages[index["longform-seam-bridge"]]
-	for _, required := range []string{"minimax/h3/image-to-video", "image_url", "end_image_url", "prompt_expansion_mode: \"quality\"", "rerun Prove the latest seam"} {
+	for _, required := range []string{"minimax/h3-max/image-to-video", "image_url", "end_image_url", "prompt_expansion_mode: \"balanced\"", "rerun Prove the latest seam"} {
 		if !strings.Contains(seamBridge.Description, required) {
 			t.Fatalf("long-form seam-bridge step is missing %q", required)
 		}

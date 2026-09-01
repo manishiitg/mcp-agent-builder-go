@@ -16,7 +16,7 @@ Use the smallest number of H3 generation boundaries that preserves the
 intended action. Select and record one route for each seam:
 
 1. one uninterrupted H3 take, up to its live-supported duration;
-2. `minimax/h3/reference-to-video` from the accepted predecessor for every
+2. `minimax/h3-max/reference-to-video` from the accepted predecessor for every
    normal continuation, including a motivated camera-angle change;
 3. a motivated editorial cut with the stable approved reference pack;
 4. an intentional discontinuity such as a time jump, location change, or

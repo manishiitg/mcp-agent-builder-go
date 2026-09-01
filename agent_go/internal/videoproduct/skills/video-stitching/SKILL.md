@@ -34,10 +34,10 @@ instead of generating a visually unrelated continuation.
 For Video Studio, use the H3 routes in `minimax-h3-video`:
 
 1. one 5–15-second H3 take when it covers the beat;
-2. `minimax/h3/reference-to-video` with the accepted predecessor as Video 1
+2. `minimax/h3-max/reference-to-video` with the accepted predecessor as Video 1
    for every normal continuation, including a deliberate camera-angle change;
 3. an intentional discontinuity such as a time/location jump or montage;
-4. `minimax/h3/image-to-video` only as a separately approved first/last-frame
+4. `minimax/h3-max/image-to-video` only as a separately approved first/last-frame
    bridge after a direct-cut seam proof visibly fails.
 
 Never use image-to-video as the normal continuation route. A new camera angle

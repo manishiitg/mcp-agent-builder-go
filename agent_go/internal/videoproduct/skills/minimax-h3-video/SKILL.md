@@ -1,38 +1,41 @@
 ---
 name: minimax-h3-video
-description: Plan and generate Video Studio's MiniMax H3 routes through fal.ai: Reference-to-Video for anchors and normal continuations, and Image-to-Video with first/last frames only for a user-approved failed-seam bridge. Read with video-provider-capabilities and fal-ai before any paid H3 call.
+description: Plan and generate Video Studio's MiniMax H3 Max routes through fal.ai: Reference-to-Video for anchors and normal continuations, and Image-to-Video with first/last frames only for a user-approved failed-seam bridge. Read with video-provider-capabilities and fal-ai before any paid H3 Max call.
 ---
 
-# Use MiniMax H3 deliberately
+# Use MiniMax H3 Max deliberately
 
 Read `video-provider-capabilities`, `fal-ai`, `video-cinematography`, and the
 live schema for the selected route before every paid call:
 
-- `https://fal.ai/models/minimax/h3/reference-to-video/api` for anchors and
+- `https://fal.ai/models/minimax/h3-max/reference-to-video` for anchors and
   normal continuations;
-- `https://fal.ai/models/minimax/h3/image-to-video/api` only for a
+- `https://fal.ai/models/minimax/h3-max/image-to-video` only for a
   user-approved bridge after a direct-cut seam proof visibly fails.
 
-Do not substitute H3 Max, another H3 route, or another provider.
+Use H3 Max only. Do not substitute standard H3, another H3 Max route, or
+another provider.
 
-The current H3 Reference-to-Video schema accepts `reference_image_urls`,
+The current H3 Max Reference-to-Video schema accepts `reference_image_urls`,
 `reference_video_urls`, and `reference_audio_urls` as arrays of URL strings.
 Refer to them in the prompt by their ordered modality name — Image 1, Video 1,
 Audio 1 — never by JSON labels. It accepts at most 9 images, 3 videos, and 3
 audio clips, with at most 12 files total; video and audio references are each
 2–15 seconds with a 15-second combined limit. Output clips are 5–15 seconds
 at 24 FPS. Video Studio defaults to `resolution: "480P"` and
-`prompt_expansion_mode: "quality"`. Use 768P only when the user explicitly
-requests and approves the higher cost; do not offer or use 2K or 4K. Verify
-live rates before estimating a run.
+`prompt_expansion_mode: "balanced"`. Fal recommends balanced for H3 Max;
+quality can spend up to 30 seconds rewriting a prompt, so use it only when the
+user explicitly requests that slower treatment. Use 768P only when the user
+explicitly requests and approves the higher cost; do not offer or use 2K or
+4K. Verify live rates before estimating a run.
 
 ## Choose the route by control need
 
-- Use `minimax/h3/reference-to-video` for every anchor and continuation. For
+- Use `minimax/h3-max/reference-to-video` for every anchor and continuation. For
   an anchor, supply the approved character/style reference images. For a
   continuation, also supply the accepted predecessor as Video 1 and describe
   the immediate handoff from its final motion.
-- Use `minimax/h3/image-to-video` only to repair a *visibly failed* direct
+- Use `minimax/h3-max/image-to-video` only to repair a *visibly failed* direct
   seam. Upload the selected predecessor end frame as `image_url` and the
   successor start frame as `end_image_url`; both must be same-aspect,
   reviewable stable frames. Make one 5–15-second bridge candidate and review
