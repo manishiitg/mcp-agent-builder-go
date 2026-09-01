@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { BrainCircuit, KeyRound, LoaderCircle, Monitor, Puzzle, Save, Server, X } from 'lucide-react'
+import { BrainCircuit, KeyRound, LoaderCircle, Monitor, Puzzle, Save, Server } from 'lucide-react'
 import { ToolSelectionSection } from '../ToolSelectionSection'
 import { SkillSelectionSection } from '../skills/SkillSelectionSection'
 import { SecretSelectionSection } from '../secrets/SecretSelectionSection'
+import SecretsManagerPanel from '../secrets/SecretsManagerPanel'
 import BrowserAutomationSettings, { type BrowserAutomationMode } from '../BrowserAutomationSettings'
 import WorkflowLLMConfigurationPanel from './WorkflowLLMConfigurationPanel'
 import ConnectorsBrowser from '../connectors/ConnectorsBrowser'
@@ -19,7 +20,6 @@ export type WorkflowCapabilitySection = 'skills' | 'mcp' | 'secrets' | 'browser'
 interface WorkflowCapabilitiesPanelProps {
   section: WorkflowCapabilitySection
   workspacePath: string | null
-  onClose: () => void
 }
 
 const EMPTY_CAPABILITIES: WorkflowCapabilities = {
@@ -60,7 +60,7 @@ const SECTION_COPY: Record<WorkflowCapabilitySection, { title: string; descripti
   },
 }
 
-export default function WorkflowCapabilitiesPanel({ section, workspacePath, onClose }: WorkflowCapabilitiesPanelProps) {
+export default function WorkflowCapabilitiesPanel({ section, workspacePath }: WorkflowCapabilitiesPanelProps) {
   const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
   const [capabilities, setCapabilities] = useState<WorkflowCapabilities>(EMPTY_CAPABILITIES)
   const [loading, setLoading] = useState(true)
@@ -161,14 +161,6 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath, onCl
           <h2 className="text-sm font-semibold text-foreground">{copy.title}</h2>
           <p className="mt-0.5 text-xs text-muted-foreground">{copy.description}</p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          aria-label="Close capability panel"
-        >
-          <X className="h-4 w-4" />
-        </button>
       </header>
 
       <div className={`min-h-0 flex-1 p-4 ${section === 'skills' || section === 'secrets' || section === 'mcp' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}>
@@ -217,15 +209,24 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath, onCl
               </div>
             )}
             {section === 'secrets' && (
-              <div className="min-h-0 flex-1">
-                <SecretSelectionSection
-                  selectedSecrets={capabilities.selected_secrets}
-                  onSecretChange={(selected_secrets) => setCapabilities(current => ({ ...current, selected_secrets }))}
-                  selectedGlobalSecrets={capabilities.selected_global_secret_names}
-                  onGlobalSecretChange={(selected_global_secret_names) => setCapabilities(current => ({ ...current, selected_global_secret_names }))}
-                  workflowPath={workspacePath || ''}
-                  fillAvailableHeight
-                />
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="shrink-0 overflow-y-auto">
+                  <SecretSelectionSection
+                    selectedSecrets={capabilities.selected_secrets}
+                    onSecretChange={(selected_secrets) => setCapabilities(current => ({ ...current, selected_secrets }))}
+                    selectedGlobalSecrets={capabilities.selected_global_secret_names}
+                    onGlobalSecretChange={(selected_global_secret_names) => setCapabilities(current => ({ ...current, selected_global_secret_names }))}
+                    workflowPath={workspacePath || ''}
+                  />
+                </div>
+                <div className="mt-3 flex min-h-0 flex-1 flex-col border-t border-border pt-3">
+                  <div className="shrink-0 text-sm font-medium text-muted-foreground">
+                    Manage secrets
+                  </div>
+                  <div className="mt-3 min-h-0 flex-1">
+                    <SecretsManagerPanel compact />
+                  </div>
+                </div>
               </div>
             )}
             {section === 'browser' && (

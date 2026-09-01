@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { BrainCircuit, ChevronLeft, Download, KeyRound, MoreHorizontal, ServerCog, WandSparkles, X } from 'lucide-react'
+import { BrainCircuit, ChevronLeft, Download, MoreHorizontal, ServerCog, WandSparkles, X } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 import LlmModalHost from './topbar/LlmModalHost'
 import RuntimeHealthControl from './topbar/RuntimeHealthControl'
@@ -8,11 +8,12 @@ import AccountControl from './topbar/AccountControl'
 import { iconButtonClass } from './ui/IconPopover'
 import MCPServersSection from './sidebar/MCPServersSection'
 import { SkillsSection } from './skills'
-import { SecretsSection } from './secrets'
 import { useLLMStore, useMCPStore } from '../stores'
 import { useIsElectron } from './topbar/useIsElectron'
 
-type ToolPanel = 'skills' | 'secrets'
+// Secrets moved into the workflow capabilities panel (alongside MCP), so this
+// menu no longer hosts them.
+type ToolPanel = 'skills'
 
 function ToolMenuItem({
   icon,
@@ -56,11 +57,6 @@ function FloatingToolPanel({
       title: 'Skills',
       icon: <WandSparkles className="h-4 w-4" />,
       content: <SkillsSection />,
-    },
-    secrets: {
-      title: 'Secrets',
-      icon: <KeyRound className="h-4 w-4" />,
-      content: <SecretsSection />,
     },
   }[panel]
 
@@ -188,12 +184,6 @@ export default function WorkspaceTopBarControls() {
                   label="Skills"
                   detail="Installed capabilities"
                   onClick={() => openPanel('skills')}
-                />
-                <ToolMenuItem
-                  icon={<KeyRound className="h-4 w-4" />}
-                  label="Secrets"
-                  detail="Keys and credentials"
-                  onClick={() => openPanel('secrets')}
                 />
                 {!isElectron && (
                   <a
