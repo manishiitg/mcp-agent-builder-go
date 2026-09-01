@@ -205,30 +205,11 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
     )
     const activeTab = activeTabId ? chatTabs[activeTabId] : undefined
     const activeWorkflowTab = activeTab?.metadata?.mode === 'workflow' ? activeTab : undefined
-    const isBuilderTab = (tab: ChatTab) => tab.metadata?.phaseId === 'workflow-builder'
-    const chooseVisibleBuilder = (tabs: ChatTab[]) => [...tabs].sort((a, b) => {
-      if (a.tabId === activeTabId) return -1
-      if (b.tabId === activeTabId) return 1
-      if (a.isStreaming !== b.isStreaming) return a.isStreaming ? -1 : 1
-      return b.createdAt - a.createdAt
-    })[0]
-
-    const matchedBuilders = matched.filter(isBuilderTab)
-    const visibleBuilder = chooseVisibleBuilder(matchedBuilders)
-    const visibleMatched = matched.filter(tab => !isBuilderTab(tab) || tab.tabId === visibleBuilder?.tabId)
-    const hasPresetBuilder = Boolean(visibleBuilder)
 
     const visibleById = new Map<string, ChatTab>()
-    visibleMatched.forEach(tab => visibleById.set(tab.tabId, tab))
+    matched.forEach(tab => visibleById.set(tab.tabId, tab))
     if (activeWorkflowTab) {
-      const isDuplicateBuilder =
-        isBuilderTab(activeWorkflowTab) &&
-        hasPresetBuilder &&
-        activeWorkflowTab.metadata?.presetQueryId !== activePresetId
-
-      if (!isDuplicateBuilder) {
-        visibleById.set(activeWorkflowTab.tabId, activeWorkflowTab)
-      }
+      visibleById.set(activeWorkflowTab.tabId, activeWorkflowTab)
     }
 
     const visible = visibleById.size > 0

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { PollingEvent, ExtendedLLMConfiguration, SessionStatusResponse, ActiveSessionInfo, DelegationTierConfig, SSEEventMessage, SSEStatusMessage } from '../services/api-types'
+import type { PollingEvent, ExtendedLLMConfiguration, SessionStatusResponse, ActiveSessionInfo, DelegationTierConfig, SSEEventMessage, SSEStatusMessage, WorkflowScheduleSummary } from '../services/api-types'
 import { SSEConnection } from '../services/sse'
 import { shouldShowEventByMode } from '../components/events/eventModeUtils'
 import type { StoreActions } from './types'
@@ -556,6 +556,9 @@ interface ChatState extends StoreActions {
   activeSessionsCache: ActiveSessionInfo[]
   activeSessionsCacheTimestamp: number | null
   activeSessionsPollingInterval: NodeJS.Timeout | null
+  // Workflow schedule header counts, refreshed as a side effect of
+  // getActiveSessions() (both come from the combined /api/header-summary poll)
+  workflowScheduleSummary: WorkflowScheduleSummary | null
 
   // Streaming text accumulation (per session)
   // Only tracks parent agent streaming - sub-agent streaming routed to delegationStreamingText
@@ -732,16 +735,16 @@ const selectDurableChatState = (state: ChatState): DurableChatState => {
   const chatTabs = Object.fromEntries(
     Object.entries(state.chatTabs)
       .filter(([, tab]) => {
-        const isRelevantMode = tab.metadata?.mode === 'workflow' || tab.metadata?.mode === 'multi-agent'
-        if (!isRelevantMode) return false
         // Explicit product decision: a tab, once opened, is closed only by the
-        // user -- including a view-only Schedule lane whose run has finished.
-        // This snapshot forces isStreaming false, so a restored Schedule tab
-        // looks dead (not live) on reload -- that's accepted, not a bug; the
-        // tab still exists as a closable record until the user closes it.
-        // See shouldDisplayWorkflowTab in workflowRuntimeTabProjection.ts for
-        // the matching live-display side of this decision.
-        return Date.now() - (tab.createdAt || 0) < 24 * 60 * 60 * 1000
+        // user -- including a view-only Schedule lane whose run has finished,
+        // and (as of the workflow-builder tab simplification) a builder tab
+        // too, no matter how old it is. This snapshot forces isStreaming
+        // false, so a restored tab looks dead (not live) on reload -- that's
+        // accepted, not a bug; the tab still exists as a closable record
+        // until the user closes it. See shouldDisplayWorkflowTab in
+        // workflowRuntimeTabProjection.ts for the matching live-display side
+        // of this decision.
+        return tab.metadata?.mode === 'workflow' || tab.metadata?.mode === 'multi-agent'
       })
       .map(([tabId, tab]) => [
         tabId,
@@ -881,6 +884,7 @@ export const useChatStore = create<ChatState>()(
       activeSessionsCache: [],
       activeSessionsCacheTimestamp: null,
       activeSessionsPollingInterval: null,
+      workflowScheduleSummary: null,
       
       // Streaming text accumulation (per session)
       streamingText: {},
@@ -2893,17 +2897,19 @@ export const useChatStore = create<ChatState>()(
           return state.activeSessionsCache
         }
         
-        // Fetch fresh data
+        // Fetch fresh data. Combined endpoint: also carries the workflow
+        // schedule header counts, so ModePresetBar no longer needs its own poll.
         try {
-          const response = await agentApi.getActiveSessions()
+          const response = await agentApi.getHeaderSummary()
           const activeSessions = response.active_sessions || []
-          
+
           set((currentState) => ({
             activeSessionsCache: activeSessions,
             activeSessionsCacheTimestamp: now,
+            workflowScheduleSummary: response.schedule_summary ?? null,
             ...reconcileInactiveSessionTabs(currentState, activeSessions, now),
           }))
-          
+
           return activeSessions
         } catch (error) {
           logger.error('SessionStore', 'Failed to fetch active sessions:', error)
@@ -2931,10 +2937,14 @@ export const useChatStore = create<ChatState>()(
           logger.error('Polling', 'Failed to fetch active sessions on polling start:', error)
         })
         
-        // Poll every 60 seconds
+        // Safety-net poll every 60 seconds for surfaces without
+        // GlobalActivityMonitor mounted (it already force-refreshes this same
+        // data every 5s). Not forced: if the 5s poll already ran within the
+        // cache TTL, this tick reuses that cached data instead of firing a
+        // redundant duplicate network request.
         const interval = setInterval(() => {
           const { getActiveSessions } = get()
-          getActiveSessions(true).catch(error => {
+          getActiveSessions().catch(error => {
             logger.error('Polling', 'Failed to fetch active sessions during polling:', error)
           })
         }, 60000)
@@ -2978,19 +2988,10 @@ if (chatPersistStorage) {
 
 function normalizeHydratedChatStore(): void {
   const state = useChatStore.getState()
-  const maxTabAge = 24 * 60 * 60 * 1000
-  const now = Date.now()
   const freshTabs: Record<string, ChatTab> = {}
-  let removedCount = 0
   let migratedTabConfig = false
 
   for (const [tabId, tab] of Object.entries(state.chatTabs)) {
-    const age = now - (tab.createdAt || 0)
-    if (age >= maxTabAge) {
-      removedCount++
-      continue
-    }
-
     let nextTab = tab
     if (tab.config && tab.config.browserMode === undefined) {
       nextTab = {
@@ -3007,7 +3008,7 @@ function normalizeHydratedChatStore(): void {
     freshTabs[tabId] = nextTab
   }
 
-  const tabsChanged = removedCount > 0 || migratedTabConfig
+  const tabsChanged = migratedTabConfig
   const activeTabIsValid = !!state.activeTabId && !!freshTabs[state.activeTabId]
   let activeTabId = state.activeTabId
   if (!activeTabIsValid) {
@@ -3021,9 +3022,6 @@ function normalizeHydratedChatStore(): void {
       ...(tabsChanged ? { chatTabs: freshTabs } : {}),
       ...(activeTabId !== state.activeTabId ? { activeTabId } : {}),
     })
-  }
-  if (removedCount > 0) {
-    logger.debug('ChatStore', `Cleaned up ${removedCount} stale tabs on rehydrate`)
   }
 }
 

@@ -26,6 +26,7 @@ import { resolveChatSurface, resolveWorkflowChatSurface } from './resolveChatSur
 import { PresetSelectionOverlay } from './PresetSelectionOverlay'
 import { ModeSwitchDialog } from './ui/ModeSwitchDialog'
 import type { ChatTab } from '../stores/useChatStore'
+import { workflowTabAlreadyHasContent } from './workflow/workflowChatTabConversion'
 import type { CustomPreset } from '../types/preset'
 import { conversationToRestoredEvents, hydrateTabEvents, restoreSession } from '../utils/sessionRestore'
 import { logger } from '../utils/logger'
@@ -2568,6 +2569,27 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     if (!trimmedQuery) {
       logger.warn('ChatArea', 'Empty query, returning early')
       return false
+    }
+
+    // A blank workflow builder tab shows the "New chat" landing screen; once
+    // it receives its first real message it's no longer blank, so rename it
+    // from that message (mirrors how the Recent list titles a session) and
+    // let a later "+ New chat" click open a genuinely new tab instead of
+    // reusing this one. Must run before this turn's events are recorded --
+    // workflowTabAlreadyHasContent would otherwise already see this tab as
+    // no-longer-blank.
+    if (
+      freshActiveTab?.metadata?.mode === 'workflow' &&
+      freshActiveTab.metadata?.phaseId === 'workflow-builder' &&
+      !workflowTabAlreadyHasContent(freshActiveTab, chatStore.tabEvents)
+    ) {
+      const normalized = trimmedQuery.replace(/\s+/g, ' ').trim()
+      const newName = normalized.length > 110 ? `${normalized.slice(0, 110)}...` : normalized
+      useChatStore.setState(state => {
+        const tab = state.chatTabs[freshActiveTab.tabId]
+        if (!tab) return state
+        return { chatTabs: { ...state.chatTabs, [freshActiveTab.tabId]: { ...tab, name: newName } } }
+      })
     }
 
     if (submitModeCategory === 'workflow' && !isRequiredFolderSelected) {

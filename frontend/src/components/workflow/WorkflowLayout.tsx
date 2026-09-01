@@ -97,13 +97,12 @@ import {
   type RunningWorkflowInfo,
 } from '../../services/api-types'
 import { findOrCreateWorkflowTab, isChatCompatiblePhase } from '../../utils/chatSubmitHelpers'
-import { reusableBlankWorkflowChatTabId } from './workflowChatTabConversion'
+import { reusableBlankWorkflowChatTabId, hasWorkflowChatContent, workflowTabAlreadyHasContent } from './workflowChatTabConversion'
 import { hydrateTabEvents } from '../../utils/sessionRestore'
 // Inactive workflow tabs hydrate lazily and fall back to workflow-scoped chat history.
 
 const WORKFLOW_RESTORE_TIMEOUT_MS = 8000
 const WORKFLOW_KILL_AND_START_STOP_TIMEOUT_MS = 30_000
-const WORKFLOW_CHAT_CONTENT_EVENT_TYPES = new Set(['user_message', 'conversation_end', 'unified_completion'])
 function normalizeWorkflowPath(path?: string | null): string {
   return (path || '').replace(/\/+$/, '')
 }
@@ -119,19 +118,6 @@ function clampWorkflowSplitRatio(ratio: number, width: number): number {
   const minRatio = Math.max(0.15, Math.min(0.5, minPaneWidth / Math.max(width, minPaneWidth * 2)))
   const maxRatio = Math.min(0.85, 1 - minRatio)
   return Math.max(minRatio, Math.min(maxRatio, ratio))
-}
-
-function hasWorkflowChatContent(events?: PollingEvent[]): boolean {
-  return (events || []).some(event => WORKFLOW_CHAT_CONTENT_EVENT_TYPES.has(event.type || ''))
-}
-
-// createChatTab always mints a fresh crypto.randomUUID() sessionId for a
-// brand-new tab, even one with zero conversation behind it -- so a tab's
-// `sessionId` alone is truthy even when nothing has ever been loaded into
-// it. The real "already has something" signal is whether that session has
-// any actual content.
-function workflowTabAlreadyHasContent(tab: ChatTab | undefined, tabEvents: Record<string, PollingEvent[]>): boolean {
-  return Boolean(tab?.sessionId) && hasWorkflowChatContent(tabEvents[tab!.sessionId!])
 }
 
 function workflowTabSortTimestamp(tab: ChatTab): number {
@@ -232,6 +218,32 @@ function runningWorkflowBelongsToPreset(
     entry.workspace_path &&
     normalizeWorkflowPath(entry.workspace_path) === normalizeWorkflowPath(workspacePath),
   )
+}
+
+// Adapts the already-fetched active-sessions cache (kept fresh by
+// GlobalActivityMonitor's 5s poll) into the shape the running-workflow tab
+// reconciler needs, so it doesn't have to run its own independent
+// /api/workflow/running poll for the same underlying tracked-execution data.
+function activeSessionToRunningWorkflowInfo(session: ActiveSessionInfo): RunningWorkflowInfo {
+  return {
+    query_id: session.session_id,
+    session_id: session.session_id,
+    preset_query_id: session.preset_query_id,
+    preset_name: session.preset_name,
+    workspace_path: session.workspace_path || '',
+    phase_id: session.phase_id,
+    phase_name: session.phase_name,
+    status: session.status,
+    title: session.title,
+    query: session.query,
+    triggered_by: session.triggered_by || '',
+    started_at: session.created_at,
+    needs_user_input: session.needs_user_input,
+    waiting_message: session.waiting_message,
+    waiting_since: session.waiting_since,
+    runtime_state: session.runtime_state,
+    display_status: session.display_status,
+  }
 }
 
 const WorkflowPreviousChatsPanel: React.FC<{
@@ -1131,24 +1143,32 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
 
   const createFreshWorkflowBuilderTab = useCallback(async (presetId: string, options?: { composerFirst?: boolean; isExplicitNewChat?: boolean }) => {
     const chatStore = useChatStore.getState()
-    const oldTabs = Object.values(chatStore.chatTabs).filter(tab =>
+
+    // A blank builder tab already IS the new-chat screen (it shows the
+    // Recent/Schedules/Bots landing panel) -- reuse it instead of stacking a
+    // second, identical-looking blank tab next to it. Once it has real
+    // content (see submitQueryImmediately's rename-on-first-message), it's no
+    // longer a match here and a later call legitimately opens a fresh one.
+    const existingBlankTab = Object.values(chatStore.chatTabs).find(tab =>
       tab.metadata?.mode === 'workflow' &&
       tab.metadata?.phaseId === 'workflow-builder' &&
       tab.metadata?.presetQueryId === presetId &&
-      !chatStore.getTabStreamingStatus(tab.tabId)
+      !workflowTabAlreadyHasContent(tab, chatStore.tabEvents)
     )
 
-    const tabId = await chatStore.createChatTab('Automation Builder', {
-      mode: 'workflow',
-      phaseId: 'workflow-builder',
-      phaseName: 'Automation Builder',
-      presetQueryId: presetId,
-      // Only an explicit New Chat marks the tab as intentionally blank. The
-      // preset-switch fallback (landing on a workflow with no open tabs) must
-      // keep auto-restoring the previous conversation -- that's the feature
-      // working as intended, not the bug this flag guards against.
-      skipWorkflowAutoRestore: options?.isExplicitNewChat === true
-    })
+    const tabId = existingBlankTab
+      ? existingBlankTab.tabId
+      : await chatStore.createChatTab('New chat', {
+        mode: 'workflow',
+        phaseId: 'workflow-builder',
+        phaseName: 'Automation Builder',
+        presetQueryId: presetId,
+        // Only an explicit New Chat marks the tab as intentionally blank. The
+        // preset-switch fallback (landing on a workflow with no open tabs) must
+        // keep auto-restoring the previous conversation -- that's the feature
+        // working as intended, not the bug this flag guards against.
+        skipWorkflowAutoRestore: options?.isExplicitNewChat === true
+      })
     if (options?.composerFirst) {
       openDefaultPreview()
       setWorkflowWorkspaceView('builder')
@@ -1157,16 +1177,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     }
     activateTab(tabId)
     setShowChatArea(true)
-
-    if (oldTabs.length > 0) {
-      void Promise.allSettled(
-        oldTabs
-          .filter(tab => tab.tabId !== tabId)
-          .map(tab => chatStore.closeTab(tab.tabId, false))
-      ).catch(error => {
-        logger.warn('WorkflowLayout', 'Failed to clean up old workflow builder tabs after starting new chat:', error)
-      })
-    }
   }, [openDefaultPreview, setFocusedPane, setShowChatArea, setShowWorkspacePane, setWorkflowWorkspaceView])
 
   useEffect(() => {
@@ -1891,9 +1901,15 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       if (runningWorkflowReconcileInFlightRef.current) return
       runningWorkflowReconcileInFlightRef.current = true
       try {
-        const response = await agentApi.listRunningWorkflows()
         if (cancelled) return
-        const projectedRunningWorkflows = (response.running || [])
+        // Reuse the store's active-sessions cache instead of independently
+        // polling /api/workflow/running — both are sourced from the same
+        // backend tracker, and GlobalActivityMonitor already keeps this
+        // cache fresh every 5s.
+        const runningFromActiveSessions = useChatStore.getState().activeSessionsCache
+          .filter(session => session.agent_mode === 'workflow' || session.agent_mode === 'workflow_phase')
+          .map(activeSessionToRunningWorkflowInfo)
+        const projectedRunningWorkflows = runningFromActiveSessions
           .filter(item => item.session_id && isRunningWorkflowEntry(item))
           .filter(item => runningWorkflowBelongsToPreset(item, activePresetId, workspacePath))
           .sort((a, b) => new Date(b.started_at || 0).getTime() - new Date(a.started_at || 0).getTime())

@@ -1,16 +1,15 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Workflow, Settings, Copy, Keyboard, Bot, Building2, HelpCircle, AlertCircle, Clock, Loader2, Pause, Eye } from 'lucide-react'
+import { Workflow, Settings, Copy, Keyboard, Bot, Building2, HelpCircle, Eye } from 'lucide-react'
 import { useAuthStore } from '../stores/useAuthStore'
 import { isWorkflowReadOnly } from '../utils/workflowPermissions'
 import { useModeStore } from '../stores/useModeStore'
 import { useGlobalPresetStore, usePresetApplication, usePresetManagement } from '../stores/useGlobalPresetStore'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
-import type { PlannerFile, PresetLLMConfig, ScheduledJob, WorkflowManifest } from '../services/api-types'
+import type { PlannerFile, PresetLLMConfig, WorkflowManifest } from '../services/api-types'
 import PresetModal from './PresetModal'
 import WorkflowScheduleRunsPanel from './scheduler/WorkflowScheduleRunsPanel'
 import BotConnectorModal from './settings/BotConnectorModal'
-import { schedulerApi } from '../api/scheduler'
 import { agentApi, workflowManifestApi } from '../services/api'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from './ui/tooltip'
 import ModalPortal from './ui/ModalPortal'
@@ -48,54 +47,6 @@ const MODE_PILLS = [
     inactiveClasses: 'text-gray-500 dark:text-gray-400',
   },
 ] as const
-
-type WorkflowScheduleSummary = {
-  scheduledWorkflows: number
-  runningWorkflows: number
-  totalSchedules: number
-  runningSchedules: number
-}
-
-const EMPTY_WORKFLOW_SCHEDULE_SUMMARY: WorkflowScheduleSummary = {
-  scheduledWorkflows: 0,
-  runningWorkflows: 0,
-  totalSchedules: 0,
-  runningSchedules: 0,
-}
-
-const WORKFLOW_SCHEDULE_HEADER_LIMIT = 10_000
-
-const getWorkflowScheduleKey = (job: ScheduledJob): string => (
-  job.workflow_id ||
-  job.preset_query_id ||
-  job.workspace_path ||
-  job.workflow_label ||
-  job.name ||
-  job.id
-)
-
-const summarizeWorkflowSchedules = (jobs: ScheduledJob[]): WorkflowScheduleSummary => {
-  const scheduledWorkflowKeys = new Set<string>()
-  const runningWorkflowKeys = new Set<string>()
-  let runningSchedules = 0
-
-  jobs.forEach((job) => {
-    const key = getWorkflowScheduleKey(job)
-    scheduledWorkflowKeys.add(key)
-
-    if (job.last_status === 'running') {
-      runningSchedules += 1
-      runningWorkflowKeys.add(key)
-    }
-  })
-
-  return {
-    scheduledWorkflows: scheduledWorkflowKeys.size,
-    runningWorkflows: runningWorkflowKeys.size,
-    totalSchedules: jobs.length,
-    runningSchedules,
-  }
-}
 
 const workflowManifestToPreset = (manifest: WorkflowManifest, workspacePath: string): CustomPreset => {
   const caps = manifest.capabilities
@@ -182,7 +133,6 @@ export const ModePresetBar: React.FC = () => {
   const [editingPreset, setEditingPreset] = useState<CustomPreset | null>(null)
   const [showShortcuts, setShowShortcuts] = useState(false)
   const [showRunsPanel, setShowRunsPanel] = useState(false)
-  const [workflowScheduleSummary, setWorkflowScheduleSummary] = useState<WorkflowScheduleSummary>(EMPTY_WORKFLOW_SCHEDULE_SUMMARY)
   const [showBotConnector, setShowBotConnector] = useState(false)
   const [restoreWorkspaceAfterBotConnector, setRestoreWorkspaceAfterBotConnector] = useState(false)
   const [showWorkflowsPopup, setShowWorkflowsPopup] = useState(false)
@@ -205,6 +155,10 @@ export const ModePresetBar: React.FC = () => {
   // This mirrors GlobalActivityMonitor's own currentSessionId derivation so
   // the two stay in agreement about which session is "current".
   const activeSessionsCache = useChatStore(state => state.activeSessionsCache)
+  // Populated as a side effect of GlobalActivityMonitor's 5s active-sessions
+  // poll (both come from the combined /api/header-summary endpoint) — no
+  // separate poll needed here.
+  const workflowScheduleSummary = useChatStore(state => state.workflowScheduleSummary)
   const activeTabId = useChatStore(state => state.activeTabId)
   const chatTabs = useChatStore(state => state.chatTabs)
   const currentSession = currentActiveSession(
@@ -271,41 +225,6 @@ export const ModePresetBar: React.FC = () => {
     setShowWorkflowsOverview(false)
   }, [setModeCategory, setShowWorkflowsOverview])
 
-  // Fetch global workflow schedule metadata for the header so it can show
-  // running/total counts before the schedules popup is opened.
-  useEffect(() => {
-    if (!shouldShowScheduleHeader) {
-      setWorkflowScheduleSummary(EMPTY_WORKFLOW_SCHEDULE_SUMMARY)
-      return
-    }
-
-    let cancelled = false
-
-    const loadScheduleState = async () => {
-      try {
-        const resp = await schedulerApi.listJobs({
-          entity_type: 'workflow',
-          limit: WORKFLOW_SCHEDULE_HEADER_LIMIT,
-        })
-        if (cancelled) return
-
-        const jobs = resp.jobs ?? []
-        setWorkflowScheduleSummary(summarizeWorkflowSchedules(jobs))
-      } catch {
-        if (cancelled) return
-        setWorkflowScheduleSummary(EMPTY_WORKFLOW_SCHEDULE_SUMMARY)
-      }
-    }
-
-    loadScheduleState()
-    const interval = window.setInterval(loadScheduleState, 10000)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(interval)
-    }
-  }, [shouldShowScheduleHeader, showRunsPanel]) // refresh after runs panel closes or mode changes
-
   // Handle ESC and Enter keys for shortcuts modal
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -323,10 +242,14 @@ export const ModePresetBar: React.FC = () => {
     }
   }, [showShortcuts])
 
-  const workflowCountLabel =`${workflowScheduleSummary.scheduledWorkflows} automation${workflowScheduleSummary.scheduledWorkflows !== 1 ? 's' : ''}`
-  const scheduleCountLabel = `${workflowScheduleSummary.totalSchedules} schedule${workflowScheduleSummary.totalSchedules !== 1 ? 's' : ''}`
-  const workflowScheduleTooltip = workflowScheduleSummary.runningWorkflows > 0
-    ? `${workflowScheduleSummary.runningWorkflows} of ${workflowScheduleSummary.scheduledWorkflows} scheduled automations running now; ${workflowScheduleSummary.runningSchedules} of ${workflowScheduleSummary.totalSchedules} schedules running`
+  const scheduledWorkflows = workflowScheduleSummary?.scheduled_workflows ?? 0
+  const runningWorkflows = workflowScheduleSummary?.running_workflows ?? 0
+  const totalSchedules = workflowScheduleSummary?.total_schedules ?? 0
+  const runningSchedules = workflowScheduleSummary?.running_schedules ?? 0
+  const workflowCountLabel = `${scheduledWorkflows} automation${scheduledWorkflows !== 1 ? 's' : ''}`
+  const scheduleCountLabel = `${totalSchedules} schedule${totalSchedules !== 1 ? 's' : ''}`
+  const workflowScheduleTooltip = runningWorkflows > 0
+    ? `${runningWorkflows} of ${scheduledWorkflows} scheduled automations running now; ${runningSchedules} of ${totalSchedules} schedules running`
     : `${workflowCountLabel} scheduled; ${scheduleCountLabel} total`
 
   const openBotConnector = useCallback(() => {
@@ -908,13 +831,13 @@ export const ModePresetBar: React.FC = () => {
                         data-testid="tour-workflow-schedules"
                         aria-label="Workflow schedules"
                         className={`relative flex items-center gap-2 rounded-md p-1 transition-colors ${
-                          workflowScheduleSummary.runningWorkflows > 0
+                          runningWorkflows > 0
                             ? 'text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30'
                             : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-700 dark:hover:text-gray-200'
                         }`}
                       >
                         <Workflow className="w-4 h-4 flex-shrink-0" />
-                        {workflowScheduleSummary.runningWorkflows > 0 && (
+                        {runningWorkflows > 0 && (
                           <>
                             <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-green-500 border border-white dark:border-gray-800" />
                             <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-green-500 animate-ping opacity-50" />

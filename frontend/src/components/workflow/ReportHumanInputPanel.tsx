@@ -174,13 +174,6 @@ export function ReportHumanInputPanel({
     return () => window.removeEventListener(WORKFLOW_LOG_REFRESH_EVENT, onRefresh)
 	}, [externallyManaged, loadInputs])
 
-	const needsStatusPolling = visibleInputs.some(input => input.status === 'pending' || input.status === 'answered' || input.status === 'claimed')
-	useEffect(() => {
-		if (externallyManaged || !needsStatusPolling) return
-    const timer = window.setInterval(() => { void loadInputs(undefined, false) }, 5000)
-    return () => window.clearInterval(timer)
-	}, [externallyManaged, loadInputs, needsStatusPolling])
-
   useEffect(() => {
     setDrafts({})
     setHistoryOpen(historyMode === 'expanded')
@@ -696,13 +689,6 @@ export function ReportHumanInputCollection({
 		window.addEventListener(WORKFLOW_LOG_REFRESH_EVENT, onRefresh)
 		return () => window.removeEventListener(WORKFLOW_LOG_REFRESH_EVENT, onRefresh)
 	}, [loadInputs])
-
-	const needsStatusPolling = inputs.some(input => input.status === 'pending' || input.status === 'answered' || input.status === 'claimed')
-	useEffect(() => {
-		if (!needsStatusPolling) return
-		const timer = window.setInterval(() => { void loadInputs(undefined, false) }, 5000)
-		return () => window.clearInterval(timer)
-	}, [loadInputs, needsStatusPolling])
 
 	if (loading && inputs.length === 0 && !error) return null
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowUpRight, Bot, CalendarClock, CheckCircle2, ChevronDown, ChevronRight, CircleAlert, CircleDashed, Clock3, Code2, Loader2, MessageSquare, Paperclip, Play, RotateCcw, Trash2, XCircle, type LucideIcon } from 'lucide-react'
+import { ArrowUpRight, Bot, CalendarClock, ChevronDown, ChevronRight, Code2, Loader2, MessageSquare, Paperclip, Trash2, type LucideIcon } from 'lucide-react'
 import { agentApi } from '../services/api'
 import { schedulerApi } from '../api/scheduler'
 import {
@@ -12,7 +12,8 @@ import {
 } from '../services/api-types'
 import { useChatStore } from '../stores/useChatStore'
 import { isScheduledChatHistorySession } from '../utils/chatHistoryOpenDisposition'
-import { scheduleRunSlotLabel } from '../utils/scheduleRunSlot'
+import { type ScheduleActivityItem } from '../utils/scheduleRunPresentation'
+import { ScheduleRunCard } from './ScheduleRunCard'
 import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
 import {
   CHAT_HISTORY_CLEANUP_AGE_OPTIONS,
@@ -39,14 +40,6 @@ const PREVIEW_MESSAGE_LIMIT = 14
 type PreviousChatKind = 'chat' | 'schedule' | 'bot'
 type PreviousChatFilter = PreviousChatKind
 type EmptyStateIcon = LucideIcon
-
-type ScheduleActivityItem = {
-  id: string
-  job: ScheduledJob
-  run?: ScheduledJobRun
-  kind: 'run' | 'missed'
-  occurredAt: string
-}
 
 const emptyStateContent: Record<PreviousChatFilter, {
   icon: EmptyStateIcon
@@ -169,89 +162,9 @@ const formatMessageCount = (count?: number): string | undefined => {
   return `${formatted} ${count === 1 ? 'message' : 'messages'}`
 }
 
-const formatDuration = (durationMs?: number): string | undefined => {
-  if (typeof durationMs !== 'number' || durationMs < 0) return undefined
-  if (durationMs < 60_000) return `${Math.round(durationMs / 1000)}s`
-  if (durationMs < 3_600_000) return `${Math.round(durationMs / 60_000)}m`
-  const hours = Math.floor(durationMs / 3_600_000)
-  const minutes = Math.round((durationMs % 3_600_000) / 60_000)
-  return minutes ? `${hours}h ${minutes}m` : `${hours}h`
-}
-
-const scheduleRouteSummary = (routeSelections?: Record<string, string>): string | undefined => {
-  const selectedRoutes = Object.values(routeSelections || {})
-    .map(route => route.trim())
-    .filter(Boolean)
-  if (selectedRoutes.length === 0) return undefined
-  return selectedRoutes.join(' · ')
-}
-
-const scheduleLastRunSummary = (job: ScheduledJob): string | undefined => {
-  if (!job.last_run_at) return undefined
-  const status = job.last_status?.replace(/_/g, ' ').trim()
-  return status ? `last ${formatChatTime(job.last_run_at)} · ${status}` : `last ${formatChatTime(job.last_run_at)}`
-}
-
 const sameWorkspace = (left?: string, right?: string): boolean => {
   const normalize = (value?: string) => (value || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
   return Boolean(normalize(left) && normalize(left) === normalize(right))
-}
-
-const scheduleStatusPresentation = (item: ScheduleActivityItem): {
-  label: string
-  className: string
-  Icon: LucideIcon
-  detail: string
-} => {
-  if (item.kind === 'missed') {
-    return {
-      label: 'Missed slot',
-      className: 'border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300',
-      Icon: CircleAlert,
-      detail: item.job.missed_run_reason || 'No execution was created for this scheduled time.',
-    }
-  }
-
-  const run = item.run!
-  switch (run.status) {
-    case 'success':
-      return { label: 'Completed', className: 'border-emerald-500/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300', Icon: CheckCircle2, detail: 'Finished successfully.' }
-    case 'running':
-      return { label: 'Running', className: 'border-sky-500/35 bg-sky-500/10 text-sky-700 dark:text-sky-300', Icon: CircleDashed, detail: 'This occurrence is still running.' }
-    case 'waiting_for_capacity':
-    case 'waiting_for_workflow':
-      return { label: 'Waiting', className: 'border-sky-500/35 bg-sky-500/10 text-sky-700 dark:text-sky-300', Icon: Clock3, detail: run.error || 'Waiting for its schedule policy to permit execution.' }
-    case 'partial':
-      return { label: 'Partial', className: 'border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300', Icon: CircleAlert, detail: run.error || 'The occurrence completed only partially.' }
-    case 'interrupted':
-    case 'stopped':
-      return { label: 'Interrupted', className: 'border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300', Icon: CircleAlert, detail: run.error || 'The occurrence stopped before completion.' }
-    default:
-      return { label: 'Failed run', className: 'border-destructive/45 bg-destructive/10 text-destructive', Icon: XCircle, detail: run.error || 'This recorded execution failed.' }
-  }
-}
-
-// Schedule history is a record of a conversation, not just a server job. Keep
-// the compact card useful without dumping the scheduler's raw error into the
-// primary line: show the instruction that started the run and its latest human
-// readable agent update. The complete transcript remains available through
-// Open, while the raw failure stays in a small disclosure for diagnosis.
-const scheduleRunStartMessage = (job: ScheduledJob, session?: ChatHistorySession): string => {
-  const configuredMessage = (job.messages || []).find(message => message.trim()) || job.query || ''
-  return (session?.query || configuredMessage || 'This scheduled run started without a saved instruction.').trim()
-}
-
-const scheduleRunLatestAgentMessage = (session?: ChatHistorySession): string | undefined => {
-  return [...(session?.preview_messages || [])]
-    .reverse()
-    .find(message => ['assistant', 'ai'].includes(message.role.trim().toLowerCase()) && message.text.trim())
-    ?.text
-    .trim()
-}
-
-const scheduleRunExcerpt = (text: string, maxLength = 240): string => {
-  const normalized = text.replace(/\s+/g, ' ').trim()
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength).trimEnd()}…` : normalized
 }
 
 const sessionHasMessages = (session: ChatHistorySession): boolean => {
@@ -480,13 +393,13 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
   const [expandedWindowBySession, setExpandedWindowBySession] = useState<Record<string, number>>({})
   const [hasMoreBySession, setHasMoreBySession] = useState<Record<string, boolean>>({})
   const [scheduleJobs, setScheduleJobs] = useState<ScheduledJob[]>([])
+  // Eagerly populated (all jobs, in parallel) once scheduleJobs loads — the
+  // Schedules tab is a flat, recency-sorted feed of runs, not a per-job
+  // grouping the user expands one at a time.
   const [scheduleRunsByJob, setScheduleRunsByJob] = useState<Record<string, ScheduledJobRun[]>>({})
-  const [scheduleRunTotalsByJob, setScheduleRunTotalsByJob] = useState<Record<string, number>>({})
   const [isLoadingScheduleActivity, setIsLoadingScheduleActivity] = useState(false)
+  const [isLoadingScheduleRuns, setIsLoadingScheduleRuns] = useState(false)
   const [scheduleJobsWorkspacePath, setScheduleJobsWorkspacePath] = useState('')
-  const [expandedScheduleIDs, setExpandedScheduleIDs] = useState<Set<string>>(() => new Set())
-  const [expandedScheduleMessageIDs, setExpandedScheduleMessageIDs] = useState<Set<string>>(() => new Set())
-  const [loadingScheduleHistoryIDs, setLoadingScheduleHistoryIDs] = useState<Set<string>>(() => new Set())
   const expandedMessagesRef = useRef(expandedMessagesBySession)
   const loadingExpandedSessionIdsRef = useRef(loadingExpandedSessionIds)
   const addToast = useChatStore(state => state.addToast)
@@ -543,6 +456,7 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
     }
     let cancelled = false
     setIsLoadingScheduleActivity(true)
+    setIsLoadingScheduleRuns(false)
 
     void schedulerApi.listJobs({ entity_type: 'workflow', limit: 100 })
       .then(async response => {
@@ -550,22 +464,35 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
         if (cancelled) return
         setScheduleJobs(jobs)
         setScheduleRunsByJob({})
-        setScheduleRunTotalsByJob({})
-        setExpandedScheduleIDs(new Set())
-        setExpandedScheduleMessageIDs(new Set())
-        setLoadingScheduleHistoryIDs(new Set())
         setScheduleJobsWorkspacePath(workspacePath)
+        setIsLoadingScheduleActivity(false)
+
+        if (jobs.length === 0) return
+        setIsLoadingScheduleRuns(true)
+        try {
+          // A workspace has a handful of schedules at most, so this stays a
+          // small, bounded, one-time fan-out — not a poll. Cap per job since
+          // the feed shows everything at once now (no per-job "show more"
+          // gate left to bound an unbounded fetch behind).
+          const runsByJob = await Promise.all(
+            jobs.map(job => schedulerApi.getJobRuns(job.id, 30).then(
+              response => [job.id, response.runs || []] as const,
+              () => [job.id, []] as const,
+            ))
+          )
+          if (cancelled) return
+          setScheduleRunsByJob(Object.fromEntries(runsByJob))
+        } finally {
+          if (!cancelled) setIsLoadingScheduleRuns(false)
+        }
       })
       .catch(() => {
         if (cancelled) return
         setScheduleJobs([])
         setScheduleRunsByJob({})
-        setScheduleRunTotalsByJob({})
         setScheduleJobsWorkspacePath(workspacePath)
+        setIsLoadingScheduleActivity(false)
         addToast('Failed to load schedule activity', 'error')
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoadingScheduleActivity(false)
       })
 
     return () => { cancelled = true }
@@ -612,18 +539,39 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
 
   const scheduleDataMatchesWorkspace = sameWorkspace(scheduleJobsWorkspacePath, workspacePath)
 
+  // A flat, cross-schedule feed sorted by actual run recency — not grouped by
+  // job. Mirrors the Recent tab's own sort-by-recency-and-paginate shape.
+  const flattenedScheduleRuns = useMemo(() => {
+    const items: { job: ScheduledJob; run: ScheduledJobRun }[] = []
+    for (const job of scheduleJobs) {
+      for (const run of scheduleRunsByJob[job.id] || []) {
+        items.push({ job, run })
+      }
+    }
+    return items.sort((a, b) => Date.parse(b.run.started_at || '') - Date.parse(a.run.started_at || ''))
+  }, [scheduleJobs, scheduleRunsByJob])
+
+  const displayedScheduleRuns = useMemo(
+    () => flattenedScheduleRuns.slice(0, visibleCount),
+    [flattenedScheduleRuns, visibleCount]
+  )
+
   const displayFilterCounts = useMemo(() => ({
     ...filterCounts,
-    // The Schedule tab is organized by schedule, not by its child runs.
     // Before its durable schedule list arrives, show a loading mark rather
     // than the unrelated legacy chat-session count (often a false zero).
-    schedule: scheduleDataMatchesWorkspace ? scheduleJobs.length : '…',
-  }), [filterCounts, scheduleDataMatchesWorkspace, scheduleJobs.length])
+    schedule: scheduleDataMatchesWorkspace
+      ? (isLoadingScheduleRuns ? '…' : flattenedScheduleRuns.length)
+      : '…',
+  }), [filterCounts, flattenedScheduleRuns.length, isLoadingScheduleRuns, scheduleDataMatchesWorkspace])
 
   const sessionsByID = useMemo(
     () => new Map(visibleSessions.map(session => [session.session_id, session])),
     [visibleSessions]
   )
+
+  const totalForActiveFilter = activeFilter === 'schedule' ? flattenedScheduleRuns.length : filteredSessions.length
+  const displayedCountForActiveFilter = activeFilter === 'schedule' ? displayedScheduleRuns.length : displayedSessions.length
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE)
@@ -750,55 +698,6 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
     void onSelectSession(session)
   }, [addToast, onSelectSession, sessionsByID])
 
-  const runScheduleNow = useCallback(async (job: ScheduledJob) => {
-    if (!window.confirm(`Run “${job.name}” now? This creates a new scheduled occurrence and follows its normal side-effect and collision rules.`)) return
-    try {
-      await schedulerApi.triggerJob(job.id)
-      addToast(`Started ${job.name}`, 'success')
-      const response = await schedulerApi.getJobRuns(job.id, 200)
-      setScheduleRunsByJob(current => ({ ...current, [job.id]: response.runs || [] }))
-      setScheduleRunTotalsByJob(current => ({ ...current, [job.id]: response.total || 0 }))
-    } catch {
-      addToast(`Could not start ${job.name}`, 'error')
-    }
-  }, [addToast])
-
-  const toggleScheduleHistory = useCallback(async (job: ScheduledJob) => {
-    const alreadyOpen = expandedScheduleIDs.has(job.id)
-    if (alreadyOpen) {
-      setExpandedScheduleIDs(current => {
-        const next = new Set(current)
-        next.delete(job.id)
-        return next
-      })
-      return
-    }
-
-    setExpandedScheduleIDs(current => new Set(current).add(job.id))
-    if (scheduleRunsByJob[job.id]) return
-    setLoadingScheduleHistoryIDs(current => new Set(current).add(job.id))
-    try {
-      // schedule-runs.json retains at most 200 entries. Fetching that one
-      // schedule's complete retained history lets the user inspect every
-      // execution without flattening every schedule into one noisy feed.
-      const response = await schedulerApi.getJobRuns(job.id, 200)
-      setScheduleRunsByJob(current => ({ ...current, [job.id]: response.runs || [] }))
-      setScheduleRunTotalsByJob(current => ({ ...current, [job.id]: response.total || 0 }))
-    } catch {
-      setExpandedScheduleIDs(current => {
-        const next = new Set(current)
-        next.delete(job.id)
-        return next
-      })
-      addToast(`Could not load execution history for ${job.name}`, 'error')
-    } finally {
-      setLoadingScheduleHistoryIDs(current => {
-        const next = new Set(current)
-        next.delete(job.id)
-        return next
-      })
-    }
-  }, [addToast, expandedScheduleIDs, scheduleRunsByJob])
 
   const handleCleanupOldChats = useCallback(async (olderThanDays: ChatHistoryCleanupAgeDays) => {
     const scopeLabel = workspacePath || 'all chats'
@@ -909,199 +808,32 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
               </div>
             ) : scheduleJobs.length === 0 ? (
               <div className="px-3 py-4 text-sm text-muted-foreground">No schedules are configured for this workflow yet.</div>
+            ) : isLoadingScheduleRuns ? (
+              <div className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span>Loading scheduled runs...</span>
+              </div>
+            ) : flattenedScheduleRuns.length === 0 ? (
+              <div className="px-3 py-4 text-sm text-muted-foreground">No scheduled runs recorded yet.</div>
             ) : (
               <div className="divide-y divide-border">
-                {scheduleJobs.map(job => {
-                  const historyOpen = expandedScheduleIDs.has(job.id)
-                  const historyLoading = loadingScheduleHistoryIDs.has(job.id)
-                  const messagesOpen = expandedScheduleMessageIDs.has(job.id)
-                  // `pulse_review_only` is the canonical API flag. Match the
-                  // established schedule name too so a frontend hot reload can
-                  // render existing Pulse schedules before the backend restart
-                  // that begins returning that new field.
-                  const isPulseSchedule = job.pulse_review_only || /^periodic\s+pulse\s+review$/i.test(job.name.trim())
-                  const configuredMessages = (job.messages || []).map(message => message.trim()).filter(Boolean)
-                  // Pulse-only schedules deliberately persist no generic
-                  // messages: the scheduler composes a run-specific context
-                  // from current evidence at trigger time. Surface that real
-                  // contract rather than incorrectly showing an empty state.
-                  const scheduleMessages = configuredMessages.length > 0
-                    ? configuredMessages
-                    : isPulseSchedule
-                      ? ['**Generated Pulse review instructions**\n\nAt the scheduled time, Pulse creates a run-specific review context from the workflow\'s retained evidence, then continues the same conversation through **Gate → Review & Fix → Finalize**. The exact prompt includes the current Pulse run ID, available evidence, and due review modules, so it is not stored as a static schedule message.']
-                      : []
-                  const runs = scheduleRunsByJob[job.id] || []
-                  const recordedRunCount = scheduleRunTotalsByJob[job.id] ?? job.run_count ?? 0
-                  const missedCount = job.missed_run_count || 0
-                  const routeSummary = scheduleRouteSummary(job.route_selections)
-                  const lastRunSummary = scheduleLastRunSummary(job)
-
-                  return (
-                    <div key={job.id} className="group px-3 py-3 transition-colors hover:bg-muted/20">
-                      <div className="flex items-start gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
-                            {isPulseSchedule && <Activity className="h-4 w-4 shrink-0 text-cyan-500" aria-label="Pulse review" />}
-                            <span className="truncate">{job.name}</span>
-                          </div>
-                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-                            <span>{job.enabled ? 'Enabled' : 'Disabled'}</span>
-                            {!isPulseSchedule && (
-                              <>
-                                <span>group {job.group_names?.length ? job.group_names.join(', ') : 'all'}</span>
-                                {routeSummary && <span>route {routeSummary}</span>}
-                              </>
-                            )}
-                            <span>{recordedRunCount} recorded execution{recordedRunCount === 1 ? '' : 's'}</span>
-                            {lastRunSummary && <span>{lastRunSummary}</span>}
-                            {job.next_run_at && <span>next {formatChatTime(job.next_run_at)}</span>}
-                          </div>
-                          {missedCount > 0 && (
-                            <div className="mt-2 flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-300">
-                              <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                              <span>
-                                {missedCount} scheduled slot{missedCount === 1 ? '' : 's'} missed{job.latest_missed_run_at ? `; latest due ${formatChatTime(job.latest_missed_run_at)}` : ''}. No execution record was created.
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => void runScheduleNow(job)}
-                            className="inline-flex items-center gap-1 rounded border border-border bg-background px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-                          >
-                            <Play className="h-3.5 w-3.5" />
-                            {!compact && <span>Run now</span>}
-                          </button>
-                        </div>
-                      </div>
-                      {scheduleMessages.length > 0 && (
-                        <div className="mt-2">
-                          <button
-                            type="button"
-                            onClick={() => setExpandedScheduleMessageIDs(current => {
-                              const next = new Set(current)
-                              if (next.has(job.id)) next.delete(job.id)
-                              else next.add(job.id)
-                              return next
-                            })}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-                          >
-                            {messagesOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                            <span>{messagesOpen ? 'Hide scheduled instructions' : isPulseSchedule ? 'Show generated Pulse instructions' : `Show scheduled instruction${scheduleMessages.length === 1 ? '' : 's'}`}</span>
-                          </button>
-                          {messagesOpen && (
-                            <div className="mt-2 space-y-2 rounded border border-border bg-muted/10 px-3 py-2.5">
-                              {scheduleMessages.map((message, index) => (
-                                <div key={`${job.id}-message-${index}`} className="text-xs leading-5 text-muted-foreground">
-                                  {scheduleMessages.length > 1 && <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Message {index + 1}</div>}
-                                  <ConversationMarkdownRenderer content={message} maxHeight="none" framed={false} />
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      <div className="mt-2">
-                        <button
-                          type="button"
-                          onClick={() => void toggleScheduleHistory(job)}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-                        >
-                          {historyLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : historyOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                          <span>{historyOpen ? 'Hide execution history' : `Show all ${recordedRunCount} recorded execution${recordedRunCount === 1 ? '' : 's'}`}</span>
-                        </button>
-                      </div>
-                      {historyOpen && !historyLoading && (
-                        <div className="mt-2 divide-y divide-border/70 rounded border border-border bg-muted/10">
-                          {runs.length === 0 ? (
-                            <div className="px-3 py-2 text-xs text-muted-foreground">No execution record exists for this schedule yet.</div>
-                          ) : runs.map(run => {
-                            const item: ScheduleActivityItem = { id: run.id, job, run, kind: 'run', occurredAt: run.started_at }
-                            const presentation = scheduleStatusPresentation(item)
-                            const Icon = presentation.Icon
-                            const session = run.session_id ? sessionsByID.get(run.session_id) : undefined
-                            const canResume = run.status === 'interrupted' && !!session
-                            const duration = formatDuration(run.duration_ms)
-                            const isDeleting = !!session && deletingSessionIds.has(session.session_id)
-                            const startedWith = scheduleRunStartMessage(job, session)
-                            const latestAgentUpdate = scheduleRunLatestAgentMessage(session)
-                            const outcome = latestAgentUpdate || presentation.detail
-                            const slotLabel = scheduleRunSlotLabel(job, run)
-                            return (
-                              <div key={run.id} className="space-y-2.5 px-3 py-3">
-                                <div className="flex items-start gap-2">
-                                  <div className={`mt-0.5 inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-semibold ${presentation.className}`}>
-                                    <Icon className={`h-3 w-3 ${run.status === 'running' ? 'animate-spin' : ''}`} />
-                                    <span>{presentation.label}</span>
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="text-sm font-medium text-foreground">
-                                      {run.status === 'success'
-                                        ? duration ? `Completed in ${duration}` : 'Completed'
-                                        : run.status === 'running'
-                                          ? 'Run in progress'
-                                          : duration ? `Stopped after ${duration}` : 'Run stopped'}
-                                    </div>
-                                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-                                      {slotLabel && <span className="font-medium text-foreground/75">{slotLabel}</span>}
-                                      <span>Started {formatChatTime(run.started_at)}</span>
-                                      {run.completed_at && <span>ended {formatChatTime(run.completed_at)}</span>}
-                                      {run.group_names?.length ? <span>{run.group_names.join(', ')}</span> : null}
-                                    </div>
-                                  </div>
-                                  <div className="flex shrink-0 items-center gap-1">
-                                    {session && (
-                                      <button
-                                        type="button"
-                                        onClick={() => openScheduleActivity(item)}
-                                        className="inline-flex items-center gap-1 rounded border border-border bg-background px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-                                      >
-                                        {canResume ? <RotateCcw className="h-3.5 w-3.5" /> : <ArrowUpRight className="h-3.5 w-3.5" />}
-                                        {!compact && <span>{canResume ? 'Resume' : 'Open'}</span>}
-                                      </button>
-                                    )}
-                                    {session && (
-                                      <button
-                                        type="button"
-                                        onClick={() => { void handleDeleteSession(session) }}
-                                        disabled={isDeleting}
-                                        className="inline-flex items-center rounded border border-border bg-background p-1 text-destructive/75 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                                        aria-label="Delete conversation record"
-                                        title="Delete conversation record; the schedule execution remains"
-                                      >
-                                        {isDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
-
-                                <div className="space-y-2 border-l-2 border-border/80 pl-3">
-                                  <div>
-                                    <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Started with</div>
-                                    <p className="line-clamp-2 text-xs leading-5 text-muted-foreground">{scheduleRunExcerpt(startedWith)}</p>
-                                  </div>
-                                  <div>
-                                    <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{latestAgentUpdate ? 'Latest agent update' : 'Outcome'}</div>
-                                    <p className="line-clamp-3 text-xs leading-5 text-foreground/90">{scheduleRunExcerpt(outcome)}</p>
-                                  </div>
-                                </div>
-
-                                {run.error && (
-                                  <details className="text-[11px] text-muted-foreground">
-                                    <summary className="cursor-pointer select-none font-medium hover:text-foreground">Technical details</summary>
-                                    <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded border border-destructive/20 bg-destructive/5 px-2 py-1.5 font-mono text-[10px] leading-4 text-muted-foreground">{run.error}</pre>
-                                  </details>
-                                )}
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
+                {displayedScheduleRuns.map(({ job, run }) => (
+                  <div key={run.id} className="px-3 py-3 transition-colors hover:bg-muted/20">
+                    <ScheduleRunCard
+                      job={job}
+                      run={run}
+                      resolveSession={r => (r.session_id ? sessionsByID.get(r.session_id) : undefined)}
+                      onOpen={r => openScheduleActivity({ id: r.id, job, run: r, kind: 'run', occurredAt: r.started_at })}
+                      onDelete={r => {
+                        const session = r.session_id ? sessionsByID.get(r.session_id) : undefined
+                        if (session) void handleDeleteSession(session)
+                      }}
+                      deletingRunIds={deletingSessionIds}
+                      compact={compact}
+                      showScheduleName
+                    />
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -1270,7 +1002,7 @@ export const PreviousChatHistoryPanel: React.FC<PreviousChatHistoryPanelProps> =
           </div>
         )}
 
-        {!isLoading && (activeFilter === 'chat' || activeFilter === 'bot') && filteredSessions.length > displayedSessions.length && (
+        {!isLoading && totalForActiveFilter > displayedCountForActiveFilter && (
           <div className="border-t border-border px-3 py-2">
             <button
               type="button"
