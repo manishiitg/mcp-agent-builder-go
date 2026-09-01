@@ -67,12 +67,6 @@ type LibraryTabProps = {
 
 const providerSectionOrder: LLMIntegrationKind[] = ['coding_agent', 'api_model', 'audio_provider']
 
-const providerSectionIcon: Record<LLMIntegrationKind, typeof Terminal> = {
-  coding_agent: Terminal,
-  api_model: KeyRound,
-  audio_provider: AudioLines,
-}
-
 const providerStatus = (provider: ProviderManifestEntry, locked: boolean) => {
   if (locked) {
     return { label: 'Managed', tone: 'text-blue-600 dark:text-blue-400', icon: CheckCircle2 }
@@ -216,7 +210,9 @@ export function LibraryTab({ providers, onSelectProvider, isProviderLocked, hide
         <div>
           <h3 className="text-lg font-semibold text-foreground">Model Library</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Installed providers, available defaults, and reusable configurations in one place.
+            {hideSavedConfigurations
+              ? 'Connect a provider or change its models.'
+              : 'Installed providers, available defaults, and reusable configurations in one place.'}
           </p>
         </div>
         <Button
@@ -244,15 +240,8 @@ export function LibraryTab({ providers, onSelectProvider, isProviderLocked, hide
 
       <div className="space-y-4">
         {providerGroups.map(group => {
-          const sectionInfo = getProviderIntegrationInfo(group.providers[0].id, group.providers[0].default_model_id)
-          const SectionIcon = providerSectionIcon[group.kind]
           return (
             <section key={group.kind}>
-              <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase text-muted-foreground">
-                <SectionIcon className={`h-3.5 w-3.5 ${sectionInfo.toneClass}`} />
-                {sectionInfo.label}
-                <span className="font-normal text-muted-foreground/70">{group.providers.length}</span>
-              </div>
               <div className="divide-y divide-border overflow-hidden rounded-md border border-border">
                 {group.providers.map(provider => {
                   const status = providerStatus(provider, isProviderLocked(provider.id))

@@ -79,7 +79,7 @@ export default function SkillEditor({ skill, onClose, onSave }: SkillEditorProps
             <button
               onClick={handleSave}
               disabled={isSaving || !isDirty}
-              className="px-4 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary hover:bg-primary/90 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
               {isSaving ? (
                 <>
@@ -118,7 +118,7 @@ export default function SkillEditor({ skill, onClose, onSave }: SkillEditorProps
               setContent(e.target.value)
               setIsDirty(true)
             }}
-            className="w-full h-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            className="w-full h-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
             placeholder="---
 name: my-skill
 description: A description of what the skill does

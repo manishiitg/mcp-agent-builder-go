@@ -7,23 +7,11 @@ import type { Skill } from '../../types/skills';
 interface SkillSelectionSectionProps {
   selectedSkills: string[]; // Array of skill folder names
   onSkillChange: (skills: string[]) => void;
-  /** Lets the list use an embedded side panel's remaining vertical space. */
-  fillAvailableHeight?: boolean;
-  /** Suppress the "Skills Selection" title + description -- for a host that
-   * already shows its own equivalent section header above this. */
-  hideHeader?: boolean;
-  /** Show only already-selected skills, instead of every available skill --
-   * for a host that offers a separate way to add new ones (e.g. the workflow
-   * panel's skills manager below). */
-  showSelectedOnly?: boolean;
 }
 
 export const SkillSelectionSection: React.FC<SkillSelectionSectionProps> = ({
   selectedSkills,
   onSkillChange,
-  fillAvailableHeight = false,
-  hideHeader = false,
-  showSelectedOnly = false,
 }) => {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -83,42 +71,31 @@ export const SkillSelectionSection: React.FC<SkillSelectionSectionProps> = ({
   }, [skills, selectedSkills, onSkillChange]);
 
   const allSelected = skills.length > 0 && skills.every(s => selectedSkills.includes(s.folder_name));
-  const visibleSkills = showSelectedOnly ? skills.filter(s => selectedSkills.includes(s.folder_name)) : skills;
 
   return (
-    <div className={fillAvailableHeight ? 'flex h-full min-h-0 flex-col gap-3' : 'space-y-3'}>
-      {!hideHeader && (
-        <>
-          <div className="flex shrink-0 items-center justify-between">
-            <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-purple-500" />
-              Skills Selection
-            </label>
-            <button
-              type="button"
-              onClick={loadSkills}
-              disabled={isLoading}
-              className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 flex items-center gap-1"
-            >
-              <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
-          </div>
+    <div className="space-y-3">
+      <div className="flex shrink-0 items-center justify-between">
+        <label className="block text-sm font-medium text-gray-900 dark:text-gray-100 flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-muted-foreground" />
+          Skills Selection
+        </label>
+        <button
+          type="button"
+          onClick={loadSkills}
+          disabled={isLoading}
+          className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 flex items-center gap-1"
+        >
+          <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
+      </div>
 
-          <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
-            Select skills to enable for this preset. Skills provide reusable instructions for the agent.
-          </div>
-        </>
-      )}
-
-      {showSelectedOnly && selectedSkills.length === 0 && (
-        <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
-          No skills selected yet. Add one below.
-        </div>
-      )}
+      <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
+        Select skills to enable for this preset. Skills provide reusable instructions for the agent.
+      </div>
 
       {/* Skills List */}
-      <div className={`border border-gray-200 dark:border-gray-700 rounded-md overflow-y-auto ${fillAvailableHeight ? 'min-h-0 flex-1' : 'max-h-64'}`}>
+      <div className="border border-gray-200 dark:border-gray-700 rounded-md overflow-y-auto max-h-64">
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 text-sm text-gray-500 dark:text-gray-400 py-8">
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -128,42 +105,34 @@ export const SkillSelectionSection: React.FC<SkillSelectionSectionProps> = ({
           <div className="text-sm text-red-500 text-center py-8">
             {error}
           </div>
-        ) : visibleSkills.length === 0 ? (
-          showSelectedOnly ? null : (
-            <div className="text-sm text-gray-500 text-center py-8">
-              No skills available. Import skills from the Skills Manager.
-            </div>
-          )
+        ) : skills.length === 0 ? (
+          <div className="text-sm text-gray-500 text-center py-8">
+            No skills available. Import skills from the Skills Manager.
+          </div>
         ) : (
           <>
-            {/* Select All Header -- bulk-select doesn't fit the "browse to
-                add" model once adding happens in the manager below, and
-                would otherwise silently select skills outside this
-                selected-only view. */}
-            {!showSelectedOnly && (
-              <div className="flex items-center p-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-                <button
-                  type="button"
-                  onClick={handleSelectAll}
-                  className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1"
-                >
-                  {allSelected ? (
-                    <>
-                      <Check className="w-3 h-3" />
-                      Deselect all
-                    </>
-                  ) : (
-                    <>Select all skills</>
-                  )}
-                </button>
-                <span className="ml-auto text-xs text-gray-500">
-                  {selectedSkills.length}/{skills.length} selected
-                </span>
-              </div>
-            )}
+            <div className="flex items-center p-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+              <button
+                type="button"
+                onClick={handleSelectAll}
+                className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1"
+              >
+                {allSelected ? (
+                  <>
+                    <Check className="w-3 h-3" />
+                    Deselect all
+                  </>
+                ) : (
+                  <>Select all skills</>
+                )}
+              </button>
+              <span className="ml-auto text-xs text-gray-500">
+                {selectedSkills.length}/{skills.length} selected
+              </span>
+            </div>
 
             {/* Skill Items */}
-            {visibleSkills
+            {skills
               .sort((a, b) => {
                 // Sort selected skills first
                 const aSelected = selectedSkills.includes(a.folder_name);

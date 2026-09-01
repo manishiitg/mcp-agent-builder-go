@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { BrainCircuit, KeyRound, LoaderCircle, Monitor, Puzzle, Save, Server } from 'lucide-react'
 import { ToolSelectionSection } from '../ToolSelectionSection'
-import { SkillSelectionSection } from '../skills/SkillSelectionSection'
 import SkillsManagerPanel from '../skills/SkillsManagerPanel'
 import { SecretSelectionSection } from '../secrets/SecretSelectionSection'
 import SecretsManagerPanel from '../secrets/SecretsManagerPanel'
@@ -175,31 +174,16 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
             {error && <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
             {section === 'skills' && (
               <div className="flex min-h-0 flex-1 flex-col">
-                <div className="shrink-0 overflow-y-auto">
-                  <SkillSelectionSection
-                    selectedSkills={capabilities.selected_skills}
-                    onSkillChange={(selected_skills) => setCapabilities(current => ({ ...current, selected_skills }))}
-                    hideHeader
-                    showSelectedOnly
-                  />
-                </div>
-                <div className="mt-3 flex min-h-0 flex-1 flex-col pt-1">
-                  <div className="shrink-0 text-sm font-medium text-muted-foreground">
-                    Add a skill
-                  </div>
-                  <div className="mt-3 flex min-h-0 flex-1 flex-col">
-                    <SkillsManagerPanel
-                      compact
-                      selectedSkills={capabilities.selected_skills}
-                      onToggleSkill={(folderName) => setCapabilities(current => ({
-                        ...current,
-                        selected_skills: current.selected_skills.includes(folderName)
-                          ? current.selected_skills.filter(s => s !== folderName)
-                          : [...current.selected_skills, folderName],
-                      }))}
-                    />
-                  </div>
-                </div>
+                <SkillsManagerPanel
+                  compact
+                  selectedSkills={capabilities.selected_skills}
+                  onToggleSkill={(folderName) => setCapabilities(current => ({
+                    ...current,
+                    selected_skills: current.selected_skills.includes(folderName)
+                      ? current.selected_skills.filter(s => s !== folderName)
+                      : [...current.selected_skills, folderName],
+                  }))}
+                />
               </div>
             )}
             {section === 'mcp' && (
@@ -273,13 +257,9 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
                   llmConfig={capabilities.llm_config}
                   onChange={(llm_config) => setCapabilities(current => ({ ...current, llm_config }))}
                 />
-                <div className="mt-3">
-                  <div className="shrink-0 text-sm font-medium text-muted-foreground">
-                    Model library
-                  </div>
-                  <div className="mt-3">
-                    <LLMLibraryPanel />
-                  </div>
+                {/* LLMLibraryPanel renders its own "Model Library" heading. */}
+                <div className="mt-6">
+                  <LLMLibraryPanel />
                 </div>
               </>
             )}

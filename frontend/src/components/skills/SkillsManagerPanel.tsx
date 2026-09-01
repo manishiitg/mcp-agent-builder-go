@@ -1,19 +1,18 @@
 import { useEffect, useCallback, useMemo, useState } from 'react'
-import { WandSparkles, Loader2, AlertCircle, Plus, RefreshCw, Search } from 'lucide-react'
+import { WandSparkles, Loader2, AlertCircle, Plus, RefreshCw, Search, X } from 'lucide-react'
 import { skillsApi } from '../../api/skills'
 import type { Skill } from '../../types/skills'
-import SkillCard from './SkillCard'
+import SkillRow from './SkillRow'
 import SkillImportDialog from './SkillImportDialog'
 
 interface SkillsManagerPanelProps {
   /** The embedded workflow-panel context: tighter spacing for a narrow side
-   * panel instead of the modal's roomier padding. SkillCard is already a
-   * full-width block with no column assumptions, so the list itself doesn't
-   * need a layout change -- just less padding around it. */
+   * panel instead of the modal's roomier padding. */
   compact?: boolean
-  // When provided (the workflow-panel embedding), each card also gets an
-  // add/remove-from-workflow action -- the point of surfacing skill
-  // management here in the first place, mirroring ConnectorsBrowser.
+  // When provided (the workflow-panel embedding), the panel also shows the
+  // selected-skills chips at top and gives each row an add/remove-from-workflow
+  // toggle -- the point of surfacing skill management here in the first
+  // place, mirroring ConnectorsBrowser.
   selectedSkills?: string[]
   onToggleSkill?: (folderName: string) => void
 }
@@ -72,16 +71,62 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
 
   const visibleSkills = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return skills
-    return skills.filter(skill =>
-      skill.frontmatter.name.toLowerCase().includes(q) ||
-      skill.folder_name.toLowerCase().includes(q) ||
-      (skill.frontmatter.description || '').toLowerCase().includes(q)
-    )
-  }, [skills, query])
+    const base = q
+      ? skills.filter(skill =>
+          skill.frontmatter.name.toLowerCase().includes(q) ||
+          skill.folder_name.toLowerCase().includes(q) ||
+          (skill.frontmatter.description || '').toLowerCase().includes(q)
+        )
+      : skills
+    if (!selectedSkills) return base
+    // Selected skills bubble to the top so they're easy to find in a long list.
+    return [...base].sort((a, b) => {
+      const aSelected = selectedSkills.includes(a.folder_name)
+      const bSelected = selectedSkills.includes(b.folder_name)
+      if (aSelected && !bSelected) return -1
+      if (!aSelected && bSelected) return 1
+      return a.frontmatter.name.localeCompare(b.frontmatter.name)
+    })
+  }, [skills, query, selectedSkills])
 
   return (
     <div className={`flex min-h-0 flex-1 flex-col ${compact ? 'gap-2' : 'gap-3'}`}>
+      {onToggleSkill && (
+        <div className="shrink-0">
+          <div className="mb-1.5 text-sm font-medium text-muted-foreground">Skills for this workflow</div>
+          {(selectedSkills || []).length === 0 ? (
+            <p className="text-xs text-gray-500 dark:text-gray-400">No skills yet — pick one below.</p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {(selectedSkills || []).map(folderName => {
+                // Fall back to the raw folder name when the skill isn't in the
+                // currently loaded list (e.g. renamed/removed elsewhere) --
+                // a selected skill must never be invisible.
+                const skill = skills.find(s => s.folder_name === folderName)
+                const label = skill?.frontmatter.name || folderName
+                return (
+                  <span
+                    key={folderName}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 py-1 pl-2.5 pr-1.5 text-xs font-medium text-primary"
+                  >
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/40" />
+                    {label}
+                    <button
+                      type="button"
+                      onClick={() => onToggleSkill(folderName)}
+                      className="rounded-full p-0.5 text-primary/70 transition-colors hover:bg-red-500/15 hover:text-red-500"
+                      aria-label={`Remove ${label} from this workflow`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex shrink-0 items-center justify-between">
         <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
           {query.trim()
@@ -98,7 +143,7 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
           </button>
           <button
             onClick={() => setShowImportDialog(true)}
-            className="px-2.5 py-1 text-xs font-medium text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-900/30 hover:bg-purple-100 dark:hover:bg-purple-900/50 rounded-md transition-colors flex items-center gap-1.5"
+            className="px-2.5 py-1 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/20 rounded-md transition-colors flex items-center gap-1.5"
           >
             <Plus className="w-3.5 h-3.5" />
             Import
@@ -115,7 +160,7 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search skills"
             aria-label="Search skills"
-            className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-10 pr-3 text-sm text-gray-900 placeholder-gray-400 transition-colors focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+            className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-10 pr-3 text-sm text-gray-900 placeholder-gray-400 transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
           />
         </div>
       )}
@@ -142,7 +187,7 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
             </p>
             <button
               onClick={() => setShowImportDialog(true)}
-              className="px-4 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-md transition-colors flex items-center gap-2"
+              className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary hover:bg-primary/90 rounded-md transition-colors flex items-center gap-2"
             >
               <Plus className="w-4 h-4" />
               Import
@@ -153,9 +198,9 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
             No skills match "{query}".
           </p>
         ) : (
-          <div className={`grid ${compact ? 'gap-2' : 'gap-4'}`}>
+          <div className="rounded-md border border-gray-200 dark:border-gray-700">
             {visibleSkills.map((skill) => (
-              <SkillCard
+              <SkillRow
                 key={skill.file_path || skill.folder_name}
                 skill={skill}
                 onDelete={() => handleDelete(skill.folder_name)}
