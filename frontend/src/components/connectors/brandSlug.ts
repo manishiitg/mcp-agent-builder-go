@@ -1,0 +1,33 @@
+import { BRAND_MARKS } from './brandMarks'
+
+/**
+ * Server names that do not normalize cleanly onto their brand slug.
+ * Keys are the normalized server name (lowercased, non-alphanumerics stripped).
+ */
+const SLUG_ALIASES: Record<string, string> = {
+  mondaycom: 'monday',
+  bitbucket: 'atlassian',
+  awsknowledge: 'amazonaws',
+}
+
+/**
+ * Vendors that publish a family of servers under one brand — "Cloudflare
+ * Radar", "Cloudflare AutoRAG" and six more all carry the Cloudflare mark.
+ * Matched by prefix so a new sibling server needs no alias entry.
+ */
+const SLUG_PREFIXES: string[] = ['cloudflare']
+
+/**
+ * Resolves an MCP server's display name to a `BRAND_MARKS` slug.
+ *
+ * Most names match once lowercased and stripped of punctuation ("PayPal" →
+ * "paypal"). The rest are aliased above. Servers with no published mark —
+ * Plaid, Close, Fireflies, Globalping, custom servers — resolve to undefined
+ * and fall back to the neutral glyph in ConnectionIcon.
+ */
+export function brandSlugFor(serverName: string): string | undefined {
+  const normalized = serverName.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const prefix = SLUG_PREFIXES.find((p) => normalized.startsWith(p))
+  const slug = SLUG_ALIASES[normalized] ?? prefix ?? normalized
+  return slug in BRAND_MARKS ? slug : undefined
+}

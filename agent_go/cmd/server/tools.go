@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -17,7 +18,6 @@ import (
 
 	"github.com/manishiitg/mcpagent/mcpcache"
 	"github.com/manishiitg/mcpagent/mcpclient"
-	"github.com/manishiitg/mcpagent/oauth"
 
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
@@ -62,21 +62,19 @@ func (api *StreamingAPI) appendServerLog(serverName, level, message string) {
 type ToolStatus struct {
 	Name          string                 `json:"name"`
 	Server        string                 `json:"server"`
-	Status        string                 `json:"status"` // "ok", "loading", or "error"
+	Status        string                 `json:"status"` // "ok", "loading", "not_connected" (awaiting OAuth), or "error"
 	Error         string                 `json:"error,omitempty"`
 	Description   string                 `json:"description,omitempty"`
 	ToolsEnabled  int                    `json:"toolsEnabled"`
 	FunctionNames []string               `json:"function_names"`
 	Tools         []mcpclient.ToolDetail `json:"tools,omitempty"` // Only populated for detailed requests
-	// OAuth detection
-	RequiresOAuth  bool            `json:"requires_oauth,omitempty"`  // Auto-detected from 401 response
-	OAuthEndpoints *OAuthEndpoints `json:"oauth_endpoints,omitempty"` // Discovered endpoints if OAuth detected
-}
-
-// OAuthEndpoints represents discovered OAuth endpoints
-type OAuthEndpoints struct {
-	AuthURL  string `json:"auth_url"`
-	TokenURL string `json:"token_url"`
+	// Connection ownership — "connected" (the user added this server) or
+	// "available" (it is in the catalog but the user has not connected it).
+	// Distinct from Status, which reports whether the server is reachable.
+	Connection string `json:"connection"`
+	// OAuth requirement, read from config rather than probed. A server needs
+	// OAuth if and only if its config carries an oauth block.
+	RequiresOAuth bool `json:"requires_oauth,omitempty"`
 }
 
 // SetEnabledToolsRequest represents a request to set enabled tools
@@ -159,7 +157,9 @@ func (api *StreamingAPI) discoverServerToolsDetailed(ctx context.Context, server
 	if err != nil {
 		api.appendServerLog(serverName, "error", fmt.Sprintf("Connection failed: %v", err))
 
-		// Check if this is an OAuth error - try to auto-discover OAuth endpoints
+		// The connection failed. Report the server's own error verbatim — it is
+		// the only diagnostic available, and both the UI and the retry decision
+		// below read it.
 		toolStatus := &ToolStatus{
 			Name:         serverName,
 			Server:       serverName,
@@ -169,21 +169,20 @@ func (api *StreamingAPI) discoverServerToolsDetailed(ctx context.Context, server
 			ToolsEnabled: 0,
 		}
 
-		// Try OAuth auto-discovery if server has URL (HTTP/SSE protocol)
-		// Also support mcp-remote pattern: command=npx, args=["mcp-remote", "<url>"]
-		discoveryURL := srvCfg.URL
-		if discoveryURL == "" {
-			discoveryURL = extractMCPRemoteURL(srvCfg.Command, srvCfg.Args)
-		}
-		if discoveryURL != "" {
-			if endpoints := api.tryOAuthDiscovery(ctx, discoveryURL); endpoints != nil {
-				toolStatus.RequiresOAuth = true
-				toolStatus.OAuthEndpoints = endpoints
-				toolStatus.Error = "OAuth authentication required"
-				api.appendServerLog(serverName, "warn", "OAuth authentication required")
-				api.logger.Info(fmt.Sprintf("✅ Auto-detected OAuth for %s: auth=%s, token=%s",
-					serverName, endpoints.AuthURL, endpoints.TokenURL))
-			}
+		// Only a failure that is actually the server rejecting our credential
+		// means the user needs to re-authenticate. Deciding this from config
+		// alone would relabel every transient failure — a restart, a timeout, a
+		// rate limit — as "OAuth authentication required", and callers latch
+		// that permanently. Discovery reaches this point only after confirming
+		// a token file exists, so the server is one the user already connected.
+		if srvCfg.OAuth != nil && isAuthFailure(err) {
+			toolStatus.Status = "not_connected"
+			toolStatus.RequiresOAuth = true
+			// Error keeps err.Error() from above. Replacing it with a canned
+			// string would throw away the only diagnostic we have — which code
+			// the server returned, and what it said — leaving the UI and the
+			// server log unable to tell an expired token from a revoked one.
+			api.appendServerLog(serverName, "warn", fmt.Sprintf("Stored OAuth credential was rejected; reconnect required: %v", err))
 		}
 
 		return toolStatus, nil
@@ -263,21 +262,6 @@ func (api *StreamingAPI) discoverServerToolsDetailed(ctx context.Context, server
 		Tools:         toolDetails,
 	}
 
-	// For mcp-remote servers: probe the remote URL for OAuth even on successful connection.
-	// Kite and similar servers allow unauthenticated tool listing but require auth for tool calls.
-	// Only do this if OAuth is not already configured for the server.
-	if srvCfg.OAuth == nil && srvCfg.URL == "" {
-		if remoteURL := extractMCPRemoteURL(srvCfg.Command, srvCfg.Args); remoteURL != "" {
-			if endpoints := api.tryOAuthDiscovery(ctx, remoteURL); endpoints != nil {
-				toolStatus.RequiresOAuth = true
-				toolStatus.OAuthEndpoints = endpoints
-				api.appendServerLog(serverName, "warn", "OAuth authentication required (detected via mcp-remote URL)")
-				api.logger.Info(fmt.Sprintf("✅ Auto-detected OAuth for mcp-remote server %s: auth=%s, token=%s",
-					serverName, endpoints.AuthURL, endpoints.TokenURL))
-			}
-		}
-	}
-
 	return toolStatus, nil
 }
 
@@ -319,13 +303,18 @@ func (api *StreamingAPI) handleGetTools(w http.ResponseWriter, r *http.Request) 
 		cachedMap[status.Name] = status
 	}
 
+	// Read the overlay once for the whole response, not once per server.
+	overlay := api.loadOverlayServerNames()
+
 	// Create comprehensive results showing ALL configured servers
 	// Apply per-user OAuth status to each result
 	allResults := make([]ToolStatus, 0, len(cfg.MCPServers))
 	for serverName, serverConfig := range cfg.MCPServers {
+		connection := connectionState(serverName, serverConfig, overlay, userID)
 		if cachedStatus, exists := cachedMap[serverName]; exists {
 			// Use cached result but apply user-specific OAuth status
 			userStatus := api.getToolStatusForUser(cachedStatus, userID)
+			userStatus.Connection = connection
 			allResults = append(allResults, userStatus)
 		} else {
 			// Create fallback result for servers not yet discovered
@@ -333,6 +322,7 @@ func (api *StreamingAPI) handleGetTools(w http.ResponseWriter, r *http.Request) 
 				Name:          serverName,
 				Server:        serverName,
 				Status:        "loading", // Indicate that tools are being discovered
+				Connection:    connection,
 				Description:   serverConfig.Description,
 				ToolsEnabled:  0,
 				FunctionNames: []string{},
@@ -642,6 +632,98 @@ func hasOAuthTokenFile(cfg mcpclient.MCPServerConfig) bool {
 	return err == nil
 }
 
+// authStatusCodeRe matches bare HTTP auth status codes on word boundaries.
+// Substring matching is not safe here: "401" appears inside ordinary text like
+// the port in "dial tcp 127.0.0.1:14018", which would misread a refused
+// connection as a rejected credential.
+var authStatusCodeRe = regexp.MustCompile(`\b(401|403)\b`)
+
+// authFailureMarkers are the phrases transports and OAuth servers use when they
+// reject a credential, as opposed to failing to reach the server at all.
+var authFailureMarkers = []string{
+	"unauthorized",
+	"unauthenticated",
+	"forbidden",
+	"access denied",
+	"permission denied",
+	"invalid_token",
+	"invalid_grant",
+	"token expired",
+}
+
+// isAuthFailureMessage reports whether an error message describes the server
+// rejecting our credential. This is the difference between "your token is no
+// longer good" — which the user must fix by reconnecting — and "the server was
+// unreachable", which may well succeed on the next attempt.
+//
+// The distinction matters because callers latch auth failures permanently:
+// treating a network blip as an auth failure wedges a working connector until
+// someone reconnects it by hand.
+func isAuthFailureMessage(msg string) bool {
+	lower := strings.ToLower(msg)
+	for _, marker := range authFailureMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return authStatusCodeRe.MatchString(lower)
+}
+
+// isAuthFailure is isAuthFailureMessage over an error value.
+func isAuthFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	return isAuthFailureMessage(err.Error())
+}
+
+// Connection states reported to the UI. "connected" means the user added this
+// server; "available" means it is offered by the catalog but not connected.
+const (
+	connectionConnected = "connected"
+	connectionAvailable = "available"
+)
+
+// loadOverlayServerNames returns the set of server names present in the user
+// config overlay. Overlay membership is the definition of "connected": the
+// base catalog is what we offer, the overlay is what the user took. OAuth
+// callbacks already write there on success, so this was already true for OAuth
+// servers before it was made explicit. Callers that iterate many servers must
+// read this once and pass the result into connectionState rather than
+// re-reading the file per server.
+func (api *StreamingAPI) loadOverlayServerNames() map[string]bool {
+	names := make(map[string]bool)
+	overlay, err := mcpclient.LoadConfig(api.getUserConfigPath(), api.logger)
+	if err != nil {
+		// A missing overlay is the normal first-run state, not an error worth
+		// failing the request over — it simply means nothing is connected yet.
+		api.logger.Debug(fmt.Sprintf("No user config overlay readable: %v", err))
+		return names
+	}
+	for name := range overlay.MCPServers {
+		names[name] = true
+	}
+	return names
+}
+
+// connectionState answers "is this server mine?" — distinct from Status, which
+// answers "is it working?". A server is connected when it is in the overlay and,
+// if it uses OAuth, this user has a credential on disk. The token is looked up
+// at the per-user path rather than the one in config, which is only the same
+// file for the default user.
+func connectionState(name string, cfg mcpclient.MCPServerConfig, overlay map[string]bool, userID string) string {
+	if !overlay[name] {
+		return connectionAvailable
+	}
+	if cfg.OAuth == nil {
+		return connectionConnected // no credential needed
+	}
+	if _, err := os.Stat(expandPath(getUserTokenFilePath(userID, name))); err != nil {
+		return connectionAvailable
+	}
+	return connectionConnected
+}
+
 // initializeToolCache initializes the tool cache on server startup using existing mcpcache service
 func (api *StreamingAPI) initializeToolCache() {
 	api.logger.Info("🚀 Initializing tool cache on server startup using existing mcpcache service...")
@@ -920,10 +1002,11 @@ func (api *StreamingAPI) runBackgroundDiscovery() {
 
 			api.toolStatusMux.Lock()
 			api.toolStatus[serverName] = ToolStatus{
-				Name:   serverName,
-				Server: serverName,
-				Status: "error",
-				Error:  "OAuth authentication required — no token available",
+				Name:          serverName,
+				Server:        serverName,
+				Status:        "not_connected",
+				Error:         "OAuth authentication required — no token available",
+				RequiresOAuth: true,
 			}
 			api.toolStatusMux.Unlock()
 			continue
@@ -945,8 +1028,7 @@ func (api *StreamingAPI) runBackgroundDiscovery() {
 
 			// Mark servers with permanent errors so they're not retried on subsequent cycles.
 			// Auth/unauthorized errors won't resolve without config changes.
-			if strings.Contains(errMsg, "unauthorized") || strings.Contains(errMsg, "401") ||
-				strings.Contains(errMsg, "OAuth") || strings.Contains(errMsg, "forbidden") || strings.Contains(errMsg, "403") {
+			if isAuthFailureMessage(errMsg) {
 				api.discoveryFailedServers[serverName] = errMsg
 				api.logger.Info(fmt.Sprintf("🚫 Server %s marked as permanently failed (auth error), will not retry", serverName))
 			}
@@ -963,17 +1045,21 @@ func (api *StreamingAPI) runBackgroundDiscovery() {
 			continue
 		}
 
-		// Check if discovery returned an error status (e.g. OAuth required, auth failed).
-		// discoverServerToolsDetailed returns (toolStatus, nil) for these — the error
+		// Check if discovery returned a non-ok status (e.g. OAuth required, auth failed).
+		// discoverServerToolsDetailed returns (toolStatus, nil) for these — the outcome
 		// is in result.Status/result.Error, not in the Go error return value.
-		if result.Status == "error" {
+		// "not_connected" means the server is simply awaiting OAuth, not broken; it is
+		// still recorded below so discovery does not retry it until the user connects.
+		if result.Status == "error" || result.Status == "not_connected" {
 			errMsg := result.Error
-			api.appendServerLog(serverName, "error", fmt.Sprintf("Discovery returned error status: %s", errMsg))
-			api.logger.Warn(fmt.Sprintf("⚠️ Server %s discovery returned error: %s", serverName, errMsg))
+			logLevel := "error"
+			if result.Status == "not_connected" {
+				logLevel = "warn"
+			}
+			api.appendServerLog(serverName, logLevel, fmt.Sprintf("Discovery returned %s status: %s", result.Status, errMsg))
+			api.logger.Warn(fmt.Sprintf("⚠️ Server %s discovery returned %s: %s", serverName, result.Status, errMsg))
 
-			if result.RequiresOAuth ||
-				strings.Contains(errMsg, "unauthorized") || strings.Contains(errMsg, "401") ||
-				strings.Contains(errMsg, "OAuth") || strings.Contains(errMsg, "forbidden") || strings.Contains(errMsg, "403") {
+			if result.RequiresOAuth || isAuthFailureMessage(errMsg) {
 				api.discoveryFailedServers[serverName] = errMsg
 				api.logger.Info(fmt.Sprintf("🚫 Server %s marked as permanently failed (auth error), will not retry", serverName))
 			}
@@ -1056,83 +1142,17 @@ func (api *StreamingAPI) getToolStatusForUser(status ToolStatus, userID string) 
 		if _, err := os.Stat(expandedPath); err == nil {
 			// User has authenticated - clear the OAuth required flag
 			status.RequiresOAuth = false
-			status.OAuthEndpoints = nil
 			status.Error = ""
+			// A "not_connected" status was recorded before this user authenticated,
+			// so it is now stale — rediscovery is pending. Report it as loading
+			// rather than leaving the UI claiming the server is not connected.
+			if status.Status == "not_connected" {
+				status.Status = "loading"
+			}
 			// Note: The tools may still be empty if discovery failed for other reasons
 		}
 	}
 	return status
-}
-
-// extractMCPRemoteURL extracts the remote server URL from mcp-remote args.
-// mcp-remote is commonly used to proxy remote HTTP MCP servers via stdio:
-//
-//	command: "npx", args: ["mcp-remote", "https://example.com/mcp"]
-func extractMCPRemoteURL(command string, args []string) string {
-	if len(args) < 2 {
-		return ""
-	}
-	// Check for npx/npx.cmd mcp-remote pattern or direct mcp-remote command
-	isMCPRemote := false
-	urlArgIdx := -1
-	if (command == "npx" || command == "npx.cmd") && args[0] == "mcp-remote" {
-		isMCPRemote = true
-		urlArgIdx = 1
-	} else if command == "mcp-remote" {
-		isMCPRemote = true
-		urlArgIdx = 0
-	}
-	if !isMCPRemote || urlArgIdx >= len(args) {
-		return ""
-	}
-	url := args[urlArgIdx]
-	if strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
-		return url
-	}
-	return ""
-}
-
-// tryOAuthDiscovery attempts to discover OAuth endpoints from a 401 response
-func (api *StreamingAPI) tryOAuthDiscovery(ctx context.Context, serverURL string) *OAuthEndpoints {
-	// Try RFC 8414 well-known discovery first (more reliable)
-	if endpoints, err := oauth.DiscoverFromWellKnown(serverURL); err == nil {
-		api.logger.Debug(fmt.Sprintf("Discovered OAuth via RFC 8414 well-known: auth=%s, token=%s",
-			endpoints.AuthURL, endpoints.TokenURL))
-		return &OAuthEndpoints{
-			AuthURL:  endpoints.AuthURL,
-			TokenURL: endpoints.TokenURL,
-		}
-	}
-
-	// Fallback: Try 401 response header discovery
-	resp, err := http.Get(serverURL)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-
-	// Only proceed if we got 401 Unauthorized
-	if resp.StatusCode != http.StatusUnauthorized {
-		return nil
-	}
-
-	// Try to extract OAuth endpoints from response headers
-	authHeader := resp.Header.Get("WWW-Authenticate")
-	if authHeader == "" {
-		return nil
-	}
-
-	// Use the oauth package's discovery logic
-	endpoints, err := oauth.DiscoverFromResponse(resp)
-	if err != nil {
-		api.logger.Debug(fmt.Sprintf("Failed to discover OAuth endpoints: %v", err))
-		return nil
-	}
-
-	return &OAuthEndpoints{
-		AuthURL:  endpoints.AuthURL,
-		TokenURL: endpoints.TokenURL,
-	}
 }
 
 // --- MCP/CUSTOM/VIRTUAL EXECUTION APIs MOVED TO mcpagent/executor ---

@@ -36,6 +36,7 @@ declare global {
 
 import { copyToClipboard } from './utils/textUtils'
 import LazyModalFallback from './components/ui/LazyModalFallback'
+import ToastHost from './components/ui/ToastHost'
 import { apiLogEntries, summarizeApiTimings } from './utils/apiTiming'
 
 const queryClient = new QueryClient();
@@ -904,6 +905,9 @@ function App() {
       <ThemeProvider>
         <AuthWrapper>
         <TooltipProvider>
+        {/* Mounted above the surface switch so toasts raised from the top bar
+            render on every surface, not only the ones that mount a chat. */}
+        <ToastHost />
         {productSurface === 'video-studio' ? (
           <Suspense fallback={<FileSurfaceFallback />}><VideoStudioSurface /></Suspense>
         ) : productSurface === 'finance' ? (

@@ -1,41 +1,45 @@
-import { useEffect, useState } from 'react'
-import { ServerCog, Loader2, AlertCircle, Settings, RefreshCw } from 'lucide-react'
-import { MarkdownRenderer } from '../ui/MarkdownRenderer'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  Loader2,
+  AlertCircle,
+  Settings,
+  RefreshCw,
+  ChevronDown,
+  ChevronRight,
+  Search,
+  X,
+} from 'lucide-react'
 import MCPConfigPopup from '../MCPConfigPopup'
-import MCPToolApiTester from '../MCPToolApiTester'
 import { OAuthStatusBadge } from '../OAuthStatusBadge'
+import ConnectionIcon from '../connectors/ConnectionIcon'
+import { brandSlugFor } from '../connectors/brandSlug'
+import { descriptionFor } from '../connectors/catalog'
 import { useMCPStore } from '../../stores'
 
-// Tool detail type for cached data
-type ToolDetail = {
-  name: string;
-  description: string;
-  server: string;
-  parameters?: Record<string, {
-    description?: string;
-    type?: string;
-  }>;
-  required?: string[];
-};
+/**
+ * The card label answers "is this mine?", which is what `connection` reports.
+ * `status` answers a different question — whether the server is currently
+ * reachable — so a connected-but-down server is surfaced as an error against
+ * the connected label rather than silently reading as not connected.
+ */
+const statusLabel = (connection: string | undefined, status: string | undefined) => {
+  if (connection === 'connected') {
+    if (status === 'error') return 'Connected — unreachable'
+    if (status === 'loading') return 'Connected — checking...'
+    return 'Connected'
+  }
+  return 'Not connected'
+}
 
-// Sanitize tool descriptions by escaping XML-like tags that aren't standard HTML
-// This prevents ReactMarkdown from breaking on custom tags like <example>, <preserve>, etc.
-const sanitizeDescription = (description: string | undefined): string => {
-  if (!description) return '';
-  // Escape custom XML-like tags by converting < to &lt; for non-standard HTML tags
-  // Keep standard markdown-compatible HTML tags
-  const standardTags = ['a', 'b', 'i', 'u', 'strong', 'em', 'code', 'pre', 'br', 'hr', 'p', 'div', 'span', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'img', 'sup', 'sub'];
-  return description.replace(/<\/?([a-zA-Z][a-zA-Z0-9_-]*)[^>]*>/g, (match, tagName) => {
-    if (standardTags.includes(tagName.toLowerCase())) {
-      return match;
-    }
-    // Escape the tag
-    return match.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  });
-};
+type Filter = 'all' | 'connected' | 'available'
+
+const FILTERS: { value: Filter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'connected', label: 'Connected' },
+  { value: 'available', label: 'Available' },
+]
 
 export default function MCPServersSection() {
-  
   // Store subscriptions
   const {
     toolList,
@@ -43,25 +47,18 @@ export default function MCPServersSection() {
     toolsError,
     showMCPDetails,
     setShowMCPDetails,
-    expandedServers,
-    setExpandedServers,
-    selectedTool,
-    setSelectedTool,
-    toolDetails,
-    loadingToolDetails,
     showConfigEditor,
     setShowConfigEditor,
-    showApiTester,
-    setShowApiTester,
     getServerGroups,
-    loadToolDetails,
     refreshTools,
     serverLogs,
-    fetchServerLogs
+    fetchServerLogs,
   } = useMCPStore()
 
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set())
   const [loadingLogs, setLoadingLogs] = useState<Set<string>>(new Set())
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<Filter>('all')
 
   const toggleLogs = async (serverName: string) => {
     const newExpanded = new Set(expandedLogs)
@@ -71,9 +68,9 @@ export default function MCPServersSection() {
     } else {
       newExpanded.add(serverName)
       setExpandedLogs(newExpanded)
-      setLoadingLogs(prev => new Set([...prev, serverName]))
+      setLoadingLogs((prev) => new Set([...prev, serverName]))
       await fetchServerLogs(serverName)
-      setLoadingLogs(prev => {
+      setLoadingLogs((prev) => {
         const next = new Set(prev)
         next.delete(serverName)
         return next
@@ -82,9 +79,9 @@ export default function MCPServersSection() {
   }
 
   const refreshLogs = async (serverName: string) => {
-    setLoadingLogs(prev => new Set([...prev, serverName]))
+    setLoadingLogs((prev) => new Set([...prev, serverName]))
     await fetchServerLogs(serverName)
-    setLoadingLogs(prev => {
+    setLoadingLogs((prev) => {
       const next = new Set(prev)
       next.delete(serverName)
       return next
@@ -103,351 +100,264 @@ export default function MCPServersSection() {
     return () => window.clearInterval(interval)
   }, [expandedLogs, fetchServerLogs, showMCPDetails])
 
+  const groups = getServerGroups()
+
+  // Connected first, then alphabetical, so the services in use stay at the top
+  // of the grid instead of scattering through it as tokens come and go.
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return Object.entries(groups)
+      .filter(([name, tools]) => {
+        const connected = tools[0]?.connection === 'connected'
+        if (filter === 'connected' && !connected) return false
+        if (filter === 'available' && connected) return false
+        if (!q) return true
+        return (
+          name.toLowerCase().includes(q) ||
+          descriptionFor(name).toLowerCase().includes(q)
+        )
+      })
+      .sort(([aName, aTools], [bName, bTools]) => {
+        const aOk = aTools[0]?.connection === 'connected' ? 0 : 1
+        const bOk = bTools[0]?.connection === 'connected' ? 0 : 1
+        return aOk - bOk || aName.localeCompare(bName)
+      })
+  }, [groups, query, filter])
+
+  const total = Object.keys(groups).length
+
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <ServerCog className="w-4 h-4 text-gray-600 dark:text-gray-400" />
-          <span className="text-sm font-medium text-gray-900 dark:text-gray-100">MCP Servers</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="px-2 py-0.5 text-xs bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-full">
-            {toolList.length}
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              refreshTools()
-            }}
-            className="p-1 rounded-md text-gray-500 hover:text-gray-900 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-gray-100 dark:hover:bg-gray-800 transition-colors"
-            title="Refresh MCP servers"
-            aria-label="Refresh MCP servers"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingTools ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
-      </div>
-
-
-      {isLoadingTools && (
-        <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-          <Loader2 className="w-4 h-4 animate-spin" />
-          <span>Loading servers...</span>
-        </div>
-      )}
-
-      {toolsError && (
-        <div className="flex items-center gap-2 text-sm text-red-500 dark:text-red-400">
-          <AlertCircle className="w-4 h-4" />
-          <span>Error: {toolsError}</span>
-        </div>
-      )}
-
-      {!isLoadingTools && !toolsError && toolList.length > 0 && (
-        <div className="space-y-2">
-          <button
-            onClick={() => setShowMCPDetails(!showMCPDetails)}
-            className="w-full p-2 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors text-left"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-                <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                  {new Set(toolList.map(tool => tool.server).filter(Boolean)).size} Servers
-                </span>
-              </div>
-              <span className="text-xs text-gray-500">
-                {showMCPDetails ? '▼' : '▶'}
-              </span>
-            </div>
-            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              {toolList.reduce((total, tool) => total + (tool.toolsEnabled || 0), 0)} tools available
-            </div>
-          </button>
-
-      {/* MCP Server Details Modal Popup */}
+    <>
+      {/* Connectors Modal */}
       {showMCPDetails && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 shadow-xl w-full max-w-6xl h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                MCP Server Details
-              </h3>
-              <div className="flex items-center gap-2">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="flex h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900">
+            {/* Header */}
+            <div className="flex shrink-0 items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-gray-800">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-gray-500 dark:text-gray-400">Connectors</span>
+                <span className="text-gray-300 dark:text-gray-600">/</span>
+                <span className="font-medium text-gray-900 dark:text-gray-100">Directory</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => refreshTools()}
+                  className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                  title="Refresh connectors"
+                  aria-label="Refresh connectors"
+                >
+                  <RefreshCw className={`h-4 w-4 ${isLoadingTools ? 'animate-spin' : ''}`} />
+                </button>
                 <button
                   onClick={() => {
                     setShowMCPDetails(false)
                     setShowConfigEditor(true)
                   }}
-                  className="px-3 py-1.5 text-sm font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 rounded-md transition-colors flex items-center gap-2"
+                  className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                  title="Configure MCP Server (advanced)"
+                  aria-label="Configure MCP Server"
                 >
-                  <Settings className="w-4 h-4" />
-                  Configure MCP Server
+                  <Settings className="h-4 w-4" />
                 </button>
-                <button 
+                <button
                   onClick={() => setShowMCPDetails(false)}
-                  className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                  className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                  aria-label="Close"
                 >
-                  ✕
+                  <X className="h-4 w-4" />
                 </button>
               </div>
             </div>
-            
-            {/* Server Groups with Individual Controls */}
-            {Object.entries(getServerGroups()).map(([serverName, tools]) => (
-              <div key={serverName} className="bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-lg p-3 mb-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-3 h-3 rounded-full bg-gradient-to-r from-blue-500 to-purple-500"></div>
-                    <h4 className="text-sm font-semibold">{serverName}</h4>
-                    <span className="text-xs text-gray-500 bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded-full">
-                      {tools[0].function_names ? tools[0].function_names.length : 0} tools
-                    </span>
-                    <span className={`w-2 h-2 rounded-full ${
-                      tools[0].status === 'ok' ? 'bg-green-500' : 'bg-red-500'
-                    }`}></span>
-                    {/* OAuth Status Badge - auto-detects if server requires OAuth */}
-                    <OAuthStatusBadge
-                      serverName={serverName}
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      requiresOAuth={(tools[0] as any).requires_oauth}
-                      onAuthChange={(valid) => {
-                        if (valid) {
-                          const needsDiscovery = tools[0].status !== 'ok' || (tools[0].toolsEnabled || 0) === 0
-                          if (needsDiscovery) {
-                            const nextExpandedServers = new Set(expandedServers)
-                            nextExpandedServers.add(serverName)
-                            setExpandedServers(nextExpandedServers)
-                            setExpandedLogs(prev => new Set([...prev, serverName]))
-                            fetchServerLogs(serverName)
-                            refreshTools();
-                          }
-                        }
-                      }}
-                    />
-                  </div>
-                  
-                  <div className="flex items-center gap-2">
-                    {/* Logs Button */}
-                    <button
-                      onClick={() => toggleLogs(serverName)}
-                      className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-colors ${
-                        expandedLogs.has(serverName)
-                          ? 'text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/30 hover:bg-amber-200 dark:hover:bg-amber-900/50'
-                          : 'text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'
-                      }`}
-                    >
-                      <span className="text-xs">
-                        {expandedLogs.has(serverName) ? '▼' : '▶'}
-                      </span>
-                      <span>Logs</span>
-                    </button>
 
-                    {/* Expand/Collapse Tools Button */}
-                    {tools[0].function_names && tools[0].function_names.length > 0 && (
-                      <button
-                        onClick={() => {
-                          const isCurrentlyExpanded = expandedServers.has(serverName)
-                          if (isCurrentlyExpanded) {
-                            const newSet = new Set(expandedServers)
-                            newSet.delete(serverName)
-                            setExpandedServers(newSet)
-                          } else {
-                            setExpandedServers(new Set([...expandedServers, serverName]))
-                          }
-                        }}
-                        className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors"
-                      >
-                        <span className="text-xs">
-                          {expandedServers.has(serverName) ? '▼' : '▶'}
-                        </span>
-                        <span>Tools</span>
-                      </button>
-                    )}
-                  </div>
+            {/* Search + filter */}
+            <div className="flex shrink-0 items-center gap-2 px-6 pt-5">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search connectors"
+                  aria-label="Search connectors"
+                  className="w-full rounded-lg border border-gray-300 bg-white py-2.5 pl-10 pr-3 text-sm text-gray-900 placeholder-gray-400 transition-colors focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+                />
+              </div>
+              <div className="flex shrink-0 items-center rounded-lg border border-gray-300 p-0.5 dark:border-gray-700">
+                {FILTERS.map((f) => (
+                  <button
+                    key={f.value}
+                    onClick={() => setFilter(f.value)}
+                    className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                      filter === f.value
+                        ? 'bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900'
+                        : 'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Grid */}
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-5">
+              <div className="mb-3 flex items-baseline justify-between">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                  {filter === 'connected'
+                    ? 'Connected'
+                    : filter === 'available'
+                      ? 'Available connectors'
+                      : 'All connectors'}
+                </h3>
+                <span className="text-xs text-gray-500 dark:text-gray-400">
+                  {visible.length === total
+                    ? `${total} total`
+                    : `${visible.length} of ${total}`}
+                </span>
+              </div>
+
+              {isLoadingTools && toolList.length === 0 && (
+                <div className="flex items-center gap-2 py-8 text-sm text-gray-500 dark:text-gray-400">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Loading connectors...</span>
                 </div>
-                
-                {/* Connection Logs Panel */}
-                {expandedLogs.has(serverName) && (
-                  <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
-                    <div className="flex items-center justify-between mb-2">
-                      <h5 className="text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
-                        Connection Logs
-                      </h5>
-                      <button
-                        onClick={() => refreshLogs(serverName)}
-                        disabled={loadingLogs.has(serverName)}
-                        className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors disabled:opacity-50"
-                      >
-                        {loadingLogs.has(serverName) ? (
-                          <div className="w-3 h-3 border border-gray-300 border-t-blue-500 rounded-full animate-spin"></div>
-                        ) : (
-                          <span>↻</span>
-                        )}
-                        <span>Refresh</span>
-                      </button>
-                    </div>
-                    <div className="bg-gray-900 dark:bg-black rounded-md p-3 max-h-48 overflow-y-auto font-mono text-xs">
-                      {loadingLogs.has(serverName) && !serverLogs[serverName]?.length ? (
-                        <div className="text-gray-400 flex items-center gap-2">
-                          <div className="w-3 h-3 border border-gray-500 border-t-blue-400 rounded-full animate-spin"></div>
-                          Loading logs...
-                        </div>
-                      ) : serverLogs[serverName]?.length ? (
-                        serverLogs[serverName].map((log, i) => (
-                          <div key={i} className="flex gap-2 py-0.5">
-                            <span className="text-gray-500 whitespace-nowrap shrink-0">
-                              {new Date(log.timestamp).toLocaleTimeString()}
-                            </span>
-                            <span className={
-                              log.level === 'error' ? 'text-red-400' :
-                              log.level === 'warn' ? 'text-yellow-400' :
-                              log.level === 'debug' ? 'text-gray-500' :
-                              'text-green-400'
-                            }>
-                              {log.message}
+              )}
+
+              {toolsError && (
+                <div className="flex items-center gap-2 py-3 text-sm text-red-500 dark:text-red-400">
+                  <AlertCircle className="h-4 w-4" />
+                  <span>Error: {toolsError}</span>
+                </div>
+              )}
+
+              {!isLoadingTools && visible.length === 0 && !toolsError && (
+                <p className="py-8 text-center text-sm text-gray-500 dark:text-gray-400">
+                  {query
+                    ? `No connectors match “${query}”.`
+                    : filter === 'connected'
+                      ? 'No connectors yet. Pick one from Available and press Connect.'
+                      : filter === 'available'
+                        ? 'Every connector is already connected.'
+                        : 'No connectors configured.'}
+                </p>
+              )}
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {visible.map(([serverName, tools]) => {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const requiresOAuth = (tools[0] as any).requires_oauth as boolean | undefined
+                  const status = tools[0]?.status
+                  const connection = tools[0]?.connection
+                  const isOpen = expandedLogs.has(serverName)
+
+                  return (
+                    <div
+                      key={serverName}
+                      className="flex flex-col rounded-xl border border-gray-200 bg-white transition-colors hover:border-gray-300 dark:border-gray-800 dark:bg-gray-900/60 dark:hover:border-gray-700"
+                    >
+                      <div className="flex items-start gap-3 p-4">
+                        <ConnectionIcon
+                          icon={brandSlugFor(serverName)}
+                          name={serverName}
+                          size="lg"
+                        />
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">
+                              {serverName}
                             </span>
                           </div>
-                        ))
-                      ) : (
-                        <div className="text-gray-500">No logs available yet.</div>
-                      )}
-                    </div>
-                  </div>
-                )}
+                          <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+                            {descriptionFor(serverName)}
+                          </p>
+                          <span className="mt-1.5 inline-block text-[11px] text-gray-400 dark:text-gray-500">
+                            {statusLabel(connection, status)}
+                          </span>
+                        </div>
 
-                {/* Expanded Tools Section */}
-                {expandedServers.has(serverName) && tools[0].function_names && tools[0].function_names.length > 0 && (
-                  <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
-                    <div className="grid grid-cols-1 gap-1">
-                      {tools[0].function_names.map((toolName: string, index: number) => {
-                        // Find the detailed tool information from the main API response or cached data
-                        const toolDetail = tools[0].tools?.find((t: ToolDetail) => t.name === toolName) || 
-                                         toolDetails[serverName]?.tools?.find((t: ToolDetail) => t.name === toolName)
-                        const isSelected = selectedTool?.serverName === serverName && selectedTool?.toolName === toolName
-                        
-                        return (
-                          <div key={index} className="space-y-1">
-                            <div 
-                              className={`flex items-center justify-between p-2 rounded-md border cursor-pointer transition-colors ${
-                                isSelected 
-                                  ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-200 dark:border-blue-700' 
-                                  : 'bg-gray-50 dark:bg-gray-800/50 border-gray-100 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700'
-                              }`}
-                              onClick={async () => {
-                                if (isSelected) {
-                                  setSelectedTool(null)
-                                } else {
-                                  setSelectedTool({serverName, toolName})
-                                  
-                                  // Only fetch detailed tool information if not already available in main response
-                                  if (!tools[0].tools && !toolDetails[serverName]) {
-                                    await loadToolDetails(serverName)
-                                  }
-                                }
-                              }}
+                        <div className="flex shrink-0 items-center gap-1">
+                          <OAuthStatusBadge
+                            serverName={serverName}
+                            requiresOAuth={requiresOAuth}
+                            connection={connection}
+                            variant="icon"
+                            onAuthChange={() => {
+                              // Refresh on disconnect too — the card's status text
+                              // reads from the store, so skipping this left it
+                              // claiming "Connected" after the token was revoked.
+                              refreshTools()
+                            }}
+                          />
+                          <button
+                            onClick={() => toggleLogs(serverName)}
+                            className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                            title="Connection logs"
+                            aria-label={`${isOpen ? 'Hide' : 'Show'} logs for ${serverName}`}
+                          >
+                            {isOpen ? (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronRight className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Connection Logs Panel */}
+                      {isOpen && (
+                        <div className="mx-4 mb-4 rounded-md bg-gray-900 px-3 py-2 dark:bg-black">
+                          <div className="mb-2 flex items-center justify-between">
+                            <h5 className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                              Connection Logs
+                            </h5>
+                            <button
+                              onClick={() => refreshLogs(serverName)}
+                              disabled={loadingLogs.has(serverName)}
+                              className="text-xs text-gray-400 transition-colors hover:text-gray-200 disabled:opacity-50"
                             >
-                              <div className="flex items-center gap-2">
-                                <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-                                <span className="text-xs font-mono text-gray-700 dark:text-gray-300">
-                                  {toolName}
-                                </span>
-                                {loadingToolDetails.has(serverName) && !tools[0].tools ? (
-                                  <span className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
-                                    <div className="w-3 h-3 border border-gray-300 border-t-blue-500 rounded-full animate-spin"></div>
-                                    Loading details...
-                                  </span>
-                                ) : toolDetail?.description ? (
-                                  <span className="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[200px]">
-                                    {toolDetail.description.replace(/<[^>]*>/g, '').substring(0, 50)}...
-                                  </span>
-                                ) : null}
+                              {loadingLogs.has(serverName) ? '...' : 'Refresh'}
+                            </button>
+                          </div>
+                          <div className="max-h-40 space-y-0.5 overflow-y-auto font-mono text-xs">
+                            {loadingLogs.has(serverName) && !serverLogs[serverName]?.length ? (
+                              <div className="flex items-center gap-2 text-gray-400">
+                                <div className="h-3 w-3 animate-spin rounded-full border border-gray-500 border-t-blue-400"></div>
+                                Loading logs...
                               </div>
-                              <div className="flex items-center gap-2">
-                                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                                  tool
-                                </span>
-                                {/* Test API button */}
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setShowApiTester({ serverName, toolName, toolDetail })
-                                  }}
-                                  className="px-2 py-1 text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/30 hover:bg-green-100 dark:hover:bg-green-900/50 rounded transition-colors"
-                                >
-                                  Test API
-                                </button>
-                                <span className="text-xs text-gray-400">
-                                  {isSelected ? '▼' : '▶'}
-                                </span>
-                              </div>
-                            </div>
-                            
-                            {/* Tool Details Popup */}
-                            {isSelected && toolDetail && (
-                              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-md p-3 mt-2">
-                                <div className="space-y-2">
-                                  <div className="flex items-center justify-between">
-                                    <h5 className="text-sm font-semibold text-blue-900 dark:text-blue-100">
-                                      {toolDetail.name}
-                                    </h5>
-                                    <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                                      {toolDetail.server}
-                                    </span>
-                                  </div>
-                                  <div className="text-sm text-blue-800 dark:text-blue-200 max-h-[300px] overflow-y-auto">
-                                    <MarkdownRenderer
-                                      content={sanitizeDescription(toolDetail.description)}
-                                      className="text-sm"
-                                    />
-                                  </div>
-                                  {toolDetail.parameters && (
-                                    <div className="mt-2">
-                                      <h6 className="text-xs font-semibold text-blue-900 dark:text-blue-100 mb-1">
-                                        Parameters:
-                                      </h6>
-                                      <div className="space-y-2">
-                                        {Object.entries(toolDetail.parameters).map(([paramName, paramInfo]) => (
-                                          <div key={paramName} className="bg-blue-100 dark:bg-blue-800 p-2 rounded border">
-                                            <div className="flex items-center justify-between mb-1">
-                                              <span className="text-xs font-semibold text-blue-900 dark:text-blue-100">
-                                                {paramName}
-                                                {toolDetail.required?.includes(paramName) && (
-                                                  <span className="text-red-500 ml-1">*</span>
-                                                )}
-                                              </span>
-                                              <span className="text-xs text-blue-700 dark:text-blue-300 bg-blue-200 dark:bg-blue-700 px-2 py-1 rounded">
-                                                {paramInfo.type || 'unknown'}
-                                              </span>
-                                            </div>
-                                            {paramInfo.description && (
-                                              <div className="text-xs text-blue-700 dark:text-blue-300">
-                                                <MarkdownRenderer
-                                                  content={sanitizeDescription(paramInfo.description)}
-                                                  className="text-xs"
-                                                />
-                                              </div>
-                                            )}
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
+                            ) : serverLogs[serverName]?.length ? (
+                              serverLogs[serverName].map((log, i) => (
+                                <div key={i} className="flex gap-2 py-0.5">
+                                  <span className="shrink-0 whitespace-nowrap text-gray-500">
+                                    {new Date(log.timestamp).toLocaleTimeString()}
+                                  </span>
+                                  <span
+                                    className={
+                                      log.level === 'error'
+                                        ? 'text-red-400'
+                                        : log.level === 'warn'
+                                          ? 'text-yellow-400'
+                                          : log.level === 'debug'
+                                            ? 'text-gray-500'
+                                            : 'text-green-400'
+                                    }
+                                  >
+                                    {log.message}
+                                  </span>
                                 </div>
-                              </div>
+                              ))
+                            ) : (
+                              <div className="text-gray-500">No logs available yet.</div>
                             )}
                           </div>
-                        )
-                      })}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                )}
-                
+                  )
+                })}
               </div>
-            ))}
+            </div>
           </div>
-        </div>
-      )}
         </div>
       )}
 
@@ -457,7 +367,7 @@ export default function MCPServersSection() {
           initialView="json"
           onConfigChange={() => {
             // Refresh tools after config change
-            refreshTools();
+            refreshTools()
           }}
           onClose={() => {
             setShowConfigEditor(false)
@@ -465,17 +375,6 @@ export default function MCPServersSection() {
           }}
         />
       )}
-
-      {/* MCP Tool API Tester Modal */}
-      {showApiTester && (
-        <MCPToolApiTester
-          isOpen={!!showApiTester}
-          onClose={() => setShowApiTester(null)}
-          serverName={showApiTester.serverName}
-          toolName={showApiTester.toolName}
-          toolDetail={showApiTester.toolDetail}
-        />
-      )}
-    </div>
+    </>
   )
 }
