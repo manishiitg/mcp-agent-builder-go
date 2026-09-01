@@ -149,15 +149,16 @@ const AssistantTranscriptMessage: React.FC<{ event: PollingEvent; content: strin
     ? formatDurationCompact(fields.duration)
     : ''
   const turn = typeof fields.turn === 'number' ? fields.turn : undefined
+  const metadata = [turn != null ? `Turn ${turn}` : '', duration, timestamp].filter(Boolean).join(' · ')
 
   return (
     <article data-testid="terminal-clear-assistant-message" className="my-4 border-l border-emerald-400/55 pl-4 pr-2">
       <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-300/75">
         <span>{label}</span>
-        <span className="h-1 w-1 rounded-full bg-neutral-600" />
-        <span className="normal-case font-medium tracking-normal text-neutral-500">
-          {turn != null ? `Turn ${turn}` : 'Response'}{duration ? ` · ${duration}` : ''}{timestamp ? ` · ${timestamp}` : ''}
-        </span>
+        {metadata && <>
+          <span className="h-1 w-1 rounded-full bg-neutral-600" />
+          <span className="normal-case font-medium tracking-normal text-neutral-500">{metadata}</span>
+        </>}
       </div>
       <div className="[&_li]:!text-[14px] [&_p]:!text-[14px]">
         <ConversationMarkdownRenderer content={content} framed={false} maxHeight="none" />
