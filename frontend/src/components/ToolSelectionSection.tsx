@@ -3,7 +3,9 @@ import { Checkbox } from './ui/checkbox';
 import { Check, Loader2 } from 'lucide-react';
 import { useToolSelectionStore } from '../stores/useToolSelectionStore';
 import { useMCPStore } from '../stores';
-import { serverNamesMatch, isSelectedServer, toolBelongsToServer, hasServerTool } from '../utils/mcpServerAlias';
+import { isSelectedServer, toolBelongsToServer, hasServerTool, toggleServerSelection } from '../utils/mcpServerAlias';
+import ConnectionIcon from './connectors/ConnectionIcon';
+import { brandSlugFor } from './connectors/brandSlug';
 
 interface ToolSelectionSectionProps {
   availableServers: string[];
@@ -15,6 +17,13 @@ interface ToolSelectionSectionProps {
   agentMode: string; // Add agentMode prop
   /** Lets the server list use an embedded side panel's remaining vertical space. */
   fillAvailableHeight?: boolean;
+  /** Suppress the "MCP Server Selection" title + description -- for a host
+   * that already shows its own equivalent section header above this. */
+  hideHeader?: boolean;
+  /** Show only servers already selected for this workflow, instead of every
+   * available (connected) server -- for a host that offers a separate way
+   * to add new ones (e.g. the workflow panel's connectors browser below). */
+  showSelectedOnly?: boolean;
 }
 
 export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
@@ -25,6 +34,8 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
   onToolChange,
   stepId,
   fillAvailableHeight = false,
+  hideHeader = false,
+  showSelectedOnly = false,
 }) => {
   // Generate instance ID from stepId or use a default
   const instanceId = useMemo(() => stepId || `preset-${Date.now()}`, [stepId]);
@@ -160,37 +171,12 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
 
   // Handle server checkbox
   const handleServerToggle = useCallback((serverName: string) => {
-    const isSelected = isSelectedServer(selectedServers, serverName);
+    const wasSelected = isSelectedServer(selectedServers, serverName);
+    const { servers, tools } = toggleServerSelection(serverName, selectedServers, selectedTools);
+    onServerChange(servers);
+    onToolChange(tools);
 
-    if (isSelected) {
-      // Remove server — alias-aware, so unchecking clears a legacy-spelled
-      // entry (e.g. "google_sheets") even though the catalog only offers the
-      // current spelling (e.g. "google-sheets") to click.
-      const newServers = selectedServers.filter(s => !serverNamesMatch(s, serverName));
-      onServerChange(newServers);
-
-      // Remove all tools from this server (including "*" marker)
-      const newTools = selectedTools.filter(t => !toolBelongsToServer(t, serverName));
-      onToolChange(newTools);
-    } else {
-      // Add server - check if we already have specific tools for this server
-      const existingServerTools = selectedTools.filter(t =>
-        toolBelongsToServer(t, serverName) && !t.endsWith(':*')
-      );
-      const hasSpecificTools = existingServerTools.length > 0;
-
-      // Defense in depth (PLAT-169): drop any stray alias-equivalent entry
-      // before appending the canonical spelling, so a toggle can never leave
-      // both spellings present even if selectedServers already somehow held
-      // a legacy one this render didn't catch.
-      onServerChange([...selectedServers.filter(s => !serverNamesMatch(s, serverName)), serverName]);
-
-      if (!hasSpecificTools) {
-        // No specific tools - use default 'all' mode and set "all tools" marker
-        const newTools = [...selectedTools, `${serverName}:*`];
-        onToolChange(newTools);
-      }
-
+    if (!wasSelected) {
       // Always expand when server is selected so user can choose tool mode
       expandServer(serverName);
     }
@@ -290,18 +276,31 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
 
   return (
     <div className={fillAvailableHeight ? 'flex h-full min-h-0 flex-col gap-3' : 'space-y-3'}>
-      <label className="block shrink-0 text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
-        MCP Server Selection
-      </label>
+      {!hideHeader && (
+        <>
+          <label className="block shrink-0 text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+            MCP Server Selection
+          </label>
 
-      <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400 mb-2">
-        Select servers and choose whether to use all tools or select specific tools for each server.
-      </div>
+          <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400 mb-2">
+            Select servers and choose whether to use all tools or select specific tools for each server.
+          </div>
+        </>
+      )}
 
-      {/* Server and Tool List */}
-      <div className={`border border-gray-200 dark:border-gray-700 rounded-md overflow-y-auto ${fillAvailableHeight ? 'min-h-0 flex-1' : 'max-h-96'}`}>
+      {/* Server and Tool List -- no outer border here: each card already has
+          its own, and a wrapping frame right up against a full-width
+          expanded card reads as a redundant double border. */}
+      <div className={`overflow-y-auto ${fillAvailableHeight ? 'min-h-0 flex-1' : 'max-h-96'}`}>
+        {showSelectedOnly && selectedServers.length === 0 && (
+          <div className="p-3 text-xs text-gray-500 dark:text-gray-400">
+            No MCP servers selected yet. Add one below.
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {availableServers
           .filter(serverName => serverName !== 'mcp')
+          .filter(serverName => !showSelectedOnly || isSelectedServer(selectedServers, serverName))
           .sort((a, b) => {
             const aSelected = isSelectedServer(selectedServers, a);
             const bSelected = isSelectedServer(selectedServers, b);
@@ -328,20 +327,46 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
           const toolMode = instance.serverToolMode[serverName] || calculatedMode;
           const isServerToolsArray = Array.isArray(serverTools);
 
+          const connectionStatus = serverStatusMap[serverName];
+          const statusDotClass =
+            connectionStatus === 'ok' ? 'bg-green-500' :
+            connectionStatus === 'error' ? 'bg-red-500' :
+            connectionStatus === 'loading' ? 'bg-yellow-400' :
+            'bg-gray-400';
+          const statusTitle =
+            connectionStatus === 'ok' ? 'Connected' :
+            connectionStatus === 'error' ? 'Error' :
+            connectionStatus === 'loading' ? 'Connecting...' :
+            'Unknown / not started';
+
+          const isExpandedCard = isExpanded && isServerSelected;
+
           return (
-            <div key={serverName} className="border-b border-gray-200 dark:border-gray-700 last:border-b-0">
+            <div
+              key={serverName}
+              className={`rounded-md border border-gray-200 dark:border-gray-700 ${isExpandedCard ? 'sm:col-span-2' : ''}`}
+            >
               {/* Server Row */}
-              <div className="flex flex-col p-3 hover:bg-gray-100 dark:hover:bg-gray-700">
-                <div className="flex items-center">
+              <div className="flex flex-col rounded-md p-2.5 hover:bg-gray-100 dark:hover:bg-gray-700">
+                <div className="flex items-center gap-2">
                 <Checkbox
                   id={`server-${serverName}`}
                   checked={isServerSelected}
                   onCheckedChange={() => handleServerToggle(serverName)}
                 />
-                
+
+                {/* Connector icon with a small connection-status badge on its corner */}
+                <span className="relative flex-shrink-0">
+                  <ConnectionIcon icon={brandSlugFor(serverName)} name={serverName} size="xs" />
+                  <span
+                    className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border border-white dark:border-gray-900 ${statusDotClass}`}
+                    title={statusTitle}
+                  />
+                </span>
+
                 <label
                   htmlFor={`server-${serverName}`}
-                  className="ml-2 text-sm font-medium text-gray-900 dark:text-gray-100 cursor-pointer flex-1 select-none flex items-center gap-1.5"
+                  className="text-sm font-medium text-gray-900 dark:text-gray-100 cursor-pointer flex-1 select-none flex items-center gap-1.5 min-w-0"
                   onClick={(e) => {
                     // Only expand if server is selected and not already expanded
                     if (isServerSelected && !isExpanded) {
@@ -350,17 +375,9 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
                     }
                   }}
                 >
-                  {/* Connection status dot */}
-                  {(() => {
-                    const st = serverStatusMap[serverName];
-                    if (st === 'ok') return <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" title="Connected" />;
-                    if (st === 'error') return <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" title="Error" />;
-                    if (st === 'loading') return <span className="w-2 h-2 rounded-full bg-yellow-400 flex-shrink-0" title="Connecting..." />;
-                    return <span className="w-2 h-2 rounded-full bg-gray-400 flex-shrink-0" title="Unknown / not started" />;
-                  })()}
-                  {serverName}
+                  <span className="truncate">{serverName}</span>
                   {isServerSelected && isServerToolsArray && serverTools.length > 0 && (
-                    <span className="ml-1 text-xs text-gray-500 dark:text-gray-400">
+                    <span className="ml-1 text-xs text-gray-500 dark:text-gray-400 shrink-0">
                       ({toolMode === 'all' ? 'all tools' : `${selectedTools.filter(t => t.startsWith(`${serverName}:`) && !t.endsWith(':*')).length}/${serverTools.length} tools`})
                     </span>
                   )}
@@ -496,6 +513,7 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
             </div>
           );
         })}
+        </div>
       </div>
 
       {/* Selection Summary */}

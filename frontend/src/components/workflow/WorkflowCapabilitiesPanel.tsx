@@ -5,12 +5,14 @@ import { SkillSelectionSection } from '../skills/SkillSelectionSection'
 import { SecretSelectionSection } from '../secrets/SecretSelectionSection'
 import BrowserAutomationSettings, { type BrowserAutomationMode } from '../BrowserAutomationSettings'
 import WorkflowLLMConfigurationPanel from './WorkflowLLMConfigurationPanel'
+import ConnectorsBrowser from '../connectors/ConnectorsBrowser'
 import { agentApi, workflowManifestApi } from '../../services/api'
 import type { WorkflowCapabilities } from '../../services/api-types'
 import { useMCPStore } from '../../stores/useMCPStore'
 import { useWorkflowManifestStore } from '../../stores/useWorkflowManifestStore'
 import { useAuthStore } from '../../stores/useAuthStore'
 import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
+import { toggleServerSelection } from '../../utils/mcpServerAlias'
 
 export type WorkflowCapabilitySection = 'skills' | 'mcp' | 'secrets' | 'browser' | 'llm'
 
@@ -69,10 +71,28 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath, onCl
   const [cdpError, setCdpError] = useState<string | null>(null)
   const [cdpChecking, setCdpChecking] = useState(false)
   const toolList = useMCPStore(state => state.toolList)
-  const availableServers = useMemo(
-    () => [...new Set(toolList.map(tool => tool.server).filter((server): server is string => Boolean(server)))],
-    [toolList],
-  )
+  // "Available to select for this workflow" means connected -- you can't
+  // meaningfully pick tools from a server nobody has authenticated yet. A
+  // not-yet-connected server only belongs in the "Connect a new MCP server"
+  // browser below, not this checklist. Still include an already-selected
+  // server even if it's since been disconnected, so it stays visible/
+  // manageable here instead of silently vanishing from the workflow's config.
+  const availableServers = useMemo(() => {
+    const connected = toolList
+      .filter(tool => tool.connection === 'connected' && tool.server)
+      .map(tool => tool.server as string)
+    return [...new Set([...connected, ...capabilities.selected_servers])]
+  }, [toolList, capabilities.selected_servers])
+  // Lets the "Connect a new MCP server" browser add/remove an already-connected
+  // server from this workflow's selection directly, without needing the main
+  // (now selected-only) list above -- same alias-safe logic ToolSelectionSection
+  // itself uses for its own checkbox, via the shared toggleServerSelection util.
+  const handleToggleServerForWorkflow = useCallback((serverName: string) => {
+    setCapabilities(current => {
+      const { servers, tools } = toggleServerSelection(serverName, current.selected_servers, current.selected_tools)
+      return { ...current, selected_servers: servers, selected_tools: tools }
+    })
+  }, [])
   const copy = SECTION_COPY[section]
 
   const load = useCallback(async () => {
@@ -169,16 +189,31 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath, onCl
               </div>
             )}
             {section === 'mcp' && (
-              <div className="min-h-0 flex-1">
-                <ToolSelectionSection
-                  availableServers={availableServers}
-                  selectedServers={capabilities.selected_servers}
-                  selectedTools={capabilities.selected_tools}
-                  onServerChange={(selected_servers) => setCapabilities(current => ({ ...current, selected_servers }))}
-                  onToolChange={(selected_tools) => setCapabilities(current => ({ ...current, selected_tools }))}
-                  agentMode="workflow"
-                  fillAvailableHeight
-                />
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="shrink-0 overflow-y-auto">
+                  <ToolSelectionSection
+                    availableServers={availableServers}
+                    selectedServers={capabilities.selected_servers}
+                    selectedTools={capabilities.selected_tools}
+                    onServerChange={(selected_servers) => setCapabilities(current => ({ ...current, selected_servers }))}
+                    onToolChange={(selected_tools) => setCapabilities(current => ({ ...current, selected_tools }))}
+                    agentMode="workflow"
+                    hideHeader
+                    showSelectedOnly
+                  />
+                </div>
+                <div className="mt-3 flex min-h-0 flex-1 flex-col border-t border-border pt-3">
+                  <div className="shrink-0 text-sm font-medium text-muted-foreground">
+                    Connect a new MCP server
+                  </div>
+                  <div className="mt-3 min-h-0 flex-1">
+                    <ConnectorsBrowser
+                      compact
+                      selectedServers={capabilities.selected_servers}
+                      onToggleServer={handleToggleServerForWorkflow}
+                    />
+                  </div>
+                </div>
               </div>
             )}
             {section === 'secrets' && (
