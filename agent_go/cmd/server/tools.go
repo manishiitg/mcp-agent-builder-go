@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -156,7 +157,9 @@ func (api *StreamingAPI) discoverServerToolsDetailed(ctx context.Context, server
 	if err != nil {
 		api.appendServerLog(serverName, "error", fmt.Sprintf("Connection failed: %v", err))
 
-		// Check if this is an OAuth error - try to auto-discover OAuth endpoints
+		// The connection failed. Report the server's own error verbatim — it is
+		// the only diagnostic available, and both the UI and the retry decision
+		// below read it.
 		toolStatus := &ToolStatus{
 			Name:         serverName,
 			Server:       serverName,
@@ -166,14 +169,20 @@ func (api *StreamingAPI) discoverServerToolsDetailed(ctx context.Context, server
 			ToolsEnabled: 0,
 		}
 
-		// A connection failure on a server that requires OAuth means the user has
-		// not authenticated yet. The oauth block in config is the authority — we
-		// no longer probe the network to find out.
-		if srvCfg.OAuth != nil {
+		// Only a failure that is actually the server rejecting our credential
+		// means the user needs to re-authenticate. Deciding this from config
+		// alone would relabel every transient failure — a restart, a timeout, a
+		// rate limit — as "OAuth authentication required", and callers latch
+		// that permanently. Discovery reaches this point only after confirming
+		// a token file exists, so the server is one the user already connected.
+		if srvCfg.OAuth != nil && isAuthFailure(err) {
 			toolStatus.Status = "not_connected"
 			toolStatus.RequiresOAuth = true
-			toolStatus.Error = "OAuth authentication required"
-			api.appendServerLog(serverName, "warn", "OAuth authentication required")
+			// Error keeps err.Error() from above. Replacing it with a canned
+			// string would throw away the only diagnostic we have — which code
+			// the server returned, and what it said — leaving the UI and the
+			// server log unable to tell an expired token from a revoked one.
+			api.appendServerLog(serverName, "warn", fmt.Sprintf("Stored OAuth credential was rejected; reconnect required: %v", err))
 		}
 
 		return toolStatus, nil
@@ -623,6 +632,51 @@ func hasOAuthTokenFile(cfg mcpclient.MCPServerConfig) bool {
 	return err == nil
 }
 
+// authStatusCodeRe matches bare HTTP auth status codes on word boundaries.
+// Substring matching is not safe here: "401" appears inside ordinary text like
+// the port in "dial tcp 127.0.0.1:14018", which would misread a refused
+// connection as a rejected credential.
+var authStatusCodeRe = regexp.MustCompile(`\b(401|403)\b`)
+
+// authFailureMarkers are the phrases transports and OAuth servers use when they
+// reject a credential, as opposed to failing to reach the server at all.
+var authFailureMarkers = []string{
+	"unauthorized",
+	"unauthenticated",
+	"forbidden",
+	"access denied",
+	"permission denied",
+	"invalid_token",
+	"invalid_grant",
+	"token expired",
+}
+
+// isAuthFailureMessage reports whether an error message describes the server
+// rejecting our credential. This is the difference between "your token is no
+// longer good" — which the user must fix by reconnecting — and "the server was
+// unreachable", which may well succeed on the next attempt.
+//
+// The distinction matters because callers latch auth failures permanently:
+// treating a network blip as an auth failure wedges a working connector until
+// someone reconnects it by hand.
+func isAuthFailureMessage(msg string) bool {
+	lower := strings.ToLower(msg)
+	for _, marker := range authFailureMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return authStatusCodeRe.MatchString(lower)
+}
+
+// isAuthFailure is isAuthFailureMessage over an error value.
+func isAuthFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	return isAuthFailureMessage(err.Error())
+}
+
 // Connection states reported to the UI. "connected" means the user added this
 // server; "available" means it is offered by the catalog but not connected.
 const (
@@ -974,8 +1028,7 @@ func (api *StreamingAPI) runBackgroundDiscovery() {
 
 			// Mark servers with permanent errors so they're not retried on subsequent cycles.
 			// Auth/unauthorized errors won't resolve without config changes.
-			if strings.Contains(errMsg, "unauthorized") || strings.Contains(errMsg, "401") ||
-				strings.Contains(errMsg, "OAuth") || strings.Contains(errMsg, "forbidden") || strings.Contains(errMsg, "403") {
+			if isAuthFailureMessage(errMsg) {
 				api.discoveryFailedServers[serverName] = errMsg
 				api.logger.Info(fmt.Sprintf("🚫 Server %s marked as permanently failed (auth error), will not retry", serverName))
 			}
@@ -1006,9 +1059,7 @@ func (api *StreamingAPI) runBackgroundDiscovery() {
 			api.appendServerLog(serverName, logLevel, fmt.Sprintf("Discovery returned %s status: %s", result.Status, errMsg))
 			api.logger.Warn(fmt.Sprintf("⚠️ Server %s discovery returned %s: %s", serverName, result.Status, errMsg))
 
-			if result.RequiresOAuth ||
-				strings.Contains(errMsg, "unauthorized") || strings.Contains(errMsg, "401") ||
-				strings.Contains(errMsg, "OAuth") || strings.Contains(errMsg, "forbidden") || strings.Contains(errMsg, "403") {
+			if result.RequiresOAuth || isAuthFailureMessage(errMsg) {
 				api.discoveryFailedServers[serverName] = errMsg
 				api.logger.Info(fmt.Sprintf("🚫 Server %s marked as permanently failed (auth error), will not retry", serverName))
 			}
