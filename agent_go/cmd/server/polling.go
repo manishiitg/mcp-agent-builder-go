@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -297,8 +298,26 @@ type ReconnectSessionResponse struct {
 func (api *StreamingAPI) handleGetActiveSessions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
+	activeSessions := api.collectActiveSessions(r.Context())
+
+	response := GetActiveSessionsResponse{
+		ActiveSessions: activeSessions,
+		Total:          len(activeSessions),
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to encode response: %v", err), http.StatusInternalServerError)
+		return
+	}
+}
+
+// collectActiveSessions returns the user-scoped active session list, including
+// synthesized entries for tracked workflow executions that outlived their chat
+// row. Shared by handleGetActiveSessions and handleGetHeaderSummary so both
+// endpoints stay in sync without the frontend needing to call both.
+func (api *StreamingAPI) collectActiveSessions(ctx context.Context) []*ActiveSessionInfo {
 	// Get current user ID for session isolation
-	currentUserID := GetUserIDFromContext(r.Context())
+	currentUserID := GetUserIDFromContext(ctx)
 
 	// getAllActiveSessions returns running + recently completed sessions from in-memory map
 	allActiveSessions := api.getAllActiveSessions()
@@ -335,21 +354,13 @@ func (api *StreamingAPI) handleGetActiveSessions(w http.ResponseWriter, r *http.
 			PresetName: workflow.PresetName, PresetQueryID: workflow.PresetQueryID,
 			WorkflowName: label, WorkflowLabel: label, TriggeredBy: workflow.TriggeredBy,
 			NeedsUserInput: workflow.NeedsUserInput, WaitingMessage: workflow.WaitingMessage,
-			WaitingSince: workflow.WaitingSince,
+			WaitingSince: workflow.WaitingSince, PhaseID: workflow.PhaseID, PhaseName: workflow.PhaseName,
 		}
 		activeSessions = append(activeSessions, api.buildActiveSessionInfoSummary(synthetic))
 		seenSessionIDs[workflow.SessionID] = struct{}{}
 	}
 
-	response := GetActiveSessionsResponse{
-		ActiveSessions: activeSessions,
-		Total:          len(activeSessions),
-	}
-
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to encode response: %v", err), http.StatusInternalServerError)
-		return
-	}
+	return activeSessions
 }
 
 func (api *StreamingAPI) buildActiveSessionInfoSummary(session *ActiveSessionInfo) *ActiveSessionInfo {

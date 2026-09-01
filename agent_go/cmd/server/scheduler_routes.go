@@ -328,6 +328,48 @@ func triggerWorkflowPulseHandler(svc *SchedulerService) http.HandlerFunc {
 	}
 }
 
+// WorkflowScheduleSummary is the header-level schedule count summary shown
+// before the schedules popup is opened. Mirrors the frontend's previous
+// client-side summarizeWorkflowSchedules(jobs), computed here instead so the
+// full job list never has to be fetched just to show four numbers.
+type WorkflowScheduleSummary struct {
+	ScheduledWorkflows int `json:"scheduled_workflows"`
+	RunningWorkflows   int `json:"running_workflows"`
+	TotalSchedules     int `json:"total_schedules"`
+	RunningSchedules   int `json:"running_schedules"`
+}
+
+// SummarizeWorkflowSchedules computes the same entity_type=workflow schedule
+// counts as listScheduledJobsHandler without building the full per-job
+// response payload.
+func (svc *SchedulerService) SummarizeWorkflowSchedules(ctx context.Context) (WorkflowScheduleSummary, error) {
+	workflows, err := svc.DiscoverWorkflowManifestsCached(ctx, 5*time.Second)
+	if err != nil {
+		return WorkflowScheduleSummary{}, err
+	}
+
+	scheduledWorkflowKeys := make(map[string]struct{})
+	runningWorkflowKeys := make(map[string]struct{})
+	summary := WorkflowScheduleSummary{}
+
+	for _, dw := range workflows {
+		for _, sched := range dw.Manifest.Schedules {
+			summary.TotalSchedules++
+			scheduledWorkflowKeys[dw.Manifest.ID] = struct{}{}
+
+			state := svc.GetRuntimeStateForWorkflow(dw.WorkspacePath, sched.ID)
+			if state.LastStatus == "running" {
+				summary.RunningSchedules++
+				runningWorkflowKeys[dw.Manifest.ID] = struct{}{}
+			}
+		}
+	}
+
+	summary.ScheduledWorkflows = len(scheduledWorkflowKeys)
+	summary.RunningWorkflows = len(runningWorkflowKeys)
+	return summary, nil
+}
+
 func listScheduledJobsHandler(svc *SchedulerService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "OPTIONS" {
