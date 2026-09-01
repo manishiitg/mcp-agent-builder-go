@@ -442,8 +442,8 @@ func showVideoFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 				// makes the YAML declaration load-bearing instead of
 				// decorative -- the same reason tool_policy.enabled has to be
 				// consulted rather than optional.
-				if runtime.Presentation == nil || strings.TrimSpace(runtime.Presentation.Kind) == "" {
-					return "", fmt.Errorf("show_video: profile did not declare a presentation kind for this tool")
+				if runtime.Presentation == nil || strings.TrimSpace(runtime.Presentation.Kind) == "" || presentationActivity(runtime.Presentation) == nil {
+					return "", fmt.Errorf("show_video: profile did not declare a presentation kind and activity for this tool")
 				}
 				rawPath, _ := args["path"].(string)
 				videoPath, err := cleanProjectPath(rawPath)
@@ -472,6 +472,7 @@ func showVideoFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 					Title:         title,
 					WorkspacePath: runtime.WorkspacePath,
 					SessionID:     runtime.SessionID,
+					Activity:      presentationActivity(runtime.Presentation),
 					Payload: map[string]interface{}{
 						"path": videoPath, "qa_report_path": reportPath,
 						"note": strings.TrimSpace(note), "verdict": verdict,

@@ -1097,6 +1097,7 @@ export interface JSONCheckResultForEvent {
   path?: string;
 }
 export interface PresentationUpdatedEvent {
+  activity?: PresentationActivity;
   component?: string;
   correlation_id?: string;
   event_id?: string;
@@ -1117,6 +1118,11 @@ export interface PresentationUpdatedEvent {
   title?: string;
   trace_id?: string;
   workspace_path?: string;
+}
+export interface PresentationActivity {
+  destination?: string;
+  detail?: string;
+  label?: string;
 }
 export interface RequestHumanFeedbackEvent {
   action_description?: string;

@@ -7,6 +7,7 @@ uid=$(id -u video-studio)
 
 usermod -s /bin/bash video-studio
 install -d -o video-studio -g video-studio -m 0700 "$app_home/.ssh" "$app_home/.config/systemd/user" "$app_dir/releases"
+install -d -o video-studio -g video-studio -m 0755 "$app_home/Downloads" "$app_dir/logs" /data/video-studio/docs/Downloads
 install -m 0600 -o video-studio -g video-studio /home/ubuntu/.ssh/authorized_keys "$app_home/.ssh/authorized_keys"
 
 release=$(readlink -f /opt/video-studio/current)

@@ -6,10 +6,10 @@ description: Direct a coherent cinematic video of any duration from story archit
 # Direct one film, not a collection of clips
 
 Own the production-level decisions that cross model generation and editing.
-Read `video-storytelling`, `video-cinematography`,
-`video-provider-capabilities`, `video-editing`, and the selected model-family
-skill for their specialist rules. Keep those responsibilities coordinated by
-one sequence plan and one editorial grammar.
+Read `video-storytelling`, `video-cinematography`, `minimax-h3-video`,
+`video-provider-capabilities`, and `video-editing` for their specialist
+rules. Keep those responsibilities coordinated by one sequence plan and one
+editorial grammar.
 
 ## Define the cinematic contract
 
@@ -20,9 +20,9 @@ across the film: character identity, wardrobe, props, geography, time of day,
 screen direction, eyelines, lighting motivation, and recurring audio motifs.
 
 Choose a small visual vocabulary and repeat it intentionally. A cinematic
-film does not need a new style, lens, camera move, transition, or model for
-every beat. Treat a model or provider change inside one continuous arc as a
-continuity risk requiring an explicit reason.
+film does not need a new style, lens, camera move, or transition for every
+beat. Video Studio uses MiniMax H3 throughout one continuous arc; vary camera
+grammar deliberately while preserving the approved H3 reference pack.
 
 ## Plan sequences before shots
 
@@ -35,12 +35,13 @@ Create `longform-sequence-plan.json` before paid video generation. Include:
 
 - chapter, sequence, scene, and shot identifiers;
 - measured narration or dialogue duration covered by each sequence;
-- model route and why it fits the sequence;
+- H3 route: Reference-to-Video for anchors and normal continuations, or the
+  separately approved Image-to-Video seam bridge after a failed direct proof;
 - references and their exact semantic roles;
 - incoming and outgoing character, prop, geography, motion, camera, lighting,
   and audio state;
-- generation topology: single take, structured multi-shot, extension,
-  reference-video continuation, boundary-frame chain, or intentional hard cut;
+- generation topology: one H3 take, Reference-to-Video continuation, a
+  motivated H3 camera-angle change, or intentional hard cut;
 - planned cut point, transition grammar, handles, and expected seam risk;
 - the reason every independent generation is unavoidable.
 
@@ -48,17 +49,16 @@ Before the first anchor, turn that plan into a user-approved visual-development
 pack: location/background boards, recurring wardrobe and hero-prop references,
 and start/exit references for every continuity sequence. References must be
 real files, not just prompt language; show each one to the user and record its
-role in the manifest. Where the selected endpoint supports multi-image or an
-end-frame control, use the appropriate approved boundary assets. Where it
-doesn't, keep the exit image as an editorial target and choose a compatible
-continuation route rather than inventing a field.
+role in the manifest. Carry an accepted predecessor through H3
+Reference-to-Video for every normal continuation. Reserve first/last boundary
+frames for the H3 Image-to-Video seam bridge after a direct proof visibly
+fails; never invent an endpoint field.
 
-Minimize generations and seams. Prefer one supported longer take or an
-in-model multi-shot sequence when the action is continuous. When a new call is
-necessary, prefer extension or reference-video continuation; otherwise carry
-the accepted outgoing frame and state into the next request. Use independent
-clips freely only for motivated discontinuity such as a montage, time jump,
-location change, or deliberate cutaway.
+Minimize generations and seams. Prefer one H3 take up to the live-supported
+limit when the action is continuous. When a new call is necessary, use H3
+Reference-to-Video with the accepted predecessor and overlapping action. Use
+independent clips only for motivated discontinuity such as a montage, time
+jump, location change, or deliberate cutaway.
 
 ## Generate for the edit
 

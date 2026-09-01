@@ -2668,9 +2668,27 @@
       },
       "type": "object"
     },
+    "PresentationActivity": {
+      "additionalProperties": false,
+      "properties": {
+        "destination": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "PresentationUpdatedEvent": {
       "additionalProperties": false,
       "properties": {
+        "activity": {
+          "$ref": "#/$defs/PresentationActivity"
+        },
         "component": {
           "type": "string"
         },

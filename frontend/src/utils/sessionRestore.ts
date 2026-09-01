@@ -376,9 +376,38 @@ function restoredEventText(event: PollingEvent): string {
 
 function transcriptCarrierKey(event: PollingEvent): string | undefined {
   const type = event.type || ''
-  if (type !== 'user_message' && type !== 'llm_generation_end' && type !== 'unified_completion') return undefined
   const content = restoredEventText(event).replace(/\s+/g, ' ').trim().toLowerCase()
-  return content ? `${type}:${content}` : undefined
+  if (!content) return undefined
+
+  if (type === 'user_message') return `user:${content}`
+  // The transport can retain a final reply as either a generation-end event
+  // or a unified completion. Durable chat history synthesizes both carriers,
+  // while a just-completed live session can return either one. They describe
+  // the same reader-visible reply, so their identity is the answer itself,
+  // not the protocol event type.
+  if (type === 'llm_generation_end' || type === 'unified_completion') {
+    return `assistant:${content}`
+  }
+  return undefined
+}
+
+function liveEventsNotAlreadyInHistory(
+  restoredEvents: PollingEvent[],
+  liveEvents: PollingEvent[],
+): PollingEvent[] {
+  const knownIDs = new Set(restoredEvents.map(event => event.id).filter(Boolean))
+  const knownCarriers = new Set(restoredEvents
+    .map(transcriptCarrierKey)
+    .filter((key): key is string => !!key))
+
+  return liveEvents.filter((event) => {
+    if (event.id && knownIDs.has(event.id)) return false
+    const carrier = transcriptCarrierKey(event)
+    if (carrier && knownCarriers.has(carrier)) return false
+    if (event.id) knownIDs.add(event.id)
+    if (carrier) knownCarriers.add(carrier)
+    return true
+  })
 }
 
 function mergePersistedUIEvents(
@@ -474,7 +503,9 @@ function restoreToolArgumentsFromConversation(
   })
 }
 
-async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?: string, includeUiEvents = true): Promise<RuntimeSessionState> {
+type HydratedHistoryRuntimeState = RuntimeSessionState & { restoredEvents: PollingEvent[] }
+
+async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?: string, includeUiEvents = true): Promise<HydratedHistoryRuntimeState> {
   const chatStore = useChatStore.getState()
   // getChatHistoryResumeConversation (not the unbounded preview variant) keeps
   // this lightweight, and conversationToRestoredEvents does the real work of
@@ -517,6 +548,7 @@ async function hydrateTabEventsFromChatHistory(sessionId: string, workspacePath?
     hasRunningBackgroundAgents: false,
     isSyntheticTurn: false,
     canSteer: false,
+    restoredEvents: events,
   }
 }
 
@@ -524,7 +556,7 @@ async function tryHydrateTabEventsFromChatHistory(
   sessionId: string,
   workspacePath?: string,
   includeUiEvents = true,
-): Promise<RuntimeSessionState | null> {
+): Promise<HydratedHistoryRuntimeState | null> {
   try {
     return await hydrateTabEventsFromChatHistory(sessionId, workspacePath, includeUiEvents)
   } catch (error) {
@@ -580,7 +612,10 @@ export async function hydrateTabEvents(
     // sessions: a browser reload may restore history from before the most
     // recent completed turn while the server still has those raw events.
     if (response.events.length > 0) {
-      chatStore.addTabEvents(sessionId, response.events)
+      const liveTail = liveEventsNotAlreadyInHistory(restored.restoredEvents, response.events)
+      if (liveTail.length > 0) {
+        chatStore.addTabEvents(sessionId, liveTail)
+      }
       if (response.last_processed_index !== undefined) {
         chatStore.setTabLastEventIndex(sessionId, response.last_processed_index)
       }

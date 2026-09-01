@@ -482,6 +482,22 @@ describe('buildTranscriptItems', () => {
     expect(items.map(i => i.key)).toEqual(['m1', 'm2'])
   })
 
+  it('keeps a presentation update available for the product activity renderer', () => {
+    const items = buildTranscriptItems([
+      evt({ id: 'message', session_id: 's1', type: 'agent_message' }),
+      evt({
+        id: 'shown-video',
+        session_id: 's1',
+        type: 'presentation_updated',
+        data: { data: { kind: 'media.video', title: 'Shot 1 — Hook (Preview)' } } as never,
+      }),
+      evt({ id: 'answer', session_id: 's1', type: 'agent_message' }),
+    ])
+
+    expect(items.filter(item => item.kind === 'event').map(item => (item as Extract<TranscriptItem, { kind: 'event' }>).event.id))
+      .toEqual(['message', 'shown-video', 'answer'])
+  })
+
   it('does not show token usage beside collapsed tool calls', () => {
     const items = buildTranscriptItems([
       evt({ id: 't1', session_id: 's1', type: 'tool_call_start' }),

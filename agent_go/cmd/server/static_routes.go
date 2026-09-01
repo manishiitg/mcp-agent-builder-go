@@ -65,11 +65,7 @@ func (api *StreamingAPI) handlePublicFile(w http.ResponseWriter, r *http.Request
 	}
 	filePath := string(decoded)
 
-	// Use uid from query param (owner's ID for cross-user sharing), fall back to auth context
-	uid := r.URL.Query().Get("uid")
-	if uid == "" {
-		uid = GetUserIDFromContext(r.Context())
-	}
+	uid := publicWorkspaceUserID(r)
 	log.Printf("[PUBLIC-FILE] Serving file: %s for user: %s", filePath, uid)
 
 	// URL-encode each path segment for the workspace API
@@ -140,11 +136,7 @@ func (api *StreamingAPI) handlePublicFolder(w http.ResponseWriter, r *http.Reque
 	}
 	folderPath := string(decoded)
 
-	// Use uid from query param (owner's ID for cross-user sharing), fall back to auth context
-	uid := r.URL.Query().Get("uid")
-	if uid == "" {
-		uid = GetUserIDFromContext(r.Context())
-	}
+	uid := publicWorkspaceUserID(r)
 	log.Printf("[PUBLIC-FOLDER] Listing folder: %s for user: %s", folderPath, uid)
 
 	wsURL := getWorkspaceAPIURL() + "/api/documents"
@@ -190,10 +182,7 @@ func (api *StreamingAPI) handlePublicFolderDownload(w http.ResponseWriter, r *ht
 	}
 	folderPath := string(decoded)
 
-	uid := r.URL.Query().Get("uid")
-	if uid == "" {
-		uid = GetUserIDFromContext(r.Context())
-	}
+	uid := publicWorkspaceUserID(r)
 	log.Printf("[PUBLIC-FOLDER-DOWNLOAD] Exporting folder: %s for user: %s", folderPath, uid)
 
 	// Proxy to workspace export endpoint
@@ -230,6 +219,22 @@ func (api *StreamingAPI) handlePublicFolderDownload(w http.ResponseWriter, r *ht
 		}
 	}
 	io.Copy(w, resp.Body)
+}
+
+// publicWorkspaceUserID selects the durable workspace owner for public file
+// routes. In a single-user deployment, the gateway's JWT subject is an
+// internal product label (for example "video-studio"), not another workspace
+// owner. Every public asset must therefore resolve to DEFAULT_USER_ID. The
+// explicit uid query parameter remains available only in multi-user mode for
+// intentional cross-user sharing.
+func publicWorkspaceUserID(r *http.Request) string {
+	if !IsMultiUserMode() {
+		return GetDefaultUserID()
+	}
+	if uid := r.URL.Query().Get("uid"); uid != "" {
+		return uid
+	}
+	return GetUserIDFromContext(r.Context())
 }
 
 // API Key Validation endpoint - validates API keys for supported providers.

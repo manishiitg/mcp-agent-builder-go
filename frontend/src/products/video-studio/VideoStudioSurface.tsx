@@ -25,8 +25,8 @@ import {
   X,
 } from 'lucide-react'
 import ChatArea, { type ChatContentRendererProps } from '../../components/ChatArea'
-import { CleanConversationSurface } from '../../components/CleanConversationSurface'
 import { FileContentViewer } from '../../components/FileContentViewer'
+import { TerminalEventTranscript } from '../../components/TerminalEventTranscript'
 import { ConversationMarkdownRenderer } from '../../components/ui/MarkdownRenderer'
 import { clampPanelWidth, loadStoredPanelWidth, saveStoredPanelWidth } from './panelWidth'
 import { videoStamp } from './videoStamp'
@@ -241,13 +241,35 @@ function ProjectChatWelcome({ project }: { project: VideoProject }) {
   )
 }
 
-function VideoStudioConversation(props: ChatContentRendererProps) {
+function VideoStudioConversation({
+  events,
+  isRestoring,
+  streamingText,
+  streamingStatus,
+  hasOlder,
+  loadingOlder,
+  historyError,
+  onLoadOlder,
+  landingContent,
+}: ChatContentRendererProps) {
+  if (!isRestoring && events.length === 0 && !streamingText.trim() && !streamingStatus?.trim()) {
+    return <>{landingContent}</>
+  }
+
   return (
-    <CleanConversationSurface
-      {...props}
-      // The formatted response stream is safe to show as live working notes.
-      // Raw tmux bytes, terminal controls, and private provider internals remain
-      // outside the product surface.
+    <TerminalEventTranscript
+      events={events}
+      terminal={null}
+      loading={isRestoring}
+      streamingText={streamingText}
+      streamingStatus={streamingStatus}
+      hasOlder={hasOlder}
+      loadingOlder={loadingOlder}
+      error={historyError}
+      onLoadOlder={onLoadOlder}
+      onRetry={onLoadOlder}
+      surfaceClassName="bg-gradient-to-b from-slate-950 via-slate-950 to-violet-950/35"
+      autoScrollMode="reveal-first-response"
     />
   )
 }

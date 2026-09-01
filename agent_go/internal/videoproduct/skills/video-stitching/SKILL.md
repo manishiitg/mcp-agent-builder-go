@@ -25,31 +25,46 @@ mid-blink, or a generation artifact). Record that selected frame and the
 outgoing subject, prop, camera, screen-direction, action, lighting, and audio
 state in the continuity ledger.
 
-When the production exposes a reusable **Create the next clip** recipe, run it
-once per clip. Its existing output and ledger are the history from prior runs:
-preserve all earlier entries and append the new attempt. Use the current
-step's human input only to choose or refine this one target shot; it does not
-authorise the remaining shot list. If no accepted predecessor is recorded,
-write a blocked result that names the missing anchor or predecessor instead of
-generating a visually unrelated continuation.
+Create one successor at a time, preserve the ledger, and append its actual
+boundary evidence. Use the user's current direction only to choose or refine
+that target shot; it does not authorise the remaining shot list. If no accepted
+predecessor is recorded, stop and name the missing anchor or predecessor
+instead of generating a visually unrelated continuation.
 
-Choose the first live-supported route that preserves the intended continuity:
+For Video Studio, use the H3 routes in `minimax-h3-video`:
 
-1. one longer take or a native structured multi-shot scene;
-2. extension or reference-video continuation from the accepted source;
-3. image-to-video from the selected outgoing frame, with the same references
-   and an overlapping action in the next prompt;
-4. a planned, motivated camera-angle change using a cut on action, reaction,
-   insert, or cutaway;
-5. an intentional discontinuity such as a time/location jump or montage.
+1. one 5–15-second H3 take when it covers the beat;
+2. `minimax/h3/reference-to-video` with the accepted predecessor as Video 1
+   for every normal continuation, including a deliberate camera-angle change;
+3. an intentional discontinuity such as a time/location jump or montage;
+4. `minimax/h3/image-to-video` only as a separately approved first/last-frame
+   bridge after a direct-cut seam proof visibly fails.
 
-Never claim a route accepts an end frame, video source, or start-image field
-until `video-provider-capabilities` verifies the exact selected endpoint. A
-new camera angle is not a continuity failure when it is planned: preserve the
-same scene state and choose a cut point that motivates the change. When no
-route can preserve the needed state, change the shot design or regenerate the
-prior source; do not create two unrelated clips and expect a dissolve to solve
-it.
+Never use image-to-video as the normal continuation route. A new camera angle
+is not a continuity failure when it is planned: preserve the same scene state
+and choose a cut point that motivates the change. Record the new lens,
+framing, camera position/vector, matching first action, screen direction, and
+audio handoff; then use the accepted predecessor as Video 1. When H3 cannot
+preserve the needed state, change the shot design or regenerate the prior
+source; do not create two unrelated clips and expect a dissolve to solve it.
+
+## Vary the film language deliberately
+
+Continuity does **not** mean holding one camera angle, lens, framing, or
+lighting setup indefinitely. Shape a sequence with the visual changes that
+serve its story: wide, medium, close, detail, over-the-shoulder, POV,
+reaction, high/low angle, static or moving camera, lens and depth-of-field
+changes, motivated lighting shifts, weather or time progression, and a new
+location when the story moves there. A new angle, scale, or camera move is a
+positive editorial choice when its entry frame, action, eyeline, geography,
+and sound bridge make it legible.
+
+For each deliberate change, state what changes and what remains continuous:
+the transition type, outgoing and incoming camera grammar, subject and prop
+state, screen direction, audio handoff, and any new approved reference. Use a
+match cut, cut on action, reaction, insert/cutaway, or a clear scene-reset
+marker. Do not preserve a flat visual setup merely to avoid a seam; equally,
+do not change several visual variables accidentally and call it cinematic.
 
 ## Prove the newest seam before advancing
 
@@ -92,7 +107,8 @@ clip, or a continuous score bridge versus an intentional chapter break.
 Recommend one option and explain the visible continuity, pacing, and audio
 tradeoff. Do not ask the user to choose codec, command, or other implementation
 detail. If every seam has one clearly safe treatment, state the plan and
-proceed under the current step's authorization rather than inventing a choice.
+proceed under the user's current approved production direction rather than
+inventing a choice.
 
 ## Stitch and mix
 

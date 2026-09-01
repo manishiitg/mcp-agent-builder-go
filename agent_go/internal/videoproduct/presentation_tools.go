@@ -8,11 +8,26 @@ import (
 	"strings"
 
 	agentprofiles "github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
+	orchestratorevents "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/presentations"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
 )
 
 var characterImageExtensions = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".webp": true}
+
+// presentationActivity converts the declarative copy in product.yaml into
+// the typed wire event. The transcript then has no kind-specific copy or
+// destination table to keep in sync with the product.
+func presentationActivity(binding *agentprofiles.PresentationBinding) *orchestratorevents.PresentationActivity {
+	if binding == nil || binding.Activity == nil {
+		return nil
+	}
+	return &orchestratorevents.PresentationActivity{
+		Label:       strings.TrimSpace(binding.Activity.Label),
+		Destination: strings.TrimSpace(binding.Activity.Destination),
+		Detail:      strings.TrimSpace(binding.Activity.Detail),
+	}
+}
 
 // showReferenceFactory exposes the visual-development evidence that a sequence
 // will be conditioned on: locations, wardrobe, props, and planned boundary
@@ -37,8 +52,8 @@ func showReferenceFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 				"note":  map[string]interface{}{"type": "string", "description": "What later shots must preserve"},
 			}, "required": []string{"path", "title", "role"}},
 			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-				if runtime.Presentation == nil || strings.TrimSpace(runtime.Presentation.Kind) == "" {
-					return "", fmt.Errorf("show_reference: profile did not declare a presentation kind for this tool")
+				if runtime.Presentation == nil || strings.TrimSpace(runtime.Presentation.Kind) == "" || presentationActivity(runtime.Presentation) == nil {
+					return "", fmt.Errorf("show_reference: profile did not declare a presentation kind and activity for this tool")
 				}
 				imagePath, err := cleanProjectPath(stringArg(args, "path"))
 				if err != nil || !characterImageExtensions[strings.ToLower(filepath.Ext(imagePath))] {
@@ -59,6 +74,7 @@ func showReferenceFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 				event, err := presentations.Upsert(ctx, client, presentations.Presentation{
 					Kind: runtime.Presentation.Kind, IdentityKey: resolvedPath, Title: title,
 					WorkspacePath: runtime.WorkspacePath, SessionID: runtime.SessionID,
+					Activity:  presentationActivity(runtime.Presentation),
 					Payload:   map[string]interface{}{"path": resolvedPath, "role": role, "note": strings.TrimSpace(stringArg(args, "note"))},
 					Resources: []map[string]string{{"kind": "workspace.file", "path": resolvedPath, "role": "primary"}},
 				})
@@ -106,8 +122,8 @@ func showCharacterFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 				"note":       map[string]interface{}{"type": "string"},
 			}, "required": []string{"name", "image_path", "spec_path"}},
 			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-				if runtime.Presentation == nil || strings.TrimSpace(runtime.Presentation.Kind) == "" {
-					return "", fmt.Errorf("show_character: profile did not declare a presentation kind for this tool")
+				if runtime.Presentation == nil || strings.TrimSpace(runtime.Presentation.Kind) == "" || presentationActivity(runtime.Presentation) == nil {
+					return "", fmt.Errorf("show_character: profile did not declare a presentation kind and activity for this tool")
 				}
 				name := strings.TrimSpace(stringArg(args, "name"))
 				if name == "" {
@@ -140,6 +156,7 @@ func showCharacterFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 					Title:         name,
 					WorkspacePath: runtime.WorkspacePath,
 					SessionID:     runtime.SessionID,
+					Activity:      presentationActivity(runtime.Presentation),
 					Payload: map[string]interface{}{
 						"name":       name,
 						"image_path": resolvedImage,
@@ -188,8 +205,8 @@ func showDocumentFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 				"note":  map[string]interface{}{"type": "string", "description": "What the user should look at or decide"},
 			}, "required": []string{"path", "title"}},
 			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-				if runtime.Presentation == nil || strings.TrimSpace(runtime.Presentation.Kind) == "" {
-					return "", fmt.Errorf("show_document: profile did not declare a presentation kind for this tool")
+				if runtime.Presentation == nil || strings.TrimSpace(runtime.Presentation.Kind) == "" || presentationActivity(runtime.Presentation) == nil {
+					return "", fmt.Errorf("show_document: profile did not declare a presentation kind and activity for this tool")
 				}
 				docPath, err := cleanProjectPath(stringArg(args, "path"))
 				if err != nil || strings.ToLower(filepath.Ext(docPath)) != ".md" {
@@ -210,6 +227,7 @@ func showDocumentFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 					Title:         title,
 					WorkspacePath: runtime.WorkspacePath,
 					SessionID:     runtime.SessionID,
+					Activity:      presentationActivity(runtime.Presentation),
 					Payload: map[string]interface{}{
 						"path":     resolvedPath,
 						"markdown": string(data),

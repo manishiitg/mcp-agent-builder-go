@@ -85,6 +85,15 @@ describe('appendStreamingText', () => {
       // The regression this guards: a newline injected mid-word.
       expect(got).not.toContain('workspace_\nadvanced')
     })
+
+    it('repairs a wrongly-marked complete sentence boundary without touching word fragments', () => {
+      const got = reduce([
+        'their look before any footage generation.',
+        'No Gemini key configured, so I\'ll generate the next image.',
+      ], true)
+
+      expect(got).toContain('generation. No Gemini')
+    })
   })
 
   describe('chunks with no marker', () => {

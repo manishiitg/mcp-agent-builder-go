@@ -63,7 +63,6 @@ profile:
   name: Video Studio
   version: 2
   skills:
-    - video-creation
     - video-look-sound
     - cinematic-visual-development
     - longform-cinematic-video
@@ -72,19 +71,12 @@ profile:
     - video-editing
     - video-quality
     - hyperframes-quality
-    - html-composition
     - hyperframes
     - agent-browser
     - fal-ai
     - google-ai
-    - seeddance-api
     - video-provider-capabilities
-    - kling-video
-    - seedance-video
-    - veo-video
     - minimax-h3-video
-    - gemini-omni-video
-    - video-model-selection
     - video-cinematography
     - video-storytelling
     - generated-video-quality
@@ -97,6 +89,10 @@ profile:
       # pkg/presentations and docs/design/agent_tool_surface_single_source.md.
       presentation:
         kind: media.video
+        activity:
+          label: Video ready
+          destination: Videos panel
+          detail: Ready to review
     # A character reference is pre-production, not a deliverable: it is shown
     # so the user can reject a face while changing it is still cheap. Video
     # previews are likewise review material; show-video applies its QA gate
@@ -104,16 +100,28 @@ profile:
     - id: video.show-character
       presentation:
         kind: media.character
+        activity:
+          label: Character reference ready
+          destination: Characters panel
+          detail: Ready for approval
     # Locations, wardrobe, props, and sequence boundary frames are their own
     # reviewable evidence. They must not be smuggled into the Characters panel.
     - id: video.show-reference
       presentation:
         kind: media.reference
+        activity:
+          label: Visual reference ready
+          destination: References panel
+          detail: Ready for approval
     # The written artifacts a stage produces — brief, script, shot list — are
     # what the user actually approves between stages.
     - id: video.show-document
       presentation:
         kind: document.markdown
+        activity:
+          label: Production document ready
+          destination: Documents panel
+          detail: Ready to review
   tool_policy:
     # Video Studio names the tools it needs. Everything AgentWorks registers that
     # is not listed here never reaches the agent.
@@ -126,9 +134,10 @@ profile:
     # See docs/design/agent_tool_surface_single_source.md.
     #
     # Not listed, deliberately: AgentWorks provider/model, skill and MCP-server
-    # administration; the shared media/LLM bridge tools; sub-agent orchestration
-    # (delegate, query_agent, list_agents, terminate_agent); every schedule tool;
-    # and human_feedback / notify_user.
+    # administration; media-generation tools; sub-agent orchestration (delegate,
+    # query_agent, list_agents, terminate_agent); every schedule tool; and
+    # human_feedback / notify_user. Read-only image inspection and web research
+    # are product capabilities, so they are explicitly admitted below.
     #
     # This list does not govern mcpagent's intrinsic tools
     # (get_api_spec, get_prompt, get_resource, read_skill), which it injects
@@ -156,20 +165,16 @@ profile:
       - execute_shell_command
       # Managed browser capability, matching the agent-browser skill above.
       - agent_browser
+      # Inspect uploaded references and generated boundary frames, then verify
+      # current H3 schema, pricing, and factual creative research on the web.
+      - read_image
+      - search_web_llm
       # Project and user secret CRUD. ui.secrets is required for this product.
       - list_secrets
       - set_workflow_secret
       - delete_workflow_secret
       - set_user_secret
       - delete_user_secret
-      # Run only the individual stage the user chooses. Video Studio does not
-      # expose unattended full-workflow execution.
-      - execute_step
-      - query_step
-      - send_step_message
-      - stop_step
-      - stop_all_executions
-      - list_executions
   # Slash commands this product ships with itself. The platform already has
   # builtin commands and per-user markdown under commands/custom/, but neither
   # lets a product carry its own, so Video Studio's opinionated flows had no
@@ -207,13 +212,10 @@ profile:
   # SECRET_<NAME> mechanics these names are read through.
   secrets:
     - name: FAL_KEY
-      description: fal.ai API key. Unlocks fal.ai's hosted third-party video/image/voice/music models (see the fal-ai skill). Get one at fal.ai.
+      description: fal.ai API key. Required for MiniMax H3 Reference-to-Video and optional still-image, voice, or music work. Get one at fal.ai.
       group: generation-provider
     - name: GEMINI_API_KEY
-      description: Google Gemini API key. Unlocks Google's own video (Veo), image, and narration (TTS) models (see the google-ai skill) -- alone, enough for a complete narrated production. Get one at aistudio.google.com.
-      group: generation-provider
-    - name: SEEDANCE_API_KEY
-      description: Direct Seeddance API key. Unlocks Seedance video generation through seeddance.io independently of fal.ai (see the seeddance-api skill).
+      description: Google Gemini API key. Used only for optional still-image and narration (TTS) work; generated video remains MiniMax H3 Reference-to-Video. Get one at aistudio.google.com.
       group: generation-provider
   runtime:
     # auto resolves the transport per provider instead of forcing one answer for
@@ -302,7 +304,6 @@ ui:
 workflows:
   enabled: [shortform, longform, quality]
   selected_skills:
-    - video-creation
     - video-look-sound
     - cinematic-visual-development
     - multi-clip-cinematic-generation
@@ -310,12 +311,12 @@ workflows:
     - video-editing
     - video-quality
     - hyperframes-quality
-    - html-composition
     - hyperframes
     - agent-browser
     - fal-ai
     - google-ai
-    - video-model-selection
+    - video-provider-capabilities
+    - minimax-h3-video
     - video-cinematography
     - video-storytelling
     - generated-video-quality

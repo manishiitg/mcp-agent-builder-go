@@ -1,0 +1,13 @@
+abi <abi/4.0>,
+
+# Video Studio's rootless workspace needs a user namespace only for its
+# mount-namespace sandbox fallback. This path-scoped exception preserves
+# Ubuntu's host-wide restriction for every unrelated process.
+/var/lib/video-studio/video-studio/releases/**/bin/video-studio-workspace flags=(unconfined) {
+  userns,
+}
+
+# The deployer runs this in-place test before it switches the release symlink.
+/var/lib/video-studio/video-studio/releases/**/bin/workspace-security.test flags=(unconfined) {
+  userns,
+}

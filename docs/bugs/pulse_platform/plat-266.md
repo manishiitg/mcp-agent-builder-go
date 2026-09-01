@@ -1,6 +1,6 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
-# PLAT-263 — Mount-namespace Landlock fallback treated every guarded path as a directory
+# PLAT-266 — Mount-namespace Landlock fallback treated every guarded path as a directory
 
 | Coordination | Value |
 |---|---|

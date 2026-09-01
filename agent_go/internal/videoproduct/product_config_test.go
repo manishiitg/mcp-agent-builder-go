@@ -30,6 +30,20 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	if manifest.Profile.ID != "video-studio" || manifest.Profile.Runtime.Capabilities.Browser != "required" || manifest.Profile.Runtime.Capabilities.Secrets != "required" || manifest.Profile.Runtime.Capabilities.LiveInput != "disabled" {
 		t.Fatalf("unexpected declarative profile: %+v", manifest.Profile)
 	}
+	profileSkills := map[string]bool{}
+	for _, skill := range manifest.Profile.Skills {
+		profileSkills[skill] = true
+	}
+	for _, required := range []string{"longform-cinematic-video", "multi-clip-cinematic-generation", "video-stitching", "minimax-h3-video"} {
+		if !profileSkills[required] {
+			t.Fatalf("Video Studio's H3 cinematic profile omits %q: %v", required, manifest.Profile.Skills)
+		}
+	}
+	for _, redundant := range []string{"video-creation", "html-composition"} {
+		if profileSkills[redundant] {
+			t.Fatalf("Video Studio's skill-only profile still attaches redundant %q: %v", redundant, manifest.Profile.Skills)
+		}
+	}
 	// Video Studio names its surface rather than blocking a list. Anything not
 	// named never reaches the agent, so a new AgentWorks tool cannot widen this
 	// product by default — the failure mode a deny list has.
@@ -47,15 +61,20 @@ func TestVideoStudioManifestDrivesProfileAndWorkflowCapabilities(t *testing.T) {
 	// set_workflow_secret is here because it was registered-but-invisible once.
 	for _, name := range []string{
 		"show_video", "show_reference", "agent_browser",
+		"read_image", "search_web_llm",
 		"list_secrets", "set_workflow_secret", "set_user_secret",
-		"execute_step",
 	} {
 		if !enabled[name] {
 			t.Fatalf("Video Studio needs %q: %+v", name, manifest.Profile.ToolPolicy)
 		}
 	}
-	if enabled["run_full_workflow"] {
-		t.Fatal("Video Studio must expose individual stage execution only")
+	for _, name := range []string{
+		"run_full_workflow", "execute_step", "query_step", "send_step_message",
+		"stop_step", "stop_all_executions", "list_executions",
+	} {
+		if enabled[name] {
+			t.Fatalf("Video Studio must not expose workflow tool %q", name)
+		}
 	}
 	// The bridge shell is how product HTTP APIs are reached. Reaching them from
 	// each CLI's own shell instead (api_transport.native_shell) is implemented

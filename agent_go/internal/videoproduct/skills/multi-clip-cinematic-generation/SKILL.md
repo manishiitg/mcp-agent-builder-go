@@ -1,34 +1,32 @@
 ---
 name: multi-clip-cinematic-generation
-description: Design and generate a coherent sequence of AI video clips using a reference manifest and explicit camera-transition grammar. Use before planning or creating an anchor clip or any follow-up clip in a cinematic sequence.
+description: Design a coherent MiniMax H3 sequence using a reference manifest and explicit camera-transition grammar. Use before planning or creating an anchor clip or any follow-up clip in a cinematic sequence.
 ---
 
 # Generate one cinematic sequence, not unrelated clips
 
 This skill owns the decisions that must happen **before** an AI-generated
-follow-up clip exists. Read `video-provider-capabilities` and the selected
-provider skill before a paid call; endpoint controls are not interchangeable.
+follow-up clip exists. Read `minimax-h3-video`, `video-provider-capabilities`,
+and `fal-ai` before a paid call; endpoint controls are not interchangeable.
 Read `video-stitching` after clips are approved to plan and verify the edit.
 
 ## Choose the sequence topology first
 
-Use the smallest number of generation boundaries that preserves the intended
-action. Select and record one route for each seam, in this order when it is
-supported by the chosen endpoint:
+Use the smallest number of H3 generation boundaries that preserves the
+intended action. Select and record one route for each seam:
 
-1. one uninterrupted take;
-2. one native structured multi-shot generation;
-3. extension or video-reference continuation of the accepted prior clip;
-4. a boundary-frame chain from the prior clip's selected last usable stable
-   frame, optionally toward a designed end frame;
-5. a motivated editorial cut with a stable reference pack;
-6. an intentional discontinuity such as a time jump, location change, or
-   montage beat.
+1. one uninterrupted H3 take, up to its live-supported duration;
+2. `minimax/h3/reference-to-video` from the accepted predecessor for every
+   normal continuation, including a motivated camera-angle change;
+3. a motivated editorial cut with the stable approved reference pack;
+4. an intentional discontinuity such as a time jump, location change, or
+   montage beat;
+5. only after a direct-cut seam proof visibly fails, a separately approved
+   H3 Image-to-Video first/last-frame bridge.
 
 Never call separately generated clips a continuous take merely because a
-dissolve can join them. If a model lacks the required input control, redesign
-the seam or select a compatible, user-approved model instead of inventing an
-API field.
+dissolve can join them. Do not select a different model or invent an API field
+when H3 lacks a control; redesign the seam or regenerate the affected H3 shot.
 
 ## Make an approved reference pack, then a reference manifest
 
@@ -43,9 +41,8 @@ Generate and present the images the sequence actually needs for review:
   at a seam;
 - a start reference for each continuity sequence and a planned exit/end-state
   reference for every sequence that has a successor;
-- an extra bridge frame when the selected endpoint genuinely supports multiple
-  images or an end-frame input. Otherwise it remains a visual/editing target,
-  never an invented request field.
+- an extra bridge frame held for an H3 Image-to-Video seam repair only after a
+  direct proof visibly fails; otherwise it remains a visual/editing target.
 
 Call `show_reference` for each generated reference and obtain approval before
 footage consumes it. Keep the assets under `references/` and record exact

@@ -61,7 +61,7 @@ func TestPresentationToolsRequireADeclaredKind(t *testing.T) {
 func TestPresentationToolsRejectUnusableInput(t *testing.T) {
 	declared := agentprofiles.ToolRuntimeContext{
 		UserID: "u1", SessionID: "s1", WorkspacePath: "Chats/Video Studio/projects/demo",
-		Presentation: &agentprofiles.PresentationBinding{Kind: "test.kind"},
+		Presentation: &agentprofiles.PresentationBinding{Kind: "test.kind", Activity: &agentprofiles.PresentationActivityBinding{Label: "Item ready", Destination: "Production panel", Detail: "Ready to review"}},
 	}
 
 	character, err := showCharacterFactory("http://unused")(declared, nil)

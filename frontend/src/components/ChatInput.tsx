@@ -3565,7 +3565,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       <div data-tour="chat-input-area" data-testid="tour-chat-input-area" className={`${inputPadX} ${isProductSurface ? 'py-2' : 'py-2'}`}>
         <form onSubmit={handleSubmit} className="space-y-2">
           <div className={isProductSurface
-            ? 'space-y-1 rounded-2xl border border-slate-700 bg-slate-900 p-2 shadow-sm transition focus-within:border-violet-500 focus-within:ring-4 focus-within:ring-violet-950/70'
+            // Keep the customer composer visually steady while events stream.
+            // The former ring-4 plus catch-all `transition` made a harmless
+            // focus hand-off look like a pulsing purple border on redraws.
+            ? 'space-y-1 rounded-2xl border border-slate-700 bg-slate-900 p-2 shadow-sm transition-colors duration-150 focus-within:border-violet-400'
             : 'space-y-1 rounded-xl border border-slate-700/80 bg-[#101513] p-1.5 shadow-sm transition focus-within:border-slate-500'}>
             {showLiveDelivery && liveMessageDelivery && (
               <div className={`flex min-w-0 items-center gap-1.5 text-[11px] ${liveDeliveryClass}`}>
