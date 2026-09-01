@@ -1,28 +1,22 @@
 ---
 name: minimax-h3-video
-description: Plan and generate Video Studio's MiniMax H3 Max routes through fal.ai: Reference-to-Video for anchors and normal continuations, and Image-to-Video with first/last frames only for a user-approved failed-seam bridge. Read with video-provider-capabilities and fal-ai before any paid H3 Max call.
+description: Plan and generate Video Studio's MiniMax H3 Max routes through fal.ai: Text-to-Video for prompt-only shots, Image-to-Video for approved first/last-frame control, and Reference-to-Video for identity and continuity. Read with video-provider-capabilities and fal-ai before any paid H3 Max call.
 ---
 
 # Use MiniMax H3 Max deliberately
 
 Read `video-provider-capabilities`, `fal-ai`, `video-cinematography`, and the
-live schema for the selected route before every paid call:
+live machine-readable guide for the selected route before every paid call:
 
-- `https://fal.ai/models/minimax/h3-max/reference-to-video` for anchors and
-  normal continuations;
-- `https://fal.ai/models/minimax/h3-max/image-to-video` only for a
-  user-approved bridge after a direct-cut seam proof visibly fails.
+- `https://fal.ai/models/minimax/h3-max/text-to-video/llms.txt`;
+- `https://fal.ai/models/minimax/h3-max/image-to-video/llms.txt`;
+- `https://fal.ai/models/minimax/h3-max/reference-to-video/llms.txt`.
 
 Use H3 Max only. Do not substitute standard H3, another H3 Max route, or
 another provider.
 
-The current H3 Max Reference-to-Video schema accepts `reference_image_urls`,
-`reference_video_urls`, and `reference_audio_urls` as arrays of URL strings.
-Refer to them in the prompt by their ordered modality name — Image 1, Video 1,
-Audio 1 — never by JSON labels. It accepts at most 9 images, 3 videos, and 3
-audio clips, with at most 12 files total; video and audio references are each
-2–15 seconds with a 15-second combined limit. Output clips are 5–15 seconds
-at 24 FPS. Video Studio defaults to `resolution: "480P"` and
+Every H3 Max route generates 5–15-second clips at `480P` or `768P`. Video
+Studio defaults to `resolution: "480P"` and
 `prompt_expansion_mode: "balanced"`. Fal recommends balanced for H3 Max;
 quality can spend up to 30 seconds rewriting a prompt, so use it only when the
 user explicitly requests that slower treatment. Use 768P only when the user
@@ -31,25 +25,31 @@ explicitly requests and approves the higher cost; do not offer or use 2K or
 
 ## Choose the route by control need
 
-- Use `minimax/h3-max/reference-to-video` for every anchor and continuation. For
-  an anchor, supply the approved character/style reference images. For a
-  continuation, also supply the accepted predecessor as Video 1 and describe
-  the immediate handoff from its final motion.
-- Use `minimax/h3-max/image-to-video` only to repair a *visibly failed* direct
-  seam. Upload the selected predecessor end frame as `image_url` and the
-  successor start frame as `end_image_url`; both must be same-aspect,
-  reviewable stable frames. Make one 5–15-second bridge candidate and review
-  both inherited joins. Preserve dialogue with the approved predecessor and
-  successor audio edit; do not assume newly generated bridge audio is usable.
-- Do not route a new scene to text-to-video or image-to-video. The H3
-  reference route accepts the approved images directly and keeps one endpoint
-  contract for the whole production.
-- Do not use an edit route as a fallback. A bridge does not excuse a broken
-  source shot or an unrelated cut: regenerate the affected H3 shot from its
-  approved reference manifest when the actual continuity state is wrong.
+1. **Prompt-only establishing shot:** use
+   `minimax/h3-max/text-to-video` only when no approved visual, motion, audio,
+   identity, or continuity reference needs to control the result. Set the
+   delivery `aspect_ratio` explicitly (21:9, 16:9, 4:3, 1:1, 3:4, or 9:16).
+2. **Opening/closing-frame control:** use
+   `minimax/h3-max/image-to-video` when an approved `image_url` must define
+   the first frame; add `end_image_url` only when a specific ending frame must
+   be reached. Output follows the supplied start image's aspect ratio. A
+   first/last-frame seam bridge remains a separately approved repair after a
+   direct-cut seam proof visibly fails; it is not a way to conceal unrelated
+   footage.
+3. **Identity, motion, voice, or continuation:** use
+   `minimax/h3-max/reference-to-video` whenever a shot needs subject/style
+   locking, a predecessor's motion or performance, reference audio, or any
+   multi-asset conditioning. For a continuation, send the accepted immediate
+   predecessor in `reference_video_urls` as Video 1 and describe the exact
+   handoff from its final stable motion. Reference each asset in prompt order:
+   Image 1, Video 1, Audio 1 — never arbitrary JSON labels.
 
-Do not assume the text, image, reference, and edit routes share field names,
-reference limits, duration choices, aspect ratios, or audio controls.
+Reference-to-Video accepts at most 9 images, 3 videos, and 3 audio clips, with
+12 files total. Reference videos and audio are each 2–15 seconds with a
+15-second combined limit; audio cannot be the only reference, so accompany it
+with an image or video. Do not use Image-to-Video's prompt-only fallback when
+Text-to-Video states the intent more accurately, and do not use an edit route
+as a fallback for a broken source shot.
 
 ## Assign every reference one job
 

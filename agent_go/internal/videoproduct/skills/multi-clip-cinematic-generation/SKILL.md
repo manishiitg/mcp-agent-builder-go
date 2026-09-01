@@ -15,13 +15,16 @@ Read `video-stitching` after clips are approved to plan and verify the edit.
 Use the smallest number of H3 generation boundaries that preserves the
 intended action. Select and record one route for each seam:
 
-1. one uninterrupted H3 take, up to its live-supported duration;
-2. `minimax/h3-max/reference-to-video` from the accepted predecessor for every
+1. `minimax/h3-max/text-to-video` for a prompt-only standalone opening shot
+   with no reference or continuity obligation;
+2. `minimax/h3-max/image-to-video` when an approved start image must control
+   the opening composition;
+3. `minimax/h3-max/reference-to-video` from the accepted predecessor for every
    normal continuation, including a motivated camera-angle change;
-3. a motivated editorial cut with the stable approved reference pack;
-4. an intentional discontinuity such as a time jump, location change, or
+4. a motivated editorial cut with the stable approved reference pack;
+5. an intentional discontinuity such as a time jump, location change, or
    montage beat;
-5. only after a direct-cut seam proof visibly fails, a separately approved
+6. only after a direct-cut seam proof visibly fails, a separately approved
    H3 Image-to-Video first/last-frame bridge.
 
 Never call separately generated clips a continuous take merely because a
