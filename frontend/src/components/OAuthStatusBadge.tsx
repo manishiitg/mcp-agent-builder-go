@@ -211,6 +211,7 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
   };
 
   const handleDisconnect = async () => {
+    if (!window.confirm(`Disconnect ${serverName}? Any workflow using it will lose access until you reconnect.`)) return;
     setLoading(true);
     try {
       await mcpConfigApi.disconnectServer(serverName);

@@ -9,7 +9,7 @@ interface ConnectionIconProps {
    * that has no published mark falls back to the neutral glyph instead.
    */
   name?: string
-  size?: 'sm' | 'md' | 'lg'
+  size?: 'xs' | 'sm' | 'md' | 'lg'
   className?: string
 }
 
@@ -56,11 +56,11 @@ export default function ConnectionIcon({
   className = '',
 }: ConnectionIconProps) {
   const mark = icon ? BRAND_MARKS[icon] : undefined
-  const box = size === 'sm' ? 'h-9 w-9' : size === 'lg' ? 'h-12 w-12' : 'h-11 w-11'
+  const box = size === 'xs' ? 'h-5 w-5' : size === 'sm' ? 'h-9 w-9' : size === 'lg' ? 'h-12 w-12' : 'h-11 w-11'
   // The mark fills more of its tile than it used to — at the old ratio the
   // logos read as small dots inside a large rounded square.
-  const glyph = size === 'sm' ? 'h-5 w-5' : size === 'lg' ? 'h-7 w-7' : 'h-6 w-6'
-  const letter = size === 'sm' ? 'text-sm' : size === 'lg' ? 'text-lg' : 'text-base'
+  const glyph = size === 'xs' ? 'h-3 w-3' : size === 'sm' ? 'h-5 w-5' : size === 'lg' ? 'h-7 w-7' : 'h-6 w-6'
+  const letter = size === 'xs' ? 'text-[9px]' : size === 'sm' ? 'text-sm' : size === 'lg' ? 'text-lg' : 'text-base'
 
   const initial = name?.trim().replace(/[^A-Za-z0-9]/g, '').charAt(0).toUpperCase()
   const useMonogram = !mark && !!initial
