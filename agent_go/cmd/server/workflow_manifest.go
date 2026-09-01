@@ -68,6 +68,19 @@ type WorkflowManifest struct {
 	Capabilities         WorkflowCapabilities                        `json:"capabilities"`
 	ExecutionDefs        WorkflowExecutionDefaults                   `json:"execution_defaults"`
 	Schedules            []WorkflowSchedule                          `json:"schedules"`
+	// CreatedBy is the user ID that created this workflow, stamped once at
+	// creation time (handleCreateWorkflowManifest) from the authenticated
+	// request. Scheduled/cron runs have no logged-in user of their own --
+	// this is how they resolve which account's stored secrets
+	// ($SECRET_<NAME>) they should actually see, instead of silently
+	// falling through to the placeholder "default" user, who never has any
+	// secrets stored (nobody configures a workflow's API keys while logged
+	// in as "default"). Confirmed live on the Dominion deployment
+	// 2026-08-31/09-01: real Polygon/Finnhub keys existed under the actual
+	// creating user's account the whole time; scheduled runs simply never
+	// looked there. Empty for any workflow created before this field
+	// existed -- those keep today's "default" fallback until backfilled.
+	CreatedBy            string                                      `json:"created_by,omitempty"`
 	CreatedAt            string                                      `json:"created_at,omitempty"`
 	UpdatedAt            string                                      `json:"updated_at,omitempty"`
 	RunRetentionCount    *int                                        `json:"run_retention_count,omitempty"`

@@ -197,6 +197,66 @@ func TestScheduleStateLockKeyFromRuntimeKey(t *testing.T) {
 	}
 }
 
+// TestBuildScheduleContextThreadsOwnerUserID is the regression test for a
+// real production incident on the Dominion deployment 2026-08-31/09-01:
+// scheduled/cron runs always passed an empty user ID to startSessionInternal,
+// which falls through to the "default" placeholder user for secret lookup.
+// Nobody configures a workflow's API keys while logged in as "default", so
+// every scheduled run's own secrets were silently empty even though the
+// same secrets worked fine in an interactive chat session as the real
+// owning user. Confirms buildScheduleContext (the single place a
+// WorkflowManifest becomes a ScheduleContext before either
+// startSessionInternal call site) actually carries CreatedBy forward.
+func TestBuildScheduleContextThreadsOwnerUserID(t *testing.T) {
+	manifest := &WorkflowManifest{ID: "demo", CreatedBy: "ac513919db5b67ed95b2263679e51052"}
+	sctx := buildScheduleContext("Workflow/demo", manifest, WorkflowSchedule{ID: "daily"})
+	if sctx.OwnerUserID != "ac513919db5b67ed95b2263679e51052" {
+		t.Fatalf("OwnerUserID = %q, want the manifest's CreatedBy", sctx.OwnerUserID)
+	}
+
+	// A workflow created before CreatedBy existed must not regress into an
+	// error -- it keeps today's already-broken "default" fallback via
+	// startSessionInternal's own empty-string handling, not a new failure.
+	legacy := buildScheduleContext("Workflow/demo", &WorkflowManifest{ID: "demo"}, WorkflowSchedule{ID: "daily"})
+	if legacy.OwnerUserID != "" {
+		t.Fatalf("OwnerUserID = %q, want empty for a manifest with no CreatedBy", legacy.OwnerUserID)
+	}
+}
+
+// TestHandleCreateWorkflowManifestStampsCreatedBy proves the other half of
+// the same fix: a newly created workflow actually records who created it,
+// using the authenticated request's own user ID -- not a hardcoded or
+// inferred value -- so buildScheduleContext has something real to thread
+// through later.
+func TestHandleCreateWorkflowManifestStampsCreatedBy(t *testing.T) {
+	workspace := &mockWorkspaceAPI{files: map[string]string{}}
+	wsServer := httptest.NewServer(workspace)
+	defer wsServer.Close()
+	t.Setenv("WORKSPACE_API_URL", wsServer.URL)
+
+	const workspacePath = "Workflow/created-by-test"
+	body := `{"label":"CreatedBy Test","workspace_path":"` + workspacePath + `"}`
+	req := httptest.NewRequest("POST", "/api/workflows/manifest", strings.NewReader(body))
+	claims := &UserClaims{UserID: "user-abc-123", Username: "tester"}
+	req = req.WithContext(context.WithValue(req.Context(), UserContextKey, claims))
+	w := httptest.NewRecorder()
+
+	api := &StreamingAPI{}
+	api.handleCreateWorkflowManifest(w, req)
+
+	if w.Code != 201 {
+		t.Fatalf("handleCreateWorkflowManifest status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	saved, exists, err := ReadWorkflowManifest(context.Background(), workspacePath)
+	if err != nil || !exists {
+		t.Fatalf("ReadWorkflowManifest: exists=%v err=%v", exists, err)
+	}
+	if saved.CreatedBy != "user-abc-123" {
+		t.Fatalf("saved manifest CreatedBy = %q, want the authenticated request's user ID", saved.CreatedBy)
+	}
+}
+
 func TestPulseAndWorkflowScheduleUseSeparateDurableLanes(t *testing.T) {
 	store, err := schedulerstate.Open(filepath.Join(t.TempDir(), "schedule-state.sqlite"))
 	if err != nil {
