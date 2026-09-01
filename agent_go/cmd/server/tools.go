@@ -99,6 +99,37 @@ type RemoveServerRequest struct {
 	Name string `json:"name"`
 }
 
+// classifyConnectionFailure decides whether a failed MCP connection attempt
+// should be reported as "needs OAuth" (not_connected) or a genuine error.
+// Only relabel as "needs OAuth" when there's genuinely no token yet.
+// srvCfg.OAuth != nil alone doesn't mean this failure IS an auth failure:
+// runBackgroundDiscovery only reaches this call after its own
+// hasOAuthTokenFile pre-check already found a token on disk, so a connection
+// failure here on an OAuth-configured server can be a transient one (network
+// blip, remote restart, rate limit) on an already-authenticated connector.
+// Mislabeling it "not_connected" put "OAuth" in the error text, which made
+// runBackgroundDiscovery's permanent-failure heuristic wedge an
+// already-working connector as "will not retry" until the user manually
+// reconfigured it.
+func classifyConnectionFailure(serverName string, srvCfg mcpclient.MCPServerConfig, connErr error) *ToolStatus {
+	toolStatus := &ToolStatus{
+		Name:         serverName,
+		Server:       serverName,
+		Status:       "error",
+		Error:        connErr.Error(),
+		Description:  srvCfg.Description,
+		ToolsEnabled: 0,
+	}
+
+	if srvCfg.OAuth != nil && !hasOAuthTokenFile(srvCfg) {
+		toolStatus.Status = "not_connected"
+		toolStatus.RequiresOAuth = true
+		toolStatus.Error = "OAuth authentication required"
+	}
+
+	return toolStatus
+}
+
 // discoverServerToolsDetailed connects to a specific MCP server and returns detailed tool information using mcpcache
 func (api *StreamingAPI) discoverServerToolsDetailed(ctx context.Context, serverName string) (*ToolStatus, error) {
 	api.appendServerLog(serverName, "info", "Loading configuration...")
@@ -156,26 +187,10 @@ func (api *StreamingAPI) discoverServerToolsDetailed(ctx context.Context, server
 	if err != nil {
 		api.appendServerLog(serverName, "error", fmt.Sprintf("Connection failed: %v", err))
 
-		// Check if this is an OAuth error - try to auto-discover OAuth endpoints
-		toolStatus := &ToolStatus{
-			Name:         serverName,
-			Server:       serverName,
-			Status:       "error",
-			Error:        err.Error(),
-			Description:  srvCfg.Description,
-			ToolsEnabled: 0,
-		}
-
-		// A connection failure on a server that requires OAuth means the user has
-		// not authenticated yet. The oauth block in config is the authority — we
-		// no longer probe the network to find out.
-		if srvCfg.OAuth != nil {
-			toolStatus.Status = "not_connected"
-			toolStatus.RequiresOAuth = true
-			toolStatus.Error = "OAuth authentication required"
+		toolStatus := classifyConnectionFailure(serverName, srvCfg, err)
+		if toolStatus.RequiresOAuth {
 			api.appendServerLog(serverName, "warn", "OAuth authentication required")
 		}
-
 		return toolStatus, nil
 	}
 
