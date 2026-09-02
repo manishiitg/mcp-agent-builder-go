@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { ArrowLeft, ChevronDown, ChevronRight, Lock, RefreshCw, Search, X } from 'lucide-react'
+import { AlertCircle, ArrowLeft, CheckCircle, ChevronDown, ChevronRight, Loader2, Lock, RefreshCw, Search, X } from 'lucide-react'
 import LLMRoleSelector from '../LLMRoleSelector'
 import LLMSelectionDropdown from '../LLMSelectionDropdown'
 import { WorkflowProviderCredentialField } from '../WorkflowProviderCredentialField'
@@ -211,6 +211,12 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   const [query, setQuery] = useState('')
   const [tokenOpen, setTokenOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  // Inline connection tests for the sign-in CLIs (Claude Code, Codex, Cursor):
+  // those rows have nothing to configure, so Test and Use live on the row
+  // itself instead of behind a drill-in. Keyed by row id.
+  type RowTest = { status: 'testing' | 'valid' | 'invalid'; message?: string }
+  const [rowTests, setRowTests] = useState<Record<string, RowTest>>({})
+  const [rowUsing, setRowUsing] = useState<string | null>(null)
   const [piCliModels, setPiCliModels] = useState<DynamicModelEntry[]>([])
   const [piCliGroups, setPiCliGroups] = useState<string[]>([])
   const [metadata, setMetadata] = useState<ModelMetadata[]>([])
@@ -409,17 +415,43 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     onChange(config)
   }
 
-  // Drill-in action: select the provider and persist right away, then return
-  // to the list. Keeping this a separate path from the radio (draft + footer
-  // Save) means "Use in this workflow" never leaves the choice half-applied.
-  const useActiveRowInWorkflow = async () => {
-    if (!activeRow) return
-    const config = configForRow(activeRow)
+  // "Use in this workflow": select the provider and persist right away. Used
+  // by the inline row button for sign-in CLIs and by the Pi drill-in.
+  const useRowInWorkflow = async (row: ProviderRow) => {
+    const config = configForRow(row)
     if (!config) return
     setExpandedRole(null)
-    onChange(config)
-    if (onUseProvider) await onUseProvider(config)
+    setRowUsing(row.id)
+    try {
+      onChange(config)
+      if (onUseProvider) await onUseProvider(config)
+    } finally {
+      setRowUsing(null)
+    }
+  }
+
+  const useActiveRowInWorkflow = async () => {
+    if (!activeRow) return
+    await useRowInWorkflow(activeRow)
     setActiveProviderId(null)
+  }
+
+  // Same check the drill-in runs, against the provider's default model.
+  const testRow = async (row: ProviderRow) => {
+    setRowTests(current => ({ ...current, [row.id]: { status: 'testing' } }))
+    try {
+      const response = await llmConfigService.validateAPIKey({
+        provider: row.id as Parameters<typeof llmConfigService.validateAPIKey>[0]['provider'],
+      })
+      setRowTests(current => ({
+        ...current,
+        [row.id]: response.valid
+          ? { status: 'valid', message: response.message || `${row.name} is working.` }
+          : { status: 'invalid', message: response.message || response.error || 'Validation failed.' },
+      }))
+    } catch (err) {
+      setRowTests(current => ({ ...current, [row.id]: { status: 'invalid', message: err instanceof Error ? err.message : 'Connection test failed.' } }))
+    }
   }
 
   const useManagedDefaults = () => {
@@ -693,6 +725,61 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     const status = providerStatus(row.entry, isProviderLocked(row.id))
     const tone = statusTone(status.label)
     const selected = row.id === selectedRowId
+    const inlineActions = row.entry.integration_kind === 'coding_agent' && !row.groupFilter
+    if (inlineActions) {
+      // Sign-in CLI: nothing to configure, so no radio and no drill-in. The
+      // row is the whole flow: status, Test, Use. A workflow-scoped token
+      // override for the selected provider stays available under the status
+      // line above the list.
+      const test = rowTests[row.id]
+      const usable = status.label === 'Ready' || status.label === 'Managed' || test?.status === 'valid'
+      return (
+        <div key={row.id} className={`flex items-center gap-2 px-3 py-2 ${selected ? 'bg-primary/5' : ''}`}>
+          <span className={`shrink-0 text-sm ${selected ? 'font-semibold' : 'font-medium'} text-foreground`}>{row.name}</span>
+          {selected && (
+            <span className="shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+              In use
+            </span>
+          )}
+          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">{row.modelId ?? ''}</span>
+          {test?.status === 'valid' ? (
+            <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400" title={test.message}>
+              <CheckCircle className="h-3 w-3" /> Working
+            </span>
+          ) : test?.status === 'invalid' ? (
+            <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-red-500" title={test.message}>
+              <AlertCircle className="h-3 w-3" /> Failed
+            </span>
+          ) : (
+            <span
+              className={`inline-flex shrink-0 items-center gap-1 text-[11px] font-medium ${tone.text}`}
+              title={statusTitle(status.label)}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} />
+              {statusActionText(status.label)}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => void testRow(row)}
+            disabled={readOnly || test?.status === 'testing'}
+            title={readOnly ? READ_ONLY_TITLE : `Send a test prompt to ${row.name}`}
+            className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-2 py-0.5 text-xs font-medium text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {test?.status === 'testing' ? <><Loader2 className="h-3 w-3 animate-spin" /> Testing…</> : 'Test'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void useRowInWorkflow(row)}
+            disabled={readOnly || selected || !row.selectable || rowUsing === row.id}
+            title={readOnly ? READ_ONLY_TITLE : selected ? 'Already in use' : !usable ? 'Not verified yet: Test first, or use anyway' : `Use ${row.name} for this workflow`}
+            className="inline-flex shrink-0 items-center gap-1 rounded-md bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {rowUsing === row.id ? <><Loader2 className="h-3 w-3 animate-spin" /> Saving…</> : 'Use'}
+          </button>
+        </div>
+      )
+    }
     return (
       <div key={row.id} className={`flex items-center gap-2 px-3 py-2 ${selected ? 'bg-primary/5' : ''}`}>
         {row.entry.integration_kind === 'coding_agent' ? (
