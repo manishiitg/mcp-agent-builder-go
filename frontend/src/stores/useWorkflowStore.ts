@@ -26,7 +26,14 @@ import { useGlobalPresetStore } from './useGlobalPresetStore'
 import { resolveGroupFolderPath } from '../utils/workflowUtils'
 import { normalizeRunFolder } from '../utils/workflowStateNormalization'
 import { getRawActiveWorkspaceId, getWorkspaceScopedStorageKey } from './useWorkspaceConnectionStore'
-import { normalizeWorkspaceViewId, type WorkspaceViewId } from '../components/workflow/workspaceViews'
+import {
+  getWorkspaceView,
+  isCanvasView,
+  normalizeCanvasViewId,
+  normalizeWorkspaceViewId,
+  type CanvasViewId,
+  type WorkspaceViewId,
+} from '../components/workflow/workspaceViews'
 import { useAppStore } from './useAppStore'
 
 // The set of views lives in one place: components/workflow/workspaceViews.ts.
@@ -34,16 +41,17 @@ export type WorkflowWorkspaceView = WorkspaceViewId | null
 
 // Layout direction for workflow canvas
 export type LayoutDirection = 'LR' | 'TB'
-export type CanvasViewMode = 'flow' | 'report' | 'log' | 'soul'
 
 const SELECTED_GROUP_IDS_KEY = 'workflow_selected_group_ids'
 const CURRENT_RUNNING_GROUP_ID_KEY = 'workflow_current_running_group_id'
 const SELECTED_RUN_FOLDER_KEY = 'workflow_selected_run_folder'
 const LAYOUT_DIRECTION_KEY = 'workflow_layout_direction'
-const CANVAS_VIEW_MODE_KEY = 'workflow_canvas_view_mode'
 const WORKSHOP_MODE_BY_PRESET_KEY = 'workflow_workshop_mode_by_preset'
-const WORKSPACE_VIEW_BY_PRESET_KEY = 'workflow_workspace_view_by_preset'
 const WORKFLOW_UI_STATE_BY_PRESET_KEY = 'workflow_ui_state_by_preset'
+// Legacy keys: read once for migration, never written. `canvasViewMode` and
+// the per-preset view map both folded into WORKFLOW_UI_STATE_BY_PRESET_KEY.
+const LEGACY_CANVAS_VIEW_MODE_KEY = 'workflow_canvas_view_mode'
+const LEGACY_WORKSPACE_VIEW_BY_PRESET_KEY = 'workflow_workspace_view_by_preset'
 
 function workflowStorageKey(key: string): string {
   return getWorkspaceScopedStorageKey(key)
@@ -76,7 +84,8 @@ type PersistedWorkflowUIState = {
   showChatArea?: boolean
   showWorkspacePane?: boolean
   workflowWorkspaceView?: WorkflowWorkspaceView
-  canvasViewMode?: CanvasViewMode
+  /** The canvas view (Plan or Report) to fall back to when no explicit view is set. */
+  lastCanvasView?: CanvasViewId
   focusedPane?: FocusedPane
 }
 
@@ -84,9 +93,11 @@ function normalizeWorkflowWorkspaceView(view: unknown): WorkflowWorkspaceView {
   return normalizeWorkspaceViewId(view)
 }
 
-function loadWorkspaceViewByPreset(): Record<string, WorkflowWorkspaceView> {
+// Legacy read only: the per-preset view now lives in the ui-state map. Old
+// saves that only have this key still restore through it.
+function loadLegacyWorkspaceViewByPreset(): Record<string, WorkflowWorkspaceView> {
   try {
-    const saved = getWorkflowStorageItem(WORKSPACE_VIEW_BY_PRESET_KEY)
+    const saved = getWorkflowStorageItem(LEGACY_WORKSPACE_VIEW_BY_PRESET_KEY)
     if (saved) {
       const parsed = JSON.parse(saved)
       if (parsed && typeof parsed === 'object') {
@@ -103,22 +114,6 @@ function loadWorkspaceViewByPreset(): Record<string, WorkflowWorkspaceView> {
   return {}
 }
 
-function persistWorkspaceViewForPreset(presetId: string | null, view: WorkflowWorkspaceView) {
-  if (!presetId) return
-  try {
-    const current = loadWorkspaceViewByPreset()
-    const normalizedView = normalizeWorkflowWorkspaceView(view)
-    if (normalizedView === null) {
-      delete current[presetId]
-    } else {
-      current[presetId] = normalizedView
-    }
-    setWorkflowStorageItem(WORKSPACE_VIEW_BY_PRESET_KEY, JSON.stringify(current))
-  } catch (error) {
-    console.error('[WorkflowStore] Failed to save workspaceViewByPreset:', error)
-  }
-}
-
 function loadWorkflowUIStateByPreset(): Record<string, PersistedWorkflowUIState> {
   try {
     const saved = getWorkflowStorageItem(WORKFLOW_UI_STATE_BY_PRESET_KEY)
@@ -133,16 +128,9 @@ function loadWorkflowUIStateByPreset(): Record<string, PersistedWorkflowUIState>
         showChatArea: typeof candidate.showChatArea === 'boolean' ? candidate.showChatArea : undefined,
         showWorkspacePane: typeof candidate.showWorkspacePane === 'boolean' ? candidate.showWorkspacePane : undefined,
         workflowWorkspaceView: normalizeWorkflowWorkspaceView(candidate.workflowWorkspaceView) ?? undefined,
-        canvasViewMode:
-          candidate.canvasViewMode === 'soul'
-            ? 'log'
-            : candidate.canvasViewMode === 'flow' ||
-              candidate.canvasViewMode === 'report' ||
-              candidate.canvasViewMode === 'log'
-              ? candidate.canvasViewMode as CanvasViewMode
-            : candidate.canvasViewMode === 'plan'
-              ? 'flow'
-            : undefined,
+        // Legacy saves stored this as `canvasViewMode` (which also allowed
+        // log/soul/plan); read either field, normalized to Plan or Report.
+        lastCanvasView: normalizeCanvasViewId(candidate.lastCanvasView ?? candidate.canvasViewMode),
         focusedPane:
           candidate.focusedPane === 'chat' || candidate.focusedPane === 'preview'
             ? candidate.focusedPane as FocusedPane
@@ -325,7 +313,9 @@ interface WorkflowStore {
   workflowWorkspaceView: WorkflowWorkspaceView
   focusedPane: FocusedPane // Which pane gets ~75% — 'preview' (canvas) or 'chat'
   layoutDirection: LayoutDirection // Canvas layout direction ('LR' = horizontal, 'TB' = vertical)
-  canvasViewMode: CanvasViewMode // 'flow' = React Flow diagram, 'report' = report preview
+  // The canvas view (Plan or Report) the pane shows when workflowWorkspaceView
+  // is null, and returns to when leaving Files. Recorded by openWorkspaceView.
+  lastCanvasView: CanvasViewId
 
   // Multi-tab chat state
   workflowChatTabs: Record<string, WorkflowChatTab>  // tabId -> tab
@@ -397,11 +387,10 @@ interface WorkflowStore {
   setFocusedPane: (pane: FocusedPane) => void
   setWorkflowWorkspaceView: (view: WorkflowWorkspaceView) => void
   /** Show the workspace pane on `view` -- the one way to navigate the pane
-   * (toolbar buttons, chat file links). Keeps canvasViewMode in step for the
-   * canvas views and un-minimizes the workspace for Files. */
+   * (toolbar buttons, chat file links, jump-to-plan). Records Plan/Report as
+   * `lastCanvasView` and un-minimizes the workspace for Files. */
   openWorkspaceView: (view: WorkspaceViewId) => void
   setLayoutDirection: (direction: LayoutDirection) => void
-  setCanvasViewMode: (mode: CanvasViewMode) => void
 
   // Workflow chat tabs
   createWorkflowTab: (phaseId: string, phaseName: string) => Promise<string>  // Returns tabId
@@ -551,19 +540,14 @@ export const useWorkflowStore = create<WorkflowStore>()(
         }
         return 'LR' // Default to horizontal layout
       })() as LayoutDirection,
-      // Canvas view mode (persists across page refreshes via localStorage)
-      canvasViewMode: (() => {
+      // Seeded once from the legacy global canvas-view key; per-preset restore
+      // (switchToPreset) overrides it from the ui-state map.
+      lastCanvasView: (() => {
         try {
-          const saved = getWorkflowStorageItem(CANVAS_VIEW_MODE_KEY)
-          if (saved === 'soul') return 'log'
-          if (saved === 'flow' || saved === 'report' || saved === 'log') {
-            return saved
-          }
-          if (saved === 'plan') return 'flow'
+          return normalizeCanvasViewId(getWorkflowStorageItem(LEGACY_CANVAS_VIEW_MODE_KEY)) ?? 'flow'
         } catch {
-          // ignore
+          return 'flow'
         }
-        return 'flow' as CanvasViewMode
       })(),
 
       // Multi-tab chat state
@@ -1220,13 +1204,15 @@ export const useWorkflowStore = create<WorkflowStore>()(
         const presetId = useGlobalPresetStore.getState().activePresetIds.workflow ?? get()._currentPresetId
         persistWorkflowUIStateForPreset(presetId ?? null, { workflowWorkspaceView: normalizedView })
         set({ workflowWorkspaceView: normalizedView })
-        // Persist per-preset so the user returns to the same view across reloads.
-        // _presetStates handles in-session preset switches but lives in memory only.
-        persistWorkspaceViewForPreset(presetId ?? null, normalizedView)
       },
 
       openWorkspaceView: (view: WorkspaceViewId) => {
-        if (view === 'flow' || view === 'report') get().setCanvasViewMode(view)
+        const kind = getWorkspaceView(view).kind
+        if ((kind === 'canvas' || kind === 'preview') && isCanvasView(view)) {
+          const presetId = useGlobalPresetStore.getState().activePresetIds.workflow ?? get()._currentPresetId
+          persistWorkflowUIStateForPreset(presetId ?? null, { lastCanvasView: view })
+          set({ lastCanvasView: view })
+        }
         get().setWorkflowWorkspaceView(view)
         get().setShowWorkspacePane(true)
         useAppStore.getState().setWorkspaceMinimized(view !== 'files')
@@ -1239,18 +1225,6 @@ export const useWorkflowStore = create<WorkflowStore>()(
           console.error('[WorkflowStore] Failed to save layout direction to localStorage:', error)
         }
         set({ layoutDirection: direction })
-      },
-
-      setCanvasViewMode: (mode: CanvasViewMode) => {
-        const normalizedMode: CanvasViewMode = mode === 'soul' ? 'log' : mode
-        try {
-          setWorkflowStorageItem(CANVAS_VIEW_MODE_KEY, normalizedMode)
-        } catch {
-          // ignore
-        }
-        const presetId = useGlobalPresetStore.getState().activePresetIds.workflow ?? get()._currentPresetId
-        persistWorkflowUIStateForPreset(presetId ?? null, { canvasViewMode: normalizedMode })
-        set({ canvasViewMode: normalizedMode })
       },
 
       // Workflow chat tabs
@@ -1698,9 +1672,9 @@ export const useWorkflowStore = create<WorkflowStore>()(
               showWorkspacePane: true,
               workflowWorkspaceView:
                 persistedUIState.workflowWorkspaceView ??
-                (loadWorkspaceViewByPreset()[presetId] ?? null),
+                (loadLegacyWorkspaceViewByPreset()[presetId] ?? null),
               focusedPane: 'preview',
-              ...(persistedUIState.canvasViewMode ? { canvasViewMode: persistedUIState.canvasViewMode } : {}),
+              ...(persistedUIState.lastCanvasView ? { lastCanvasView: persistedUIState.lastCanvasView } : {}),
               workshopMode: restoredWorkshopMode,
               workflowMode: 'plan',
               _currentPresetId: presetId
@@ -1720,7 +1694,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
             restored.workflowWorkspaceView !== null
               ? restored.workflowWorkspaceView
               : (persistedUIState.workflowWorkspaceView ??
-                (loadWorkspaceViewByPreset()[presetId] ?? null))
+                (loadLegacyWorkspaceViewByPreset()[presetId] ?? null))
           // New adaptive layout: workflows always open with BOTH the chat rail
           // and the preview canvas visible (focus-follows-click sizes them).
           // Force them on so a stale persisted showChatArea:false from the
@@ -1731,15 +1705,12 @@ export const useWorkflowStore = create<WorkflowStore>()(
           // state is transient within a session — never remembered across opens,
           // so a workflow always greets you with the report front-and-centre.
           const persistedFocusedPane: FocusedPane = 'preview'
-          const persistedCanvasViewMode =
-            persistedUIState.canvasViewMode
-          // When the effective workspace view is flow/report, keep canvasViewMode
-          // in lock-step so the canvas renders the same shape the user left on last time.
-          const syncedCanvasMode: CanvasViewMode | undefined =
-            persistedWorkspaceView === 'flow' ||
-            persistedWorkspaceView === 'report'
+          // If the user left on Plan or Report, that is the last canvas view by
+          // definition; otherwise take the persisted one (if any).
+          const restoredLastCanvasView: CanvasViewId | undefined =
+            isCanvasView(persistedWorkspaceView)
               ? persistedWorkspaceView
-              : persistedCanvasViewMode
+              : persistedUIState.lastCanvasView
           set({
             // Reset workflow context (loaded from API, not per-preset)
             runFolders: [],
@@ -1752,7 +1723,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
             chatAreaExpanded: restored.chatAreaExpanded,
             workflowWorkspaceView: persistedWorkspaceView,
             focusedPane: persistedFocusedPane,
-            ...(syncedCanvasMode ? { canvasViewMode: syncedCanvasMode } : {}),
+            ...(restoredLastCanvasView ? { lastCanvasView: restoredLastCanvasView } : {}),
             workflowChatTabs: restored.workflowChatTabs,
             activeWorkflowTabId: restored.activeWorkflowTabId,
             selectedGroupIds: restored.selectedGroupIds,

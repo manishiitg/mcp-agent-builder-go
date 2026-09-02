@@ -1,11 +1,9 @@
 import React, { useCallback } from 'react'
 import { agentApi } from '../../services/api'
 import type { WorkflowPublishInfoResponse, WorkflowPublishStrategyInfo } from '../../services/api-types'
-import PublishPopup from '../backup-publish/PublishPopup'
+import PublishPopupBody from '../backup-publish/PublishPopupBody'
 
-interface WorkflowPublishPopupProps {
-  isOpen: boolean
-  onClose: () => void
+interface WorkflowPublishViewProps {
   workspacePath: string | null
   onStateLoaded?: (state: string) => void
 }
@@ -24,7 +22,7 @@ const getPublishSummary = (info: WorkflowPublishInfoResponse | null): string => 
   return 'Publish status is waiting for the builder to update publish/status.json.'
 }
 
-const WorkflowPublishPopup: React.FC<WorkflowPublishPopupProps> = ({ isOpen, onClose, workspacePath, onStateLoaded }) => {
+const WorkflowPublishView: React.FC<WorkflowPublishViewProps> = ({ workspacePath, onStateLoaded }) => {
   const loadInfo = useCallback(async () => {
     if (!workspacePath) throw new Error('No workflow is selected')
     return agentApi.getWorkflowPublish(workspacePath)
@@ -37,9 +35,7 @@ const WorkflowPublishPopup: React.FC<WorkflowPublishPopupProps> = ({ isOpen, onC
   }, [workspacePath])
 
   return (
-    <PublishPopup
-      isOpen={isOpen}
-      onClose={onClose}
+    <PublishPopupBody
       loadInfo={loadInfo}
       loadAccessSecret={loadAccessSecret}
       onStateLoaded={onStateLoaded}
@@ -58,4 +54,4 @@ const WorkflowPublishPopup: React.FC<WorkflowPublishPopupProps> = ({ isOpen, onC
   )
 }
 
-export default WorkflowPublishPopup
+export default WorkflowPublishView

@@ -17,7 +17,11 @@ describe('bot and notification settings separation', () => {
   it('exposes Notifications at workflow level and keeps it out of the global header', () => {
     const header = readFileSync('src/components/ModePresetBar.tsx', 'utf8')
     const workflowToolbar = readFileSync('src/components/workflow/canvas/WorkflowToolbar.tsx', 'utf8')
-    const notifications = readFileSync('src/components/workflow/WorkflowNotificationPopup.tsx', 'utf8')
+    // Notify (like Pulse/Backup/Publish) is a registry view now: the toolbar
+    // button navigates the pane, and the host's InspectorBody switch is what
+    // actually mounts the view component.
+    const host = readFileSync('src/components/workflow/canvas/WorkspaceViewHost.tsx', 'utf8')
+    const notifications = readFileSync('src/components/workflow/WorkflowNotificationView.tsx', 'utf8')
     expect(header).not.toContain('notification-settings-button')
     expect(header).not.toContain('bot-connector')
     expect(workflowToolbar).toContain('data-testid="workflow-notification-settings-button"')
@@ -25,7 +29,8 @@ describe('bot and notification settings separation', () => {
     // attribute is no longer a JSX literal; the hook itself must still be in
     // the toolbar and nowhere near the global header.
     expect(workflowToolbar).toContain("'data-tour': 'bot-connector'")
-    expect(workflowToolbar).toContain('<WorkflowNotificationPopup')
+    expect(workflowToolbar).toContain("openWorkspaceView('notify')")
+    expect(host).toContain('<WorkflowNotificationView')
     expect(workflowToolbar).toContain('<BellRing')
     expect(notifications).toContain('Agentic notification delivery')
     expect(notifications).toContain('Workflow Slack webhook')

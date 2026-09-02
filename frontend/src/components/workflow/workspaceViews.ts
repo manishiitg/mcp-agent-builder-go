@@ -1,14 +1,18 @@
 import {
+  Activity,
+  BellRing,
   BookOpen,
   Bot,
   BrainCircuit,
   CalendarClock,
   ClipboardCheck,
+  Cloud,
   Database,
   DollarSign,
   Files,
   FileText,
   FolderOpen,
+  Globe,
   KeyRound,
   LayoutDashboard,
   Monitor,
@@ -30,21 +34,21 @@ import {
  * fails to compile.
  *
  * `kind` is what the host and layout switch on:
- *   - `canvas`     the React Flow plan (`flow`), or the default builder
- *                  workspace (`builder`, an alias for "no explicit view":
- *                  nothing dispatches it, the host falls through to
- *                  `canvasViewMode`).
- *   - `preview`    lightweight preview-pane views with no React Flow tree
- *                  (`report`, `log`; `soul` is legacy and is remapped to `log`
- *                  by `normalizeWorkspaceViewId`, kept here only so existing
- *                  comparisons still type-check).
+ *   - `canvas`     the React Flow plan (`flow`).
+ *   - `preview`    the report preview (`report`) -- no React Flow tree.
  *   - `files`      the file browser.
  *   - `inspector`  a full-pane inspector (costs, logs, learnings, ...).
  *   - `capability` a section of `WorkflowCapabilitiesPanel`.
  *
+ * `flow` and `report` are the two "canvas views": the store's
+ * `workflowWorkspaceView` being null means "show the last canvas view the
+ * user was on" (`lastCanvasView`), which is how the default builder
+ * workspace works. Old persisted ids (`builder`, `log`, `soul`, `plan`) are
+ * remapped by `normalizeWorkspaceViewId` and never exist as views.
+ *
  * `pane` says whether opening the view means the workspace pane is showing
- * content (every kind except `builder`/`files`, which the layout treats as the
- * default workspace rather than an open pane).
+ * content (every kind except `files`, which the layout treats as the default
+ * workspace rather than an open pane).
  */
 export type WorkspaceViewKind = 'canvas' | 'preview' | 'files' | 'inspector' | 'capability'
 
@@ -65,11 +69,8 @@ export type WorkspaceViewDef = {
 
 const VIEWS = [
   // -- canvas / preview (dispatched by WorkspaceViewHost) ------------------
-  { id: 'builder', kind: 'canvas', label: 'Builder', icon: Route, pane: false },
   { id: 'report', kind: 'preview', label: 'Report', icon: LayoutDashboard, toolbarGroup: 'views', pane: true },
   { id: 'flow', kind: 'canvas', label: 'Plan', icon: Route, toolbarGroup: 'views', pane: true },
-  { id: 'log', kind: 'preview', label: 'Pulse', icon: FileText, pane: true },
-  { id: 'soul', kind: 'preview', label: 'Pulse', icon: FileText, pane: true },
   // -- inspectors (toolbar "views" cluster, in button order) ---------------
   { id: 'costs', kind: 'inspector', label: 'Costs', icon: DollarSign, toolbarGroup: 'views', pane: true },
   { id: 'execution-logs', kind: 'inspector', label: 'Execution logs', icon: FileText, toolbarGroup: 'views', pane: true },
@@ -79,8 +80,17 @@ const VIEWS = [
   // -- files (last button of the "views" cluster) --------------------------
   { id: 'files', kind: 'files', label: 'Files', icon: Files, toolbarGroup: 'views', pane: false },
   // -- inspectors (toolbar "pulse" cluster) --------------------------------
+  // The toolbar builds this cluster by hand (status dots, a run button, and a
+  // divider between the schedule/eval group and the backup/publish/notify
+  // group don't fit a generic button loop), so `toolbarGroup: 'pulse'` here
+  // is categorization only -- nothing filters on it the way `views` and
+  // `capabilities` are filtered into their auto-rendered clusters below.
+  { id: 'pulse', kind: 'inspector', label: 'Pulse', icon: Activity, toolbarGroup: 'pulse', pane: true },
   { id: 'evaluation', kind: 'inspector', label: 'Evaluation', icon: ClipboardCheck, toolbarGroup: 'pulse', pane: true },
   { id: 'schedules', kind: 'inspector', label: 'Schedules', icon: CalendarClock, toolbarGroup: 'pulse', pane: true },
+  { id: 'backup', kind: 'inspector', label: 'Backup', icon: Cloud, toolbarGroup: 'pulse', pane: true },
+  { id: 'publish', kind: 'inspector', label: 'Publish', icon: Globe, toolbarGroup: 'pulse', pane: true },
+  { id: 'notify', kind: 'inspector', label: 'Notify', icon: BellRing, toolbarGroup: 'pulse', pane: true },
   // -- capability sections (WorkflowCapabilitiesPanel), then folders -------
   { id: 'skills', kind: 'capability', label: 'Workflow skills', icon: Puzzle, toolbarGroup: 'capabilities', pane: true, managesOwnScroll: true },
   { id: 'secrets', kind: 'capability', label: 'Workflow secrets', icon: KeyRound, toolbarGroup: 'capabilities', pane: true, managesOwnScroll: true },
@@ -105,6 +115,9 @@ type ViewOfKind<K extends WorkspaceViewKind> = Extract<typeof VIEWS[number], { k
 export type InspectorViewId = ViewOfKind<'inspector'> | ViewOfKind<'capability'>
 export type CapabilityViewId = ViewOfKind<'capability'>
 export type PreviewViewId = ViewOfKind<'preview'>
+/** The two views that render in the canvas slot (Plan and Report); the store
+ * remembers the last one opened as the fallback for "no explicit view". */
+export type CanvasViewId = ViewOfKind<'canvas'> | ViewOfKind<'preview'>
 
 const VIEW_BY_ID: ReadonlyMap<string, WorkspaceView> = new Map(
   WORKSPACE_VIEWS.map(view => [view.id, view] as const),
@@ -134,6 +147,12 @@ export function isPreviewView(id: WorkspaceViewId | null | undefined): id is Pre
   return Boolean(id) && VIEW_BY_ID.get(id as string)?.kind === 'preview'
 }
 
+export function isCanvasView(id: unknown): id is CanvasViewId {
+  if (typeof id !== 'string') return false
+  const kind = VIEW_BY_ID.get(id)?.kind
+  return kind === 'canvas' || kind === 'preview'
+}
+
 /** True when the view means the workspace pane is showing something other
  * than the default builder workspace or the file browser. */
 export function isWorkspacePaneView(id: WorkspaceViewId | null | undefined): boolean {
@@ -144,10 +163,14 @@ export const CAPABILITY_VIEWS = WORKSPACE_VIEWS.filter(
   (view): view is WorkspaceView & { id: CapabilityViewId; kind: 'capability' } => view.kind === 'capability',
 )
 
-/** Legacy persisted ids that no longer exist as views of their own. */
-const LEGACY_VIEW_IDS: Record<string, WorkspaceViewId> = {
-  soul: 'log',
+/** Legacy persisted ids that no longer exist as views of their own. `log` and
+ * `soul` were the old Pulse/Soul preview, which is the report today;
+ * `builder` meant "no explicit view", which is `null`. */
+const LEGACY_VIEW_IDS: Record<string, WorkspaceViewId | null> = {
+  soul: 'report',
+  log: 'report',
   plan: 'flow',
+  builder: null,
 }
 
 /** Coerce a persisted/unknown value to a view id, or null. Legacy ids are
@@ -155,9 +178,15 @@ const LEGACY_VIEW_IDS: Record<string, WorkspaceViewId> = {
 export function normalizeWorkspaceViewId(value: unknown): WorkspaceViewId | null {
   if (value === null || value === undefined) return null
   if (typeof value !== 'string') return null
-  const legacy = LEGACY_VIEW_IDS[value]
-  if (legacy) return legacy
+  if (value in LEGACY_VIEW_IDS) return LEGACY_VIEW_IDS[value]
   return isWorkspaceViewId(value) ? value : null
+}
+
+/** Coerce a persisted canvas-view value (current `lastCanvasView` or the old
+ * `canvasViewMode`, which also allowed `log`/`soul`/`plan`) to Plan or Report. */
+export function normalizeCanvasViewId(value: unknown): CanvasViewId | undefined {
+  const view = normalizeWorkspaceViewId(value)
+  return isCanvasView(view) ? view : undefined
 }
 
 /** Compile-time exhaustiveness helper for switches over view ids. Never
