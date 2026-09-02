@@ -7,6 +7,7 @@ import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { agentApi } from '../../services/api'
 import { useWorkflowManifestStore } from '../../stores/useWorkflowManifestStore'
+import { READ_ONLY_TITLE, useCanWriteWorkflow } from '../../hooks/useCanWriteWorkflow'
 import type {
   ChannelRoute, GmailConfigRequest, GmailConfigResponse, GmailTestResponse,
   SlackConfig, SlackConfigRequest, SlackTestResponse,
@@ -86,6 +87,9 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
   )
   const workflowId = workflow?.manifest.id ?? null
   const workflowLabel = (id: string) => workflows.find(w => w.manifest.id === id)?.manifest.label || id
+  // Every write here lands in shared connector config immediately -- there's
+  // no Save step for the panel to gate -- so each mutating control disables.
+  const readOnly = !useCanWriteWorkflow()
 
   useEffect(() => {
     if (workflows.length === 0) void refreshWorkflows()
@@ -629,7 +633,7 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
                 <p className="text-xs text-muted-foreground mt-0.5">Connect the two-way Slack bot for @mentions, threads, and human replies</p>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
-                <input type="checkbox" checked={slackConfig.enabled} onChange={e => setSlackConfig({ ...slackConfig, enabled: e.target.checked })} className="sr-only peer" />
+                <input type="checkbox" checked={slackConfig.enabled} disabled={readOnly} onChange={e => setSlackConfig({ ...slackConfig, enabled: e.target.checked })} className="sr-only peer" />
                 <div className={toggleClass}></div>
               </label>
             </div>
@@ -642,7 +646,8 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
                 <label className="text-sm font-medium text-foreground">Allowed Users</label>
                 <button
                   onClick={handleEmailsSave}
-                  disabled={emailsSaving || (!emailsDirty && !emailsSaved)}
+                  disabled={readOnly || emailsSaving || (!emailsDirty && !emailsSaved)}
+                  title={readOnly ? READ_ONLY_TITLE : undefined}
                   className={`px-3 py-1 text-xs rounded-md transition-colors flex items-center gap-1 ${
                     emailsSaved ? 'bg-green-600 text-white' : 'bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50'
                   }`}
@@ -654,6 +659,7 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
                 type="text"
                 value={allowedEmails}
                 onChange={e => { setAllowedEmails(e.target.value); setEmailsDirty(true); setEmailsSaved(false) }}
+                disabled={readOnly}
                 placeholder="user@example.com, user2@example.com"
                 className="w-full px-2.5 py-1.5 text-xs bg-secondary border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
               />
@@ -671,7 +677,7 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
                     <p className="text-xs text-muted-foreground mt-0.5">Users can @mention the bot to start agent sessions directly from Slack. Required for channel routing.</p>
                   </div>
                   <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" checked={slackConfig.bot_mode || false} onChange={e => setSlackConfig({ ...slackConfig, bot_mode: e.target.checked })} className="sr-only peer" />
+                    <input type="checkbox" checked={slackConfig.bot_mode || false} disabled={readOnly} onChange={e => setSlackConfig({ ...slackConfig, bot_mode: e.target.checked })} className="sr-only peer" />
                     <div className={toggleClass}></div>
                   </label>
                 </div>
@@ -737,7 +743,7 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
                 <Card className="p-4">
                   <label className="block text-sm font-medium text-foreground mb-2">Bot Token <span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <input type={showBotToken ? 'text' : 'password'} value={slackConfig.bot_token || ''} onChange={e => setSlackConfig({ ...slackConfig, bot_token: e.target.value })} placeholder="xoxb-..." className="w-full px-3 py-2 pr-10 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary" />
+                    <input type={showBotToken ? 'text' : 'password'} value={slackConfig.bot_token || ''} onChange={e => setSlackConfig({ ...slackConfig, bot_token: e.target.value })} disabled={readOnly} placeholder="xoxb-..." className="w-full px-3 py-2 pr-10 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary" />
                     <button type="button" onClick={() => setShowBotToken(!showBotToken)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                       {showBotToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
@@ -748,7 +754,7 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
                 {/* Channel ID */}
                 <Card className="p-4">
                   <label className="block text-sm font-medium text-foreground mb-2">Channel ID <span className="text-red-500">*</span></label>
-                  <input type="text" value={slackConfig.channel_id || ''} onChange={e => setSlackConfig({ ...slackConfig, channel_id: e.target.value })} placeholder="C1234567890" className="w-full px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary" />
+                  <input type="text" value={slackConfig.channel_id || ''} onChange={e => setSlackConfig({ ...slackConfig, channel_id: e.target.value })} disabled={readOnly} placeholder="C1234567890" className="w-full px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary" />
                   <p className="text-xs text-muted-foreground mt-1">Right-click channel → View channel details → Channel ID (starts with C)</p>
                 </Card>
 
@@ -756,7 +762,7 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
                 <Card className="p-4">
                   <label className="block text-sm font-medium text-foreground mb-2">App Token (Socket Mode) <span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <input type={showAppToken ? 'text' : 'password'} value={slackConfig.app_token || ''} onChange={e => setSlackConfig({ ...slackConfig, app_token: e.target.value })} placeholder="xapp-..." className="w-full px-3 py-2 pr-10 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary" />
+                    <input type={showAppToken ? 'text' : 'password'} value={slackConfig.app_token || ''} onChange={e => setSlackConfig({ ...slackConfig, app_token: e.target.value })} disabled={readOnly} placeholder="xapp-..." className="w-full px-3 py-2 pr-10 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary" />
                     <button type="button" onClick={() => setShowAppToken(!showAppToken)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                       {showAppToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
@@ -766,7 +772,7 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
 
                 {/* Test Connection */}
                 <div className="space-y-1">
-                  <Button variant="outline" onClick={handleSlackTest} disabled={!slackConfig.enabled || slackTesting || slackLoading} className="w-full flex items-center justify-center gap-2">
+                  <Button variant="outline" onClick={handleSlackTest} disabled={readOnly || !slackConfig.enabled || slackTesting || slackLoading} title={readOnly ? READ_ONLY_TITLE : undefined} className="w-full flex items-center justify-center gap-2">
                     {slackTesting ? <><Loader2 className="w-4 h-4 animate-spin" />Testing...</> : 'Test Connection'}
                   </Button>
                   <p className="text-xs text-muted-foreground text-center">
@@ -796,7 +802,7 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
           )}
 
           <div className="flex items-center justify-end gap-2 border-t border-border pt-3">
-            <Button onClick={handleSlackSave} disabled={!slackHasChanges || slackSaving || slackLoading} className="flex items-center gap-2">
+            <Button onClick={handleSlackSave} disabled={readOnly || !slackHasChanges || slackSaving || slackLoading} title={readOnly ? READ_ONLY_TITLE : undefined} className="flex items-center gap-2">
               {slackSaving ? <><Loader2 className="w-4 h-4 animate-spin" />Saving...</> : <><CheckCircle className="w-4 h-4" />Save</>}
             </Button>
           </div>
@@ -963,7 +969,8 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
             </div>
             <Button
               onClick={handleUnpairWhatsApp}
-              disabled={unpairing}
+              disabled={readOnly || unpairing}
+              title={readOnly ? READ_ONLY_TITLE : undefined}
               variant={unpairConfirm ? 'destructive' : 'outline'}
               size="sm"
               className="flex-shrink-0 whitespace-nowrap"
@@ -1038,9 +1045,10 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
             <button
               type="button"
               onClick={() => void removeRoute(route)}
-              className="rounded-full p-0.5 text-primary/70 transition-colors hover:bg-red-500/15 hover:text-red-500"
+              disabled={readOnly}
+              className="rounded-full p-0.5 text-primary/70 transition-colors hover:bg-red-500/15 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-primary/70"
               aria-label={`Stop answering on ${label}`}
-              title="Remove from this workflow"
+              title={readOnly ? READ_ONLY_TITLE : 'Remove from this workflow'}
             >
               <X className="h-3 w-3" />
             </button>
@@ -1053,7 +1061,7 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
               <select
                 value={route.kind === 'slack' ? (route.workshop_mode || '') : 'run'}
                 onChange={e => void updateRoute(route, { workshop_mode: e.target.value })}
-                disabled={saving || route.kind === 'whatsapp'}
+                disabled={readOnly || saving || route.kind === 'whatsapp'}
                 className="px-1.5 py-1 text-xs bg-secondary border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
                 title="Bot channels always run in Run mode. 'Default' uses the automation manifest's setting (which is also Run for bot deployments)."
               >
@@ -1065,7 +1073,7 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
               <input
                 type="checkbox"
                 checked={!!route.send_full_details}
-                disabled={saving}
+                disabled={readOnly || saving}
                 onChange={e => void updateRoute(route, { send_full_details: e.target.checked })}
                 className="h-3.5 w-3.5"
               />
@@ -1123,13 +1131,15 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
               }}
               onKeyDown={e => { if (e.key === 'Enter') add() }}
               placeholder={kind === 'slack' ? 'Channel ID (C…)' : 'slug, e.g. rca'}
-              disabled={!!adding}
-              className="min-w-0 flex-1 px-2 py-1 text-xs bg-secondary border border-border rounded font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+              disabled={readOnly || !!adding}
+              title={readOnly ? READ_ONLY_TITLE : undefined}
+              className="min-w-0 flex-1 px-2 py-1 text-xs bg-secondary border border-border rounded font-mono focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
             />
             <button
               type="button"
               onClick={add}
-              disabled={!value.trim() || !!adding}
+              disabled={readOnly || !value.trim() || !!adding}
+              title={readOnly ? READ_ONLY_TITLE : undefined}
               className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
             >
               {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
@@ -1186,7 +1196,7 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
                     <p className="mt-0.5 text-xs text-muted-foreground">Available to notify_user across workflows and product chats.</p>
                   </div>
                   <label className={`relative inline-flex items-center ${!gmailConfig.enabled && !gmailTestPassed ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
-                    <input type="checkbox" checked={gmailConfig.enabled} disabled={!gmailConfig.enabled && !gmailTestPassed} onChange={event => setGmailConfig({ ...gmailConfig, enabled: event.target.checked })} className="peer sr-only" />
+                    <input type="checkbox" checked={gmailConfig.enabled} disabled={readOnly || (!gmailConfig.enabled && !gmailTestPassed)} onChange={event => setGmailConfig({ ...gmailConfig, enabled: event.target.checked })} className="peer sr-only" />
                     <div className="h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-blue-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-disabled:opacity-40 dark:bg-gray-700" />
                   </label>
                 </div>
@@ -1215,19 +1225,19 @@ export default function WorkflowBotsPanel({ workspacePath }: WorkflowBotsPanelPr
                   <label className="mb-2 block text-sm font-medium">Default recipients</label>
                   {/* Deliberately type="text": type="email" rejects a comma-separated
                       list, which is the whole point of this field. */}
-                  <input type="text" inputMode="email" value={gmailConfig.default_to || ''} onChange={event => setGmailConfig({ ...gmailConfig, default_to: event.target.value })} placeholder="you@example.com, teammate@example.com" className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
+                  <input type="text" inputMode="email" value={gmailConfig.default_to || ''} onChange={event => setGmailConfig({ ...gmailConfig, default_to: event.target.value })} disabled={readOnly} placeholder="you@example.com, teammate@example.com" className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
                   <p className="mt-1 text-xs text-muted-foreground">Where notifications are emailed when a workflow has no recipients of its own. Separate several addresses with commas.</p>
                 </div>
                 <div>
                   <label className="mb-2 block text-sm font-medium">Disallowed recipients</label>
-                  <textarea value={gmailBlockedText} onChange={event => setGmailBlockedText(event.target.value)} rows={3} placeholder="blocked@example.com, no-notify@example.com" className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
+                  <textarea value={gmailBlockedText} onChange={event => setGmailBlockedText(event.target.value)} disabled={readOnly} rows={3} placeholder="blocked@example.com, no-notify@example.com" className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
                   {gmailDefaultIsBlocked && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{gmailBlockedDefaults.join(', ')} {gmailBlockedDefaults.length === 1 ? 'is' : 'are'} both a default recipient and disallowed.</p>}
                 </div>
               </Card>
-              <Button variant="outline" onClick={testGmail} disabled={gmailTesting || !gmailConfig.default_to || gmailDefaultIsBlocked} className="w-full">{gmailTesting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Sending…</> : 'Send test email'}</Button>
+              <Button variant="outline" onClick={testGmail} disabled={readOnly || gmailTesting || !gmailConfig.default_to || gmailDefaultIsBlocked} title={readOnly ? READ_ONLY_TITLE : undefined} className="w-full">{gmailTesting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Sending…</> : 'Send test email'}</Button>
               {gmailTestResult && <Card className={`p-3 text-sm ${gmailTestResult.success ? 'border-green-300 bg-green-50 text-green-700 dark:border-green-700 dark:bg-green-900/20 dark:text-green-300' : 'border-red-300 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-900/20 dark:text-red-300'}`}>{gmailTestResult.message}</Card>}
               <div className="flex justify-end">
-                <Button onClick={saveGmail} disabled={!gmailHasChanges || gmailSaving || gmailLoading || gmailDefaultIsBlocked || (gmailConfig.enabled && !gmailTestPassed)}>{gmailSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving…</> : 'Save'}</Button>
+                <Button onClick={saveGmail} disabled={readOnly || !gmailHasChanges || gmailSaving || gmailLoading || gmailDefaultIsBlocked || (gmailConfig.enabled && !gmailTestPassed)} title={readOnly ? READ_ONLY_TITLE : undefined}>{gmailSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving…</> : 'Save'}</Button>
               </div>
             </>
           )}

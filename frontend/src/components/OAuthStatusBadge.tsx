@@ -9,6 +9,7 @@ import { oauthApi } from '../services/oauthApi';
 import type { OAuthDiscoveryResponse } from '../services/oauthApi';
 import { mcpConfigApi } from '../services/mcpConfigApi';
 import { useChatStore } from '../stores';
+import { READ_ONLY_TITLE } from '../hooks/useCanWriteWorkflow';
 
 /** Toasts are global, so read the action lazily rather than subscribing to the store. */
 const notify = (message: string, type: 'success' | 'info' | 'error') =>
@@ -32,6 +33,9 @@ interface OAuthStatusBadgeProps {
    * which service the button belongs to.
    */
   variant?: 'label' | 'icon';
+  /** The current user can't change workflow state: connect/disconnect and
+   * the credential dialogs' submit buttons disable. */
+  readOnly?: boolean;
 }
 
 export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
@@ -39,7 +43,8 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
   requiresOAuth,
   connection,
   onAuthChange,
-  variant = 'label'
+  variant = 'label',
+  readOnly = false,
 }) => {
   // When the caller knows the connection state, this component stops asking the
   // server about it — that is what removes ~24 polls per 10s from the directory.
@@ -342,7 +347,7 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
           </button>
           <button
             onClick={handleClientIdSubmit}
-            disabled={!clientIdInput.trim()}
+            disabled={readOnly || !clientIdInput.trim()}
             className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             Continue
@@ -402,7 +407,8 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
           </button>
           <button
             onClick={handleApiKeySubmit}
-            className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+            disabled={readOnly}
+            className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             Connect
           </button>
@@ -429,13 +435,13 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
               handleLogin();
             }
           }}
-          disabled={loading}
+          disabled={readOnly || loading}
           className={`group/btn flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors disabled:opacity-50 ${
             isConnected
               ? 'border-red-500/30 bg-red-500/10 text-red-500 hover:border-red-500/50 hover:bg-red-500/20 hover:text-red-400'
               : 'border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-100'
           }`}
-          title={isConnected ? `Disconnect ${serverName}` : `Connect ${serverName}`}
+          title={readOnly ? READ_ONLY_TITLE : isConnected ? `Disconnect ${serverName}` : `Connect ${serverName}`}
           aria-label={isConnected ? `Disconnect ${serverName}` : `Connect ${serverName}`}
         >
           {loading ? (
@@ -458,9 +464,9 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
         <div className="flex items-center gap-1">
           <button
             onClick={() => (connectionDriven ? handleConnectClick() : handleLogin())}
-            disabled={loading}
+            disabled={readOnly || loading}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 hover:bg-gray-700 dark:hover:bg-gray-300 rounded-md transition-colors disabled:opacity-50"
-            title="Connect this service"
+            title={readOnly ? READ_ONLY_TITLE : 'Connect this service'}
           >
             {loading ? (
               <>
@@ -480,9 +486,9 @@ export const OAuthStatusBadge: React.FC<OAuthStatusBadgeProps> = ({
     <div className="flex items-center gap-1.5">
       <button
         onClick={() => (connectionDriven ? handleDisconnect() : handleLogout())}
-        disabled={loading}
+        disabled={readOnly || loading}
         className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 hover:border-red-300 dark:hover:border-red-800 rounded-md transition-colors disabled:opacity-50"
-        title="Disconnect — removes the saved token, you will need to connect again"
+        title={readOnly ? READ_ONLY_TITLE : 'Disconnect — removes the saved token, you will need to connect again'}
         aria-label={`Disconnect ${serverName}`}
       >
         {loading ? (

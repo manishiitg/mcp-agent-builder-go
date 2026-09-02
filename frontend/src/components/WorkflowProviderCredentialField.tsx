@@ -3,6 +3,7 @@ import { CheckCircle2, Eye, EyeOff, KeyRound, Loader2, Trash2 } from 'lucide-rea
 import { Button } from './ui/Button';
 import { secretsApi, type WorkflowCredentialProvider } from '../api/secrets';
 import { useChatStore } from '../stores/useChatStore';
+import { READ_ONLY_TITLE } from '../hooks/useCanWriteWorkflow';
 import { maskCredentialPreviewClient } from '../utils/maskCredentialPreview';
 
 
@@ -33,6 +34,8 @@ interface WorkflowProviderCredentialFieldProps {
   workflowCredentialPath?: string;
   /** Disables the controls while the surrounding form is submitting. */
   isFormBusy?: boolean;
+  /** The user lacks write access: the input, save, and remove all disable. */
+  readOnly?: boolean;
   /** Resets the entry field whenever the parent form is re-opened or switched. */
   resetKey?: string;
   inputId: string;
@@ -60,6 +63,7 @@ export function WorkflowProviderCredentialField({
   copy,
   workflowCredentialPath,
   isFormBusy = false,
+  readOnly = false,
   resetKey,
   inputId,
   onDirtyChange,
@@ -201,6 +205,7 @@ export function WorkflowProviderCredentialField({
                   setError(null);
                 }}
                 placeholder={configured ? copy.replacePlaceholder : copy.inputPlaceholder}
+                disabled={readOnly}
                 className="h-9 w-full rounded-md border border-input bg-background px-3 pr-10 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
               />
               <button
@@ -217,7 +222,8 @@ export function WorkflowProviderCredentialField({
               type="button"
               size="sm"
               onClick={handleSave}
-              disabled={!value.trim() || isSaving || isFormBusy}
+              disabled={readOnly || !value.trim() || isSaving || isFormBusy}
+              title={readOnly ? READ_ONLY_TITLE : undefined}
               className="h-9 shrink-0"
             >
               {isSaving && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
@@ -242,7 +248,8 @@ export function WorkflowProviderCredentialField({
             <button
               type="button"
               onClick={handleDelete}
-              disabled={isDeleting || isSaving || isFormBusy}
+              disabled={readOnly || isDeleting || isSaving || isFormBusy}
+              title={readOnly ? READ_ONLY_TITLE : undefined}
               className="inline-flex shrink-0 items-center gap-1 text-xs text-red-600 hover:text-red-700 disabled:opacity-50 dark:text-red-400"
             >
               {isDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}

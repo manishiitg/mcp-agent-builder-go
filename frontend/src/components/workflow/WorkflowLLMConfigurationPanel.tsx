@@ -9,6 +9,7 @@ import { providerStatus } from '../llm/providerStatus'
 import type { AgentLLMConfig, AgentLLMFallback, LLMProvider, PresetLLMConfig } from '../../services/api-types'
 import { llmConfigService, type DynamicModelEntry, type ModelMetadata, type ProviderManifestEntry } from '../../services/llm-config-api'
 import { useLLMStore } from '../../stores/useLLMStore'
+import { READ_ONLY_TITLE, useCanWriteWorkflow } from '../../hooks/useCanWriteWorkflow'
 import type { LLMOption } from '../../types/llm'
 import { llmOptionsKey } from '../../utils/llmConfigDisplay'
 import { resolvePiModelGroup } from '../../utils/llmDisplay'
@@ -175,6 +176,10 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     testAPIKey,
   } = useLLMStore()
 
+  // Provider selection goes through the panel's Save, but the drill-ins (API
+  // keys, publish, Pi keys) and role edits write immediately -- disable all of
+  // it for read-only users rather than only the Save button upstream.
+  const readOnly = !useCanWriteWorkflow()
   const [expandedRole, setExpandedRole] = useState<RoleKey | null>(null)
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -497,11 +502,12 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
                 apiKeyStatus={apiKeyStatus[providerKey]}
                 apiKeyError={apiKeyErrors[providerKey]}
                 metadata={metadata}
+                readOnly={readOnly}
               />
             )
           })()
         ) : (
-          <CodingAgentSection key={activeProviderId} provider={activeRow.entry} groupFilter={activeRow.groupFilter} />
+          <CodingAgentSection key={activeProviderId} provider={activeRow.entry} groupFilter={activeRow.groupFilter} readOnly={readOnly} />
         )}
       </div>
     )
@@ -573,6 +579,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
                 provider="claude-code"
                 inputId="workflow-claude-code-token"
                 workflowCredentialPath={workspacePath || undefined}
+                readOnly={readOnly}
                 copy={{
                   heading: 'Claude Code token',
                   hint: <>Use a token from <code className="rounded bg-background px-1 py-0.5 font-mono text-foreground">claude setup-token</code>, or leave this empty to use the saved Claude login.</>,
@@ -589,6 +596,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
                 provider="cursor-cli"
                 inputId="workflow-cursor-api-key"
                 workflowCredentialPath={workspacePath || undefined}
+                readOnly={readOnly}
                 copy={{
                   heading: 'Cursor API key',
                   hint: <>Paste an API key from <code className="rounded bg-background px-1 py-0.5 font-mono text-foreground">cursor.com</code> settings, or leave this empty to use the saved Cursor login.</>,
@@ -618,9 +626,9 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
             type="button"
             role="radio"
             aria-checked={selected}
-            disabled={!row.selectable}
+            disabled={readOnly || !row.selectable}
             onClick={() => selectRow(row)}
-            title={row.selectable ? `Use ${row.name} for this workflow` : 'Loading models…'}
+            title={readOnly ? READ_ONLY_TITLE : row.selectable ? `Use ${row.name} for this workflow` : 'Loading models…'}
             className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-border transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-40"
           >
             {selected && <span className="h-2 w-2 rounded-full bg-primary" />}
@@ -686,9 +694,9 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
         </button>
         {expanded && value && (
           <div className="space-y-3 border-t border-border bg-muted/20 px-3 py-3">
-            <LLMRoleSelector availableLLMs={workflowOptions} value={value} onLLMSelect={llm => updateRole(row.key, toAgentLLMConfig(llm))} />
+            <LLMRoleSelector availableLLMs={workflowOptions} value={value} onLLMSelect={llm => updateRole(row.key, toAgentLLMConfig(llm))} disabled={readOnly} />
             {isCustomized && defaultValue && (
-              <button type="button" onClick={() => resetRole(row.key)} className="text-xs text-primary hover:underline">
+              <button type="button" onClick={() => resetRole(row.key)} disabled={readOnly} title={readOnly ? READ_ONLY_TITLE : undefined} className="text-xs text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline">
                 Reset this role to provider default
               </button>
             )}
@@ -698,7 +706,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
                 {fallbackList.map((fallback, index) => (
                   <span key={`${row.key}-${configKey(fallback)}-${index}`} className="mr-1 inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-foreground">
                     {fallback.provider}/{fallback.model_id.split('/').pop()}
-                    <button type="button" onClick={() => updateFallbacks(row.key, fallbackList.filter((_, itemIndex) => itemIndex !== index))} className="text-muted-foreground hover:text-destructive" aria-label={`Remove ${row.label} fallback`}>
+                    <button type="button" onClick={() => updateFallbacks(row.key, fallbackList.filter((_, itemIndex) => itemIndex !== index))} disabled={readOnly} title={readOnly ? READ_ONLY_TITLE : undefined} className="text-muted-foreground hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50" aria-label={`Remove ${row.label} fallback`}>
                       <X className="h-3 w-3" />
                     </button>
                   </span>
@@ -709,6 +717,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
                   onLLMSelect={llm => updateFallbacks(row.key, [...fallbackList, toFallback(llm)])}
                   onRefresh={loadDefaultsFromBackend}
                   placeholder="+ Add fallback"
+                  disabled={readOnly}
                 />
               </div>
             </details>
@@ -792,8 +801,8 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
                 <button
                   type="button"
                   onClick={startAdvancedSetup}
-                  disabled={!defaults}
-                  title={defaults ? undefined : 'Select a provider first'}
+                  disabled={readOnly || !defaults}
+                  title={readOnly ? READ_ONLY_TITLE : defaults ? undefined : 'Select a provider first'}
                   className="shrink-0 text-xs font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Pin models per role
@@ -806,8 +815,8 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
                   <button
                     type="button"
                     onClick={useManagedDefaults}
-                    disabled={!selectedProfile}
-                    title={selectedProfile ? undefined : 'No provider profile to return to'}
+                    disabled={readOnly || !selectedProfile}
+                    title={readOnly ? READ_ONLY_TITLE : selectedProfile ? undefined : 'No provider profile to return to'}
                     className="shrink-0 text-xs font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Use managed defaults

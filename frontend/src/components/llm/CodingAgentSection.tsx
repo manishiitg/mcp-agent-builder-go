@@ -6,6 +6,7 @@ import { TierModelSelector } from '../ui/TierModelSelector'
 import { DynamicModelSelector } from '../ui/DynamicModelSelector'
 import { CodingAgentCapabilities } from './CodingAgentCapabilities'
 import { useLLMStore } from '../../stores'
+import { READ_ONLY_TITLE } from '../../hooks/useCanWriteWorkflow'
 import { llmConfigService, type ModelMetadata, type ProviderManifestEntry } from '../../services/llm-config-api'
 import { providerKeysApi, type StoredProviderKeys } from '../../api/scheduler'
 
@@ -18,6 +19,10 @@ interface CodingAgentSectionProps {
    * this instead of `provider` fields wherever they'd otherwise say
    * "Pi CLI" or default to the pi-cli-wide model. */
   groupFilter?: string
+  /** The current user can't change workflow state: test, key save, and
+   * publish disable. Model/effort pickers stay usable since they're local
+   * state until published. */
+  readOnly?: boolean
 }
 
 type PiTopLevelProviderKey =
@@ -168,7 +173,7 @@ function piAuthValue(keys: StoredProviderKeys | undefined, spec: PiAuthSpec): st
   return ''
 }
 
-export function CodingAgentSection({ provider, onPublished, groupFilter }: CodingAgentSectionProps) {
+export function CodingAgentSection({ provider, onPublished, groupFilter, readOnly = false }: CodingAgentSectionProps) {
   const {
     saveLLM,
     savedLLMs,
@@ -427,13 +432,13 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
                   }}
                   placeholder={piAuthLoading ? 'Loading saved key...' : `Enter ${piAuthSpec.envNames[0]}`}
                   className="flex-1 px-3 py-2 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary"
-                  disabled={piAuthLoading || piAuthStatus === 'saving'}
+                  disabled={readOnly || piAuthLoading || piAuthStatus === 'saving'}
                 />
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={handleSavePiAuth}
-                  disabled={piAuthLoading || piAuthStatus === 'saving'}
+                  disabled={readOnly || piAuthLoading || piAuthStatus === 'saving'}
                 >
                   {piAuthStatus === 'saving' ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save'}
                 </Button>
@@ -490,7 +495,8 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
             variant="outline"
             size="sm"
             onClick={handleTestConnection}
-            disabled={testStatus === 'testing'}
+            disabled={readOnly || testStatus === 'testing'}
+            title={readOnly ? READ_ONLY_TITLE : undefined}
           >
             {testStatus === 'testing' ? (
               <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Testing...</>
@@ -552,6 +558,8 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
               setPublishError(null)
             }}
             size="sm"
+            disabled={readOnly}
+            title={readOnly ? READ_ONLY_TITLE : undefined}
           >
             Save to Library
           </Button>
@@ -571,7 +579,8 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
             <div className="flex gap-2">
               <Button
                 onClick={handlePublishToLibrary}
-                disabled={!publishName.trim() || isSubmitting}
+                disabled={readOnly || !publishName.trim() || isSubmitting}
+                title={readOnly ? READ_ONLY_TITLE : undefined}
                 size="sm"
               >
                 {isSubmitting ? (
