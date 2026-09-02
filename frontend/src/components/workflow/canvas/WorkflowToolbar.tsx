@@ -84,24 +84,19 @@ function ToolbarGroup({ label, state, dotClass, open, onToggle, title, children,
   children: React.ReactNode
 } & Record<`data-${string}`, string | undefined>) {
   return (
-    <div {...rest} className="inline-flex h-8 items-center rounded-lg border border-border bg-background/90 shadow-sm backdrop-blur-sm">
+    <div {...rest} className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={open}
         title={title}
-        className={`relative inline-flex h-full items-center gap-1.5 rounded-l-lg px-2.5 text-[11px] font-medium transition-colors hover:text-foreground ${open ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted'}`}
+        className={`inline-flex h-6 items-center gap-1.5 rounded px-2 text-[11px] font-medium transition-colors ${open ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
       >
         <span>{label}</span>
-        {state && <span className="max-w-[9rem] truncate text-[10px] font-semibold tracking-wide text-foreground/80">{state}</span>}
-        {!open && dotClass && <span className={`absolute right-0.5 top-1 h-1.5 w-1.5 rounded-full border border-background ${dotClass}`} />}
+        {state && <span className={`max-w-[9rem] truncate text-[10px] font-semibold tracking-wide ${open ? 'text-muted-foreground' : 'text-foreground/70'}`}>{state}</span>}
+        {!open && dotClass && <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />}
       </button>
-      {open && (
-        <>
-          <span className="h-4 w-px bg-border" aria-hidden="true" />
-          {children}
-        </>
-      )}
+      {open && children}
     </div>
   )
 }
@@ -709,7 +704,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
               onToggle={() => toggleGroup('views')}
               title={openGroups.views ? 'Hide views' : 'Show views: report, plan, costs, logs, learnings, knowledgebase, database, files'}
             >
-              <div className="inline-flex h-full items-center gap-0.5 p-0.5">
+              <div className="inline-flex items-center gap-0.5">
                 {workspaceViewDefinitions.map(({ id: view, icon: Icon, label }) => {
                   const active = view === activeWorkspaceView
                   const viewButton = (
@@ -761,7 +756,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   <button
                     type="button"
                     onClick={() => openWorkspaceView('pulse')}
-                    className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
                     aria-label="Pulse status"
                   >
                     <Activity className={`h-3.5 w-3.5 ${monitorOn ? 'text-primary' : ''}`} />
@@ -774,7 +769,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   <button
                     type="button"
                     onClick={() => openWorkspaceView('evaluation')}
-                    className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
                     aria-label="Evaluation"
                   >
                     <Gauge className="h-3.5 w-3.5" />
@@ -787,7 +782,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   <button
                     type="button"
                     onClick={() => openWorkspaceView('schedules')}
-                    className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    className="relative flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
                     aria-label="Schedules"
                   >
                     <CalendarClock className="h-3.5 w-3.5" />
@@ -802,7 +797,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                     type="button"
                     onClick={runPulseNow}
                     disabled={!canWriteWorkflow || manualPulseStarting}
-                    className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                    className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                     aria-label="Run Pulse now"
                   >
                     {manualPulseStarting
@@ -812,13 +807,13 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 </TooltipTrigger>
                 <TooltipContent side="bottom"><p>Run Pulse on the latest retained run</p></TooltipContent>
               </Tooltip>
-              <span className="h-4 w-px bg-border" aria-hidden="true" />
+              <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
                     type="button"
                     onClick={() => openWorkspaceView('backup')}
-                    className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    className="relative flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
                     aria-label="Backup"
                   >
                     <Cloud className="h-3.5 w-3.5" />
@@ -832,7 +827,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   <button
                     type="button"
                     onClick={() => openWorkspaceView('publish')}
-                    className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    className="relative flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
                     aria-label="Publish"
                   >
                     <Globe className="h-3.5 w-3.5" />
@@ -847,7 +842,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                     type="button"
                     data-testid="workflow-notification-settings-button"
                     onClick={() => openWorkspaceView('notify')}
-                    className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    className="relative flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
                     aria-label="Notify"
                   >
                     <BellRing className="h-3.5 w-3.5" />
@@ -883,7 +878,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
             onToggle={() => toggleGroup('setup')}
             title={openGroups.setup ? 'Hide setup' : 'Show setup: skills, secrets, MCP servers, browser, LLM, bots, folders'}
           >
-          <div className="inline-flex h-full items-center gap-0.5 p-0.5">
+          <div className="inline-flex items-center gap-0.5">
             {capabilityViewDefinitions.map(({ id, icon: Icon, label }) => {
               const active = workflowWorkspaceView === id
               return (
