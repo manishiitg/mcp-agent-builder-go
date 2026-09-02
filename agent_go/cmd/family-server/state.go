@@ -18,6 +18,14 @@ import (
 // familyDataDir is the isolated data root for Family Learning. It never touches
 // AgentWorks' workspace-docs. Override with FAMILY_DATA_DIR; defaults to
 // ~/.sunlit-learning.
+//
+// Keep it under $HOME, never under /var (or /private/var). The child's shell
+// sandbox on macOS (workspace/security, StrictAllowlist) starts from "deny
+// everything" but must allow reads of /var for hostname resolution and system
+// state, so a workspace placed there would be readable in full and the
+// one-activity confinement would silently not apply. Go's t.TempDir() lives
+// under /var/folders on macOS, which is why the sandbox test creates its
+// workspace under $HOME instead.
 func familyDataDir() string {
 	if d := strings.TrimSpace(os.Getenv("FAMILY_DATA_DIR")); d != "" {
 		return d
