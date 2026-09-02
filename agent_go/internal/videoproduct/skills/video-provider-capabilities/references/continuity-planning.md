@@ -12,8 +12,10 @@ Choose the first supported strategy that fits:
    duration limit.
 2. **Native multi-shot:** one request with the endpoint's structured shot or
    prompt sequence for intentional cuts inside one coherent scene.
-3. **Video extension/edit:** continue the accepted source clip while retaining
-   its motion and scene state.
+3. **Video extension/edit:** use this only when the live route explicitly
+   supports a literal extension or edit of the accepted source clip. H3 Max
+   Reference-to-Video is not this strategy: it generates a new conditioned
+   clip and belongs under reference-driven continuation.
 4. **Boundary-frame chain:** choose the accepted clip's last usable stable
    frame at the intended cut point and use it as the next start frame;
    optionally provide a designed end frame. Do not blindly use the literal
@@ -23,9 +25,13 @@ Choose the first supported strategy that fits:
 6. **Independent generation:** only for a deliberate discontinuity approved in
    the plan.
 
-Minimize both paid calls and seams. Do not choose five ten-second clips for a
-thirty-second continuous scene when a fifteen-second endpoint plus one
-extension or boundary-frame continuation can cover it.
+Minimize both paid calls and seams. Keep uninterrupted visible dialogue or one
+continuous action inside one supported take whenever possible. Do not choose
+five short clips for a longer continuous performance merely because each is
+cheap or fast. If a real boundary is unavoidable, write an editorial cut on a
+completed thought/pause, reaction, insert, or motivated angle change; never
+assume a reference-conditioned successor starts on the exact final phoneme or
+audio sample of its predecessor.
 
 ## State ledger
 

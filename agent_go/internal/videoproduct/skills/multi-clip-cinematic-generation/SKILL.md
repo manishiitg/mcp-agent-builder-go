@@ -28,9 +28,15 @@ optimisation. Select and record one route for each seam:
    montage beat.
 
 Never call separately generated clips a continuous take merely because a
-dissolve can join them. Do not create a third bridge clip when a direct review
-fails; regenerate or redesign the affected H3 successor through
-Reference-to-Video.
+dissolve can join them. Reference-to-Video conditions a new successor; it does
+not append the predecessor or guarantee a frame-, mouth-, or audio-exact seam.
+Keep uninterrupted on-camera dialogue and one continuous action in one H3 Max
+take whenever it fits 5–15 seconds. When a new request is unavoidable, the
+shot list must name an editorial boundary—a completed thought/pause, reaction,
+insert, or motivated angle change—not a mid-word continuation. Do not rewrite
+user-approved dialogue to fit that boundary without explicit approval. Do not
+create a third bridge clip when a direct review fails; regenerate or redesign
+the affected H3 successor through Reference-to-Video.
 
 ## Make an approved reference pack, then a reference manifest
 

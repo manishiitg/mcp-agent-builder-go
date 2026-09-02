@@ -56,6 +56,37 @@ clips, request 5 seconds for every applicable H3 generation; do not replace
 them with longer 10–15-second takes to reduce cost or seam count. Recommend a
 duration tradeoff only when the user has not fixed one.
 
+## Plan continuity honestly before spending
+
+Reference-to-Video conditions a **new** bounded H3 Max generation. Passing an
+accepted predecessor as Video 1 can carry identity, location, camera language,
+performance, and audio direction, but it neither appends the old MP4 nor
+guarantees its final frame, mouth shape/phoneme, timing, or audio waveform at
+the new clip's first frame. Never describe it to the user as literal video
+extension or promise a seamless speech continuation.
+
+Choose the smallest topology that respects the actual dramatic action:
+
+1. Keep one person's uninterrupted visible dialogue, an unbroken sentence, or
+   one continuous physical action in a **single 5–15-second generation** when
+   it fits the route limit. Do not split it into 5-second requests because the
+   model is fast, because a prior clip exists, or to reduce a quote to pieces.
+2. When the required uninterrupted performance exceeds one H3 Max take, stop
+   before paying and propose an explicit editorial boundary: a completed
+   thought and pause, reaction, insert/cutaway, or motivated camera-angle
+   change. Record the exact boundary in the shot contract and obtain approval
+   if it changes user-approved dialogue or the requested continuous-take
+   treatment.
+3. Use Reference-to-Video only for that planned successor shot. Give Video 1
+   the role `continuity context`, state the outgoing/incoming action, and do
+   not ask it to recreate a mid-word mouth pose or claim that it will do so.
+
+If a boundary is rejected, redesign the editorial beat or regenerate the
+successor with a clearer handoff. Never silently shorten/rewrite approved
+dialogue merely to make a seam less visible. When reporting model behavior,
+separate a result observed in this production from a guarantee or limitation
+verified in official H3 Max route documentation.
+
 ## Prompt from an H3 Max shot contract
 
 Before writing an H3 prompt, write `shot-contracts/<shot-id>.md` and present it
@@ -113,7 +144,7 @@ room tone, and prohibited sound separately. Do not put a second, competing
 gesture or action into a tightly constrained performance unless the user asked
 for it. If the required dialogue cannot be spoken naturally in the requested
 duration, flag that before spending rather than silently rushing, truncating,
-or inventing new words.
+splitting it mid-sentence, or inventing new words.
 
 ## Choose the route by control need
 
@@ -180,18 +211,21 @@ overwrite the last accepted version.
 
 ## Continue and review
 
-For a continuous sequence, use Reference-to-Video from the accepted immediate
-predecessor as Video 1. Carry forward the accepted output, endpoint route,
-reference order, subject state, screen direction, lighting, audio bed, and the
-precise next camera/action handoff. Prefer this generation-time continuity over
-manual stitching or a bridge workaround. H3 Max produces a new bounded file;
-it does not append footage to its predecessor.
+For a planned successor shot, use Reference-to-Video from the accepted
+immediate predecessor as Video 1. Carry forward the accepted output, endpoint
+route, reference order, subject state, screen direction, lighting, audio bed,
+and the precise next camera/action handoff. Prefer this generation-time
+continuity over manual stitching or a bridge workaround. H3 Max produces a new
+bounded file; it does not append footage to its predecessor or reproduce an
+exact vocal/mouth state at the boundary.
 
 Persist the queue request ID immediately and rejoin it after timeouts. Download
 the result once and perform a clip receipt: `ffprobe` the actual file and
-inspect its stable opening and ending frames. Call `show_video` for each
-reviewable candidate. Do not run a full contact-sheet, black/freeze, audio,
-prompt, and seam audit for every preview. If a visible boundary is wrong,
+inspect its stable opening and ending frames. For a visible-dialogue boundary,
+also watch the join and check the mouth/phoneme and audible speech handoff;
+still frames alone cannot prove it. Call `show_video` for each reviewable
+candidate. Do not run a full contact-sheet, black/freeze, audio, prompt, and
+seam audit for every preview. If a visible boundary is wrong,
 regenerate or redesign the successor through Reference-to-Video with a more
 specific prompt/reference set; do not hide it with a bridge clip, crossfade,
 blend, reframe, zoom, or other creative FFmpeg repair. The full inspection is
