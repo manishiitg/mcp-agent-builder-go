@@ -42,25 +42,6 @@ the Production panel prefers Fal's CDN for fast preview playback and falls back
 to the retained local file. After its `completed` event, run the normal file receipt
 (`ffprobe`, stable-frame inspection, then `show_video`) before accepting it.
 
-## Prepare a focused continuity tail
-
-For a direct continuation, do not send the full predecessor as Video 1. After
-the predecessor is accepted, create a deterministic **2- or 3-second tail**
-from its end, then pass the uploaded tail URL as Video 1 together with the
-approved character and location references. Default to 3 seconds; use 2 only
-when it fully contains the outgoing action.
-
-```bash
-node .claude/skills/minimax-h3-video/scripts/h3-max-runner.mjs tail-reference \
-  --input "$BASE/previous-candidate.mp4" --output "$BASE/previous-tail-3s.mp4" --seconds 3
-```
-
-The runner verifies source/output duration and writes only the final tail.
-Upload that output through the normal workspace upload flow before adding its
-returned URL to `reference_video_urls`. This prepares a model input, not a
-visual seam repair: do not trim accepted delivery clips, blend picture/audio,
-or use the tail as a substitute for still references.
-
 Use H3 Max only. Do not substitute standard H3, another H3 Max route, or
 another provider.
 
@@ -90,8 +71,8 @@ editorial cut, or an explicit user duration.
 
 ## Plan continuity honestly before spending
 
-Reference-to-Video conditions a **new** bounded H3 Max generation. Passing a
-2- or 3-second tail of an accepted predecessor as Video 1 can carry identity, location, camera language,
+Reference-to-Video conditions a **new** bounded H3 Max generation. Passing an
+accepted predecessor as Video 1 can carry identity, location, camera language,
 performance, and audio direction, but it neither appends the old MP4 nor
 guarantees its final frame, mouth shape/phoneme, timing, or audio waveform at
 the new clip's first frame. Never describe it to the user as literal video
@@ -109,9 +90,8 @@ Choose the smallest topology that respects the actual dramatic action:
    change. Record the exact boundary in the shot contract and obtain approval
    if it changes user-approved dialogue or the requested continuous-take
    treatment.
-3. Use Reference-to-Video only for that planned successor shot. Give its
-   2- or 3-second predecessor tail the role `continuity context`, state the
-   outgoing/incoming action, and do
+3. Use Reference-to-Video only for that planned successor shot. Give Video 1
+   the role `continuity context`, state the outgoing/incoming action, and do
    not ask it to recreate a mid-word mouth pose or claim that it will do so.
 
 If a boundary is rejected, redesign the editorial beat or regenerate the
@@ -244,11 +224,10 @@ overwrite the last accepted version.
 
 ## Continue and review
 
-For a planned successor shot, use Reference-to-Video from a 2- or 3-second tail
-of the accepted immediate predecessor as Video 1. Carry forward the accepted
-output, endpoint route, reference order, subject state, screen direction,
-lighting, audio bed, and the precise next camera/action handoff. Keep approved
-character/location still references in the same request. Prefer this generation-time
+For a planned successor shot, use Reference-to-Video from the accepted
+immediate predecessor as Video 1. Carry forward the accepted output, endpoint
+route, reference order, subject state, screen direction, lighting, audio bed,
+and the precise next camera/action handoff. Prefer this generation-time
 continuity over manual stitching or a bridge workaround. H3 Max produces a new
 bounded file; it does not append footage to its predecessor or reproduce an
 exact vocal/mouth state at the boundary.
