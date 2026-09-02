@@ -84,7 +84,7 @@ function ToolbarGroup({ label, state, dotClass, open, onToggle, title, children,
   children: React.ReactNode
 } & Record<`data-${string}`, string | undefined>) {
   return (
-    <div {...rest} className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
+    <div {...rest} className="inline-flex h-full items-center gap-0.5 px-1 first:pl-0.5 last:pr-0.5">
       <button
         type="button"
         onClick={onToggle}
@@ -696,6 +696,9 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       {/* Right side - View controls */}
       <div data-tour="workflow-tools" data-testid="tour-workflow-tools" className="ml-auto flex shrink-0 items-center gap-1">
         <TooltipProvider delayDuration={150}>
+          {/* One continuous pill: Views | Pulse | Setup, separated by dividers. */}
+          {(workspacePath || canWriteWorkflow) && (
+          <div className="inline-flex h-8 items-center divide-x divide-border rounded-lg border border-border bg-muted/60 py-0.5 shadow-sm">
           {workspacePath && (
             <ToolbarGroup
               label="Views"
@@ -854,21 +857,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
             </ToolbarGroup>
           )}
 
-        {/* Workflow Access (multi-user mode only, owners only) */}
-        {canManageAccess && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => setShowAccessPopup(true)}
-                className="p-1.5 rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom"><p>Automation Access</p></TooltipContent>
-          </Tooltip>
-        )}
-
         {/* Workflow capabilities — write-only (read users don't see this) */}
         {canWriteWorkflow && (
           <ToolbarGroup
@@ -894,6 +882,23 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
             })}
           </div>
           </ToolbarGroup>
+        )}
+          </div>
+          )}
+
+        {/* Workflow Access (multi-user mode only, owners only) */}
+        {canManageAccess && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => setShowAccessPopup(true)}
+                className="p-1.5 rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom"><p>Automation Access</p></TooltipContent>
+          </Tooltip>
         )}
 
         </TooltipProvider>
