@@ -260,8 +260,9 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
               // (the folder-scoped box) and global secrets. Account-level "Your
               // Secrets" are a different store that workflow runs never read
               // (chat tools and bots use them), so the account-wide manager is
-              // not mounted in this pane; it stays in the Secrets modal.
-              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              // not mounted in this pane; it stays in the Secrets modal. The
+              // pane scrolls as a whole and the list takes only its own height.
+              <div>
                 <SecretSelectionSection
                   selectedSecrets={capabilities.selected_secrets}
                   onSecretChange={(selected_secrets) => setCapabilities(current => ({ ...current, selected_secrets }))}
