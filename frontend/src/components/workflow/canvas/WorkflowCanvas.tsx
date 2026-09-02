@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useImperativeHandle, forwardRef, useEffect } from 'react'
+import React, { Suspense, lazy, useCallback, useRef, useImperativeHandle, forwardRef, useEffect } from 'react'
 import {
   ReactFlow,
   Background,
@@ -56,16 +56,21 @@ import {
 import type { VariablesManifest } from '../../../services/api-types'
 import { buildGroupFolderPath } from '../../../utils/workflowUtils'
 import { MarkdownRenderer } from '../../ui/MarkdownRenderer'
-import CostsPopup from '../CostsPopup'
-import ExecutionLogsPopup from '../ExecutionLogsPopup'
-import LearningsPopup from '../LearningsPopup'
-import KBPopup from '../KBPopup'
-import DatabasePopup from '../DatabasePopup'
-import { PulseEvalSummary } from '../PulseEvalSummary'
-import WorkflowScheduleRunsPanel from '../../scheduler/WorkflowScheduleRunsPanel'
-import WorkflowCapabilitiesPanel from '../WorkflowCapabilitiesPanel'
 import { assertNeverView, isInspectorView, type InspectorViewId } from '../workspaceViews'
-import WorkflowFolderAccessPopup from '../WorkflowFolderAccessPopup'
+
+// Every inspector view is lazy: only the one the user opens is fetched, so the
+// eager bundle carries the flow canvas and nothing else from this list. The
+// single <Suspense> around the inspector slot below shows the same muted
+// "Loading…" line the views use for their own data loading.
+const CostsPopup = lazy(() => import('../CostsPopup'))
+const ExecutionLogsPopup = lazy(() => import('../ExecutionLogsPopup'))
+const LearningsPopup = lazy(() => import('../LearningsPopup'))
+const KBPopup = lazy(() => import('../KBPopup'))
+const DatabasePopup = lazy(() => import('../DatabasePopup'))
+const PulseEvalSummary = lazy(() => import('../PulseEvalSummary').then(module => ({ default: module.PulseEvalSummary })))
+const WorkflowScheduleRunsPanel = lazy(() => import('../../scheduler/WorkflowScheduleRunsPanel'))
+const WorkflowCapabilitiesPanel = lazy(() => import('../WorkflowCapabilitiesPanel'))
+const WorkflowFolderAccessPopup = lazy(() => import('../WorkflowFolderAccessPopup'))
 
 // Duration to show highlights before clearing (in ms)
 const HIGHLIGHT_DURATION = 4000
@@ -539,7 +544,17 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
         return assertNeverView(view)
     }
   }
-  const inspector = isInspectorView(workflowWorkspaceView) ? renderInspector(workflowWorkspaceView) : null
+  const inspector = isInspectorView(workflowWorkspaceView) ? (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+          Loading…
+        </div>
+      }
+    >
+      {renderInspector(workflowWorkspaceView)}
+    </Suspense>
+  ) : null
 
   return (
     <div className={`flex h-full flex-col ${className} ${sharedToolbar && showChatArea ? 'contents' : ''}`}>
