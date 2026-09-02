@@ -16,8 +16,8 @@ import { llmOptionsKey } from '../../utils/llmConfigDisplay'
 import { resolvePiModelGroup } from '../../utils/llmDisplay'
 import { getWorkflowLLMOptions, getWorkflowLLMTierDefaults, getWorkflowProviderOptions } from '../../utils/workflowLLMTierDefaults'
 
-type RoleKey = 'tier_1' | 'tier_2' | 'tier_3' | 'builder_llm' | 'maintenance_llm' | 'pulse_llm'
-const ROLE_KEYS: RoleKey[] = ['tier_1', 'tier_2', 'tier_3', 'builder_llm', 'maintenance_llm', 'pulse_llm']
+type RoleKey = 'tier_1' | 'tier_2' | 'tier_3' | 'builder_llm' | 'pulse_llm'
+const ROLE_KEYS: RoleKey[] = ['tier_1', 'tier_2', 'tier_3', 'builder_llm', 'pulse_llm']
 
 type RoleRow = {
   key: RoleKey
@@ -31,7 +31,6 @@ const ROLE_ROWS: RoleRow[] = [
   { key: 'tier_2', label: 'Medium reasoning', description: 'Execution after useful learnings exist.', group: 'Execution' },
   { key: 'tier_3', label: 'Low reasoning', description: 'Validation and mature learned tasks.', group: 'Execution' },
   { key: 'builder_llm', label: 'Builder', description: 'Chat, planning, evaluation design, and coordination.', group: 'Workflow agents' },
-  { key: 'maintenance_llm', label: 'Maintenance', description: 'Harden, Goal Advisor, and deeper health reviews.', group: 'Workflow agents' },
   { key: 'pulse_llm', label: 'Pulse', description: 'Scheduled post-run QA and routine coordination.', group: 'Workflow agents' },
 ]
 
@@ -237,6 +236,9 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   // X" line; the provider list only appears on "Change provider".
   const [changing, setChanging] = useState(false)
   const [rolesOpen, setRolesOpen] = useState<boolean>(() => readRolesOpen())
+  // The list leads with the sign-in CLIs only; Pi model families and direct
+  // API providers stay reachable behind "More providers".
+  const [moreProviders, setMoreProviders] = useState(false)
   const toggleRolesOpen = () => setRolesOpen(open => { writeRolesOpen(!open); return !open })
 
   useEffect(() => {
@@ -406,7 +408,6 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
         schema_version: 2,
         mode: 'explicit',
         builder_llm: groupDefaults.builder,
-        maintenance_llm: groupDefaults.maintenance,
         pulse_llm: groupDefaults.pulse,
         tiered_config: { tier_1: groupDefaults.tier1, tier_2: groupDefaults.tier2, tier_3: groupDefaults.tier3 },
       }
@@ -491,8 +492,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
       : key === 'tier_2' ? defaults.tier2
         : key === 'tier_3' ? defaults.tier3
           : key === 'builder_llm' ? defaults.builder
-            : key === 'maintenance_llm' ? defaults.maintenance
-              : defaults.pulse
+                    : defaults.pulse
   }
 
   const resetRole = (key: RoleKey) => {
@@ -623,7 +623,6 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
           <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
             <span className={`h-2 w-2 rounded-full ${tone.dot}`} />
             {selectedRow.name}
-            {selectedRow.modelId && <span className="font-normal text-muted-foreground">· {selectedRow.modelId}</span>}
           </span>
           {!usable && (
             <>
@@ -741,7 +740,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
               In use
             </span>
           )}
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">{row.modelId ?? ''}</span>
+          <span className="min-w-0 flex-1" />
           {test?.status === 'valid' ? (
             <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400" title={test.message}>
               <CheckCircle className="h-3 w-3" /> Working
@@ -839,6 +838,62 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
       </div>
     )
   }
+
+  // ---- Strong / Fast picks -------------------------------------------------
+  // Nearly every real setup is "a strong model and a cheap model". The section
+  // shows exactly those two; the five roles are derived (High, Builder and
+  // Pulse = strong; Medium = strong at medium effort when the model supports
+  // it; Low = fast). Per-role overrides stay available behind "Customize".
+  const optionForConfig = (config?: AgentLLMConfig): LLMOption | null => {
+    if (!config) return null
+    const exact = workflowOptions.find(option => optionKey(option) === configKey(config))
+    if (exact) return exact
+    const sameModel = workflowOptions.find(option => option.provider === config.provider && option.model === config.model_id)
+    if (sameModel) return sameModel
+    return {
+      provider: config.provider,
+      model: config.model_id,
+      label: `${config.provider} · ${config.model_id}`,
+      ...(hasOptions(config.options) ? { options: config.options } : {}),
+    }
+  }
+  const strongConfig = advanced ? roleConfig(llmConfig, 'tier_1') : defaults?.tier1
+  const fastConfig = advanced ? roleConfig(llmConfig, 'tier_3') : defaults?.tier3
+  const strongOption = optionForConfig(strongConfig)
+  const fastOption = optionForConfig(fastConfig)
+
+  const mediumFrom = (strong: AgentLLMConfig): AgentLLMConfig => {
+    const meta = metadata.find(entry => entry.model_id === strong.model_id && entry.provider === strong.provider)
+      ?? metadata.find(entry => entry.model_id === strong.model_id)
+    const levels = meta?.reasoning_effort_levels ?? []
+    if (!meta?.supports_reasoning_effort || !levels.includes('medium')) return strong
+    return { ...strong, options: { ...(strong.options ?? {}), reasoning_effort: 'medium' } }
+  }
+
+  const applyPicks = (strong: LLMOption | null, fast: LLMOption | null) => {
+    if (!strong || !fast) return
+    const strongCfg = toAgentLLMConfig(strong)
+    const fastCfg = toAgentLLMConfig(fast)
+    onChange({
+      schema_version: 2,
+      mode: 'explicit',
+      builder_llm: strongCfg,
+      pulse_llm: strongCfg,
+      tiered_config: { tier_1: strongCfg, tier_2: mediumFrom(strongCfg), tier_3: fastCfg },
+    })
+  }
+
+  // True when the explicit config no longer follows the two-pick derivation
+  // (someone pinned a role individually), so the section can say so.
+  const customizedPerRole = (() => {
+    if (!advanced || !strongConfig) return false
+    const same = (a?: AgentLLMConfig, b?: AgentLLMConfig) => Boolean(a && b) && configKey(a!) === configKey(b!)
+    const t2 = roleConfig(llmConfig, 'tier_2')
+    return !same(roleConfig(llmConfig, 'builder_llm'), strongConfig)
+      || !same(roleConfig(llmConfig, 'pulse_llm'), strongConfig)
+      || !(same(t2, strongConfig) || same(t2, mediumFrom(strongConfig)))
+      || ROLE_KEYS.some(key => (roleConfig(llmConfig, key)?.fallbacks?.length ?? 0) > 0)
+  })()
 
   // One flat row per role: what it runs on now, and the picker right there.
   // Changing a role switches the workflow to per-role (explicit) mode via
@@ -961,12 +1016,23 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
               'Sign in once on this machine. Test the connection, then use it in this workflow.',
               visibleRows.filter(row => row.entry.integration_kind === 'coding_agent' && !row.groupFilter),
             )}
-            {renderGroup(
+            <div className="bg-muted/20 px-3 py-1.5">
+              <button
+                type="button"
+                onClick={() => setMoreProviders(open => !open)}
+                aria-expanded={moreProviders}
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <ChevronRight className={`h-3 w-3 transition-transform ${moreProviders ? 'rotate-90' : ''}`} />
+                {moreProviders ? 'Fewer providers' : 'More providers (Pi model families, API keys)'}
+              </button>
+            </div>
+            {(moreProviders || query.trim()) && renderGroup(
               'Models via Pi',
               'Each provider needs its own API key saved. Add the key, test, then use it in this workflow.',
               visibleRows.filter(row => Boolean(row.groupFilter)),
             )}
-            {renderGroup(
+            {(moreProviders || query.trim()) && renderGroup(
               'Direct API providers',
               'Chat and library use only; not selectable for a workflow.',
               visibleRows.filter(row => row.entry.integration_kind !== 'coding_agent' && !row.groupFilter),
@@ -979,23 +1045,17 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <button
-            type="button"
-            onClick={toggleRolesOpen}
-            aria-expanded={rolesOpen}
-            className="flex min-w-0 items-start gap-2 text-left"
-          >
-            <ChevronRight className={`mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${rolesOpen ? 'rotate-90' : ''}`} />
-            <span>
-              <span className="block text-sm font-medium text-foreground">Models per role</span>
-              <span className="block text-xs text-muted-foreground">
-                {advanced
-                  ? 'Pinned per role. Changes save immediately.'
-                  : "Following the selected provider's defaults. Change any role to pin it."}
-              </span>
-            </span>
-          </button>
-          {advanced && rolesOpen && (
+          <div>
+            <div className="text-sm font-medium text-foreground">Models</div>
+            <div className="text-xs text-muted-foreground">
+              {customizedPerRole
+                ? 'Customized per role — see Customize below.'
+                : advanced
+                  ? 'Pinned. Changes save immediately.'
+                  : "Following the selected provider's defaults. Change either pick to pin."}
+            </div>
+          </div>
+          {advanced && (
             <button
               type="button"
               onClick={useManagedDefaults}
@@ -1003,10 +1063,48 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
               title={readOnly ? READ_ONLY_TITLE : selectedProfile ? undefined : 'No provider profile to return to'}
               className="shrink-0 text-xs font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Use provider defaults for all roles
+              Use provider defaults
             </button>
           )}
         </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="rounded-md border border-border bg-background p-3">
+            <div className="text-xs font-medium text-foreground">Strong model</div>
+            <div className="mb-2 text-[11px] text-muted-foreground">High reasoning, Builder, and Pulse. Medium reasoning uses it at medium effort.</div>
+            <LLMSelectionDropdown
+              availableLLMs={workflowOptions}
+              selectedLLM={strongOption}
+              onLLMSelect={llm => applyPicks(llm, fastOption)}
+              onRefresh={loadDefaultsFromBackend}
+              placeholder="Select a strong model"
+              title="Strong model"
+              disabled={readOnly || !fastOption}
+            />
+          </div>
+          <div className="rounded-md border border-border bg-background p-3">
+            <div className="text-xs font-medium text-foreground">Fast model</div>
+            <div className="mb-2 text-[11px] text-muted-foreground">Low reasoning: validation and mature learned tasks.</div>
+            <LLMSelectionDropdown
+              availableLLMs={workflowOptions}
+              selectedLLM={fastOption}
+              onLLMSelect={llm => applyPicks(strongOption, llm)}
+              onRefresh={loadDefaultsFromBackend}
+              placeholder="Select a fast model"
+              title="Fast model"
+              disabled={readOnly || !strongOption}
+            />
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={toggleRolesOpen}
+          aria-expanded={rolesOpen}
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ChevronRight className={`h-3 w-3 transition-transform ${rolesOpen ? 'rotate-90' : ''}`} />
+          Customize per role
+          {customizedPerRole && <span className="ml-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">active</span>}
+        </button>
         {rolesOpen && (['Execution', 'Workflow agents'] as const).map(group => (
           <div key={group}>
             <div className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div>
