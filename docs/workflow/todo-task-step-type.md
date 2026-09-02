@@ -2,567 +2,173 @@
 
 ## Overview
 
-The `TodoTaskPlanStep` is a new orchestrator step type that combines:
-- **Main orchestrator agent** with full tool access (workspace + MCP) - can do work directly
-- Predefined sub-agents (with learning and prevalidation)
-- A generic execution sub-agent (no learning or prevalidation)
-- Todo list management tools for task tracking
-- Dynamic task creation and progress tracking
+A `todo_task` step is an **orchestrator**: a conversational agent that owns a
+set of predefined routes (sub-agents) and decides at runtime what to delegate,
+what to do itself, and how to react to what comes back. Users call it
+"orchestrator", "sub-workflow", or "pipeline". The plan type name `todo_task`
+is historical; the todo list it once managed no longer exists.
 
-## Context Management
+Since PLAT-269 the orchestrator **runs on the message_sequence executor**. It
+is a message sequence that owns routes: one conversation, ordered items, an
+in-place prevalidation repair loop, a synthetic final validation gate, and a
+closing reflection turn — plus the sub-agent tools, an asynchronous child
+lifecycle, and a narrower folder guard.
 
-The main orchestrator agent manages the overall context and can:
-1. **Do work directly** - Use its tools for quick tasks, verifications, or context gathering
-2. **Delegate to sub-agents** - Sub-agents have **smaller context** (only the instructions provided)
+**When to use it.** Only when the parent makes a real runtime orchestration
+decision the static plan cannot express: a dynamic task set discovered at
+runtime, conditional selection or fan-out per item, material runtime parallel
+coordination, adaptive retry, an approval boundary, or an interim synthesis
+that changes later delegation. A fixed child set and order does not justify a
+`todo_task`; that is plain plan steps, a `message_sequence`, a `routing`
+step, or a scripted step (see the `todo-task` and `plan-design` guidance).
 
-This design allows:
-- Main agent: Maintains full conversation context, coordinates work, handles complex decisions
-- Sub-agents: Focused execution with clean context, efficient for well-defined tasks
-
-## Key Differences from OrchestrationPlanStep
-
-| Feature | OrchestrationPlanStep | TodoTaskPlanStep |
-|---------|----------------------|------------------|
-| Progress Tracking | Success criteria only | Todo list with tasks |
-| Sub-agents | All predefined in routes | Predefined + Generic |
-| Learning | All sub-agents have learning | Only predefined sub-agents |
-| Routing | LLM selects route | LLM creates tasks + assigns agents |
-| Tools | Standard workspace tools | + Todo management tools |
-
-## Plan JSON Format
-
-As of 2026-04-02, `TodoTaskPlanStep` uses a **flat format** — all fields (description, success_criteria, context_dependencies, context_output, validation_schema) are directly on the step, identical to how `RegularPlanStep` works. There is only **one ID** per step.
+## Plan JSON shape
 
 ```json
 {
   "type": "todo_task",
-  "id": "my-orchestrator",
-  "title": "My Orchestrator",
-  "description": "Orchestrate the process by delegating to sub-agents in order...",
-  "success_criteria": "All routes completed, output files created.",
-  "context_dependencies": ["previous_step_output.json"],
-  "context_output": "final_status.json",
-  "validation_schema": { "files": [{ "file_name": "final_status.json", "must_exist": true }] },
+  "id": "step-grow",
+  "title": "Grow the account",
+  "description": "Opening instruction — executed as the orchestrator's first turn.",
+  "context_dependencies": ["execution/step-research/research.json"],
+  "context_output": "growth-report.md",
+  "validation_schema": { "files": [ { "path": "growth-report.md", "must_exist": true } ] },
   "predefined_routes": [
     {
-      "route_id": "fetch-data",
-      "route_name": "Fetch Data",
-      "condition": "To fetch data from API",
-      "sub_agent_step": {
-        "type": "regular",
-        "id": "fetch-data",
-        "title": "Fetch Data from API",
-        "description": "...",
-        "success_criteria": "...",
-        "context_output": "data.json"
-      }
-    }
-  ],
-  "next_step_id": "end"
-}
-```
-
-### Step Config
-
-Step config uses the **single step ID** (`my-orchestrator` in the example above). There is no inner ID.
-
-```json
-{
-  "steps": [
-    {
-      "id": "my-orchestrator",
-      "agent_configs": {
-        "execution_max_turns": 100,
-        "execution_llm": { "provider": "vertex", "model_id": "gemini-2.5-pro" }
-      }
-    }
-  ]
-}
-```
-
-### Legacy Format (Backwards Compatible)
-
-The old nested `todo_task_step` format is still supported for reading. On unmarshal, fields are automatically promoted from the inner step to the top level. On marshal, the flat format is always written.
-
-```json
-// OLD FORMAT (deprecated, still parsed)
-{
-  "type": "todo_task",
-  "id": "my-task",
-  "title": "My Task",
-  "todo_task_step": {
-    "type": "regular",
-    "id": "my-orchestrator",
-    "description": "...",
-    "success_criteria": "..."
-  },
-  "predefined_routes": [...],
-  "next_step_id": "end"
-}
-```
-
-### Migrating Old Plans
-
-**Automatic (no action needed):** If the backend loads an old-format plan.json, `UnmarshalJSON` automatically promotes `todo_task_step` fields to the top level. The next time the plan is saved (e.g. via workshop edit, plan update tool, or any write path), it will be written in the new flat format. No manual migration is required for plans that are actively used.
-
-**Manual migration** for plans stored externally (backups, other machines, shared repos), use this Python script:
-
-```python
-import json, os, sys
-
-def migrate_step(step):
-    """Flatten todo_task_step into parent step."""
-    if step.get('type') != 'todo_task':
-        return step
-    inner = step.get('todo_task_step')
-    if inner is None:
-        return step  # already flat
-    for field in ['description', 'success_criteria', 'context_dependencies',
-                  'context_output', 'validation_schema']:
-        if not step.get(field) and field in inner:
-            step[field] = inner[field]
-    del step['todo_task_step']
-    # Recurse into nested todo_task sub-agents in routes
-    for route in step.get('predefined_routes', []):
-        if route.get('sub_agent_step'):
-            route['sub_agent_step'] = migrate_step(route['sub_agent_step'])
-    return step
-
-# Usage: python migrate_plan.py path/to/plan.json
-path = sys.argv[1]
-with open(path) as f:
-    data = json.load(f)
-changed = False
-for i, step in enumerate(data.get('steps', [])):
-    if step.get('type') == 'todo_task' and 'todo_task_step' in step:
-        data['steps'][i] = migrate_step(step)
-        changed = True
-if changed:
-    with open(path, 'w') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.write('\n')
-    print(f'Migrated {path}')
-else:
-    print(f'{path} already in flat format')
-```
-
-**Step config cleanup:** After migrating plan.json, also check `step_config.json` for entries referencing the old inner step ID (e.g. `my-orchestrator` from the example above). These configs are now orphaned since the inner step no longer exists. Either remove them or merge their settings into the outer step's config entry.
-
-**Learnings folders:** If learnings were accumulated under the old inner step ID (e.g. `learnings/my-orchestrator/`), they will still be found — the orchestrator resolves learnings by the step ID used at execution time, which is now the outer ID. Old learnings under the inner ID won't be loaded automatically. To preserve them, rename the folder to match the outer step ID:
-
-```bash
-# Example: rename old inner-ID learnings folder to match the outer step ID
-mv workspace-docs/Workflow/MyWorkflow/learnings/my-orchestrator/ \
-   workspace-docs/Workflow/MyWorkflow/learnings/my-task/
-```
-
-## Architecture
-
-```
-TodoTaskPlanStep (single step, single ID)
-├── TodoTaskOrchestratorAgent (main brain - FULL CONTEXT)
-│   ├── Tools: workspace + todo management + MCP (full access)
-│   ├── Can do work directly (read files, call APIs, etc.)
-│   ├── Creates and tracks todo tasks
-│   ├── Delegates focused tasks to sub-agents
-│   └── Outputs: TodoTaskResponse (next action + progress)
-│
-├── Predefined Sub-Agents (SMALLER CONTEXT - only instructions)
-│   ├── Route 1 → SpecificSubAgentStep
-│   │   ├── Full tool access (workspace + MCP)
-│   │   ├── Has learning (automatic on completion)
-│   │   └── Has prevalidation schema
-│   ├── Route 2 → SpecificSubAgentStep
-│   └── ...
-│
-└── Generic Execution (SMALLER CONTEXT - only instructions)
-    ├── Uses standard execution_only_agent pattern
-    ├── Full tool access (workspace + MCP) - same as predefined
-    ├── No learnings contribution
-    └── No prevalidation (DisableValidation=true)
-```
-
-### Async Sub-Agent Lifecycle
-
-Normal LLM-driven todo-task orchestration does not keep the provider tool call
-open while a child agent runs:
-
-1. `call_sub_agent` or `call_generic_agent` starts the child and immediately
-   returns a unique `execution_id`.
-2. Independent calls made in the same orchestrator turn run concurrently.
-3. The workflow controller waits outside the LLM/MCP request until every child
-   owned by that turn is terminal.
-4. It sends one authoritative completion batch back into the same orchestrator
-   conversation, including successes and failures.
-5. Validation and parent-step completion cannot run while an owned child is
-   pending. Parent cancellation propagates to every child.
-
-Child ownership is held by the live orchestrator execution. Provider/tmux
-completion closes the child lifecycle and triggers an `[AUTO-NOTIFICATION]
-SUB-AGENT COMPLETION BATCH`; there is no second SQLite lifecycle store.
-`query_sub_agent(execution_id)` provides explicit, non-polling inspection and
-`stop_sub_agent(execution_id)` cancels one owned child. Saved scripted todo-task
-fast paths remain synchronous because the script consumes each tool result in
-the same process invocation.
-
-A predefined child may itself be a `message_sequence` or a nested `todo_task`.
-A sequence is one child execution: it stays running until its full message queue
-or resumed turn finishes, and stopping it cancels the entire sequence. Nested
-orchestrators recursively wait for and reconcile their own children before they
-report completion to their parent. Each nesting level has a distinct custom-tool
-session so parallel levels cannot overwrite each other's route/query/stop tools.
-
-### Tool Access Matrix
-
-| Agent | Workspace | Todo Tools | MCP | Learning | Prevalidation |
-|-------|-----------|------------|-----|----------|---------------|
-| TodoTaskOrchestratorAgent | Yes | All | Yes | - | - |
-| Predefined Sub-Agent | Yes | update/complete | Yes | Yes (Auto) | Yes |
-| Generic Execution (via executeSingleStep) | Yes | update/complete | Yes | No | No |
-
-## Backend Implementation
-
-### Files Created
-
-1. **`agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/todo_task_orchestrator_agent.go`**
-   - Main orchestrator agent for todo task steps
-   - System and user prompt templates with emoji formatting
-   - Structured output via `submit_todo_task_result` tool
-   - `TodoTaskResponse` struct for agent decisions
-
-2. **`agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/controller_todo_task.go`**
-   - Execution logic for `executeTodoTaskStep()`
-   - Handles todo.json loading/saving
-   - Routes to predefined or generic agents (uses standard `executeSingleStep` with `execution_only_agent`)
-   - Manages task state transitions
-   - Uses factory pattern for proper event bridge connection
-
-3. **`agent_go/cmd/server/virtual-tools/todo_tools.go`**
-   - `create_todo` - Create a new task
-   - `update_todo` - Update task status/notes
-   - `complete_todo` - Mark task as done with result
-   - `list_todos` - View all tasks and status
-   - `get_todo` - Get details of a specific task
-
-### Files Modified
-
-1. **`agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/planning_agent.go`**
-   - `TodoTaskPlanStep` struct embeds `CommonStepFields` directly (same pattern as `RegularPlanStep`)
-   - `MarshalJSON` writes flat format, `UnmarshalJSON` reads both flat and legacy nested format
-   - Tool schemas (`getAddTodoTaskStepSchema`, `getUpdateTodoTaskStepSchema`) use flat fields
-   - Partial update merge handles both new flat fields and legacy `todo_task_step` map
-
-2. **`agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/planning_management.go`**
-   - `populateRuntimeFields()` matches config by the single step ID, populates `AgentConfigs` and `ValidationSchema` directly
-   - Route sub-agent steps are populated recursively
-
-3. **`agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/step_config.go`**
-   - Added TodoTaskPlanStep and HumanInputPlanStep to type switch
-
-4. **`agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/controller_execution.go`**
-   - Added routing for TodoTaskPlanStep in main execution loop
-   - Added HumanInputPlanStep to `getAgentConfigs()`
-
-5. **`agent_go/pkg/orchestrator/base_orchestrator_tools.go`**
-   - Registered todo_tools category
-
-6. **`agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/controller_agent_factory.go`**
-   - Added `createTodoTaskOrchestratorAgent()` factory method
-   - Uses standard factory pattern for proper event bridge connection
-   - Mirrors `createOrchestrationOrchestratorAgent()` pattern
-
-## Frontend Implementation
-
-### Files Created
-
-1. **`frontend/src/components/workflow/nodes/TodoTaskNode.tsx`**
-   - React component for rendering todo_task steps in workflow canvas
-   - Purple color scheme with ListTodo icon
-   - Shows predefined routes count and generic agent indicator
-   - Layout-aware handle positioning (LR/TB modes)
-   - Status handling: pending, running, executing, evaluating, orchestrating, completed, failed
-
-### Files Modified
-
-1. **`frontend/src/utils/stepConfigMatching.ts`**
-   - Added `TodoTaskPlanStep` interface
-   - Added `isTodoTaskStep()` type guard
-   - Updated `PlanStep` union type
-
-2. **`frontend/src/components/workflow/hooks/usePlanToFlow.ts`**
-   - Added `TodoTaskNodeData` interface with `evaluating` status
-   - Added NODE_DIMENSIONS for todo_task
-   - Added node conversion logic in `stepToNode()`
-   - Added edge routing for todo_task (similar to orchestration)
-   - Creates sub-agent nodes for predefined routes
-
-3. **`frontend/src/components/workflow/nodes/index.ts`**
-   - Registered TodoTaskNode in nodeTypes
-
-4. **`frontend/src/components/workflow/nodes/RoutingNode.tsx`**
-   - Added layout-aware handle positioning
-   - Output handles on Right (LR) or Bottom (TB)
-   - Added `running` and `failed` status support
-
-5. **`frontend/src/components/workflow/nodes/StepNode.tsx`**
-   - Added layout-aware handle positioning for sub-agents
-   - Sub-agent "top" handle positioned on Left (LR) or Top (TB)
-   - Sub-agents show Bot icon instead of step number
-
-6. **`frontend/src/stores/useLLMStore.ts`**
-   - Fixed `testAPIKey` return type to include `correctedOptions`
-
-7. **`frontend/src/components/AzureSection.tsx`**
-   - Fixed type casting for `correctedOptions.endpoint`
-
-## Todo File Structure
-
-**Location**: `{step_execution_path}/todos.json`
-
-```json
-{
-  "step_id": "step-3",
-  "objective": "Process all customer data",
-  "todos": [
-    {
-      "id": "todo_1",
-      "title": "Fetch customer list from API",
-      "description": "Call /api/customers endpoint",
-      "priority": "high",
-      "status": "completed",
-      "assigned_agent": "api_fetcher",
-      "result": "Fetched 150 customers to customers.json",
-      "created_at": "2024-01-25T10:00:00Z",
-      "updated_at": "2024-01-25T10:05:00Z"
+      "route_id": "draft-post",
+      "route_name": "Draft a post",
+      "condition": "When a post needs to be written",
+      "sub_agent_step": { "type": "message_sequence", "id": "draft-post", "title": "...", "description": "...", "items": [ ... ] }
     },
-    {
-      "id": "todo_2",
-      "title": "Transform customer data",
-      "description": "Convert to required format",
-      "priority": "medium",
-      "status": "in_progress",
-      "assigned_agent": "generic",
-      "created_at": "2024-01-25T10:05:00Z",
-      "updated_at": "2024-01-25T10:05:00Z"
-    }
+    { "route_id": "shared-reviewer", "route_name": "Reviewer", "orphan_step_ref": "reviewer" }
   ],
-  "summary": {
-    "total": 5,
-    "completed": 1,
-    "in_progress": 1,
-    "open": 3
-  }
+  "messages": [
+    { "id": "phase-2", "type": "user_message", "message": "Now reconcile the drafts and write the report." },
+    { "id": "gate", "type": "prevalidation", "validation_schema": { "files": [ ... ] } }
+  ],
+  "next_step_id": "step-publish"
 }
 ```
 
-## Execution Flow
+- `predefined_routes[].sub_agent_step` may be `message_sequence` (the default
+  for any conversational specialist; repeated calls resume its conversation),
+  `regular` (a deterministic scripted boundary), or `todo_task` (one nested
+  orchestrator level, no deeper).
+- `messages` are ordinary message-sequence items: `user_message` (alias
+  `message`), `prevalidation`, `foreach`. Code and file items are rejected at
+  plan validation and again at runtime.
+- Step config (`planning/step_config.json`) is the same as any step:
+  `execution_llm`, tools, skills, store access. `declared_execution_mode:
+  scripted` is rejected for a `todo_task`.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    executeTodoTaskStep                      │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-              ┌─────────────────────────────┐
-              │  Load/Init todos.json       │
-              └─────────────────────────────┘
-                            │
-                            ▼
-         ┌──────────────────────────────────────┐
-         │  TodoTaskOrchestratorAgent           │
-         │  - Reviews current todos             │
-         │  - Creates/updates tasks             │
-         │  - Selects agent for next task       │
-         │  - Returns TodoTaskResponse          │
-         └──────────────────────────────────────┘
-                            │
-         ┌──────────────────┼──────────────────┐
-         │                  │                  │
-    all_complete?    delegate_predefined?   delegate_generic?
-         │                  │                  │
-         ▼                  ▼                  ▼
-┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-│ Run Validation  │ │ Execute via     │ │ Execute via     │
-│ + Learning      │ │ executeSingleStep│ │ GenericAgent   │
-│ → Return        │ │ (has learning)  │ │ (NO learning)  │
-└─────────────────┘ └─────────────────┘ └─────────────────┘
-                            │                  │
-                            └────────┬─────────┘
-                                     │
-                                     ▼
-                         ┌─────────────────────┐
-                         │ Update todos.json   │
-                         │ → Loop back         │
-                         └─────────────────────┘
-```
+## Runtime
 
-## LLM Configuration
+`executeTodoTaskStep` (`controller_todo_task.go`) is a thin wrapper:
 
-The TodoTaskOrchestratorAgent uses the **execution LLM** (same as the regular OrchestrationPlanStep), not the validation LLM.
+1. Computes the orchestrator folder guard: the run's execution folder plus
+   `db/`, learnings and KB when granted, skills read-only. It deliberately
+   does **not** grant the workflow root, so a nested orchestrator cannot read
+   `workflow.json`, `variables/`, `planning/`, or sibling groups.
+2. Builds the orchestrator prompt variables (`buildTodoTaskOrchestratorTemplateVars`):
+   the route catalog, inlined context dependencies, stores, folder guard,
+   validation schema, and any Workshop human input.
+3. Builds the `SubAgentExecutionContext` that owns async children.
+4. Constructs a synthetic `MessageSequencePlanStep` whose items are one
+   opening `user_message` (the step description) followed by `messages`, and
+   calls `executeMessageSequenceStep` with a `Delegation`.
+5. Emits `todo_task_step_completed` and returns `next_step_id`.
 
-### LLM Selection Implementation
+The `messageSequenceDelegation` seam (`controller_message_sequence.go`)
+carries: the exec context, the folder guard paths, an agent factory (the
+orchestrator agent type with sub-agent tools — the progress bridge from
+PLAT-027 keys on that type), the per-turn template variables, and the
+`todo_task` execution-log writer.
 
-All orchestrator and execution agents use the shared `selectExecutionLLM` helper function. This keeps execution model selection consistent with the main workflow runtime.
+With a delegation set, the executor:
 
-### LLM Selection Priority
+- creates the orchestrator agent once and reuses it for every item;
+- after every conversational turn waits for the children that turn launched
+  and feeds one `[AUTO-NOTIFICATION] SUB-AGENT COMPLETION BATCH` back into the
+  same conversation (`reconcileAsyncSubAgentCalls`, up to 64 rounds) before
+  the next item — on the error path too; a `foreach` that launches one child
+  per row therefore blocks per row;
+- runs `prevalidation` items and the synthetic final gate with the in-place
+  repair loop (three repair turns); an exhausted gate fails the step with an
+  error, it is not marked completed;
+- appends the closing reflection turn (learnings / knowledgebase) from step
+  config, exactly as a standalone sequence does;
+- guarantees `cancelOutstandingAndWait` on every exit path;
+- does not take the global learnings mutex on the reflection turn (a parent
+  waiting for children inside the turn would deadlock against a child's own
+  learnings turn).
 
-**Standard agents (TodoTaskOrchestrator, OrchestrationOrchestrator, GenericAgent):**
-1. **Step-specific execution LLM** (`agent_configs.execution_llm`)
-2. **Preset default execution LLM** (`presetExecutionLLM`)
-3. **Orchestrator default LLM** (fallback)
+There is no scripted fast path and no restart-the-whole-step retry.
 
-This is consistent with how the regular orchestration orchestrator selects its LLM.
+### Async sub-agent lifecycle
 
-### Agent LLM Matrix
+`call_sub_agent` and `call_generic_agent` register the call, spawn a
+goroutine under a cancellable child context, and return an `execution_id`
+immediately. Several calls in one turn run concurrently. The wait happens
+outside the LLM call: the executor blocks on every unreconciled child, then
+delivers one batch sorted by start time, failures included as terminal
+results. `query_sub_agent` and `stop_sub_agent` act on the exact
+`execution_id`; `get_sub_agent_conversation` pages one execution's transcript.
+See `sub_agent_async.go`.
 
-| Agent | LLM Type | Priority |
-|-------|----------|----------|
-| TodoTaskOrchestratorAgent | Execution LLM | step > preset > default |
-| Predefined Sub-Agent | Execution LLM | step > preset > default |
-| Generic Execution Agent | Execution LLM | step > preset > default |
+### Tool arguments
 
-## TodoTaskResponse Schema
+- `route_id` — parent-side selector for a configured route.
+- `task_id` — a stable label for one unit of delegated work, used for tracking
+  and artifact naming (`execution/<step>/<route>-<task_id>/`). Formerly
+  `todo_id`; it never referred to a persisted todo item.
+- `execution_id` — runtime identity of one exact invocation; the only identity
+  used for query, stop, and conversation diagnostics.
+- `preferred_tier` — required 1/2/3 reasoning tier per call.
+- `message_sequence_restart` — for message_sequence routes only; archive the
+  route conversation and replay its configured queue.
 
-```json
-{
-  "next_action": "delegate|complete|continue",
-  "selected_route_id": "route_id (for predefined)",
-  "use_generic_agent": true|false,
-  "todo_id_to_execute": "todo_1",
-  "instructions_to_sub_agent": "Detailed instructions...",
-  "success_criteria_for_sub_agent": "Measurable criteria...",
-  "all_tasks_complete": true|false,
-  "progress_summary": "2 of 5 tasks completed",
-  "completion_reason": "All tasks done and verified"
-}
-```
+## Artifacts and logs
 
-## Layout Support
-
-The frontend nodes support both horizontal (LR) and vertical (TB) layout modes:
-
-### Horizontal Mode (LR)
-- Input handles on the Left side
-- Output handles (routes) on the Right side
-- Sub-agents positioned to the right of parent
-
-### Vertical Mode (TB)
-- Input handles on the Top
-- Output handles (routes) on the Bottom
-- Sub-agents positioned below parent
-
-Nodes dynamically adjust handle positions by reading `layoutDirection` from the workflow store.
+- Orchestrator turns: `execution-attempt-1-iteration-<n>.json` plus
+  `-conversation.json` and `-timing.json` under the step's log folder, written
+  by `saveTodoTaskExecutionLog`. Turn 1 is iteration 0. These carry the
+  `SubAgentCallRecord`s that `ExecutionLogsPopup` renders as the
+  route-selection view and populate `stepLogs.todo_task`.
+- Sequence session: `execution/<step>/session.json` (one-way observability
+  log, not a resume checkpoint) and per-gate prevalidation logs.
+- Sub-agent artifacts: `execution/<step>/<route>-<task_id>/`.
+- Prompts: `todo-task-prompts.json` pre-saved so `get_step_prompts` works
+  during execution.
 
 ## Events
 
-The todo task step emits the following events for tracking and UI updates:
+`todo_task_route_selected` (per delegation, from the tool wrapper),
+`todo_task_step_completed` (after children settle), plus the standard step
+started/finished and pre-validation events. The progress bridge keeps the
+`todo_task_orchestrator` turn open until `todo_task_step_completed` arrives
+(PLAT-027). The old `todo_task_item_*` events were never emitted and have
+been removed.
 
-### TodoTaskRouteSelectedEvent
-Emitted when the orchestrator makes a routing decision:
-- `step_index`, `step_path`, `step_id`, `step_title`: Step identification
-- `iteration`: Current iteration number (1-based)
-- `next_action`: "delegate", "complete", or "continue"
-- `selected_route_id`, `selected_route_name`: Selected predefined route (if any)
-- `use_generic_agent`: True if generic agent was selected
-- `todo_id_to_execute`, `todo_title`: The todo item being worked on
-- `instructions_to_sub_agent`: Instructions given to the sub-agent
-- `selection_reasoning`: Why this route was selected
-- `all_tasks_complete`: Whether all tasks are complete
-- `progress_summary`: Summary of overall progress
+## LLM selection
 
-### TodoTaskStepCompletedEvent
-Emitted when the entire todo task step completes:
-- `step_index`, `step_path`, `step_id`, `step_title`: Step identification
-- `total_iterations`: How many iterations the step took
-- `total_todos_count`: Total number of todo items
-- `completed_count`: Number of completed todo items
-- `completion_reason`: Why the step completed
-- `next_step_id`: The next step to execute
+`selectTodoTaskOrchestratorLLM`: step-config `execution_llm` wins; otherwise
+tier 1 (high) from the tier resolver. Sub-agents inherit the step's
+`execution_llm` when set, else honor `preferred_tier`.
 
-### Todo Item Events
-The controller emits events when todo items change (detected by comparing before/after state):
-- `TodoTaskItemCreated`: When a new todo item is created
-  - `step_index`, `step_path`, `step_id`: Step identification
-  - `todo_id`, `title`, `description`, `priority`: Todo item details
-  - `created_by`: Always "orchestrator"
-- `TodoTaskItemUpdated`: When a todo item status changes (but not to completed)
-  - `todo_id`, `title`: Todo identification
-  - `old_status`, `new_status`: Status transition
-  - `notes`: Any notes added
-  - `updated_by`: Always "orchestrator"
-- `TodoTaskItemCompleted`: When a todo item is marked as completed
-  - `todo_id`, `title`: Todo identification
-  - `result`: Completion result summary
-  - `completed_by`: Always "orchestrator"
+## Frontend
 
-### Execution Logs UI
+The workflow graph renders a `todo_task` as a compound node with its routes
+as children (`usePlanToFlow.ts`). `ExecutionLogsPopup.tsx` reads the
+`stepLogs.todo_task` category and the per-call decision records. Neither
+needed changes for the executor merge because the log shape and event names
+were kept.
 
-The `ExecutionLogsPopup` component displays todo task logs in a similar format to orchestration logs:
+## History
 
-**Todo Task Logs Section** (`stepLogs.todo_task`):
-- Groups logs by iteration number
-- Timeline visualization with purple accent color
-- Displays for each routing decision:
-  - Next action (delegate/complete/continue)
-  - Selected agent (predefined route or generic agent)
-  - Todo item being executed
-  - Selection reasoning
-  - Instructions and success criteria for sub-agent
-  - Progress summary
-- "View Raw JSON" collapsible for debugging
-
-**Archived Todo Task Logs**:
-- Displayed in the archived logs section
-- Shows route selections and completion status
-
-**Type Definitions** (`api-types.ts`):
-- `TodoTaskLog` interface for routing log entries
-- Added `todo_task?: TodoTaskLog[]` to `StepExecutionLogs`
-- Added `todo_task?: TodoTaskLog[]` to `ArchivedLogEntry`
-
-## Visual Indicators
-
-### TodoTaskNode
-- Purple badge with ListTodo icon
-- Shows predefined routes count
-- Context inputs/outputs from step fields directly
-
-## Orchestrator learn_code mode (fast path)
-
-A todo_task step can be put into **learn_code mode** only as an Optimizer promotion after the user explicitly asks for a scripted fast path, the orchestration is highly deterministic, and 10+ scenario-covering successful runs prove the route behavior is stable. Optimizer authors a Python `main.py` at `learnings/{step-id}/main.py` that drives the orchestration deterministically. At runtime, if eligibility holds, the script runs first and returns success with **zero LLM tokens**. Any failure falls through to the normal LLM orchestrator with a **fresh start** (no state carried over from the script).
-
-### Eligibility
-
-All conditions are required before promotion; runtime checks only the mechanical eligibility at the start of `executeTodoTaskStep`:
-
-1. `declared_execution_mode = "learn_code"` set on the step (via `update_step_config(step_id, declared_execution_mode="learn_code")`) — lives in `planning/step_config.json`, not plan.json
-2. `len(predefined_routes) >= 1` — the script needs routes to call
-3. Promotion policy already satisfied before that config is set: explicit user request, deterministic route behavior, and 10+ successful scenario-covering runs
-
-If either runtime eligibility condition is missing, the script is never attempted and the step runs as the normal LLM orchestrator. If the policy condition was not met, do not set `declared_execution_mode="learn_code"` in the first place.
-
-### Contract
-
-- Read-only at runtime: builder writes `main.py` once; runtime never repairs or rewrites it (no fix loop, no save-back — distinct from regular-step learn_code)
-- Script calls sub-agents via HTTP: `POST ${MCP_API_URL}/tools/custom/call_sub_agent` with body `{ "route_id": "...", "todo_id": "...", "instructions": "..." }`
-- Pre-validation runs after the script exits (same `RunPreValidation` path as LLM orchestrator). Success requires exit=0 **and** validation pass. Without a `validation_schema` on the step, any exit-zero script counts as success — strongly recommend setting one.
-- Fallback is fresh: LLM orchestrator starts from zero, re-plans from step description + predefined routes. No `complete_todo`-style state handoff.
-- `fast_path_only=true` on `execute_step` is honored — no LLM fallback, hard error if script missing/fails.
-
-### When to use
-
-- Flow is stable and deterministic (call route A → route B → route C, or loop over items calling one route per item)
-- Branching is only success/failure, not semantic inspection of sub-agent output
-
-### When NOT to use
-
-- Orchestrator must decide per item whether to delegate based on inspecting prior results
-- Only one predefined route and a single call — make it a regular learn_code step instead
-
-See also: `docs/workflow/learn_code_flow.md` for the regular-step learn_code flow.
-
-### Sub-Agent Nodes (in StepNode)
-- Bot icon instead of step number
-- Dashed cyan border
-- Cannot run independently (controlled by parent)
-- Receives connections from parent orchestrator/todo_task
+- PLAT-027: async completion no longer falsely completes the parent.
+- PLAT-082: failed async children reported correctly.
+- PLAT-151: dead `context_to_pass` removed from routes.
+- PLAT-157: identifier boundary (`route_id` / `task_id` / `execution_id`).
+- PLAT-259: `branch` split from `routing`; route `sub_agent_step` types.
+- PLAT-269: scripted orchestrator path removed, dead todo list deleted,
+  `todo_id` → `task_id`, orchestrator moved onto the message_sequence executor.

@@ -7,6 +7,13 @@ designing a new todo_task step, adding/restructuring routes, deciding
 between inline `sub_agent_step` and shared `orphan_step_ref`, or
 debugging route behavior.
 
+At runtime an orchestrator **is a `message_sequence` that owns routes**: it
+runs on the same executor (one conversation, ordered items, in-place
+prevalidation repairs, a final validation gate, a closing reflection turn),
+plus the sub-agent tools, an async child lifecycle, and a narrower folder
+guard. Everything in the `message-sequence` reference about items, foreach,
+prevalidation, and write access applies here unchanged.
+
 For the broader plan-design framing (when to pick todo_task vs routing
 vs message_sequence vs regular), the `plan-design` skill is the authoritative
 parent reference. This file explains how to author an already-justified
@@ -136,35 +143,32 @@ sees `$VAR_GROUP_NAME` and any per-group variables as env. When you
 add a todo_task step, write the description so it explicitly reads
 the group's variables / inputs rather than guessing.
 
-## Scripted messages (long, multi-phase tasks)
+## Messages (long, multi-phase tasks)
 
-A todo_task step can carry an optional ordered `messages` list. After the
-orchestrator's first turn, each entry is fed into the **same orchestrator
-conversation** in order — so it keeps going through the phases with full memory
-of its prior turns and every sub-agent result. Use this when one orchestrator
-needs to work a long, multi-phase task as a continuous conversation ("do phase
-1" → "now phase 2 using what you found" → "now reconcile and write the report").
+A todo_task step can carry an optional ordered `messages` list. These are
+ordinary message-sequence items: after the opening turn (the step description),
+each entry is fed into the **same orchestrator conversation** in order, so the
+orchestrator works through the phases with full memory of prior turns and every
+sub-agent result ("do phase 1" → "now phase 2 using what you found" → "now
+reconcile and write the report").
 
-- Three entry types: `message` (an instruction for one orchestrator turn),
-  `prevalidation` (a hard gate between turns — on failure the orchestrator gets
-  the failed checks as a corrective turn and retries up to `max_corrections`),
-  and `foreach` (data-driven — see below).
-- **`foreach`** iterates `db/db.sqlite` table rows and feeds **one orchestrator
-  turn per row** (row bound to `.` in a Go template via `message`; `source_sql` =
-  a read-only query e.g. `SELECT id, task FROM tasks WHERE status='pending'`,
-  optional `max_iterations`). The query runs against `db/db.sqlite` and each
-  result row (an object keyed by column) is rendered through the `message`
-  template. The loop is deterministic (in code, not the LLM), so the orchestrator
-  reliably works through **every** row — delegating to sub-agents per row as
-  needed. This is the producer/consumer pattern: one step fills a table, this one
-  drains it.
-- It all runs in **one execution** — there is **no persistence and no re-entry**.
-  For a specialist that resumes across the orchestrator's *own repeated calls*,
-  or anything that must "rerun later", use a `message_sequence` **route** instead
-  (see the `message-sequence` reference doc) — that is the only place persistence
-  lives.
-- Retries of the step (on final pre-validation failure) continue the existing
-  conversation with feedback; they do **not** replay the scripted messages.
+- Item types: `user_message` (alias `message`), `prevalidation` (a hard gate
+  between turns — on failure the orchestrator receives the failed checks as a
+  repair turn in the same conversation and re-runs the gate, up to three
+  repairs), and `foreach` (one orchestrator turn per `db/db.sqlite` row from a
+  read-only `source_sql`, row bound to `.` in the `message` template — the
+  deterministic producer/consumer loop; delegate per row as needed).
+- Code and file items are rejected at plan validation and again at runtime:
+  the orchestrator delegates that work to a sub-agent route.
+- After every item the runtime waits for the children that item launched and
+  feeds one completion batch back before the next item starts. A `foreach`
+  that launches a child per row therefore blocks per row, not per step.
+- The step-level `validation_schema` runs as a synthetic final gate after the
+  last item, with the same in-place repair loop. There is no restart-the-step
+  retry: repairs keep the conversation and its sub-agent results.
+- It all runs in **one execution** — no persistence and no re-entry. For a
+  specialist that resumes across the orchestrator's *own repeated calls*, use a
+  `message_sequence` **route** instead (see the `message-sequence` reference).
 
 ## Anti-patterns
 

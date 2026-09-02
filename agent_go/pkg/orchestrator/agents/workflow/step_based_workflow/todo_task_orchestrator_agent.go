@@ -406,6 +406,12 @@ func (agent *WorkflowTodoTaskOrchestratorAgent) todoTaskOrchestratorUserMessageP
 	templateVars map[string]string,
 	conversationHistory []llmtypes.MessageContent,
 ) string {
+	// A follow-up turn (scripted message, repair turn, reflection turn) is sent
+	// verbatim: the step framing, dependencies, and human input were already
+	// delivered on the opening turn and live in the conversation.
+	if followUp := strings.TrimSpace(templateVars["FollowUpMessage"]); followUp != "" {
+		return followUp
+	}
 	templateData := map[string]interface{}{
 		"StepTitle":               templateVars["StepTitle"],
 		"StepDescription":         templateVars["StepDescription"],

@@ -167,22 +167,19 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	// Learnings read gate — default-on unless learnings_access="none" or routing/eval.
 	// Todo-task agents benefit from seeing _global/SKILL.md to reuse cross-step knowledge.
 	isLearningDisabled := !canReadLearnings(stepConfig, todoTaskStep, hcpo.isEvaluationMode)
-	// Check for context cancellation
 	select {
 	case <-ctx.Done():
 		return false, "", fmt.Errorf("todo task execution canceled: %w", ctx.Err())
 	default:
 	}
-
-	// Load orchestrator learnings from global learning skill
 	var orchestratorLearningHistory string
-	if isLearningDisabled {
-		orchestratorLearningHistory = ""
-	} else {
+	if !isLearningDisabled {
 		orchestratorLearningHistory, _ = hcpo.readGlobalLearningHistory(ctx)
 	}
 
-	// Build template variables for orchestrator
+	// The orchestrator's own prompt variables: routes catalog, dependencies, stores,
+	// folder guard, validation schema, human input. Built once; every turn of the
+	// sequence reuses them (follow-up turns only swap in their message).
 	templateVars := hcpo.buildTodoTaskOrchestratorTemplateVars(
 		ctx,
 		todoTaskStep,
@@ -195,440 +192,146 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 		execCtx,
 	)
 
-	// Capture tool calls and wall-clock duration per attempt so persisted logs show
-	// where todo orchestration time was spent.
-	var capturedToolCalls []orchestrator.ToolCallEntry
-	var capturedLLMCalls []orchestrator.LLMCallEntry
+	agentName := todoTaskStep.Title
+	if agentName == "" {
+		agentName = fmt.Sprintf("todo-task-orchestrator-step-%d", stepIndex+1)
+	}
+	llmConfig := hcpo.selectTodoTaskOrchestratorLLM(ctx, stepConfig, stepID, todoTaskStepPath)
+	if llmConfig == nil {
+		return false, "", fmt.Errorf("no valid LLM configuration found for todo task orchestrator")
+	}
+	executionLLM := ""
+	if llmConfig.Primary.ModelID != "" {
+		executionLLM = fmt.Sprintf("%s/%s", llmConfig.Primary.Provider, llmConfig.Primary.ModelID)
+	}
 
-	// Retry loop: execute with validation feedback on pre-validation failure
-	maxRetryAttempts := 3
-	validationSchema := step.GetValidationSchema()
-	var validationResponse *ValidationResponse
-	var validationFailures []validationFailureConcern
-	var todoTaskAgent orchestratoragents.OrchestratorAgent
-	var subAgentExecCtx *SubAgentExecutionContext
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := subAgentExecCtx.cancelOutstandingAndWait(cleanupCtx); err != nil {
-			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Todo task step %s could not fully stop owned sub-agents during cleanup: %v", step.GetID(), err))
-		}
-		if todoTaskAgent != nil {
-			_ = todoTaskAgent.Close()
-		}
-	}()
+	// Sub-agent execution context for tool-based delegation. The workshop
+	// correlation ID tags sub-agent events with the workshop step's ID so the
+	// frontend can auto-notify on them.
+	workshopCorrelationID := ""
+	if forcedID, ok := ctx.Value(events.ForceCorrelationIDKey).(string); ok {
+		workshopCorrelationID = forcedID
+	}
+	var humanInputs map[string]string
+	if execCtx != nil {
+		humanInputs = execCtx.HumanInputs
+	}
+	subAgentExecCtx := &SubAgentExecutionContext{
+		TodoTaskStep:          todoTaskStep,
+		StepIndex:             stepIndex,
+		StepPath:              todoTaskStepPath,
+		AllSteps:              allSteps,
+		Progress:              progress,
+		StepConfig:            stepConfig, // Pass step config for sub_agent_llm override
+		WorkshopCorrelationID: workshopCorrelationID,
+		ParentContext:         ctx,
+		AsyncEnabled:          true,
+		HumanInputs:           humanInputs,
+	}
 
-	// Fires an [AUTO-NOTIFICATION] on the first pre-validation failure this
-	// step this run — see the matching guard in controller_execution.go for
-	// the full rationale (early builder visibility during retries, not just
-	// after they're exhausted; once per step, not once per attempt).
-	preValidationNotifiedThisStep := false
-	for retryAttempt := 1; retryAttempt <= maxRetryAttempts; retryAttempt++ {
-		// Check for context cancellation before each attempt
-		select {
-		case <-ctx.Done():
-			return false, "", fmt.Errorf("todo task execution canceled: %w", ctx.Err())
-		default:
-		}
-
-		// On retry, inject validation feedback so the LLM knows what to fix
-		if retryAttempt > 1 && validationResponse != nil {
-			contextStr := fmt.Sprintf("Pre-Validation Feedback (Retry Attempt %d/%d)", retryAttempt, maxRetryAttempts)
-			templateVars["ValidationFeedback"] = hcpo.formatValidationResponseForTemplate(validationResponse, contextStr)
-			hcpo.GetLogger().Info(fmt.Sprintf("🔄 Retrying todo task step %d execution with validation feedback (attempt %d/%d)", stepIndex+1, retryAttempt, maxRetryAttempts))
-		} else {
-			templateVars["ValidationFeedback"] = ""
-		}
-
-		hcpo.GetLogger().Info(fmt.Sprintf("🎯 Executing todo task orchestrator (attempt %d/%d)", retryAttempt, maxRetryAttempts))
-		attemptCtx := ctx
-		if cab, ok := hcpo.GetContextAwareBridge().(*orchestrator.ContextAwareEventBridge); ok {
-			attemptCtx = cab.StartTimingCaptureFor(attemptCtx)
-		}
-		attemptStartedAt := time.Now().UTC()
-
-		var (
-			updatedHistory []llmtypes.MessageContent
-			executionLLM   string
-			err            error
+	createAgent := func(agentCtx context.Context) (orchestratoragents.OrchestratorAgent, error) {
+		agent, err := hcpo.createTodoTaskOrchestratorAgent(
+			agentCtx,
+			"todo_task", // phase
+			stepIndex,   // step
+			0,           // iteration
+			stepID,
+			todoTaskStepPath,
+			agentName,
+			stepConfig,
+			llmConfig,
+			subAgentExecCtx,
 		)
-		shouldContinue := retryAttempt > 1 && todoTaskAgent != nil && len(conversationHistory) > 0
-		if !shouldContinue {
-			if todoTaskAgent != nil {
-				_ = todoTaskAgent.Close()
-				todoTaskAgent = nil
-			}
-			_, updatedHistory, executionLLM, subAgentExecCtx, todoTaskAgent, err = hcpo.executeTodoTaskOrchestratorAgent(
-				attemptCtx,
-				todoTaskStep,
-				stepIndex,
-				todoTaskStepPath,
-				templateVars,
-				conversationHistory,
-				allSteps,
-				progress,
-				execCtx.HumanInputs,
-			)
-		} else {
-			feedbackUserMsg := buildValidationContinuationUserMessage(validationResponse, retryAttempt)
-			hcpo.GetLogger().Info(fmt.Sprintf("🔁 Todo task step %d attempt %d/%d: continuing existing orchestrator with validation feedback (history=%d turns)",
-				stepIndex+1, retryAttempt, maxRetryAttempts, len(conversationHistory)))
-			executionLLM = agentConfigModelLabel(todoTaskAgent.GetConfig())
-			ba := todoTaskAgent.GetBaseAgent()
-			if ba == nil {
-				return false, "", fmt.Errorf("todo task orchestrator has no base agent for continuation on attempt %d", retryAttempt)
-			}
-			_, updatedHistory, err = hcpo.withWorkshopMessageTarget(attemptCtx, step.GetID(), "todo-validation-retry", todoTaskAgent, func() (string, []llmtypes.MessageContent, error) {
-				return ba.Execute(attemptCtx, feedbackUserMsg, conversationHistory, "", false)
-			})
-		}
-		attemptCompletedAt := time.Now().UTC()
-		attemptDuration := attemptCompletedAt.Sub(attemptStartedAt)
-
-		// Drain captured tool calls regardless of error
-		if cab, ok := hcpo.GetContextAwareBridge().(*orchestrator.ContextAwareEventBridge); ok {
-			timingCapture := cab.DrainTimingCaptureFor(attemptCtx)
-			capturedToolCalls = timingCapture.ToolCalls
-			capturedLLMCalls = timingCapture.LLMCalls
-		}
-
 		if err != nil {
-			return false, "", fmt.Errorf("todo task orchestrator failed: %w", err)
+			return nil, fmt.Errorf("failed to create todo task orchestrator agent: %w", err)
 		}
-		conversationHistory = updatedHistory
-		if err := hcpo.reconcileAsyncSubAgentCalls(ctx, step.GetID(), todoTaskAgent, subAgentExecCtx, &conversationHistory); err != nil {
-			return false, "", fmt.Errorf("todo task sub-agent reconciliation failed: %w", err)
-		}
-		updatedHistory = conversationHistory
-
-		// Log execution. Carry earlier validation failures forward because Pulse
-		// Gate reads the latest/final attempt rather than every retry.
-		executionSummary := withValidationFailureConcern(latestAssistantExecutionSummary(updatedHistory), validationFailures, 0, false)
-		hcpo.saveTodoTaskExecutionLog(ctx, step.GetID(), todoTaskStepPath, retryAttempt, 0, executionLLM, updatedHistory, capturedToolCalls, capturedLLMCalls, attemptStartedAt, attemptCompletedAt, attemptDuration, executionSummary)
-
-		// Drive the optional scripted message sequence through the SAME orchestrator
-		// conversation. First attempt only — retries continue the conversation with
-		// validation feedback and must not replay the scripted messages.
-		if retryAttempt == 1 && len(todoTaskStep.Messages) > 0 {
-			if msErr := hcpo.runTodoTaskMessageSequence(ctx, todoTaskStep, stepIndex, todoTaskStepPath, stepExecutionPath, todoTaskAgent, subAgentExecCtx, &conversationHistory); msErr != nil {
-				return false, "", fmt.Errorf("todo task message sequence failed: %w", msErr)
+		// Sync template vars with the actual agent config — the factory may have
+		// enabled code execution mode for CLI providers after the vars were built.
+		if cfg := agent.GetConfig(); cfg != nil {
+			if agentConfigUseCodeExecutionMode(cfg) {
+				templateVars["IsCodeExecutionMode"] = "true"
+			}
+			// The tools reference section is for CLI providers NOT in code execution
+			// mode; in code-exec mode the {{TOOL_STRUCTURE}} JSON is authoritative.
+			if isCliProviderForPrompt(agentConfigProvider(cfg)) && !agentConfigUseCodeExecutionMode(cfg) {
+				templateVars["ShowToolsSection"] = "true"
 			}
 		}
-
-		// Run pre-validation if schema exists
-		if validationSchema != nil {
-			hcpo.GetLogger().Info(fmt.Sprintf("🔍 Running pre-validation after execution (attempt %d/%d)", retryAttempt, maxRetryAttempts))
-			preValidationPassed, formattedResults := hcpo.runTodoTaskPreValidation(ctx, step, stepIndex, todoTaskStepPath, stepExecutionPath, retryAttempt)
-
-			if preValidationPassed {
-				hcpo.GetLogger().Info("✅ Todo task step complete (pre-validation passed)")
-				if len(validationFailures) > 0 {
-					executionSummary = withValidationFailureConcern(latestAssistantExecutionSummary(conversationHistory), validationFailures, retryAttempt, false)
-					hcpo.saveTodoTaskExecutionLog(ctx, step.GetID(), todoTaskStepPath, retryAttempt, 0, executionLLM, conversationHistory, capturedToolCalls, capturedLLMCalls, attemptStartedAt, attemptCompletedAt, attemptDuration, executionSummary)
-				}
-				if summaryErr := hcpo.persistCompletedTodoTaskSummary(ctx, todoTaskStep, stepIndex, todoTaskStepPath, todoTaskAgent, subAgentExecCtx, &conversationHistory); summaryErr != nil {
-					return false, "", fmt.Errorf("todo task completion summary failed: %w", summaryErr)
-				}
-				hcpo.emitTodoTaskStepCompletedEvent(ctx, step, stepIndex, todoTaskStepPath, 1, "Pre-validation passed", todoTaskStep.NextStepID)
-				hcpo.emitStepFinishedEvent(ctx, step, stepIndex, todoTaskStepPath)
-				return true, todoTaskStep.NextStepID, nil
-			}
-
-			if !preValidationNotifiedThisStep && hcpo.workshopExecutionNotifier != nil {
-				preValidationNotifiedThisStep = true
-				notifyID := fmt.Sprintf("prevalidation-warn-%s-%d", step.GetID(), time.Now().UnixNano())
-				notifyName := fmt.Sprintf("Pre-validation check: %s", step.GetTitle())
-				hcpo.workshopExecutionNotifier.OnExecutionStart(WorkshopExecutionStart{
-					ID:                notifyID,
-					ParentExecutionID: currentWorkshopParentExecutionID(ctx),
-					Name:              notifyName,
-					Kind:              "prevalidation_warning",
-					Metadata:          map[string]string{"step_id": step.GetID(), "step_path": todoTaskStepPath},
-				})
-				hcpo.workshopExecutionNotifier.OnExecutionComplete(notifyID, notifyName, formattedResults,
-					map[string]string{"step_id": step.GetID(), "step_path": todoTaskStepPath},
-					fmt.Errorf("pre-validation failed on attempt %d/%d — will retry unless attempts are exhausted", retryAttempt, maxRetryAttempts))
-			}
-
-			// Build validation response for feedback on next retry
-			validationResponse = &ValidationResponse{
-				IsSuccessCriteriaMet: false,
-				ExecutionStatus:      "FAILED",
-				Reasoning:            formattedResults + "\n\nPre-validation failed - required output files are missing or invalid. Fix these issues.",
-				Feedback: []ValidationFeedback{{
-					Type:        "structural_validation",
-					Description: "Pre-validation failed - output structure does not meet requirements",
-					Severity:    "HIGH",
-				}},
-			}
-			validationFailures = append(validationFailures, newValidationFailureConcern(retryAttempt, validationResponse))
-			exhausted := retryAttempt >= maxRetryAttempts
-			executionSummary = withValidationFailureConcern(latestAssistantExecutionSummary(conversationHistory), validationFailures, 0, exhausted)
-			hcpo.saveTodoTaskExecutionLog(ctx, step.GetID(), todoTaskStepPath, retryAttempt, 0, executionLLM, conversationHistory, capturedToolCalls, capturedLLMCalls, attemptStartedAt, attemptCompletedAt, attemptDuration, executionSummary)
-
-			if exhausted {
-				hcpo.GetLogger().Error(fmt.Sprintf("❌ Todo task step %d pre-validation failed after %d attempts", stepIndex+1, maxRetryAttempts), nil)
-				return false, todoTaskStep.NextStepID, nil
-			}
-
-			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Pre-validation failed for todo task step %d (attempt %d/%d) - retrying with feedback", stepIndex+1, retryAttempt, maxRetryAttempts))
-			continue
+		// Pre-save prompts.json so get_step_prompts works during execution, not just after.
+		if todoAgent, ok := agent.(*WorkflowTodoTaskOrchestratorAgent); ok {
+			preSystemPrompt := todoAgent.todoTaskOrchestratorSystemPromptProcessor(templateVars)
+			preUserMessage := todoAgent.todoTaskOrchestratorUserMessageProcessor(templateVars, nil)
+			hcpo.preSavePromptsJSON(stepIndex, stepID, todoTaskStepPath, "todo_task_orchestrator", preSystemPrompt, preUserMessage, executionLLM, "todo-task-prompts.json")
 		}
-
-		// No validation schema — execution completion is the signal
-		hcpo.GetLogger().Info("✅ Todo task step complete (execution finished)")
-		if summaryErr := hcpo.persistCompletedTodoTaskSummary(ctx, todoTaskStep, stepIndex, todoTaskStepPath, todoTaskAgent, subAgentExecCtx, &conversationHistory); summaryErr != nil {
-			return false, "", fmt.Errorf("todo task completion summary failed: %w", summaryErr)
+		return agent, nil
+	}
+	turnVars := func(item MessageSequenceItem, message string, opening bool) map[string]string {
+		vars := make(map[string]string, len(templateVars)+1)
+		for k, v := range templateVars {
+			vars[k] = v
 		}
-		hcpo.emitTodoTaskStepCompletedEvent(ctx, step, stepIndex, todoTaskStepPath, 1, "Execution completed", todoTaskStep.NextStepID)
-		hcpo.emitStepFinishedEvent(ctx, step, stepIndex, todoTaskStepPath)
-		return true, todoTaskStep.NextStepID, nil
+		if !opening {
+			vars["FollowUpMessage"] = message
+		}
+		return vars
+	}
+	// The todo_task execution-log shape (SubAgentCallRecords, todo_task_response) is
+	// what ExecutionLogsPopup renders as the route-selection view and what keeps
+	// stepLogs.todo_task populated; keep writing it. Turn N lands as iteration N-1 so
+	// the opening turn keeps today's file name.
+	logTurn := func(logCtx context.Context, turnNumber int, turnLLM string, history []llmtypes.MessageContent, toolCalls []orchestrator.ToolCallEntry, llmCalls []orchestrator.LLMCallEntry, startedAt, completedAt time.Time) {
+		hcpo.saveTodoTaskExecutionLog(logCtx, stepID, todoTaskStepPath, 1, turnNumber-1, turnLLM, history, toolCalls, llmCalls, startedAt, completedAt, completedAt.Sub(startedAt), "")
 	}
 
-	// Should not reach here, but handle gracefully
-	return false, todoTaskStep.NextStepID, nil
-}
-
-func (hcpo *StepBasedWorkflowOrchestrator) persistCompletedTodoTaskSummary(
-	ctx context.Context,
-	step *TodoTaskPlanStep,
-	stepIndex int,
-	stepPath string,
-	agent orchestratoragents.OrchestratorAgent,
-	subAgentExecCtx *SubAgentExecutionContext,
-	conversationHistory *[]llmtypes.MessageContent,
-) error {
-	mainSummary := latestAssistantExecutionSummary(*conversationHistory)
-	learningsSummary, knowledgebaseSummary, reconcileErr := hcpo.runTodoTaskContributionTurns(ctx, step, stepIndex, agent, subAgentExecCtx, conversationHistory)
-	if reconcileErr != nil {
-		return reconcileErr
-	}
-	finalSummary := buildDirectModeCompletionSummary(mainSummary, knowledgebaseSummary, learningsSummary)
-	if strings.TrimSpace(finalSummary) == "" {
-		finalSummary = "STATUS: COMPLETED"
-	}
-	if err := hcpo.saveFinalExecutionSummary(step.GetID(), stepPath, finalSummary); err != nil {
-		hcpo.recordRunPersistenceError(context.Background(), step.GetID(), err)
-		hcpo.GetLogger().Warn(fmt.Sprintf("Todo task step %s completed, but its final execution summary could not be persisted: %v", step.GetID(), err))
-	}
-	return nil
-}
-
-// runTodoTaskContributionTurns runs a trailing learnings turn and/or KB turn on
-// the orchestrator's own conversation after its work completes — the same
-// contribution model regular steps and message_sequence steps use, so learnings/KB
-// are handled identically across all step types. The orchestrator already holds
-// learnings/_global and notes/ write access via its folder guard, so the turn can
-// write. Both turns are best-effort: a failure is logged, never fatal.
-func (hcpo *StepBasedWorkflowOrchestrator) runTodoTaskContributionTurns(ctx context.Context, step *TodoTaskPlanStep, stepIndex int, agent orchestratoragents.OrchestratorAgent, subAgentExecCtx *SubAgentExecutionContext, conversationHistory *[]llmtypes.MessageContent) (learningsSummary, knowledgebaseSummary string, reconcileErr error) {
-	cfg := step.AgentConfigs
-	if cfg == nil {
-		return "", "", nil
-	}
-	ba := agent.GetBaseAgent()
-	if ba == nil {
-		return "", "", nil
-	}
-	runTurn := func(label, msg string) (string, error) {
-		msg = strings.TrimSpace(msg)
-		if msg == "" {
-			return "", nil
+	// Run the orchestrator on the message_sequence executor: the opening turn is the
+	// step description rendered through the orchestrator's own templates, followed by
+	// the step's scripted messages, the synthetic final validation gate, and the
+	// closing reflection turn. Repairs happen in place with full memory (the
+	// prevalidation repair loop) instead of restarting the whole step.
+	items := make([]MessageSequenceItem, 0, len(todoTaskStep.Messages)+1)
+	items = append(items, MessageSequenceItem{
+		ID:      stepID + "-opening",
+		Type:    "user_message",
+		Kind:    "execution",
+		Message: templateVars["StepDescription"],
+	})
+	for _, m := range todoTaskStep.Messages {
+		if t := strings.TrimSpace(m.Type); t == "message" {
+			m.Type = "user_message"
 		}
-		if label == "learnings" {
-			restoreDirectLearningTurn := hcpo.prepareDirectLearningTurn(agent, []string{filepath.Join(hcpo.GetWorkspacePath(), LearningsFolderName, GlobalLearningID)})
-			defer restoreDirectLearningTurn()
+		items = append(items, m)
+	}
+	sequenceStep := &MessageSequencePlanStep{
+		Type:             StepTypeMessageSeq,
+		CommonStepFields: todoTaskStep.CommonStepFields,
+		Items:            items,
+		NextStepID:       todoTaskStep.NextStepID,
+		AgentConfigs:     todoTaskStep.AgentConfigs,
+	}
+	opts := messageSequenceCallOptions{
+		Source: "configured_queue",
+		Delegation: &messageSequenceDelegation{
+			ExecCtx:     subAgentExecCtx,
+			ReadPaths:   readPaths,
+			WritePaths:  writePaths,
+			CreateAgent: createAgent,
+			TurnVars:    turnVars,
+			LogTurn:     logTurn,
+		},
+	}
+	_, history, err := hcpo.executeMessageSequenceStep(ctx, sequenceStep, stepIndex, todoTaskStepPath, progress, execCtx, allSteps, opts)
+	conversationHistory = history
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, "", fmt.Errorf("todo task execution canceled: %w", ctx.Err())
 		}
-		hcpo.GetLogger().Info(fmt.Sprintf("📝 Todo task %s contribution turn for step %d", label, stepIndex+1))
-		result, updated, err := hcpo.withWorkshopMessageTarget(ctx, step.GetID(), "todo-"+label, agent, func() (string, []llmtypes.MessageContent, error) {
-			return ba.Execute(ctx, msg, *conversationHistory, "", false)
-		})
-		if len(updated) > 0 {
-			*conversationHistory = updated
-		}
-		if childErr := hcpo.reconcileAsyncSubAgentCalls(ctx, step.GetID(), agent, subAgentExecCtx, conversationHistory); childErr != nil {
-			return "", fmt.Errorf("reconcile children launched by %s contribution: %w", label, childErr)
-		}
-		if err != nil {
-			// Non-fatal by design (the step's main work already succeeded and
-			// pre-validation passed), but the loss of a learnings/KB write must
-			// be visible — not just a log line — so reviewers and the workshop
-			// can see that this run contributed nothing to the store.
-			errMsg := fmt.Sprintf("%s contribution turn failed — %s write was lost for this run (step still completes): %v", label, label, err)
-			hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Todo task step %d: %s", stepIndex+1, errMsg))
-			hcpo.EmitOrchestratorAgentError(ctx, "workflow", fmt.Sprintf("todo-task-%s-contribution", label), fmt.Sprintf("Write %s for step: %s", label, step.GetTitle()), errMsg, stepIndex, 0)
-			return fmt.Sprintf("CONCERNS: %s\nSTATUS: COMPLETED", errMsg), nil
-		}
-		return summarizeExecutionResultForNotification(result), nil
+		return false, "", fmt.Errorf("todo task orchestrator failed: %w", err)
 	}
 
-	if shouldDirectWriteLearnings(cfg, step, hcpo.isEvaluationMode) {
-		learningsSummary, reconcileErr = runTurn("learnings", hcpo.buildLearningsContributionTurn(step.GetID(), step.GetDescription(), strings.TrimSpace(cfg.LearningObjective), false))
-		if reconcileErr != nil {
-			return learningsSummary, knowledgebaseSummary, reconcileErr
-		}
-	}
-
-	if contribution := strings.TrimSpace(kbContributionForPrompt(cfg)); contribution != "" && kbAccessAllowsWrite(cfg.KnowledgebaseAccess) {
-		var b strings.Builder
-		b.WriteString("## Knowledgebase Contribution (dedicated turn)\n\n")
-		b.WriteString("The step is complete. In this turn you have WRITE access to the knowledgebase. Fulfill this step's knowledgebase contribution, then stop.\n\n")
-		b.WriteString("**Contribution instruction:**\n")
-		b.WriteString(contribution)
-		b.WriteString("\n\nWrite durable, deduplicated notes under `knowledgebase/notes/`. If there is nothing new worth recording, say so explicitly and write nothing.")
-		knowledgebaseSummary, reconcileErr = runTurn("knowledgebase", b.String())
-		if reconcileErr != nil {
-			return learningsSummary, knowledgebaseSummary, reconcileErr
-		}
-	}
-	return learningsSummary, knowledgebaseSummary, nil
-}
-
-// runTodoTaskMessageSequence drives a todo_task step's optional scripted message sequence.
-// After the orchestrator's first turn, each message entry is fed into the SAME orchestrator
-// conversation (so it keeps working with full memory of prior turns and sub-agent results),
-// and each prevalidation entry is a hard gate between turns. A failed gate is fed back to the
-// orchestrator as a corrective turn and re-checked up to max_corrections times. Everything
-// runs within one execution — no persistence, no re-entry.
-func (hcpo *StepBasedWorkflowOrchestrator) runTodoTaskMessageSequence(
-	ctx context.Context,
-	step *TodoTaskPlanStep,
-	stepIndex int,
-	stepPath string,
-	stepExecutionPath string,
-	agent orchestratoragents.OrchestratorAgent,
-	subAgentExecCtx *SubAgentExecutionContext,
-	conversationHistory *[]llmtypes.MessageContent,
-) error {
-	ba := agent.GetBaseAgent()
-	if ba == nil {
-		return fmt.Errorf("todo task orchestrator has no base agent for message sequence")
-	}
-	executionLLM := agentConfigModelLabel(agent.GetConfig())
-
-	// runTurn feeds one user turn into the SAME orchestrator conversation, captures timing,
-	// and logs it. logSeq starts past the retry-attempt indices to avoid log-file collisions.
-	logSeq := 100
-	runTurn := func(text string) error {
-		text = strings.TrimSpace(text)
-		if text == "" {
-			return nil
-		}
-		turnCtx := ctx
-		if cab, ok := hcpo.GetContextAwareBridge().(*orchestrator.ContextAwareEventBridge); ok {
-			turnCtx = cab.StartTimingCaptureFor(turnCtx)
-		}
-		startedAt := time.Now().UTC()
-		_, updated, err := hcpo.withWorkshopMessageTarget(turnCtx, step.GetID(), "todo-message-sequence", agent, func() (string, []llmtypes.MessageContent, error) {
-			return ba.Execute(turnCtx, text, *conversationHistory, "", false)
-		})
-		completedAt := time.Now().UTC()
-		var toolCalls []orchestrator.ToolCallEntry
-		var llmCalls []orchestrator.LLMCallEntry
-		if cab, ok := hcpo.GetContextAwareBridge().(*orchestrator.ContextAwareEventBridge); ok {
-			tc := cab.DrainTimingCaptureFor(turnCtx)
-			toolCalls = tc.ToolCalls
-			llmCalls = tc.LLMCalls
-		}
-		if len(updated) > 0 {
-			*conversationHistory = updated
-		}
-		if reconcileErr := hcpo.reconcileAsyncSubAgentCalls(ctx, step.GetID(), agent, subAgentExecCtx, conversationHistory); reconcileErr != nil {
-			return fmt.Errorf("reconcile children launched by scripted message: %w", reconcileErr)
-		}
-		if err != nil {
-			return err
-		}
-		hcpo.saveTodoTaskExecutionLog(ctx, step.GetID(), stepPath, 1, logSeq, executionLLM, *conversationHistory, toolCalls, llmCalls, startedAt, completedAt, completedAt.Sub(startedAt), "")
-		logSeq++
-		return nil
-	}
-
-	for i, m := range step.Messages {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("todo task message sequence canceled: %w", ctx.Err())
-		default:
-		}
-
-		mType := strings.TrimSpace(m.Type)
-		if mType == "" {
-			mType = "message"
-		}
-		switch mType {
-		case "message", "user_message":
-			hcpo.GetLogger().Info(fmt.Sprintf("💬 Todo task scripted message %d/%d for step %d", i+1, len(step.Messages), stepIndex+1))
-			if err := runTurn(m.Message); err != nil {
-				return fmt.Errorf("todo task scripted message %d failed: %w", i+1, err)
-			}
-
-		case "foreach":
-			rows, err := hcpo.expandForeach(ctx, m.SourceSQL, m.Message, m.MaxIterations)
-			if err != nil {
-				return fmt.Errorf("todo task foreach (messages[%d]): %w", i, err)
-			}
-			hcpo.GetLogger().Info(fmt.Sprintf("🔁 Todo task foreach (messages[%d]) for step %d: %d row(s)", i, stepIndex+1, len(rows)))
-			for ridx, rowMsg := range rows {
-				select {
-				case <-ctx.Done():
-					return fmt.Errorf("todo task foreach (messages[%d]) canceled: %w", i, ctx.Err())
-				default:
-				}
-				if err := runTurn(rowMsg); err != nil {
-					return fmt.Errorf("todo task foreach (messages[%d]) row %d failed: %w", i, ridx, err)
-				}
-			}
-
-		case "prevalidation":
-			schema := m.ValidationSchema
-			if schema == nil {
-				continue
-			}
-			maxCorr := m.MaxCorrections
-			if maxCorr <= 0 {
-				maxCorr = 1
-			}
-			passed := false
-			for attempt := 0; attempt <= maxCorr; attempt++ {
-				res, vErr := RunPreValidation(ctx, schema, stepExecutionPath, hcpo.BaseOrchestrator)
-				if vErr == nil && res != nil && res.OverallPass {
-					passed = true
-					break
-				}
-				if attempt >= maxCorr {
-					break
-				}
-				feedback := "Pre-validation gate failed. Fix the issues below, then make sure the required outputs exist before continuing."
-				if res != nil {
-					feedback += "\n\n" + formatWorkspaceResults(res)
-				} else if vErr != nil {
-					feedback = fmt.Sprintf("Pre-validation gate could not run: %v. Ensure the required outputs exist before continuing.", vErr)
-				}
-				hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Todo task gate (messages[%d]) failed for step %d - corrective turn %d/%d", i, stepIndex+1, attempt+1, maxCorr))
-				_, updated, exErr := hcpo.withWorkshopMessageTarget(ctx, step.GetID(), "todo-prevalidation-repair", agent, func() (string, []llmtypes.MessageContent, error) {
-					return ba.Execute(ctx, feedback, *conversationHistory, "", false)
-				})
-				if len(updated) > 0 {
-					*conversationHistory = updated
-				}
-				if reconcileErr := hcpo.reconcileAsyncSubAgentCalls(ctx, step.GetID(), agent, subAgentExecCtx, conversationHistory); reconcileErr != nil {
-					return fmt.Errorf("reconcile children launched by gate correction %d: %w", i+1, reconcileErr)
-				}
-				if exErr != nil {
-					return fmt.Errorf("todo task gate %d correction turn failed: %w", i+1, exErr)
-				}
-			}
-			if !passed {
-				return fmt.Errorf("todo task prevalidation gate (messages[%d]) did not pass after %d correction(s)", i, maxCorr)
-			}
-
-		default:
-			// The orchestrator's scripted sequence runs only the conversational item
-			// kinds; it delegates real work to sub-agent routes. code/file items
-			// (which a standalone message_sequence supports) are rejected here.
-			return fmt.Errorf("orchestrator scripted message type %q is not supported — a todo_task sequence runs only conversational items (message, prevalidation, foreach); use a sub-agent route for code/file work", mType)
-		}
-	}
-	return nil
+	hcpo.GetLogger().Info("✅ Todo task step complete")
+	hcpo.emitTodoTaskStepCompletedEvent(ctx, step, stepIndex, todoTaskStepPath, 1, "Execution completed", todoTaskStep.NextStepID)
+	hcpo.emitStepFinishedEvent(ctx, step, stepIndex, todoTaskStepPath)
+	return true, todoTaskStep.NextStepID, nil
 }
 
 func formatMessageSequenceRoutePromptBlock(step PlanStepInterface) string {
@@ -890,115 +593,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) selectTodoTaskOrchestratorLLM(
 	hcpo.GetLogger().Info(fmt.Sprintf("🏷️ [TIERED] Todo task orchestrator using Tier %d (%s): %s/%s",
 		int(tier), TierLevelLabel(tier), llmConfig.Primary.Provider, llmConfig.Primary.ModelID))
 	return llmConfig
-}
-
-// executeTodoTaskOrchestratorAgent executes the orchestrator agent using the standard factory pattern
-// This ensures proper event bridge connection for sub-event tracking
-// Returns: response, updatedHistory, executionLLM, subAgentExecCtx, error
-// The subAgentExecCtx contains execution state for sub-agent tool calls
-func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskOrchestratorAgent(
-	ctx context.Context,
-	step *TodoTaskPlanStep,
-	stepIndex int,
-	stepPath string,
-	templateVars map[string]string,
-	conversationHistory []llmtypes.MessageContent,
-	allSteps []PlanStepInterface,
-	progress *StepProgress,
-	humanInputs map[string]string,
-) (*TodoTaskResponse, []llmtypes.MessageContent, string, *SubAgentExecutionContext, orchestratoragents.OrchestratorAgent, error) {
-	agentName := step.Title
-	if agentName == "" {
-		agentName = fmt.Sprintf("todo-task-orchestrator-step-%d", stepIndex+1)
-	}
-
-	// Get step config
-	stepConfig := getAgentConfigs(step)
-
-	// Select LLM config using helper function
-	stepID := step.GetID()
-	if stepID == "" {
-		stepID = fmt.Sprintf("step-%d", stepIndex+1)
-	}
-	llmConfig := hcpo.selectTodoTaskOrchestratorLLM(ctx, stepConfig, stepID, stepPath)
-	if llmConfig == nil {
-		return nil, nil, "", nil, nil, fmt.Errorf("no valid LLM configuration found for todo task orchestrator")
-	}
-
-	// Capture execution LLM for logging before creating agent
-	var executionLLM string
-	if llmConfig.Primary.ModelID != "" {
-		executionLLM = fmt.Sprintf("%s/%s", llmConfig.Primary.Provider, llmConfig.Primary.ModelID)
-	}
-
-	// Build sub-agent execution context for tool-based delegation
-	// Propagate workshop correlation ID from the calling context so sub-agent events
-	// are tagged with the workshop step's ID (enables frontend auto-notifications).
-	workshopCorrelationID := ""
-	if forcedID, ok := ctx.Value(events.ForceCorrelationIDKey).(string); ok {
-		workshopCorrelationID = forcedID
-	}
-	subAgentExecCtx := &SubAgentExecutionContext{
-		TodoTaskStep:          step,
-		StepIndex:             stepIndex,
-		StepPath:              stepPath,
-		AllSteps:              allSteps,
-		Progress:              progress,
-		StepConfig:            stepConfig, // Pass step config for sub_agent_llm override
-		WorkshopCorrelationID: workshopCorrelationID,
-		ParentContext:         ctx,
-		AsyncEnabled:          true,
-		HumanInputs:           humanInputs,
-	}
-
-	// Use factory method to create agent with proper event bridge connection
-	// This handles initialization, event bridge connection, and tool registration
-	agent, err := hcpo.createTodoTaskOrchestratorAgent(
-		ctx,
-		"todo_task", // phase
-		stepIndex,   // step
-		0,           // iteration
-		stepID,
-		stepPath, // step path for todo tools context injection
-		agentName,
-		stepConfig,
-		llmConfig,
-		subAgentExecCtx, // Sub-agent execution context for tool-based delegation
-	)
-	if err != nil {
-		return nil, nil, "", nil, nil, fmt.Errorf("failed to create todo task orchestrator agent: %w", err)
-	}
-
-	// Sync template vars with actual agent config — the factory may have enabled
-	// code execution mode for CLI providers after template vars were built.
-	if agent.GetConfig() != nil {
-		if agentConfigUseCodeExecutionMode(agent.GetConfig()) {
-			templateVars["IsCodeExecutionMode"] = "true"
-		}
-		// Show tools reference section for CLI providers ONLY when NOT in code execution mode.
-		// In code exec mode, the {{TOOL_STRUCTURE}} JSON already provides the authoritative tool index.
-		provider := agentConfigProvider(agent.GetConfig())
-		if isCliProviderForPrompt(provider) && !agentConfigUseCodeExecutionMode(agent.GetConfig()) {
-			templateVars["ShowToolsSection"] = "true"
-		}
-	}
-
-	// Pre-save prompts.json so get_step_prompts works during execution (not just after)
-	if todoAgent, ok := agent.(*WorkflowTodoTaskOrchestratorAgent); ok {
-		preSystemPrompt := todoAgent.todoTaskOrchestratorSystemPromptProcessor(templateVars)
-		preUserMessage := todoAgent.todoTaskOrchestratorUserMessageProcessor(templateVars, conversationHistory)
-		hcpo.preSavePromptsJSON(stepIndex, step.GetID(), stepPath, "todo_task_orchestrator", preSystemPrompt, preUserMessage, executionLLM, "todo-task-prompts.json")
-	}
-
-	// Execute — single-shot, the agent delegates to sub-agents and runs to completion
-	_, updatedHistory, err := hcpo.withWorkshopMessageTarget(ctx, step.GetID(), "todo-orchestrator", agent, func() (string, []llmtypes.MessageContent, error) {
-		return agent.Execute(ctx, templateVars, conversationHistory)
-	})
-	if err != nil {
-		return nil, nil, "", subAgentExecCtx, agent, fmt.Errorf("todo task orchestrator execution failed: %w", err)
-	}
-
-	return nil, updatedHistory, executionLLM, subAgentExecCtx, agent, nil
 }
 
 // executeGenericAgent executes a generic task using the standard execution agent
@@ -1824,75 +1418,4 @@ func latestAssistantExecutionSummary(conversationHistory []llmtypes.MessageConte
 		}
 	}
 	return ""
-}
-
-// runTodoTaskPreValidation runs pre-validation for a todo task step if validation schema exists
-// Returns (passed bool, reason string) - reason contains formatted validation results if failed
-func (hcpo *StepBasedWorkflowOrchestrator) runTodoTaskPreValidation(
-	ctx context.Context,
-	step PlanStepInterface,
-	stepIndex int,
-	stepPath string,
-	stepExecutionPath string,
-	retryAttempt int,
-) (bool, string) {
-	// Get validation schema from step
-	validationSchema := step.GetValidationSchema()
-	if validationSchema == nil {
-		hcpo.GetLogger().Info(fmt.Sprintf("⏭️ Pre-validation skipped for todo task step %d (no validation schema)", stepIndex+1))
-		return true, ""
-	}
-
-	hcpo.GetLogger().Info(fmt.Sprintf("🔍 Running pre-validation for todo task step %d with %d file checks", stepIndex+1, len(validationSchema.Files)))
-
-	// Run pre-validation
-	workspaceResults, err := RunPreValidation(ctx, validationSchema, stepExecutionPath, hcpo.BaseOrchestrator)
-	if err != nil {
-		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Pre-validation error for todo task step %d: %v", stepIndex+1, err))
-		// Pre-validation error means we can't verify structure - treat as failure
-		workspaceResults = &WorkspaceVerificationResult{
-			OverallPass:  false,
-			FilesChecked: []FileCheckResult{},
-			Summary: ValidationSummary{
-				TotalChecks:  0,
-				PassedChecks: 0,
-				FailedChecks: 1,
-				SchemaErrors: 0,
-				Errors: []ValidationError{
-					{
-						File:      "",
-						Path:      "",
-						CheckType: "pre_validation_error",
-						Expected:  "pre-validation to run successfully",
-						Actual:    "error occurred",
-						Message:   fmt.Sprintf("Pre-validation failed to run: %v", err),
-					},
-				},
-				SchemaWarnings: []ValidationError{},
-			},
-		}
-	}
-
-	// Emit pre-validation completed event
-	hcpo.emitPreValidationCompletedEvent(ctx, step, stepIndex, stepPath, true, workspaceResults)
-
-	// Persist pre-validation results for Pulse Bug Review and diagnostics.
-	if hcpo.selectedRunFolder != "" {
-		preValLogPath := fmt.Sprintf("%s/runs/%s", hcpo.GetWorkspacePath(), hcpo.selectedRunFolder)
-		SavePreValidationLog(ctx, hcpo.BaseOrchestrator, preValLogPath, step.GetID(), stepPath, workspaceResults, validationSchema, hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.currentGroupName,
-			PreValidationAttempt{ExecutionMode: "todo_task", ValidationPhase: "final-gate", ExecutionAttempt: retryAttempt, ValidationAttempt: 1})
-	}
-
-	// Format results for feedback
-	formattedResults := formatWorkspaceResults(workspaceResults)
-
-	if workspaceResults.OverallPass {
-		hcpo.GetLogger().Info(fmt.Sprintf("✅ Pre-validation passed for todo task step %d: %d/%d checks passed",
-			stepIndex+1, workspaceResults.Summary.PassedChecks, workspaceResults.Summary.TotalChecks))
-		return true, formattedResults
-	}
-
-	hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Pre-validation failed for todo task step %d: %d/%d checks passed",
-		stepIndex+1, workspaceResults.Summary.PassedChecks, workspaceResults.Summary.TotalChecks))
-	return false, formattedResults
 }
