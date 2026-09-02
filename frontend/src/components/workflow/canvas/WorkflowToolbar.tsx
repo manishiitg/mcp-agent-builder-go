@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
+  ChevronDown,
   Cloud,
   Globe,
   LoaderCircle,
@@ -38,6 +39,57 @@ const WORKFLOW_SCHEDULE_TOOLBAR_LIMIT = 10_000
 // Product-tour / test hooks on specific toolbar buttons. Kept here rather
 // than in the view registry because they describe this toolbar's buttons,
 // not the views themselves.
+// The toolbar is three labeled groups (Views, Pulse, Setup). Each label is a
+// toggle: collapsed, the group shows only its label and current state; open,
+// its icons unfold next to it. Which groups are open is a per-browser
+// preference shared by all workflows.
+const TOOLBAR_OPEN_GROUPS_KEY = 'workflow-toolbar-open-groups'
+type ToolbarGroupId = 'views' | 'pulse' | 'setup'
+const readOpenGroups = (): Record<ToolbarGroupId, boolean> => {
+  const fallback = { views: false, pulse: false, setup: false }
+  try {
+    const raw = localStorage.getItem(TOOLBAR_OPEN_GROUPS_KEY)
+    return raw ? { ...fallback, ...JSON.parse(raw) as Partial<Record<ToolbarGroupId, boolean>> } : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function ToolbarGroup({ label, state, dotClass, open, onToggle, title, children, ...rest }: {
+  label: string
+  /** Short current-state text shown next to the label (active view, ON/OFF, provider). */
+  state?: string
+  /** Attention dot shown on the collapsed label, so a problem inside stays visible. */
+  dotClass?: string | null
+  open: boolean
+  onToggle: () => void
+  title: string
+  children: React.ReactNode
+} & Record<`data-${string}`, string | undefined>) {
+  return (
+    <div {...rest} className="inline-flex h-8 items-center rounded-lg border border-border bg-background/90 shadow-sm backdrop-blur-sm">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        title={title}
+        className="relative inline-flex h-full items-center gap-1 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      >
+        <ChevronDown className={`h-3 w-3 transition-transform ${open ? '' : '-rotate-90'}`} />
+        <span>{label}</span>
+        {state && <span className="max-w-[9rem] truncate text-[10px] font-semibold tracking-wide text-foreground/80">{state}</span>}
+        {!open && dotClass && <span className={`absolute right-0.5 top-1 h-1.5 w-1.5 rounded-full border border-background ${dotClass}`} />}
+      </button>
+      {open && (
+        <>
+          <span className="h-4 w-px bg-border" aria-hidden="true" />
+          {children}
+        </>
+      )}
+    </div>
+  )
+}
+
 const CAPABILITY_BUTTON_ATTRS: Partial<Record<WorkspaceViewId, { 'data-tour': string; 'data-testid': string }>> = {
   bots: { 'data-tour': 'bot-connector', 'data-testid': 'tour-bot-connector' },
 }
@@ -309,6 +361,14 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [showAccessPopup, setShowAccessPopup] = useState(false)
   const [workflowScheduleStats, setWorkflowScheduleStats] = useState<WorkflowScheduleStats>(EMPTY_WORKFLOW_SCHEDULE_STATS)
   const [manualPulseStarting, setManualPulseStarting] = useState(false)
+  const [openGroups, setOpenGroups] = useState<Record<ToolbarGroupId, boolean>>(() => readOpenGroups())
+  const toggleGroup = useCallback((group: ToolbarGroupId) => {
+    setOpenGroups(current => {
+      const next = { ...current, [group]: !current[group] }
+      try { localStorage.setItem(TOOLBAR_OPEN_GROUPS_KEY, JSON.stringify(next)) } catch { /* preference only */ }
+      return next
+    })
+  }, [])
 
   const runPulseNow = useCallback(async () => {
     if (!workspacePath || manualPulseStarting) return
@@ -570,6 +630,16 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     }
     return `Schedules · ${workflowScheduleStats.total === 1 ? 'Paused' : `All ${workflowScheduleStats.total} paused`}`
   }, [workflowScheduleStats])
+  const pulseAttentionDotClass = useMemo(() => {
+    const dots = [
+      workflowScheduleStats.issues > 0 ? 'bg-red-500' : workflowScheduleStats.missed > 0 ? 'bg-amber-500' : '',
+      getBackupDotClass(backupState),
+      getPublishDotClass(publishState),
+      getNotificationDotClass(notificationState),
+    ]
+    return dots.find(dot => dot.includes('bg-red')) ?? dots.find(dot => dot.includes('bg-amber')) ?? null
+  }, [backupState, notificationState, publishState, workflowScheduleStats.issues, workflowScheduleStats.missed])
+
   const scheduleStatusDotClass = workflowScheduleStats.issues > 0
     ? 'bg-red-500'
     : workflowScheduleStats.missed > 0
@@ -614,8 +684,14 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       <div data-tour="workflow-tools" data-testid="tour-workflow-tools" className="ml-auto flex shrink-0 items-center gap-1">
         <TooltipProvider delayDuration={150}>
           {workspacePath && (
-            <>
-              <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
+            <ToolbarGroup
+              label="Views"
+              state={workspaceViewDefinitions.find(view => view.id === activeWorkspaceView)?.label}
+              open={openGroups.views}
+              onToggle={() => toggleGroup('views')}
+              title={openGroups.views ? 'Hide views' : 'Show views: report, plan, costs, logs, learnings, knowledgebase, database, files'}
+            >
+              <div className="inline-flex h-full items-center gap-0.5 p-0.5">
                 {workspaceViewDefinitions.map(({ id: view, icon: Icon, label }) => {
                   const active = view === activeWorkspaceView
                   const viewButton = (
@@ -648,29 +724,33 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   )
                 })}
               </div>
-
-            </>
+            </ToolbarGroup>
           )}
 
           {/* Pulse is the operational hub for monitoring, schedules, backup,
               publishing, and notifications. */}
           {workspacePath && (
-            <div className="inline-flex h-8 items-center rounded-lg border border-border bg-background/90 shadow-sm backdrop-blur-sm">
+            <ToolbarGroup
+              label="Pulse"
+              state={monitorOn ? 'ON' : 'OFF'}
+              dotClass={pulseAttentionDotClass}
+              open={openGroups.pulse}
+              onToggle={() => toggleGroup('pulse')}
+              title={openGroups.pulse ? 'Hide Pulse tools' : 'Show Pulse tools: status, evaluation, schedules, run now, backup, publish, notify'}
+            >
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
                     type="button"
                     onClick={() => openWorkspaceView('pulse')}
-                    className="inline-flex h-full items-center gap-1.5 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted"
+                    className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    aria-label="Pulse status"
                   >
                     <Activity className={`h-3.5 w-3.5 ${monitorOn ? 'text-primary' : ''}`} />
-                    <span className={monitorOn ? 'text-foreground' : ''}>Pulse</span>
-                    <span className={`text-[10px] font-semibold tracking-wide ${monitorOn ? 'text-primary' : 'text-muted-foreground/60'}`}>{monitorOn ? 'ON' : 'OFF'}</span>
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom"><p>Pulse status and module cadence</p></TooltipContent>
               </Tooltip>
-              <span className="h-4 w-px bg-border" aria-hidden="true" />
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -758,7 +838,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 </TooltipTrigger>
                 <TooltipContent side="bottom"><p>Notify</p></TooltipContent>
               </Tooltip>
-            </div>
+            </ToolbarGroup>
           )}
 
         {/* Workflow Access (multi-user mode only, owners only) */}
@@ -778,7 +858,14 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
 
         {/* Workflow capabilities — write-only (read users don't see this) */}
         {canWriteWorkflow && (
-          <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
+          <ToolbarGroup
+            label="Setup"
+            state={capabilityViewDefinitions.find(view => view.id === workflowWorkspaceView)?.label}
+            open={openGroups.setup}
+            onToggle={() => toggleGroup('setup')}
+            title={openGroups.setup ? 'Hide setup' : 'Show setup: skills, secrets, MCP servers, browser, LLM, bots, folders'}
+          >
+          <div className="inline-flex h-full items-center gap-0.5 p-0.5">
             {capabilityViewDefinitions.map(({ id, icon: Icon, label }) => {
               const active = workflowWorkspaceView === id
               return (
@@ -793,6 +880,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
               )
             })}
           </div>
+          </ToolbarGroup>
         )}
 
         </TooltipProvider>
