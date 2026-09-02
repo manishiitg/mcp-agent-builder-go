@@ -425,23 +425,6 @@ func isScriptedExecutionModeConfig(cfg *AgentConfigs) bool {
 	return canonicalDeclaredExecutionMode(cfg.DeclaredExecutionMode) == StepModeScripted
 }
 
-// isOrchestratorScriptedEligible gates the todo_task fast path: the builder-authored
-// main.py is only run when the step declares scripted and has at least one
-// predefined route for the script to call. If either check fails the step runs as a
-// normal LLM orchestrator — the script is never attempted.
-// The orchestrator scripted path is read-only at runtime: the builder writes
-// main.py at design time, the runtime only runs it. There is no repair loop and no
-// save-back; any script failure falls back to the LLM orchestrator with a fresh start.
-func isOrchestratorScriptedEligible(step *TodoTaskPlanStep, cfg *AgentConfigs) bool {
-	if step == nil || !isScriptedExecutionModeConfig(cfg) {
-		return false
-	}
-	if len(step.PredefinedRoutes) == 0 {
-		return false
-	}
-	return true
-}
-
 func syncDeclaredExecutionModeConfig(cfg *AgentConfigs) {
 	if cfg == nil {
 		return
@@ -1327,7 +1310,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 		// not in the central workspace registry; use the active shell/diff/text/search tools.
 		"execute_shell_command", "diff_patch_workspace_file",
 		"generate_text_llm", "search_web_llm",
-		"query_workflow_db", "mutate_workflow_db", "apply_workflow_db_migration",
+		"query_workflow_db", "mutate_workflow_db", "apply_workflow_db_migration", "create_workflow_database_snapshot",
 		// PLAT-184. This workflow's own per-workspace cost ledger.
 		"query_workflow_costs",
 		// Secret management tools. Global secrets are read-only; workflow/user
@@ -2265,6 +2248,28 @@ func resolveWorkshopStepConfigTarget(ctx context.Context, controller *StepBasedW
 	}
 
 	return "", "", false, fmt.Errorf("step %q not found in planning/plan.json or evaluation/evaluation_plan.json", inputID)
+}
+
+// workshopPlanStepType returns the plan step type for a workflow (non-evaluation)
+// step ID, or "" when the plan cannot be loaded or the step is not in it. It
+// mirrors resolveWorkshopStepConfigTarget's save/restore of controller state so a
+// lookup never leaves the controller pointed at a different plan.
+func workshopPlanStepType(ctx context.Context, controller *StepBasedWorkflowOrchestrator, stepID string) StepType {
+	originalEvalMode := controller.isEvaluationMode
+	originalPlan := controller.approvedPlan
+	defer func() {
+		controller.isEvaluationMode = originalEvalMode
+		controller.approvedPlan = originalPlan
+	}()
+	controller.isEvaluationMode = false
+	if err := controller.LoadPlanForWorkshop(ctx); err != nil || controller.approvedPlan == nil {
+		return ""
+	}
+	info := findWorkshopStepByID(controller.approvedPlan.Steps, stepID)
+	if info == nil || info.Step == nil {
+		return ""
+	}
+	return info.Step.StepType()
 }
 
 // registerInteractiveWorkshopTools registers the custom workshop tools on the agent.
@@ -3923,6 +3928,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if s, ok := val.(string); ok && s != "" {
 					if err := validateDeclaredExecutionModeChange(s, targetConfig.AgentConfigs.DeclaredExecutionModeReason); err != nil {
 						return "", err
+					}
+					if canonicalDeclaredExecutionMode(s) == StepModeScripted && !isEvalStep &&
+						workshopPlanStepType(ctx, iwm.controller, stepID) == StepTypeTodoTask {
+						return "", fmt.Errorf("declared_execution_mode=\"scripted\" is not supported on orchestrator (todo_task) step %q: an orchestrator exists to make runtime delegation decisions, and delegation that is deterministic enough to script belongs in a regular scripted step whose main.py calls the routes", stepID)
 					}
 					targetConfig.AgentConfigs.DeclaredExecutionMode = s
 				}

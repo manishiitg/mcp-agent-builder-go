@@ -301,8 +301,8 @@ func TestTodoTaskEligibilityStaysConsistentAcrossGuidance(t *testing.T) {
 
 	for _, kind := range []string{"todo-task", "optimize-playbook"} {
 		doc := RenderSystemDoc(kind)
-		if !strings.Contains(doc, "already-justified orchestrator") {
-			t.Fatalf("%s scripted fast-path guidance can be mistaken for todo_task eligibility", kind)
+		if strings.Contains(doc, "Scripted-mode todo_task") || strings.Contains(doc, "Orchestrator scripted mode (deterministic delegation") {
+			t.Fatalf("%s still documents the removed orchestrator scripted fast path", kind)
 		}
 	}
 }

@@ -185,31 +185,6 @@ needs to work a long, multi-phase task as a continuous conversation ("do phase
   multiple orchestrators only when its `shared_with.orchestrator_ids`
   explicitly lists each one. Don't assume reuse is automatic.
 
-## Scripted-mode todo_task (fast-path orchestrator)
-
-When the orchestrator's routing decisions are **stable and
-deterministic** — the set of route calls is known in advance and only
-branches on success/failure — you can author a
-`learnings/{step-id}/main.py` and mark the step
-`declared_execution_mode="scripted"` when the user explicitly asks
-(don't auto-promote on your own). 10+ scenario-covering successful runs
-proving the route behavior is stable are the bar for freezing it
-(`lock_code`), not for creating the scripted route the user requested.
-
-At runtime the script runs first; any failure falls back to the normal
-LLM orchestrator with a fresh start. The orchestrator scripted path is
-**read-only at runtime** — the builder writes main.py once at design
-time, the runtime only runs it. There is no fix loop and no save-back.
-Script failures surface so you can regenerate `main.py` manually.
-
-This is an optimization for an already-justified orchestrator whose delegation
-later stabilized. It is not permission to create a `todo_task` merely because a
-fixed child sequence can be scripted.
-
-For the full scripted-orchestrator authoring rules, call
-`read_skill(skills=[{"name":"builder-reference","path":"references/optimize-playbook.md"}])` and read the
-"Orchestrator scripted mode" section.
-
 ## Tools
 
 - `add_todo_task_step(step_id, description, todo_task_step, ...)` — add
