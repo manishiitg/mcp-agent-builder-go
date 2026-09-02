@@ -472,6 +472,10 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   const useManagedDefaults = () => {
     if (!selectedProfile) return
     onChange({ schema_version: 2, mode: 'provider_profile', provider: selectedProfile.provider as LLMProvider })
+    // Back on the provider's defaults there is nothing per-role left to look
+    // at, so fold the section (and remember it folded).
+    setRolesOpen(false)
+    writeRolesOpen(false)
   }
 
   // Pinning any one role switches the workflow from the managed provider
