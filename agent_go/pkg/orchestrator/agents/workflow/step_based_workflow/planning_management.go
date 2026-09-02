@@ -77,7 +77,7 @@ func validatePlanStepIDsAtPath(steps []PlanStepInterface, pathPrefix string) err
 		if err := validateRoutingStepTyped(step, i); err != nil {
 			return err
 		}
-		if todo, ok := step.(*TodoTaskPlanStep); ok {
+		if todo, ok := step.(*OrchestratorPlanStep); ok {
 			for routeIndex, route := range todo.PredefinedRoutes {
 				if route.SubAgentStep == nil {
 					continue
@@ -110,7 +110,7 @@ func collectStepIDsRecursive(steps []PlanStepInterface, pathPrefix string, seen 
 			}
 			seen[id] = thisLoc
 		}
-		if todo, ok := step.(*TodoTaskPlanStep); ok {
+		if todo, ok := step.(*OrchestratorPlanStep); ok {
 			for routeIndex, route := range todo.PredefinedRoutes {
 				if route.SubAgentStep == nil {
 					continue
@@ -203,8 +203,8 @@ func validateLoadedPlanStepWithOptions(typedStep PlanStepInterface, stepIndex in
 		}
 		return nil
 
-	case *TodoTaskPlanStep:
-		if err := validateTodoTaskStepFieldsTyped(step); err != nil {
+	case *OrchestratorPlanStep:
+		if err := validateOrchestratorStepFieldsTyped(step); err != nil {
 			return err
 		}
 		for i, route := range step.PredefinedRoutes {
@@ -354,7 +354,7 @@ func collectKnownStepIDs(plan *PlanningResponse) map[string]struct{} {
 				out[id] = struct{}{}
 			}
 			switch s := step.(type) {
-			case *TodoTaskPlanStep:
+			case *OrchestratorPlanStep:
 				for _, route := range s.PredefinedRoutes {
 					if route.SubAgentStep != nil {
 						walk([]PlanStepInterface{route.SubAgentStep})
@@ -401,7 +401,7 @@ func validateNextStepIDReferences(plan *PlanningResponse) error {
 				for _, route := range s.Routes {
 					ref(s.GetID(), fmt.Sprintf("route %q.next_step_id", route.RouteID), route.NextStepID)
 				}
-			case *TodoTaskPlanStep:
+			case *OrchestratorPlanStep:
 				ref(s.GetID(), "next_step_id", s.NextStepID)
 				for _, route := range s.PredefinedRoutes {
 					if route.SubAgentStep != nil {
@@ -583,7 +583,7 @@ func populateRuntimeFields(typedStep PlanStepInterface, stepConfigs []StepConfig
 		}
 		return nil
 
-	case *TodoTaskPlanStep:
+	case *OrchestratorPlanStep:
 		// Populate sub-agent steps in predefined routes recursively
 		for i := range step.PredefinedRoutes {
 			route := &step.PredefinedRoutes[i]

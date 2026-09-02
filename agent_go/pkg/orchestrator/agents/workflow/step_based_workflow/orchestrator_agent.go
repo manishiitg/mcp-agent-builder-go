@@ -14,8 +14,8 @@ import (
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
-// Pre-parsed templates for TodoTask orchestrator agent - panics at startup if invalid
-var todoTaskOrchestratorSystemTemplate = MustRegisterTemplate("todoTaskOrchestratorSystem", `# Task Orchestrator
+// Pre-parsed templates for Orchestrator orchestrator agent - panics at startup if invalid
+var orchestratorSystemTemplate = MustRegisterTemplate("orchestratorSystem", `# Task Orchestrator
 **Session**: {{.CurrentDate}} {{.CurrentTime}}
 
 ## Role & Objective
@@ -243,7 +243,7 @@ emit a separate concern protocol. End with exactly one final status line:
 
 `)
 
-var todoTaskOrchestratorUserTemplate = MustRegisterTemplate("todoTaskOrchestratorUser", `## Step: {{.StepTitle}}
+var orchestratorUserTemplate = MustRegisterTemplate("orchestratorUser", `## Step: {{.StepTitle}}
 
 {{.StepDescription}}
 
@@ -269,34 +269,34 @@ Fix the issues above — ensure all required output files are generated in the s
 
 Execute the step objective. Use sub-agents for specialized tasks and direct execution for everything else. Run all tasks to completion.`)
 
-// WorkflowTodoTaskOrchestratorAgent executes the main todo task orchestration step
+// WorkflowOrchestratorAgent executes the main todo task orchestration step
 // This agent manages a todo list and delegates work to predefined or generic sub-agents
-type WorkflowTodoTaskOrchestratorAgent struct {
+type WorkflowOrchestratorAgent struct {
 	*agents.BaseOrchestratorAgent
 }
 
-// NewWorkflowTodoTaskOrchestratorAgent creates a new todo task orchestrator agent
-func NewWorkflowTodoTaskOrchestratorAgent(
+// NewWorkflowOrchestratorAgent creates a new todo task orchestrator agent
+func NewWorkflowOrchestratorAgent(
 	config *agents.OrchestratorAgentConfig,
 	logger loggerv2.Logger,
 	tracer observability.Tracer,
 	eventBridge mcpagent.AgentEventListener,
-) *WorkflowTodoTaskOrchestratorAgent {
+) *WorkflowOrchestratorAgent {
 	baseAgent := agents.NewBaseOrchestratorAgentWithEventBridge(
 		config,
 		logger,
 		tracer,
-		agents.TodoTaskOrchestratorAgentType,
+		agents.OrchestratorAgentType,
 		eventBridge,
 	)
 
-	return &WorkflowTodoTaskOrchestratorAgent{
+	return &WorkflowOrchestratorAgent{
 		BaseOrchestratorAgent: baseAgent,
 	}
 }
 
-// TodoTaskOrchestratorTemplate holds template variables for todo task orchestrator agent prompts
-type TodoTaskOrchestratorTemplate struct {
+// OrchestratorTemplate holds template variables for todo task orchestrator agent prompts
+type OrchestratorTemplate struct {
 	StepTitle               string
 	StepDescription         string
 	StepSuccessCriteria     string
@@ -314,14 +314,14 @@ type TodoTaskOrchestratorTemplate struct {
 
 // Execute implements the OrchestratorAgent interface
 // The agent delegates work to sub-agents via tools and runs to completion in a single shot.
-func (agent *WorkflowTodoTaskOrchestratorAgent) Execute(
+func (agent *WorkflowOrchestratorAgent) Execute(
 	ctx context.Context,
 	templateVars map[string]string,
 	conversationHistory []llmtypes.MessageContent,
 ) (string, []llmtypes.MessageContent, error) {
 	// Generate system prompt and user message
-	systemPrompt := agent.todoTaskOrchestratorSystemPromptProcessor(templateVars)
-	userMessage := agent.todoTaskOrchestratorUserMessageProcessor(templateVars, conversationHistory)
+	systemPrompt := agent.orchestratorSystemPromptProcessor(templateVars)
+	userMessage := agent.orchestratorUserMessageProcessor(templateVars, conversationHistory)
 
 	// Create input processor
 	inputProcessor := func(map[string]string) string {
@@ -345,8 +345,8 @@ func (agent *WorkflowTodoTaskOrchestratorAgent) Execute(
 	return result, updatedHistory, nil
 }
 
-// todoTaskOrchestratorSystemPromptProcessor generates the system prompt for todo task orchestrator agent
-func (agent *WorkflowTodoTaskOrchestratorAgent) todoTaskOrchestratorSystemPromptProcessor(templateVars map[string]string) string {
+// orchestratorSystemPromptProcessor generates the system prompt for todo task orchestrator agent
+func (agent *WorkflowOrchestratorAgent) orchestratorSystemPromptProcessor(templateVars map[string]string) string {
 	now := time.Now()
 	learningHistory := templateVars["LearningHistory"]
 	var config *agents.OrchestratorAgentConfig
@@ -395,14 +395,14 @@ func (agent *WorkflowTodoTaskOrchestratorAgent) todoTaskOrchestratorSystemPrompt
 	}
 
 	var result strings.Builder
-	if err := todoTaskOrchestratorSystemTemplate.Execute(&result, templateData); err != nil {
+	if err := orchestratorSystemTemplate.Execute(&result, templateData); err != nil {
 		panic(fmt.Sprintf("todo task orchestrator system prompt template execution failed (missing variable?): %v", err))
 	}
 	return result.String()
 }
 
-// todoTaskOrchestratorUserMessageProcessor generates the user message for todo task orchestrator agent
-func (agent *WorkflowTodoTaskOrchestratorAgent) todoTaskOrchestratorUserMessageProcessor(
+// orchestratorUserMessageProcessor generates the user message for todo task orchestrator agent
+func (agent *WorkflowOrchestratorAgent) orchestratorUserMessageProcessor(
 	templateVars map[string]string,
 	conversationHistory []llmtypes.MessageContent,
 ) string {
@@ -422,7 +422,7 @@ func (agent *WorkflowTodoTaskOrchestratorAgent) todoTaskOrchestratorUserMessageP
 	}
 
 	var result strings.Builder
-	if err := todoTaskOrchestratorUserTemplate.Execute(&result, templateData); err != nil {
+	if err := orchestratorUserTemplate.Execute(&result, templateData); err != nil {
 		panic(fmt.Sprintf("todo task orchestrator user message template execution failed (missing variable?): %v", err))
 	}
 	return result.String()

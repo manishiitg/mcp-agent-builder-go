@@ -18,7 +18,7 @@ import (
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
-func (hcpo *StepBasedWorkflowOrchestrator) getTodoTaskExecutionWorkspacePath() string {
+func (hcpo *StepBasedWorkflowOrchestrator) getOrchestratorExecutionWorkspacePath() string {
 	baseWorkspacePath := hcpo.GetWorkspacePath()
 	if hcpo.selectedRunFolder != "" {
 		return filepath.Join(baseWorkspacePath, "runs", hcpo.selectedRunFolder, "execution")
@@ -26,11 +26,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) getTodoTaskExecutionWorkspacePath() s
 	return filepath.Join(baseWorkspacePath, "execution")
 }
 
-func (hcpo *StepBasedWorkflowOrchestrator) getTodoTaskStepExecutionPath(stepID, stepPath string) string {
-	return getExecutionFolderPath(hcpo.getTodoTaskExecutionWorkspacePath(), stepID, stepPath)
+func (hcpo *StepBasedWorkflowOrchestrator) getOrchestratorStepExecutionPath(stepID, stepPath string) string {
+	return getExecutionFolderPath(hcpo.getOrchestratorExecutionWorkspacePath(), stepID, stepPath)
 }
 
-// executeTodoTaskStep executes a todo task step by:
+// executeOrchestratorStep executes a todo task step by:
 //  1. The orchestrator LLM delegates to sub-agents and/or executes directly
 //  2. Processing tool calls:
 //     - call_sub_agent: Delegate to predefined sub-agents (with learning/prevalidation)
@@ -40,7 +40,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) getTodoTaskStepExecutionPath(stepID, 
 //  5. Return success status and next step ID
 //
 // Returns: (successCriteriaMet bool, nextStepID string, error)
-func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
+func (hcpo *StepBasedWorkflowOrchestrator) executeOrchestratorStep(
 	ctx context.Context,
 	step PlanStepInterface,
 	stepIndex int,
@@ -52,18 +52,18 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	allSteps []PlanStepInterface,
 	stepPath string,
 ) (bool, string, error) {
-	// Cast to TodoTaskPlanStep
-	todoTaskStep, ok := step.(*TodoTaskPlanStep)
+	// Cast to OrchestratorPlanStep
+	orchestratorStep, ok := step.(*OrchestratorPlanStep)
 	if !ok {
-		return false, "", fmt.Errorf("step is not a TodoTaskPlanStep")
+		return false, "", fmt.Errorf("step is not a OrchestratorPlanStep")
 	}
 
 	hcpo.GetLogger().Info(fmt.Sprintf("🎯 Executing todo task step %d: %s", stepIndex+1, step.GetTitle()))
 
 	// Use provided stepPath or generate from stepIndex
-	todoTaskStepPath := stepPath
-	if todoTaskStepPath == "" {
-		todoTaskStepPath = fmt.Sprintf("step-%d", stepIndex+1)
+	orchestratorStepPath := stepPath
+	if orchestratorStepPath == "" {
+		orchestratorStepPath = fmt.Sprintf("step-%d", stepIndex+1)
 	}
 
 	// Setup folder guard for todo task orchestrator agent
@@ -77,8 +77,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	// Build paths for folder guard
 	// All paths should include the workspace prefix (e.g., Workflow/codeanalysis/...)
 
-	executionWorkspacePath := hcpo.getTodoTaskExecutionWorkspacePath()
-	stepExecutionPath := hcpo.getTodoTaskStepExecutionPath(stepID, todoTaskStepPath)
+	executionWorkspacePath := hcpo.getOrchestratorExecutionWorkspacePath()
+	stepExecutionPath := hcpo.getOrchestratorStepExecutionPath(stepID, orchestratorStepPath)
 	// DB folder: Workflow/codeanalysis/db/ (structured JSON data, always enabled, shared across runs)
 	dbPath := getDBPath(baseWorkspacePath)
 	skillStepConfig := getAgentConfigs(step)
@@ -143,7 +143,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	}
 
 	// Emit step_started event
-	hcpo.emitStepStartedEvent(ctx, step, stepIndex, todoTaskStepPath)
+	hcpo.emitStepStartedEvent(ctx, step, stepIndex, orchestratorStepPath)
 
 	// Keep only the latest iteration conversation history in-memory.
 	// Todo-task state should come from current files (outputs, tool results),
@@ -156,7 +156,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 		}
 	}()
 
-	stepConfig := getAgentConfigs(todoTaskStep)
+	stepConfig := getAgentConfigs(orchestratorStep)
 
 	// Orchestrator steps have no scripted fast path. A fast_path_only request for one is a
 	// caller error rather than something to silently run through the LLM orchestrator.
@@ -166,7 +166,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 
 	// Learnings read gate — default-on unless learnings_access="none" or routing/eval.
 	// Todo-task agents benefit from seeing _global/SKILL.md to reuse cross-step knowledge.
-	isLearningDisabled := !canReadLearnings(stepConfig, todoTaskStep, hcpo.isEvaluationMode)
+	isLearningDisabled := !canReadLearnings(stepConfig, orchestratorStep, hcpo.isEvaluationMode)
 	select {
 	case <-ctx.Done():
 		return false, "", fmt.Errorf("todo task execution canceled: %w", ctx.Err())
@@ -180,11 +180,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	// The orchestrator's own prompt variables: routes catalog, dependencies, stores,
 	// folder guard, validation schema, human input. Built once; every turn of the
 	// sequence reuses them (follow-up turns only swap in their message).
-	templateVars := hcpo.buildTodoTaskOrchestratorTemplateVars(
+	templateVars := hcpo.buildOrchestratorTemplateVars(
 		ctx,
-		todoTaskStep,
+		orchestratorStep,
 		stepIndex,
-		todoTaskStepPath,
+		orchestratorStepPath,
 		previousContextFiles,
 		previousExecutionResults,
 		allSteps,
@@ -192,11 +192,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 		execCtx,
 	)
 
-	agentName := todoTaskStep.Title
+	agentName := orchestratorStep.Title
 	if agentName == "" {
 		agentName = fmt.Sprintf("todo-task-orchestrator-step-%d", stepIndex+1)
 	}
-	llmConfig := hcpo.selectTodoTaskOrchestratorLLM(ctx, stepConfig, stepID, todoTaskStepPath)
+	llmConfig := hcpo.selectOrchestratorLLM(ctx, stepConfig, stepID, orchestratorStepPath)
 	if llmConfig == nil {
 		return false, "", fmt.Errorf("no valid LLM configuration found for todo task orchestrator")
 	}
@@ -217,9 +217,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 		humanInputs = execCtx.HumanInputs
 	}
 	subAgentExecCtx := &SubAgentExecutionContext{
-		TodoTaskStep:          todoTaskStep,
+		OrchestratorStep:          orchestratorStep,
 		StepIndex:             stepIndex,
-		StepPath:              todoTaskStepPath,
+		StepPath:              orchestratorStepPath,
 		AllSteps:              allSteps,
 		Progress:              progress,
 		StepConfig:            stepConfig, // Pass step config for sub_agent_llm override
@@ -230,13 +230,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	}
 
 	createAgent := func(agentCtx context.Context) (orchestratoragents.OrchestratorAgent, error) {
-		agent, err := hcpo.createTodoTaskOrchestratorAgent(
+		agent, err := hcpo.createOrchestratorAgent(
 			agentCtx,
 			"todo_task", // phase
 			stepIndex,   // step
 			0,           // iteration
 			stepID,
-			todoTaskStepPath,
+			orchestratorStepPath,
 			agentName,
 			stepConfig,
 			llmConfig,
@@ -258,10 +258,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 			}
 		}
 		// Pre-save prompts.json so get_step_prompts works during execution, not just after.
-		if todoAgent, ok := agent.(*WorkflowTodoTaskOrchestratorAgent); ok {
-			preSystemPrompt := todoAgent.todoTaskOrchestratorSystemPromptProcessor(templateVars)
-			preUserMessage := todoAgent.todoTaskOrchestratorUserMessageProcessor(templateVars, nil)
-			hcpo.preSavePromptsJSON(stepIndex, stepID, todoTaskStepPath, "todo_task_orchestrator", preSystemPrompt, preUserMessage, executionLLM, "todo-task-prompts.json")
+		if todoAgent, ok := agent.(*WorkflowOrchestratorAgent); ok {
+			preSystemPrompt := todoAgent.orchestratorSystemPromptProcessor(templateVars)
+			preUserMessage := todoAgent.orchestratorUserMessageProcessor(templateVars, nil)
+			hcpo.preSavePromptsJSON(stepIndex, stepID, orchestratorStepPath, "todo_task_orchestrator", preSystemPrompt, preUserMessage, executionLLM, "todo-task-prompts.json")
 		}
 		return agent, nil
 	}
@@ -280,7 +280,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	// stepLogs.todo_task populated; keep writing it. Turn N lands as iteration N-1 so
 	// the opening turn keeps today's file name.
 	logTurn := func(logCtx context.Context, turnNumber int, turnLLM string, history []llmtypes.MessageContent, toolCalls []orchestrator.ToolCallEntry, llmCalls []orchestrator.LLMCallEntry, startedAt, completedAt time.Time) {
-		hcpo.saveTodoTaskExecutionLog(logCtx, stepID, todoTaskStepPath, 1, turnNumber-1, turnLLM, history, toolCalls, llmCalls, startedAt, completedAt, completedAt.Sub(startedAt), "")
+		hcpo.saveOrchestratorExecutionLog(logCtx, stepID, orchestratorStepPath, 1, turnNumber-1, turnLLM, history, toolCalls, llmCalls, startedAt, completedAt, completedAt.Sub(startedAt), "")
 	}
 
 	// Run the orchestrator on the message_sequence executor: the opening turn is the
@@ -288,14 +288,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	// the step's scripted messages, the synthetic final validation gate, and the
 	// closing reflection turn. Repairs happen in place with full memory (the
 	// prevalidation repair loop) instead of restarting the whole step.
-	items := make([]MessageSequenceItem, 0, len(todoTaskStep.Messages)+1)
+	items := make([]MessageSequenceItem, 0, len(orchestratorStep.Messages)+1)
 	items = append(items, MessageSequenceItem{
 		ID:      stepID + "-opening",
 		Type:    "user_message",
 		Kind:    "execution",
 		Message: templateVars["StepDescription"],
 	})
-	for _, m := range todoTaskStep.Messages {
+	for _, m := range orchestratorStep.Messages {
 		if t := strings.TrimSpace(m.Type); t == "message" {
 			m.Type = "user_message"
 		}
@@ -303,10 +303,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	}
 	sequenceStep := &MessageSequencePlanStep{
 		Type:             StepTypeMessageSeq,
-		CommonStepFields: todoTaskStep.CommonStepFields,
+		CommonStepFields: orchestratorStep.CommonStepFields,
 		Items:            items,
-		NextStepID:       todoTaskStep.NextStepID,
-		AgentConfigs:     todoTaskStep.AgentConfigs,
+		NextStepID:       orchestratorStep.NextStepID,
+		AgentConfigs:     orchestratorStep.AgentConfigs,
 	}
 	opts := messageSequenceCallOptions{
 		Source: "configured_queue",
@@ -319,7 +319,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 			LogTurn:     logTurn,
 		},
 	}
-	_, history, err := hcpo.executeMessageSequenceStep(ctx, sequenceStep, stepIndex, todoTaskStepPath, progress, execCtx, allSteps, opts)
+	_, history, err := hcpo.executeMessageSequenceStep(ctx, sequenceStep, stepIndex, orchestratorStepPath, progress, execCtx, allSteps, opts)
 	conversationHistory = history
 	if err != nil {
 		if ctx.Err() != nil {
@@ -329,9 +329,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 	}
 
 	hcpo.GetLogger().Info("✅ Todo task step complete")
-	hcpo.emitTodoTaskStepCompletedEvent(ctx, step, stepIndex, todoTaskStepPath, 1, "Execution completed", todoTaskStep.NextStepID)
-	hcpo.emitStepFinishedEvent(ctx, step, stepIndex, todoTaskStepPath)
-	return true, todoTaskStep.NextStepID, nil
+	hcpo.emitOrchestratorStepCompletedEvent(ctx, step, stepIndex, orchestratorStepPath, 1, "Execution completed", orchestratorStep.NextStepID)
+	hcpo.emitStepFinishedEvent(ctx, step, stepIndex, orchestratorStepPath)
+	return true, orchestratorStep.NextStepID, nil
 }
 
 func formatMessageSequenceRoutePromptBlock(step PlanStepInterface) string {
@@ -346,10 +346,10 @@ Re-entry: later call_sub_agent instructions are sent as the next user message in
 Start fresh: set message_sequence_restart=true to archive the existing route session and replay the configured queue`)
 }
 
-// buildTodoTaskOrchestratorTemplateVars builds template variables for the orchestrator agent
-func (hcpo *StepBasedWorkflowOrchestrator) buildTodoTaskOrchestratorTemplateVars(
+// buildOrchestratorTemplateVars builds template variables for the orchestrator agent
+func (hcpo *StepBasedWorkflowOrchestrator) buildOrchestratorTemplateVars(
 	ctx context.Context,
-	step *TodoTaskPlanStep,
+	step *OrchestratorPlanStep,
 	stepIndex int,
 	stepPath string,
 	previousContextFiles []string,
@@ -367,7 +367,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildTodoTaskOrchestratorTemplateVars
 		fmt.Fprintf(&routesBuilder, "- **%s** (`%s`) — %s", ResolveVariables(route.RouteName, hcpo.variableValues), route.RouteID, routeStepTypeSummary(route.SubAgentStep))
 		if route.SubAgentStep != nil {
 			subStepPath := todoSubAgentArtifactFolderName(stepPath, route.RouteID, "<todo_id>")
-			subExecRelPath := getExecutionFolderPath(hcpo.getTodoTaskExecutionWorkspacePath(), "", subStepPath)
+			subExecRelPath := getExecutionFolderPath(hcpo.getOrchestratorExecutionWorkspacePath(), "", subStepPath)
 			subExecAbsPath := filepath.Join(GetPromptDocsRoot(), subExecRelPath)
 			contextOutput := strings.TrimSpace(ResolveVariables(route.SubAgentStep.GetContextOutput().String(), hcpo.variableValues))
 			if contextOutput != "" {
@@ -386,7 +386,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildTodoTaskOrchestratorTemplateVars
 	if stepID == "" {
 		stepID = fmt.Sprintf("step-%d", stepIndex+1)
 	}
-	executionPath := hcpo.getTodoTaskStepExecutionPath(stepID, stepPath)
+	executionPath := hcpo.getOrchestratorStepExecutionPath(stepID, stepPath)
 	shellWorkingDirectory := filepath.Join(GetPromptDocsRoot(), executionPath)
 
 	// Get step config for code execution mode: step config > workflow/preset default
@@ -399,9 +399,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildTodoTaskOrchestratorTemplateVars
 	learningsAccess := resolveExecutionLearningsAccess(stepConfig, step, hcpo.isEvaluationMode)
 	useKnowledgebase := kbAccess != KBAccessNone
 
-	// Build folder guard paths for prompt (same logic as executeTodoTaskStep setup)
+	// Build folder guard paths for prompt (same logic as executeOrchestratorStep setup)
 	docsRoot := GetPromptDocsRoot()
-	fgExecPath := hcpo.getTodoTaskExecutionWorkspacePath()
+	fgExecPath := hcpo.getOrchestratorExecutionWorkspacePath()
 	fgGlobalLearningsPath := filepath.Join(baseWorkspacePath, "learnings", GlobalLearningID)
 	fgKnowledgebasePath := getKnowledgebasePath(baseWorkspacePath)
 	fgDBPath := getDBPath(baseWorkspacePath)
@@ -518,7 +518,7 @@ func routeStepTypeSummary(step PlanStepInterface) string {
 	switch step.StepType() {
 	case StepTypeMessageSeq:
 		return "type: message_sequence, stateful sequence worker"
-	case StepTypeTodoTask:
+	case StepTypeOrchestrator:
 		return "type: todo_task, nested orchestrator"
 	case StepTypeRegular:
 		return "type: regular, stateless worker"
@@ -540,20 +540,20 @@ func routeStepBehaviorDetails(step PlanStepInterface) string {
 		return "Stateful sequence worker. First call sends the configured item queue with the provided instructions as initial context. Later calls resume the same saved conversation and send instructions as the re-entry user message. Set message_sequence_restart=true to archive the existing route session and replay the queue from the beginning."
 	case StepTypeRegular:
 		return "Stateless worker. Each call executes the task as a normal one-off step."
-	case StepTypeTodoTask:
+	case StepTypeOrchestrator:
 		return "Nested orchestrator. It manages its own sub-tasks and routes."
 	default:
 		return fmt.Sprintf("Route step type: %s.", step.StepType())
 	}
 }
 
-// selectTodoTaskOrchestratorLLM selects the LLM config for todo task orchestrator.
+// selectOrchestratorLLM selects the LLM config for todo task orchestrator.
 //
 // Priority:
 //  1. step config ExecutionLLM — explicit override always wins (same knob used for
 //     regular step execution; sub-agents spawned by this orchestrator inherit it too)
 //  2. Tier 1 (High) — default for orchestrator (returns nil if tier resolver is unavailable)
-func (hcpo *StepBasedWorkflowOrchestrator) selectTodoTaskOrchestratorLLM(
+func (hcpo *StepBasedWorkflowOrchestrator) selectOrchestratorLLM(
 	ctx context.Context,
 	stepConfig *AgentConfigs,
 	stepID string,
@@ -581,13 +581,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) selectTodoTaskOrchestratorLLM(
 	// int where every other tier is a string enum, so it bypassed tier validation and
 	// PLAT-060's required-reason path. Use execution_llm to override.
 	if hcpo.tierResolver == nil {
-		hcpo.GetLogger().Warn(fmt.Sprintf("selectTodoTaskOrchestratorLLM: tier resolver is nil for step %s — returning nil so caller surfaces a user-visible error", stepPath))
+		hcpo.GetLogger().Warn(fmt.Sprintf("selectOrchestratorLLM: tier resolver is nil for step %s — returning nil so caller surfaces a user-visible error", stepPath))
 		return nil
 	}
 	tier := TierHigh
 	llmConfig := hcpo.tierResolver.ResolveTier(tier)
 	if llmConfig == nil {
-		hcpo.GetLogger().Warn(fmt.Sprintf("selectTodoTaskOrchestratorLLM: tier resolver returned nil for Tier %d (%s) on step %s", int(tier), TierLevelLabel(tier), stepPath))
+		hcpo.GetLogger().Warn(fmt.Sprintf("selectOrchestratorLLM: tier resolver returned nil for Tier %d (%s) on step %s", int(tier), TierLevelLabel(tier), stepPath))
 		return nil
 	}
 	hcpo.GetLogger().Info(fmt.Sprintf("🏷️ [TIERED] Todo task orchestrator using Tier %d (%s): %s/%s",
@@ -603,10 +603,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) selectTodoTaskOrchestratorLLM(
 // All task input comes from response (tool parameters), not from files
 func (hcpo *StepBasedWorkflowOrchestrator) executeGenericAgent(
 	ctx context.Context,
-	step *TodoTaskPlanStep,
+	step *OrchestratorPlanStep,
 	stepIndex int,
 	stepPath string,
-	response *TodoTaskResponse,
+	response *OrchestratorDecision,
 	allSteps []PlanStepInterface,
 	progress *StepProgress,
 ) (string, []llmtypes.MessageContent, error) {
@@ -837,7 +837,7 @@ func cloneStepWithDelegationOverrides(
 		stepCopy := *s
 		applyDelegationOverridesToCommonFields(&stepCopy.CommonStepFields, instructions)
 		return &stepCopy, nil
-	case *TodoTaskPlanStep:
+	case *OrchestratorPlanStep:
 		stepCopy := *s
 		applyDelegationOverridesToCommonFields(&stepCopy.CommonStepFields, instructions)
 		return &stepCopy, nil
@@ -865,8 +865,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeRoutedSubAgentStep(
 		localExecCtx = &execCtxCopy
 	}
 
-	if isTodoTaskStep(stepToExecute) {
-		successCriteriaMet, _, err := hcpo.executeTodoTaskStep(
+	if isOrchestratorStep(stepToExecute) {
+		successCriteriaMet, _, err := hcpo.executeOrchestratorStep(
 			ctx,
 			stepToExecute,
 			stepIndex,
@@ -885,12 +885,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeRoutedSubAgentStep(
 			return "", capturedHistory, fmt.Errorf("nested todo task step did not complete successfully")
 		}
 
-		if todoTaskStep, ok := stepToExecute.(*TodoTaskPlanStep); ok && todoTaskStep.TodoTaskResponse != nil {
-			if todoTaskStep.TodoTaskResponse.CompletionReason != "" {
-				return todoTaskStep.TodoTaskResponse.CompletionReason, capturedHistory, nil
+		if orchestratorStep, ok := stepToExecute.(*OrchestratorPlanStep); ok && orchestratorStep.OrchestratorDecision != nil {
+			if orchestratorStep.OrchestratorDecision.CompletionReason != "" {
+				return orchestratorStep.OrchestratorDecision.CompletionReason, capturedHistory, nil
 			}
-			if todoTaskStep.TodoTaskResponse.ProgressSummary != "" {
-				return todoTaskStep.TodoTaskResponse.ProgressSummary, capturedHistory, nil
+			if orchestratorStep.OrchestratorDecision.ProgressSummary != "" {
+				return orchestratorStep.OrchestratorDecision.ProgressSummary, capturedHistory, nil
 			}
 		}
 
@@ -954,10 +954,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeRoutedSubAgentStep(
 // This uses the same execution pattern as orchestration steps (with learning/prevalidation)
 func (hcpo *StepBasedWorkflowOrchestrator) executePredefinedSubAgent(
 	ctx context.Context,
-	step *TodoTaskPlanStep,
+	step *OrchestratorPlanStep,
 	stepIndex int,
 	stepPath string,
-	response *TodoTaskResponse,
+	response *OrchestratorDecision,
 	allSteps []PlanStepInterface,
 	progress *StepProgress,
 	humanInputs map[string]string,
@@ -994,7 +994,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executePredefinedSubAgent(
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to clone delegated sub-agent step: %w", err)
 	}
-	if err := validateTodoTaskNestingDepth(stepToExecute, strings.Count(stepPath, "-sub-")+1); err != nil {
+	if err := validateOrchestratorNestingDepth(stepToExecute, strings.Count(stepPath, "-sub-")+1); err != nil {
 		return "", nil, fmt.Errorf("route %s exceeds supported todo_task nesting depth: %w", response.SelectedRouteID, err)
 	}
 
@@ -1029,7 +1029,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executePredefinedSubAgent(
 	// Carrying the whole map forward, not just this one lookup, also means a
 	// route that is itself a nested todo_task can resolve ITS OWN routes'
 	// entries the identical way — nesting depth already caps how far this goes
-	// (validateTodoTaskNestingDepth).
+	// (validateOrchestratorNestingDepth).
 	execCtx := executionContextForStep(&ExecutionContext{HumanInputs: humanInputs}, stepToExecute.GetID())
 	execCtx.SkipHumanInput = true // Sub-agents don't request human feedback
 	execCtx.RunSingleStepOnly = false
@@ -1112,14 +1112,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) executePredefinedSubAgent(
 	return result, capturedHistory, nil
 }
 
-// emitTodoTaskRouteSelectedEvent emits an event when the todo task orchestrator selects a route/sub-agent
-func (hcpo *StepBasedWorkflowOrchestrator) emitTodoTaskRouteSelectedEvent(
+// emitOrchestratorRouteSelectedEvent emits an event when the todo task orchestrator selects a route/sub-agent
+func (hcpo *StepBasedWorkflowOrchestrator) emitOrchestratorRouteSelectedEvent(
 	ctx context.Context,
 	step PlanStepInterface,
 	stepIndex int,
 	stepPath string,
 	iteration int,
-	response *TodoTaskResponse,
+	response *OrchestratorDecision,
 	executionLLM string,
 ) {
 	bridge := hcpo.GetContextAwareBridge()
@@ -1134,9 +1134,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) emitTodoTaskRouteSelectedEvent(
 	// Get route name if predefined route selected
 	var selectedRouteName string
 	if response.SelectedRouteID != "" {
-		todoTaskStep, ok := step.(*TodoTaskPlanStep)
+		orchestratorStep, ok := step.(*OrchestratorPlanStep)
 		if ok {
-			for _, route := range todoTaskStep.PredefinedRoutes {
+			for _, route := range orchestratorStep.PredefinedRoutes {
 				if route.RouteID == response.SelectedRouteID {
 					selectedRouteName = route.RouteName
 					break
@@ -1153,7 +1153,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) emitTodoTaskRouteSelectedEvent(
 		preferredTierLabel = TierLevelLabel(TierLevel(tier))
 	}
 
-	event := &TodoTaskRouteSelectedEvent{
+	event := &OrchestratorRouteSelectedEvent{
 		BaseEventData: baseevents.BaseEventData{
 			Timestamp: time.Now(),
 			Component: "orchestrator",
@@ -1179,7 +1179,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) emitTodoTaskRouteSelectedEvent(
 	}
 
 	agentEvent := &baseevents.AgentEvent{
-		Type:      events.TodoTaskRouteSelected,
+		Type:      events.OrchestratorRouteSelected,
 		Timestamp: time.Now(),
 		Data:      event,
 	}
@@ -1192,8 +1192,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) emitTodoTaskRouteSelectedEvent(
 	}
 }
 
-// emitTodoTaskStepCompletedEvent emits an event when the entire todo task step is completed
-func (hcpo *StepBasedWorkflowOrchestrator) emitTodoTaskStepCompletedEvent(
+// emitOrchestratorStepCompletedEvent emits an event when the entire todo task step is completed
+func (hcpo *StepBasedWorkflowOrchestrator) emitOrchestratorStepCompletedEvent(
 	ctx context.Context,
 	step PlanStepInterface,
 	stepIndex int,
@@ -1211,7 +1211,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) emitTodoTaskStepCompletedEvent(
 	totalTodos := 0
 	completedCount := 0
 
-	event := &TodoTaskStepCompletedEvent{
+	event := &OrchestratorStepCompletedEvent{
 		BaseEventData: baseevents.BaseEventData{
 			Timestamp: time.Now(),
 			Component: "orchestrator",
@@ -1228,7 +1228,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) emitTodoTaskStepCompletedEvent(
 	}
 
 	agentEvent := &baseevents.AgentEvent{
-		Type:      events.TodoTaskStepCompleted,
+		Type:      events.OrchestratorStepCompleted,
 		Timestamp: time.Now(),
 		Data:      event,
 	}
@@ -1241,13 +1241,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) emitTodoTaskStepCompletedEvent(
 	}
 }
 
-func todoTaskExecutionLogFilename(retryAttempt, iteration int) string {
+func orchestratorExecutionLogFilename(retryAttempt, iteration int) string {
 	return fmt.Sprintf("execution-attempt-%d-iteration-%d.json", retryAttempt, iteration)
 }
 
-// saveTodoTaskExecutionLog saves the execution log for a todo task iteration
+// saveOrchestratorExecutionLog saves the execution log for a todo task iteration
 // This allows the UI to show the full execution history (conversation, tool calls) for each iteration
-func (hcpo *StepBasedWorkflowOrchestrator) saveTodoTaskExecutionLog(
+func (hcpo *StepBasedWorkflowOrchestrator) saveOrchestratorExecutionLog(
 	ctx context.Context,
 	stepID string,
 	stepPath string,
@@ -1305,7 +1305,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) saveTodoTaskExecutionLog(
 		"breakdown":   timingBreakdown,
 	}
 
-	filename := todoTaskExecutionLogFilename(retryAttempt, iteration)
+	filename := orchestratorExecutionLogFilename(retryAttempt, iteration)
 	filePath := fmt.Sprintf("%s/%s", executionLogsFolderPath, filename)
 	conversationPath := strings.TrimSuffix(filePath, ".json") + "-conversation.json"
 

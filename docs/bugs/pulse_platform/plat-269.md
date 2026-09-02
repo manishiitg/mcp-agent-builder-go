@@ -45,7 +45,7 @@ that todo item.
 
 ## What changed
 
-1. **Scripted orchestrator path removed.** `executeTodoTaskStep` no longer
+1. **Scripted orchestrator path removed.** `executeTodoTaskStep` (now `executeOrchestratorStep`) no longer
    consults `declared_execution_mode`; `update_step_config` rejects `scripted`
    on a `todo_task` with a message pointing at a regular scripted step that
    calls routes. `controller_scripted.go` is untouched and still serves regular
@@ -75,7 +75,7 @@ that todo item.
    - skips the global learnings mutex on the reflection turn, because a parent
      that waits for children inside the turn would deadlock against a child's
      own learnings turn (the orchestrator never held that lock before either).
-   `executeTodoTaskStep` is now a ~150-line wrapper. Deleted:
+   `executeTodoTaskStep` (renamed `executeOrchestratorStep` in the follow-up identifier rename; file `controller_orchestrator.go`) is now a ~150-line wrapper. Deleted:
    `runTodoTaskMessageSequence`, `runTodoTaskPreValidation`,
    `runTodoTaskContributionTurns`, `persistCompletedTodoTaskSummary`,
    `executeTodoTaskOrchestratorAgent`, and the restart-the-step retry loop.

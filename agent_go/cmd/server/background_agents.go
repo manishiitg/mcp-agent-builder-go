@@ -506,7 +506,7 @@ func (r *BackgroundAgentRegistry) GetAll(sessionID string) []*BackgroundAgent {
 // event — but several real paths never deliver that end. A superseded or
 // abandoned evaluation stops emitting entirely, and a todo_task_orchestrator's
 // successful turn end is deliberately ignored in favour of a later
-// TodoTaskStepCompleted event that an abandoned run never sends.
+// OrchestratorStepCompleted event that an abandoned run never sends.
 //
 // That matters because HasRunningAgents treats BGAgentRunning as live
 // unconditionally and the registry never deletes entries, so one orphan pins

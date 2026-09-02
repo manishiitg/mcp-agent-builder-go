@@ -33,7 +33,7 @@ const planDriftReviewContractVersion = 3
 const (
 	messageSequenceBestPracticesDriftCheckID = "message_sequence_best_practices"
 	scriptedBestPracticesDriftCheckID        = "scripted_best_practices"
-	todoTaskBestPracticesDriftCheckID        = "todo_task_best_practices"
+	orchestratorBestPracticesDriftCheckID        = "todo_task_best_practices"
 	routingBestPracticesDriftCheckID         = "routing_best_practices"
 	branchBestPracticesDriftCheckID          = "branch_best_practices"
 )
@@ -44,8 +44,8 @@ func requiredStepTypeBestPracticesCheckID(stepType string) string {
 		return scriptedBestPracticesDriftCheckID
 	case string(StepTypeMessageSeq):
 		return messageSequenceBestPracticesDriftCheckID
-	case string(StepTypeTodoTask):
-		return todoTaskBestPracticesDriftCheckID
+	case string(StepTypeOrchestrator):
+		return orchestratorBestPracticesDriftCheckID
 	case string(StepTypeRouting):
 		return routingBestPracticesDriftCheckID
 	case string(StepTypeBranch):
@@ -130,7 +130,7 @@ func collectStepTypesByID(steps []PlanStepInterface, out map[string]string) {
 		if id := strings.TrimSpace(step.GetID()); id != "" {
 			out[id] = string(step.StepType())
 		}
-		if todo, ok := step.(*TodoTaskPlanStep); ok {
+		if todo, ok := step.(*OrchestratorPlanStep); ok {
 			for _, route := range todo.PredefinedRoutes {
 				if route.SubAgentStep == nil {
 					continue

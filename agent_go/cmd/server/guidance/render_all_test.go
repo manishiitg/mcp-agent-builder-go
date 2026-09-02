@@ -276,7 +276,7 @@ func TestStandaloneStrategyAuditRunsDirectlyAndRequiresTerminalModuleResult(t *t
 	}
 }
 
-func TestTodoTaskEligibilityStaysConsistentAcrossGuidance(t *testing.T) {
+func TestOrchestratorEligibilityStaysConsistentAcrossGuidance(t *testing.T) {
 	canonical, err := renderFromRegistry("design-plan", tmplData{}, allKinds)
 	if err != nil {
 		t.Fatalf("render design-plan: %v", err)

@@ -115,8 +115,8 @@ const (
 	ScriptedExecution events.EventType = "learn_code_script_execution" // When controller runs python3 main.py
 
 	// Todo task orchestration events
-	TodoTaskRouteSelected events.EventType = "todo_task_route_selected" // When orchestrator selects a route/sub-agent
-	TodoTaskStepCompleted events.EventType = "todo_task_step_completed" // When the entire todo task step is completed
+	OrchestratorRouteSelected events.EventType = "todo_task_route_selected" // When orchestrator selects a route/sub-agent
+	OrchestratorStepCompleted events.EventType = "todo_task_step_completed" // When the entire todo task step is completed
 
 )
 
@@ -131,7 +131,7 @@ func GetComponentFromEventType(eventType events.EventType) string {
 		HumanVerificationResponse, RequestHumanFeedback, BlockingHumanFeedback, PlanApproval,
 		LearningSkipped,
 		RoutingEvaluated, PreValidationCompleted,
-		TodoTaskRouteSelected, TodoTaskStepCompleted:
+		OrchestratorRouteSelected, OrchestratorStepCompleted:
 		return "orchestrator"
 	default:
 		return "system"

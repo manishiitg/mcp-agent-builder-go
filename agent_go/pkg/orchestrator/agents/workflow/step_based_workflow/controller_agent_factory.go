@@ -1497,7 +1497,7 @@ func subAgentConversationPage(records []SubAgentCallRecord, executionID string, 
 
 // SubAgentExecutionContext holds the context needed for sub-agent execution from tools
 type SubAgentExecutionContext struct {
-	TodoTaskStep *TodoTaskPlanStep
+	OrchestratorStep *OrchestratorPlanStep
 	StepIndex    int
 	StepPath     string
 	AllSteps     []PlanStepInterface
@@ -1583,12 +1583,12 @@ func serializeConversationHistory(history []llmtypes.MessageContent) []Conversat
 	return entries
 }
 
-// createTodoTaskOrchestratorAgent creates a todo task orchestrator agent using the standard factory pattern
+// createOrchestratorAgent creates a todo task orchestrator agent using the standard factory pattern
 // This agent manages todo lists, creates tasks, and delegates to predefined or generic sub-agents
 // Note: Folder guard paths should be set by the caller before calling this function (see controller_todo_task.go)
 // The stepPath parameter is used to inject context for todo tools (e.g., "step-1")
 // The subAgentExecCtx contains context for sub-agent tool execution (can be nil for simple cases)
-func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx context.Context, phase string, step, iteration int, stepID string, stepPath string, agentName string, stepConfig *AgentConfigs, todoTaskLLMConfig *orchestrator.LLMConfig, subAgentExecCtx *SubAgentExecutionContext) (agents.OrchestratorAgent, error) {
+func (hcpo *StepBasedWorkflowOrchestrator) createOrchestratorAgent(ctx context.Context, phase string, step, iteration int, stepID string, stepPath string, agentName string, stepConfig *AgentConfigs, orchestratorStepLLMConfig *orchestrator.LLMConfig, subAgentExecCtx *SubAgentExecutionContext) (agents.OrchestratorAgent, error) {
 	// Todo task orchestrator agent needs folder guard (can write files)
 	// Note: Folder guard is set by caller in controller_todo_task.go before agent creation
 	// We apply it to the agent here via post-setup
@@ -1599,21 +1599,21 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	// Determine LLM config: Priority: step config > preset default
 	var llmConfig *orchestrator.LLMConfig
 	orchestratorLLMConfig := hcpo.GetLLMConfig()
-	if todoTaskLLMConfig != nil && todoTaskLLMConfig.Primary.Provider != "" && todoTaskLLMConfig.Primary.ModelID != "" {
+	if orchestratorStepLLMConfig != nil && orchestratorStepLLMConfig.Primary.Provider != "" && orchestratorStepLLMConfig.Primary.ModelID != "" {
 		var apiKeys *orchestrator.APIKeys
 		if orchestratorLLMConfig != nil {
 			apiKeys = orchestratorLLMConfig.APIKeys
 		}
 		llmConfig = &orchestrator.LLMConfig{
 			Primary: orchestrator.LLMModel{
-				Provider: todoTaskLLMConfig.Primary.Provider,
-				ModelID:  todoTaskLLMConfig.Primary.ModelID,
-				Options:  todoTaskLLMConfig.Primary.Options,
+				Provider: orchestratorStepLLMConfig.Primary.Provider,
+				ModelID:  orchestratorStepLLMConfig.Primary.ModelID,
+				Options:  orchestratorStepLLMConfig.Primary.Options,
 			},
-			Fallbacks: todoTaskLLMConfig.Fallbacks,
+			Fallbacks: orchestratorStepLLMConfig.Fallbacks,
 			APIKeys:   apiKeys, // Preserve API keys from orchestrator (may be nil)
 		}
-		hcpo.GetLogger().Info(fmt.Sprintf("🔧 Using step-specific todo task orchestrator LLM: %s/%s", todoTaskLLMConfig.Primary.Provider, todoTaskLLMConfig.Primary.ModelID))
+		hcpo.GetLogger().Info(fmt.Sprintf("🔧 Using step-specific todo task orchestrator LLM: %s/%s", orchestratorStepLLMConfig.Primary.Provider, orchestratorStepLLMConfig.Primary.ModelID))
 	} else if hcpo.tierResolver != nil {
 		// Use tiered allocation (high tier for orchestration)
 		tieredLLM := hcpo.tierResolver.ResolveTier(TierHigh)
@@ -1779,7 +1779,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 	// todo-task orchestrator's own shell calls resolve sibling step outputs via env vars
 	// rather than having to rebuild absolute paths from the step context.
 	{
-		stepExecutionRelPath := hcpo.getTodoTaskStepExecutionPath(stepID, stepPath)
+		stepExecutionRelPath := hcpo.getOrchestratorStepExecutionPath(stepID, stepPath)
 		stepOutputAbsPath := filepath.Join(GetPromptDocsRoot(), stepExecutionRelPath)
 		stepExecutionAbsPath := filepath.Dir(stepOutputAbsPath)
 		// The todo-task orchestrator now uses a dedicated MCP session for shell/file tools.
@@ -1866,7 +1866,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createTodoTaskOrchestratorAgent(ctx c
 		iteration,
 		stepID, // Step ID
 		func(cfg *agents.OrchestratorAgentConfig, logger loggerv2.Logger, tracer observability.Tracer, eventBridge mcpagent.AgentEventListener) agents.OrchestratorAgent {
-			return NewWorkflowTodoTaskOrchestratorAgent(cfg, logger, tracer, eventBridge)
+			return NewWorkflowOrchestratorAgent(cfg, logger, tracer, eventBridge)
 		},
 		toolsToRegister, // Pass workspace tools (filtered by step config if specified)
 		executorsToUse,  // Pass workspace tool executors
@@ -1958,12 +1958,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) wrapSubAgentToolExecutor(
 		))
 
 		// Inject predefined routes for route lookup
-		if execCtx.TodoTaskStep != nil {
-			ctx = context.WithValue(ctx, virtualtools.PredefinedRoutesKey, execCtx.TodoTaskStep.PredefinedRoutes)
+		if execCtx.OrchestratorStep != nil {
+			ctx = context.WithValue(ctx, virtualtools.PredefinedRoutesKey, execCtx.OrchestratorStep.PredefinedRoutes)
 
 			// Build route descriptions map for get_route_description tool
 			routeDescriptions := make(map[string]string)
-			for _, route := range execCtx.TodoTaskStep.PredefinedRoutes {
+			for _, route := range execCtx.OrchestratorStep.PredefinedRoutes {
 				desc := ResolveVariables(route.Condition, hcpo.variableValues)
 				if route.SubAgentStep != nil {
 					desc += "\n\nRoute type: " + routeStepTypeSummary(route.SubAgentStep)
@@ -2013,19 +2013,19 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutePredefinedSubAgentSyncFu
 		if strings.TrimSpace(routeID) == "" {
 			return "", fmt.Errorf("invalid or missing route_id")
 		}
-		if execCtx.TodoTaskStep == nil {
+		if execCtx.OrchestratorStep == nil {
 			return "", fmt.Errorf("call_sub_agent is only available inside a todo_task step")
 		}
-		validRouteIDs := make([]string, 0, len(execCtx.TodoTaskStep.PredefinedRoutes))
+		validRouteIDs := make([]string, 0, len(execCtx.OrchestratorStep.PredefinedRoutes))
 		routeExists := false
-		for _, route := range execCtx.TodoTaskStep.PredefinedRoutes {
+		for _, route := range execCtx.OrchestratorStep.PredefinedRoutes {
 			validRouteIDs = append(validRouteIDs, route.RouteID)
 			if route.RouteID == routeID {
 				routeExists = true
 			}
 		}
 		if !routeExists {
-			return "", fmt.Errorf("route_id %q not found in todo task step %q. Available route IDs: %v", routeID, execCtx.TodoTaskStep.GetID(), validRouteIDs)
+			return "", fmt.Errorf("route_id %q not found in todo task step %q. Available route IDs: %v", routeID, execCtx.OrchestratorStep.GetID(), validRouteIDs)
 		}
 
 		// Propagate workshop correlation IDs to sub-agent context so events are tagged correctly.
@@ -2038,8 +2038,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutePredefinedSubAgentSyncFu
 			}
 		}
 
-		// Build a TodoTaskResponse to reuse existing execution logic
-		response := &TodoTaskResponse{
+		// Build a OrchestratorDecision to reuse existing execution logic
+		response := &OrchestratorDecision{
 			NextAction:             "delegate",
 			SelectedRouteID:        routeID,
 			TodoIDToExecute:        todoID,
@@ -2047,14 +2047,14 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutePredefinedSubAgentSyncFu
 		}
 
 		// Emit route selected event BEFORE sub-agent execution so it appears before the agent card
-		hcpo.emitTodoTaskRouteSelectedEvent(ctx, execCtx.TodoTaskStep, execCtx.StepIndex, execCtx.StepPath, 0, response, "")
+		hcpo.emitOrchestratorRouteSelectedEvent(ctx, execCtx.OrchestratorStep, execCtx.StepIndex, execCtx.StepPath, 0, response, "")
 
 		startTime := time.Now()
 
 		// Execute using existing method
 		result, history, err := hcpo.executePredefinedSubAgent(
 			ctx,
-			execCtx.TodoTaskStep,
+			execCtx.OrchestratorStep,
 			execCtx.StepIndex,
 			execCtx.StepPath,
 			response,
@@ -2124,9 +2124,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecuteGenericAgentSyncFunc(
 			}
 		}
 
-		// Build a TodoTaskResponse to reuse existing execution logic
+		// Build a OrchestratorDecision to reuse existing execution logic
 		// All task info comes from the tool parameters, not from a file
-		response := &TodoTaskResponse{
+		response := &OrchestratorDecision{
 			NextAction:             "delegate",
 			UseGenericAgent:        true,
 			TodoIDToExecute:        todoID,
@@ -2134,7 +2134,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecuteGenericAgentSyncFunc(
 		}
 
 		// Emit route selected event BEFORE sub-agent execution so it appears before the agent card
-		hcpo.emitTodoTaskRouteSelectedEvent(ctx, execCtx.TodoTaskStep, execCtx.StepIndex, execCtx.StepPath, 0, response, "")
+		hcpo.emitOrchestratorRouteSelectedEvent(ctx, execCtx.OrchestratorStep, execCtx.StepIndex, execCtx.StepPath, 0, response, "")
 
 		startTime := time.Now()
 
@@ -2142,7 +2142,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecuteGenericAgentSyncFunc(
 		// All task info comes from tool parameters
 		result, history, err := hcpo.executeGenericAgent(
 			ctx,
-			execCtx.TodoTaskStep,
+			execCtx.OrchestratorStep,
 			execCtx.StepIndex,
 			execCtx.StepPath,
 			response,

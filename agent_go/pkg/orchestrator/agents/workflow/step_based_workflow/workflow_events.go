@@ -170,8 +170,8 @@ func (e *PreValidationCompletedEvent) GetEventType() baseevents.EventType {
 	return events.PreValidationCompleted
 }
 
-// TodoTaskRouteSelectedEvent represents when the todo task orchestrator selects a route/sub-agent
-type TodoTaskRouteSelectedEvent struct {
+// OrchestratorRouteSelectedEvent represents when the todo task orchestrator selects a route/sub-agent
+type OrchestratorRouteSelectedEvent struct {
 	baseevents.BaseEventData
 	StepIndex              int    `json:"step_index"`
 	StepPath               string `json:"step_path"`
@@ -193,12 +193,12 @@ type TodoTaskRouteSelectedEvent struct {
 	PreferredTierLabel     string `json:"preferred_tier_label,omitempty"`      // Human-readable tier label
 }
 
-func (e *TodoTaskRouteSelectedEvent) GetEventType() baseevents.EventType {
-	return events.TodoTaskRouteSelected
+func (e *OrchestratorRouteSelectedEvent) GetEventType() baseevents.EventType {
+	return events.OrchestratorRouteSelected
 }
 
-// TodoTaskStepCompletedEvent represents when the entire todo task step is completed
-type TodoTaskStepCompletedEvent struct {
+// OrchestratorStepCompletedEvent represents when the entire todo task step is completed
+type OrchestratorStepCompletedEvent struct {
 	baseevents.BaseEventData
 	StepIndex        int    `json:"step_index"`
 	StepPath         string `json:"step_path"`
@@ -211,6 +211,6 @@ type TodoTaskStepCompletedEvent struct {
 	NextStepID       string `json:"next_step_id,omitempty"`
 }
 
-func (e *TodoTaskStepCompletedEvent) GetEventType() baseevents.EventType {
-	return events.TodoTaskStepCompleted
+func (e *OrchestratorStepCompletedEvent) GetEventType() baseevents.EventType {
+	return events.OrchestratorStepCompleted
 }

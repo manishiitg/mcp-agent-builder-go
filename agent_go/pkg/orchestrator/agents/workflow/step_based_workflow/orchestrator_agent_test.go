@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-func TestTodoTaskOrchestratorPromptIncludesSharedCodeExecutionSection(t *testing.T) {
-	agent := &WorkflowTodoTaskOrchestratorAgent{}
+func TestOrchestratorPromptIncludesSharedCodeExecutionSection(t *testing.T) {
+	agent := &WorkflowOrchestratorAgent{}
 
-	prompt := agent.todoTaskOrchestratorSystemPromptProcessor(map[string]string{
+	prompt := agent.orchestratorSystemPromptProcessor(map[string]string{
 		"CurrentTodos":          "",
 		"ProgressSummary":       "",
 		"VariableNames":         "",
@@ -49,10 +49,10 @@ func TestTodoTaskOrchestratorPromptIncludesSharedCodeExecutionSection(t *testing
 	}
 }
 
-func TestTodoTaskOrchestratorPromptDocumentsMessageSequenceRoutes(t *testing.T) {
-	agent := &WorkflowTodoTaskOrchestratorAgent{}
+func TestOrchestratorPromptDocumentsMessageSequenceRoutes(t *testing.T) {
+	agent := &WorkflowOrchestratorAgent{}
 
-	prompt := agent.todoTaskOrchestratorSystemPromptProcessor(map[string]string{
+	prompt := agent.orchestratorSystemPromptProcessor(map[string]string{
 		"ShowToolsSection":    "true",
 		"IsCodeExecutionMode": "false",
 		"PredefinedRoutes":    "- route-sequence",
@@ -79,9 +79,9 @@ func TestTodoTaskOrchestratorPromptDocumentsMessageSequenceRoutes(t *testing.T) 
 	}
 }
 
-func TestTodoTaskOrchestratorPromptRoutesConsequentialEvidenceToPulseReview(t *testing.T) {
-	agent := &WorkflowTodoTaskOrchestratorAgent{}
-	prompt := agent.todoTaskOrchestratorSystemPromptProcessor(map[string]string{})
+func TestOrchestratorPromptRoutesConsequentialEvidenceToPulseReview(t *testing.T) {
+	agent := &WorkflowOrchestratorAgent{}
+	prompt := agent.orchestratorSystemPromptProcessor(map[string]string{})
 
 	for _, want := range []string{
 		"## Completion",
@@ -99,9 +99,9 @@ func TestTodoTaskOrchestratorPromptRoutesConsequentialEvidenceToPulseReview(t *t
 	}
 }
 
-func TestTodoTaskCLIPromptUsesProjectedWorkflowLearnings(t *testing.T) {
-	agent := &WorkflowTodoTaskOrchestratorAgent{}
-	prompt := agent.todoTaskOrchestratorSystemPromptProcessor(map[string]string{
+func TestOrchestratorCLIPromptUsesProjectedWorkflowLearnings(t *testing.T) {
+	agent := &WorkflowOrchestratorAgent{}
+	prompt := agent.orchestratorSystemPromptProcessor(map[string]string{
 		"UseProjectedReferenceSkills": "true",
 		"LearningHistory":             "legacy recursive inventory that must not be rendered",
 		"CurrentTodos":                "- [ ] inspect the application\n- [ ] verify the result",
@@ -156,10 +156,10 @@ func TestFormatMessageSequenceRoutePromptBlock(t *testing.T) {
 	}
 }
 
-func TestTodoTaskOrchestratorUserPromptIncludesWorkshopHumanInput(t *testing.T) {
-	agent := &WorkflowTodoTaskOrchestratorAgent{}
+func TestOrchestratorUserPromptIncludesWorkshopHumanInput(t *testing.T) {
+	agent := &WorkflowOrchestratorAgent{}
 
-	prompt := agent.todoTaskOrchestratorUserMessageProcessor(map[string]string{
+	prompt := agent.orchestratorUserMessageProcessor(map[string]string{
 		"StepTitle":           "Investigate RCA",
 		"StepDescription":     "Gather evidence and synthesize.",
 		"StepSuccessCriteria": "Answer is complete.",

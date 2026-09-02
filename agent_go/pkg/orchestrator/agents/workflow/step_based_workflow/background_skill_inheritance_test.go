@@ -69,7 +69,7 @@ func TestRunInBackgroundPassesBuilderSkillSnapshotToBothAgentKinds(t *testing.T)
 	text := string(source)
 	for _, want := range []string{
 		"inheritedSkills := mcpAgent.AttachedSkills()",
-		"runBackgroundTodoTaskAgent(execCtx, name, instruction, inheritedSkills)",
+		"runBackgroundOrchestratorAgent(execCtx, name, instruction, inheritedSkills)",
 		"runBackgroundTaskAgentSequence(execCtx, name, instruction, messageSequence, inheritedSkills)",
 		"applyInheritedBackgroundSkills(ctx, baseAgent, inheritedSkills)",
 	} {

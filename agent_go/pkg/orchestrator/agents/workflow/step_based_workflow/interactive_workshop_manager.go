@@ -369,7 +369,7 @@ func collectInnerSteps(step PlanStepInterface) []WorkshopStepInfo {
 	parentType := step.StepType()
 
 	switch s := step.(type) {
-	case *TodoTaskPlanStep:
+	case *OrchestratorPlanStep:
 		for _, route := range s.PredefinedRoutes {
 			if route.SubAgentStep != nil {
 				result = append(result, WorkshopStepInfo{
@@ -484,7 +484,7 @@ func (iwm *InteractiveWorkshopManager) enrichQueryForComplexStep(
 	stepType := stepInfo.Step.StepType()
 	var logFileName, stepTypeName string
 	switch stepType {
-	case StepTypeTodoTask:
+	case StepTypeOrchestrator:
 		logFileName = "todo-task-execution.json"
 		stepTypeName = "Todo Task"
 	case StepTypeRouting, StepTypeBranch:
@@ -541,7 +541,7 @@ func (iwm *InteractiveWorkshopManager) enrichQueryForComplexStep(
 
 		// Extract sub-agent path from the response
 		var response map[string]interface{}
-		if stepType == StepTypeTodoTask {
+		if stepType == StepTypeOrchestrator {
 			response, _ = entry["todo_task_response"].(map[string]interface{})
 		} else {
 			response, _ = entry["orchestration_response"].(map[string]interface{})
@@ -557,7 +557,7 @@ func (iwm *InteractiveWorkshopManager) enrichQueryForComplexStep(
 		}
 
 		// Extract tier usage data for todo_task steps
-		if stepType == StepTypeTodoTask {
+		if stepType == StepTypeOrchestrator {
 			nextAction, _ := response["next_action"].(string)
 			if nextAction == "delegate" {
 				tierNum := 0
@@ -592,7 +592,7 @@ func (iwm *InteractiveWorkshopManager) enrichQueryForComplexStep(
 	summary.WriteString(fmt.Sprintf("\n\n[%s step — %d iterations", stepTypeName, iterations))
 
 	// Show todo progress from the last entry (already parsed in main loop)
-	if stepType == StepTypeTodoTask && lastEntry != nil {
+	if stepType == StepTypeOrchestrator && lastEntry != nil {
 		if todoSummary, ok := lastEntry["todo_summary"].(map[string]interface{}); ok {
 			total, _ := todoSummary["total"].(float64)
 			completed, _ := todoSummary["completed"].(float64)
@@ -2999,7 +2999,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				}
 
 				if agentType == "orchestrator" {
-					result, execErr = iwm.runBackgroundTodoTaskAgent(execCtx, name, instruction, inheritedSkills)
+					result, execErr = iwm.runBackgroundOrchestratorAgent(execCtx, name, instruction, inheritedSkills)
 				} else {
 					result, execErr = iwm.runBackgroundTaskAgentSequence(execCtx, name, instruction, messageSequence, inheritedSkills)
 				}
@@ -3930,7 +3930,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						return "", err
 					}
 					if canonicalDeclaredExecutionMode(s) == StepModeScripted && !isEvalStep &&
-						workshopPlanStepType(ctx, iwm.controller, stepID) == StepTypeTodoTask {
+						workshopPlanStepType(ctx, iwm.controller, stepID) == StepTypeOrchestrator {
 						return "", fmt.Errorf("declared_execution_mode=\"scripted\" is not supported on orchestrator (todo_task) step %q: an orchestrator exists to make runtime delegation decisions, and delegation that is deterministic enough to script belongs in a regular scripted step whose main.py calls the routes", stepID)
 					}
 					targetConfig.AgentConfigs.DeclaredExecutionMode = s
@@ -9727,17 +9727,17 @@ func validateWorkshopScheduleTimezone(timezone string) error {
 	return nil
 }
 
-// runBackgroundTodoTaskAgent runs a todo task orchestrator as a background agent.
+// runBackgroundOrchestratorAgent runs a todo task orchestrator as a background agent.
 // Unlike runBackgroundTaskAgent (single-pass), this supports multi-step task management
 // and sub-agent delegation. Sub-agent completions auto-notify
 // the main workshop agent via the subAgentNotifier already set on the controller.
-func (iwm *InteractiveWorkshopManager) runBackgroundTodoTaskAgent(ctx context.Context, name, instruction string, inheritedSkills []*llmtypes.Skill) (string, error) {
+func (iwm *InteractiveWorkshopManager) runBackgroundOrchestratorAgent(ctx context.Context, name, instruction string, inheritedSkills []*llmtypes.Skill) (string, error) {
 	stepID := fmt.Sprintf("bg-todo-%s-%d", strings.ToLower(strings.ReplaceAll(name, " ", "-")), time.Now().UnixNano()%100000)
 	ctx = withBackgroundAgentSkills(ctx, inheritedSkills)
 
-	// Build a minimal TodoTaskPlanStep from the instruction
-	todoStep := &TodoTaskPlanStep{
-		Type: StepTypeTodoTask,
+	// Build a minimal OrchestratorPlanStep from the instruction
+	todoStep := &OrchestratorPlanStep{
+		Type: StepTypeOrchestrator,
 		CommonStepFields: CommonStepFields{
 			ID:          stepID,
 			Title:       name,
@@ -9754,7 +9754,7 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTodoTaskAgent(ctx context.Co
 		IsEvaluationMode:  false,
 	}
 
-	_, _, err := iwm.controller.executeTodoTaskStep(
+	_, _, err := iwm.controller.executeOrchestratorStep(
 		ctx,
 		todoStep,
 		0,

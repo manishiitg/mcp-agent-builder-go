@@ -89,7 +89,7 @@ func TestPlanMutationExecutorsEnforceWorkflowArtifactPurity(t *testing.T) {
 		t.Fatalf("update error = %v, want nested artifact-purity rejection", err)
 	}
 
-	addRoute := createAddTodoTaskRouteExecutor("Workflow/demo", nil, nil, nil)
+	addRoute := createAddOrchestratorRouteExecutor("Workflow/demo", nil, nil, nil)
 	_, err = addRoute(context.Background(), map[string]interface{}{
 		"reason":         "add a specialist route",
 		"parent_step_id": "orchestrate",

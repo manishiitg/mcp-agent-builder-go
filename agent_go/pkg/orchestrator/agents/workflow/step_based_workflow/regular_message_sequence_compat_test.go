@@ -306,14 +306,14 @@ func TestUpsertNewScriptedRegularStepConfig(t *testing.T) {
 func TestCollectRegularPlanStepsIncludesNestedTodoRoutes(t *testing.T) {
 	regular := &RegularPlanStep{CommonStepFields: CommonStepFields{ID: "fetch-data", Title: "Fetch data"}}
 	sequence := &MessageSequencePlanStep{CommonStepFields: CommonStepFields{ID: "analyze-data"}}
-	nested := &TodoTaskPlanStep{
+	nested := &OrchestratorPlanStep{
 		CommonStepFields: CommonStepFields{ID: "nested"},
 		PredefinedRoutes: []PlanOrchestrationRoute{
 			{RouteID: "fetch-data", SubAgentStep: regular},
 			{RouteID: "analyze-data", SubAgentStep: sequence},
 		},
 	}
-	root := &TodoTaskPlanStep{
+	root := &OrchestratorPlanStep{
 		CommonStepFields: CommonStepFields{ID: "root"},
 		PredefinedRoutes: []PlanOrchestrationRoute{{RouteID: "nested", SubAgentStep: nested}},
 	}
@@ -324,8 +324,8 @@ func TestCollectRegularPlanStepsIncludesNestedTodoRoutes(t *testing.T) {
 	}
 }
 
-func TestTodoTaskRejectsIncompleteMessageSequenceRoute(t *testing.T) {
-	step := &TodoTaskPlanStep{
+func TestOrchestratorRejectsIncompleteMessageSequenceRoute(t *testing.T) {
+	step := &OrchestratorPlanStep{
 		CommonStepFields: CommonStepFields{
 			ID:          "orchestrate",
 			Title:       "Orchestrate",
@@ -343,7 +343,7 @@ func TestTodoTaskRejectsIncompleteMessageSequenceRoute(t *testing.T) {
 		}},
 	}
 
-	if err := validateTodoTaskStepFieldsTyped(step); err == nil {
+	if err := validateOrchestratorStepFieldsTyped(step); err == nil {
 		t.Fatal("expected an empty message_sequence route to fail validation")
 	}
 	step.PredefinedRoutes[0].SubAgentStep.(*MessageSequencePlanStep).Items = []MessageSequenceItem{{
@@ -351,7 +351,7 @@ func TestTodoTaskRejectsIncompleteMessageSequenceRoute(t *testing.T) {
 		Type:    "user_message",
 		Message: "Analyze the evidence and save the result.",
 	}}
-	if err := validateTodoTaskStepFieldsTyped(step); err != nil {
+	if err := validateOrchestratorStepFieldsTyped(step); err != nil {
 		t.Fatalf("expected a complete message_sequence route to pass validation: %v", err)
 	}
 }

@@ -63,13 +63,13 @@ step, or a scripted step (see the `todo-task` and `plan-design` guidance).
 
 ## Runtime
 
-`executeTodoTaskStep` (`controller_todo_task.go`) is a thin wrapper:
+`executeOrchestratorStep` (`controller_orchestrator.go`) is a thin wrapper:
 
 1. Computes the orchestrator folder guard: the run's execution folder plus
    `db/`, learnings and KB when granted, skills read-only. It deliberately
    does **not** grant the workflow root, so a nested orchestrator cannot read
    `workflow.json`, `variables/`, `planning/`, or sibling groups.
-2. Builds the orchestrator prompt variables (`buildTodoTaskOrchestratorTemplateVars`):
+2. Builds the orchestrator prompt variables (`buildOrchestratorTemplateVars`):
    the route catalog, inlined context dependencies, stores, folder guard,
    validation schema, and any Workshop human input.
 3. Builds the `SubAgentExecutionContext` that owns async children.
@@ -131,7 +131,7 @@ See `sub_agent_async.go`.
 
 - Orchestrator turns: `execution-attempt-1-iteration-<n>.json` plus
   `-conversation.json` and `-timing.json` under the step's log folder, written
-  by `saveTodoTaskExecutionLog`. Turn 1 is iteration 0. These carry the
+  by `saveOrchestratorExecutionLog`. Turn 1 is iteration 0. These carry the
   `SubAgentCallRecord`s that `ExecutionLogsPopup` renders as the
   route-selection view and populate `stepLogs.todo_task`.
 - Sequence session: `execution/<step>/session.json` (one-way observability
@@ -151,7 +151,7 @@ been removed.
 
 ## LLM selection
 
-`selectTodoTaskOrchestratorLLM`: step-config `execution_llm` wins; otherwise
+`selectOrchestratorLLM`: step-config `execution_llm` wins; otherwise
 tier 1 (high) from the tier resolver. Sub-agents inherit the step's
 `execution_llm` when set, else honor `preferred_tier`.
 

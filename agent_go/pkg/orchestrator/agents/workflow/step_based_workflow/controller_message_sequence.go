@@ -1163,7 +1163,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) getMessageSequenceRuntime(ctx context
 
 	if session.delegation != nil {
 		// The orchestrator agent carries its own MCP session, tool registry, and
-		// shared folder guard (set by executeTodoTaskStep); none of the sequence's
+		// shared folder guard (set by executeOrchestratorStep); none of the sequence's
 		// per-session overrides apply to it.
 		if session.runtime != nil && session.runtime.Agent != nil {
 			return session.runtime, ctx, nil

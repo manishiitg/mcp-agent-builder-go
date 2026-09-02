@@ -253,7 +253,7 @@ func parseStepPath(stepPath string) StepPathInfo {
 	// Sub-agent step pattern: "step-{number}-sub-agent-{index}" or "step-{number}-sub-agent-{index}-i-{iteration}"
 	subAgentStepRegex := regexp.MustCompile(`^step-(\d+)-sub-agent-(\d+)(?:-i-(\d+))?$`)
 	// Todo-task route sub-agent step pattern: "step-{number}-sub-{routeId}"
-	todoTaskSubAgentStepRegex := regexp.MustCompile(`^step-(\d+)-sub-.+$`)
+	orchestratorSubAgentStepRegex := regexp.MustCompile(`^step-(\d+)-sub-.+$`)
 
 	if matches := subAgentStepRegex.FindStringSubmatch(stepPath); matches != nil {
 		parentStepNumber := 0
@@ -262,7 +262,7 @@ func parseStepPath(stepPath string) StepPathInfo {
 			ParentStepNumber:  parentStepNumber,
 			IsNestedExecution: true,
 		}
-	} else if matches := todoTaskSubAgentStepRegex.FindStringSubmatch(stepPath); matches != nil {
+	} else if matches := orchestratorSubAgentStepRegex.FindStringSubmatch(stepPath); matches != nil {
 		parentStepNumber := 0
 		fmt.Sscanf(matches[1], "%d", &parentStepNumber)
 		return StepPathInfo{
@@ -2958,9 +2958,9 @@ func buildDirectModeCompletionSummary(mainSummary, kbSummary, learningsSummary s
 	return strings.Join(parts, "\n")
 }
 
-// isTodoTaskStep returns true if the step is a todo task step (orchestrator with todo list management)
-func isTodoTaskStep(step PlanStepInterface) bool {
-	_, ok := step.(*TodoTaskPlanStep)
+// isOrchestratorStep returns true if the step is a todo task step (orchestrator with todo list management)
+func isOrchestratorStep(step PlanStepInterface) bool {
+	_, ok := step.(*OrchestratorPlanStep)
 	return ok
 }
 
@@ -3112,7 +3112,7 @@ func getAgentConfigs(step PlanStepInterface) *AgentConfigs {
 	switch s := step.(type) {
 	case *RegularPlanStep:
 		return s.AgentConfigs
-	case *TodoTaskPlanStep:
+	case *OrchestratorPlanStep:
 		return s.AgentConfigs
 	case *HumanInputPlanStep:
 		return s.AgentConfigs
@@ -3397,13 +3397,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 		}
 
 		// Check if this is a todo task step
-		if isTodoTaskStep(step) {
+		if isOrchestratorStep(step) {
 			// Execute todo task step - manages todo list and delegates to sub-agents
 			hcpo.GetLogger().Info(fmt.Sprintf("🎯 Starting todo task step execution: %s", step.GetTitle()))
 			// Generate step path for todo task step
-			todoTaskStepPath := fmt.Sprintf("step-%d", i+1)
+			orchestratorStepPath := fmt.Sprintf("step-%d", i+1)
 
-			successCriteriaMet, nextStepID, err := hcpo.executeTodoTaskStep(ctx, step, i, progress, previousContextFiles, previousExecutionResults, iteration, stepExecCtx, breakdownSteps, todoTaskStepPath)
+			successCriteriaMet, nextStepID, err := hcpo.executeOrchestratorStep(ctx, step, i, progress, previousContextFiles, previousExecutionResults, iteration, stepExecCtx, breakdownSteps, orchestratorStepPath)
 			if err != nil {
 				if isWorkflowCancellationErr(ctx, err) {
 					hcpo.GetLogger().Info(fmt.Sprintf("Todo task step %d canceled", i+1))

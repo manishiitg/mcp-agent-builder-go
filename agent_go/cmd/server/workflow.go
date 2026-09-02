@@ -1820,9 +1820,9 @@ func collectAllStepIDs(steps []todo_creation_human.PlanStepInterface) []string {
 		}
 
 		// Handle todo_task steps - collect sub-agent step IDs from predefined_routes
-		if todoTaskStep, ok := step.(*todo_creation_human.TodoTaskPlanStep); ok {
+		if orchestratorStep, ok := step.(*todo_creation_human.OrchestratorPlanStep); ok {
 			// Collect sub-agent step IDs from predefined routes
-			for _, route := range todoTaskStep.PredefinedRoutes {
+			for _, route := range orchestratorStep.PredefinedRoutes {
 				if route.SubAgentStep != nil {
 					if subAgentStepID := route.SubAgentStep.GetID(); subAgentStepID != "" {
 						stepIDs = append(stepIDs, subAgentStepID)
@@ -1960,10 +1960,10 @@ type PlanStepUpdate struct {
 	MaxIterations   *int    `json:"max_iterations,omitempty"`
 	LoopDescription *string `json:"loop_description,omitempty"`
 
-	// Routing/TodoTask step fields
+	// Routing/Orchestrator step fields
 	NextStepID *string `json:"next_step_id,omitempty"`
 
-	// TodoTask step fields
+	// Orchestrator step fields
 	PredefinedRoutes *[]todo_creation_human.PlanOrchestrationRoute `json:"predefined_routes,omitempty"`
 }
 
@@ -2288,7 +2288,7 @@ func findStepInPlan(plan *todo_creation_human.PlanningResponse, stepID string) (
 
 			// Check nested steps based on step type
 			switch s := step.(type) {
-			case *todo_creation_human.TodoTaskPlanStep:
+			case *todo_creation_human.OrchestratorPlanStep:
 				// Check predefined_routes
 				for j, route := range s.PredefinedRoutes {
 					if route.SubAgentStep != nil {
@@ -2340,9 +2340,9 @@ func updateStepInPlan(plan *todo_creation_human.PlanningResponse, stepID string,
 		}
 		updatedStep = &updated
 
-	case *todo_creation_human.TodoTaskPlanStep:
+	case *todo_creation_human.OrchestratorPlanStep:
 		updated := *s // Copy the step
-		// TodoTaskPlanStep only has ID and Title (no embedded CommonStepFields)
+		// OrchestratorPlanStep only has ID and Title (no embedded CommonStepFields)
 		if updates.Title != nil {
 			updated.Title = *updates.Title
 		}
@@ -2407,7 +2407,7 @@ func updateNestedStepInPlan(plan *todo_creation_human.PlanningResponse, path []i
 
 	// Handle different step types
 	switch s := parentStep.(type) {
-	case *todo_creation_human.TodoTaskPlanStep:
+	case *todo_creation_human.OrchestratorPlanStep:
 		if len(path) >= 3 && path[1] == -4 {
 			// predefined_routes[path[2]].sub_agent_step
 			routeIndex := path[2]
@@ -2431,7 +2431,7 @@ func updateNestedStepInPlanRecursive(current todo_creation_human.PlanStepInterfa
 	if len(path) < 2 || path[0] != -4 {
 		return fmt.Errorf("invalid nested sub-agent path")
 	}
-	todo, ok := current.(*todo_creation_human.TodoTaskPlanStep)
+	todo, ok := current.(*todo_creation_human.OrchestratorPlanStep)
 	if !ok {
 		return fmt.Errorf("nested path traverses non-todo step %T", current)
 	}
@@ -3022,7 +3022,7 @@ func (api *StreamingAPI) handleAddStep(w http.ResponseWriter, r *http.Request) {
 		}
 		newStep = &s
 	case "todo_task":
-		var s todo_creation_human.TodoTaskPlanStep
+		var s todo_creation_human.OrchestratorPlanStep
 		if err := json.Unmarshal(stepJSON, &s); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to parse todo_task step: %v", err), http.StatusBadRequest)
 			return
@@ -3590,7 +3590,7 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 							processedPaths[logPath] = true
 
 							entry := getStepEntry(stepId)
-							todoTaskLogs, _ := entry["todo_task"].([]map[string]interface{})
+							orchestratorLogs, _ := entry["todo_task"].([]map[string]interface{})
 
 							content, exists, _ := readFileFromWorkspace(r.Context(), logPath)
 							if exists {
@@ -3601,11 +3601,11 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 									}
 									var logEntry map[string]interface{}
 									if err := json.Unmarshal([]byte(line), &logEntry); err == nil {
-										todoTaskLogs = append(todoTaskLogs, logEntry)
+										orchestratorLogs = append(orchestratorLogs, logEntry)
 									}
 								}
 							}
-							entry["todo_task"] = todoTaskLogs
+							entry["todo_task"] = orchestratorLogs
 						}
 
 						if childIsDir && childName == "execution" {
@@ -3816,9 +3816,9 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 										archiveEntry["learnings"] = learnings
 									} else if archivedFileName == "todo-task-execution.json" {
 										// Handle todo task archived logs (JSONL format)
-										todoTaskLogs, _ := archiveEntry["todo_task"].([]map[string]interface{})
-										if todoTaskLogs == nil {
-											todoTaskLogs = []map[string]interface{}{}
+										orchestratorLogs, _ := archiveEntry["todo_task"].([]map[string]interface{})
+										if orchestratorLogs == nil {
+											orchestratorLogs = []map[string]interface{}{}
 										}
 										content, exists, _ := readFileFromWorkspace(r.Context(), archivedFilePath)
 										if exists {
@@ -3829,11 +3829,11 @@ func (api *StreamingAPI) handleGetExecutionLogs(w http.ResponseWriter, r *http.R
 												}
 												var logEntry map[string]interface{}
 												if err := json.Unmarshal([]byte(line), &logEntry); err == nil {
-													todoTaskLogs = append(todoTaskLogs, logEntry)
+													orchestratorLogs = append(orchestratorLogs, logEntry)
 												}
 											}
 										}
-										archiveEntry["todo_task"] = todoTaskLogs
+										archiveEntry["todo_task"] = orchestratorLogs
 									}
 								}
 

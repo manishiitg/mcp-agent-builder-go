@@ -6,7 +6,7 @@ func TestRoutingNextStepTypesByID(t *testing.T) {
 	steps := []PlanStepInterface{
 		&RegularPlanStep{CommonStepFields: CommonStepFields{ID: "write"}},
 		&RoutingPlanStep{CommonStepFields: CommonStepFields{ID: "route"}},
-		&TodoTaskPlanStep{CommonStepFields: CommonStepFields{ID: "orchestrate"}},
+		&OrchestratorPlanStep{CommonStepFields: CommonStepFields{ID: "orchestrate"}},
 	}
 
 	stepTypes := routingNextStepTypesByID(steps)

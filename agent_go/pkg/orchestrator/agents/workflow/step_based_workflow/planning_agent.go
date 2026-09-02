@@ -433,7 +433,7 @@ type StepType string
 const (
 	StepTypeRegular    StepType = "regular"
 	StepTypeHumanInput StepType = "human_input"
-	StepTypeTodoTask   StepType = "todo_task"
+	StepTypeOrchestrator   StepType = "todo_task"
 	StepTypeRouting    StepType = "routing"
 	StepTypeMessageSeq StepType = "message_sequence"
 	// StepTypeBranch is a small in-flow next-step decision — same executor
@@ -780,18 +780,18 @@ func (m *MessageSequencePlanStep) MarshalJSON() ([]byte, error) {
 	return json.Marshal((*Alias)(m))
 }
 
-// TodoTaskPlanStep represents a todo task orchestrator step that manages a dynamic todo list
+// OrchestratorPlanStep represents a todo task orchestrator step that manages a dynamic todo list
 // It combines predefined sub-agents (with learning/prevalidation) and an optional generic execution agent
 // The main orchestrator creates/assigns tasks, then delegates to appropriate agents
 // NOTE: Todo task steps are orchestration-like wrappers that manage todo lists instead of success criteria.
 // Loops are NOT supported on todo task wrappers - the step completes when all todos are done.
-type TodoTaskPlanStep struct {
+type OrchestratorPlanStep struct {
 	Type             StepType                 `json:"type"` // Always "todo_task" - required for JSON marshaling/unmarshaling
 	CommonStepFields                          // Embeds ID, Title, Description, SuccessCriteria, ContextDependencies, ContextOutput, ValidationSchema
 	PredefinedRoutes []PlanOrchestrationRoute `json:"predefined_routes,omitempty"` // Predefined sub-agents (with learning/prevalidation)
 	NextStepID       string                   `json:"next_step_id,omitempty"`      // ID of step after todo task completes (or "end")
 	Messages         []MessageSequenceItem    `json:"messages,omitempty"`          // Optional scripted message sequence fed into the orchestrator's own conversation after its first turn
-	TodoTaskResponse *TodoTaskResponse        `json:"-"`                           // runtime: stores orchestrator decisions - not stored in plan.json
+	OrchestratorDecision *OrchestratorDecision        `json:"-"`                           // runtime: stores orchestrator decisions - not stored in plan.json
 	AgentConfigs     *AgentConfigs            `json:"-"`                           // runtime: per-agent configuration - not stored in plan.json
 }
 
@@ -803,8 +803,8 @@ type TodoTaskPlanStep struct {
 // in order; a prevalidation item is a hard gate (up to MaxCorrections corrective
 // turns). The whole sequence runs within one execution — no persistence or re-entry.
 
-// TodoTaskResponse represents the structured output from the TodoTask orchestrator agent
-type TodoTaskResponse struct {
+// OrchestratorDecision represents the structured output from the Orchestrator orchestrator agent
+type OrchestratorDecision struct {
 	// Task management (via tools, not structured output - these are for reference)
 	TasksCreated   []string `json:"tasks_created,omitempty"`   // IDs of tasks created this turn
 	TasksUpdated   []string `json:"tasks_updated,omitempty"`   // IDs of tasks updated this turn
@@ -826,30 +826,30 @@ type TodoTaskResponse struct {
 	CompletionReason string `json:"completion_reason,omitempty"` // Why the step is complete
 }
 
-// Implement PlanStepInterface for TodoTaskPlanStep
-func (t *TodoTaskPlanStep) GetID() string                           { return t.ID }
-func (t *TodoTaskPlanStep) GetTitle() string                        { return t.Title }
-func (t *TodoTaskPlanStep) GetDescription() string                  { return t.Description }
-func (t *TodoTaskPlanStep) GetContextDependencies() []string        { return t.ContextDependencies }
-func (t *TodoTaskPlanStep) GetContextOutput() FlexibleContextOutput { return t.ContextOutput }
-func (t *TodoTaskPlanStep) GetValidationSchema() *ValidationSchema  { return t.ValidationSchema }
-func (t *TodoTaskPlanStep) StepType() StepType                      { return StepTypeTodoTask }
-func (t *TodoTaskPlanStep) GetCommonFields() CommonStepFields       { return t.CommonStepFields }
+// Implement PlanStepInterface for OrchestratorPlanStep
+func (t *OrchestratorPlanStep) GetID() string                           { return t.ID }
+func (t *OrchestratorPlanStep) GetTitle() string                        { return t.Title }
+func (t *OrchestratorPlanStep) GetDescription() string                  { return t.Description }
+func (t *OrchestratorPlanStep) GetContextDependencies() []string        { return t.ContextDependencies }
+func (t *OrchestratorPlanStep) GetContextOutput() FlexibleContextOutput { return t.ContextOutput }
+func (t *OrchestratorPlanStep) GetValidationSchema() *ValidationSchema  { return t.ValidationSchema }
+func (t *OrchestratorPlanStep) StepType() StepType                      { return StepTypeOrchestrator }
+func (t *OrchestratorPlanStep) GetCommonFields() CommonStepFields       { return t.CommonStepFields }
 
-// MarshalJSON ensures the type field is always set when marshaling TodoTaskPlanStep
+// MarshalJSON ensures the type field is always set when marshaling OrchestratorPlanStep
 // Writes the flat format (no nested todo_task_step)
-func (t *TodoTaskPlanStep) MarshalJSON() ([]byte, error) {
+func (t *OrchestratorPlanStep) MarshalJSON() ([]byte, error) {
 	// Ensure type is set
-	t.Type = StepTypeTodoTask
+	t.Type = StepTypeOrchestrator
 
 	// Use type alias to avoid infinite recursion
-	type Alias TodoTaskPlanStep
+	type Alias OrchestratorPlanStep
 	return json.Marshal((*Alias)(t))
 }
 
-// UnmarshalJSON implements custom unmarshaling for TodoTaskPlanStep
+// UnmarshalJSON implements custom unmarshaling for OrchestratorPlanStep
 // Supports both the new flat format and the legacy nested todo_task_step format for backwards compatibility.
-func (t *TodoTaskPlanStep) UnmarshalJSON(data []byte) error {
+func (t *OrchestratorPlanStep) UnmarshalJSON(data []byte) error {
 	// First, unmarshal into a temporary struct to extract nested steps as raw JSON
 	var temp struct {
 		Type  StepType `json:"type"`
@@ -861,7 +861,7 @@ func (t *TodoTaskPlanStep) UnmarshalJSON(data []byte) error {
 		ContextOutput       FlexibleContextOutput `json:"context_output"`
 		ValidationSchema    *ValidationSchema     `json:"validation_schema,omitempty"`
 		// Legacy nested field (backwards compatibility)
-		TodoTaskStep     json.RawMessage `json:"todo_task_step,omitempty"`
+		OrchestratorStep     json.RawMessage `json:"todo_task_step,omitempty"`
 		PredefinedRoutes []struct {
 			RouteID       string          `json:"route_id"`
 			RouteName     string          `json:"route_name"`
@@ -892,8 +892,8 @@ func (t *TodoTaskPlanStep) UnmarshalJSON(data []byte) error {
 
 	// BACKWARDS COMPATIBILITY: if legacy todo_task_step is present, migrate fields from it
 	// Top-level fields take precedence if both are present
-	if len(temp.TodoTaskStep) > 0 && string(temp.TodoTaskStep) != "null" {
-		innerStep, err := unmarshalStepFromJSON(temp.TodoTaskStep)
+	if len(temp.OrchestratorStep) > 0 && string(temp.OrchestratorStep) != "null" {
+		innerStep, err := unmarshalStepFromJSON(temp.OrchestratorStep)
 		if err != nil {
 			return fmt.Errorf("failed to unmarshal legacy todo_task_step: %w", err)
 		}
@@ -978,7 +978,7 @@ func parseStepFromJSON(stepData json.RawMessage, index int, label string) (PlanS
 		}
 		return &step, nil
 	case "todo_task":
-		var step TodoTaskPlanStep
+		var step OrchestratorPlanStep
 		if err := json.Unmarshal(stepData, &step); err != nil {
 			return nil, fmt.Errorf("failed to parse todo_task %s %d: %w", label, index, err)
 		}
@@ -1095,7 +1095,7 @@ type PartialPlanStep struct {
 	MaxIterations       *int                  `json:"max_iterations,omitempty"`       // DEPRECATED: loop feature removed
 	LoopDescription     string                `json:"loop_description,omitempty"`     // DEPRECATED: loop feature removed
 	// Todo task step fields
-	TodoTaskStep     map[string]interface{}   `json:"todo_task_step,omitempty"`    // Optional: Updated todo task step - will be converted to PlanStepInterface
+	OrchestratorStep     map[string]interface{}   `json:"todo_task_step,omitempty"`    // Optional: Updated todo task step - will be converted to PlanStepInterface
 	PredefinedRoutes []PlanOrchestrationRoute `json:"predefined_routes,omitempty"` // Optional: Updated predefined routes for todo task steps
 	Messages         []MessageSequenceItem    `json:"messages,omitempty"`          // Optional: Updated scripted message sequence for todo task steps
 	// Routing fields
@@ -1960,8 +1960,8 @@ func getAddHumanInputStepSchema() string {
 	}`
 }
 
-// getAddTodoTaskStepSchema returns the JSON schema for add_todo_task_step tool
-func getAddTodoTaskStepSchema() string {
+// getAddOrchestratorStepSchema returns the JSON schema for add_todo_task_step tool
+func getAddOrchestratorStepSchema() string {
 	return `{
 		"type": "object",
 		"properties": {
@@ -2092,8 +2092,8 @@ func getAddTodoTaskStepSchema() string {
 	}`
 }
 
-// getUpdateTodoTaskStepSchema returns the JSON schema for update_todo_task_step tool
-func getUpdateTodoTaskStepSchema() string {
+// getUpdateOrchestratorStepSchema returns the JSON schema for update_todo_task_step tool
+func getUpdateOrchestratorStepSchema() string {
 	return `{
 		"type": "object",
 		"properties": {
@@ -2177,8 +2177,8 @@ func getUpdateTodoTaskStepSchema() string {
 	}`
 }
 
-// getAddTodoTaskRouteSchema returns the JSON schema for add_todo_task_route tool
-func getAddTodoTaskRouteSchema() string {
+// getAddOrchestratorRouteSchema returns the JSON schema for add_todo_task_route tool
+func getAddOrchestratorRouteSchema() string {
 	return `{
 		"type": "object",
 		"properties": {
@@ -2238,8 +2238,8 @@ func getAddTodoTaskRouteSchema() string {
 	}`
 }
 
-// getUpdateTodoTaskRouteSchema returns the JSON schema for update_todo_task_route tool
-func getUpdateTodoTaskRouteSchema() string {
+// getUpdateOrchestratorRouteSchema returns the JSON schema for update_todo_task_route tool
+func getUpdateOrchestratorRouteSchema() string {
 	return `{
 		"type": "object",
 		"properties": {
@@ -2289,8 +2289,8 @@ func getUpdateTodoTaskRouteSchema() string {
 	}`
 }
 
-// getDeleteTodoTaskRouteSchema returns the JSON schema for delete_todo_task_route tool
-func getDeleteTodoTaskRouteSchema() string {
+// getDeleteOrchestratorRouteSchema returns the JSON schema for delete_todo_task_route tool
+func getDeleteOrchestratorRouteSchema() string {
 	return `{
 		"type": "object",
 		"properties": {
@@ -2386,7 +2386,7 @@ func updateToolForStepType(stepType StepType) string {
 	switch stepType {
 	case StepTypeMessageSeq:
 		return "update_message_sequence_step"
-	case StepTypeTodoTask:
+	case StepTypeOrchestrator:
 		return "update_todo_task_step"
 	case StepTypeRouting:
 		return "update_routing_step"
@@ -2585,7 +2585,7 @@ func convertMapToStep(stepMap map[string]interface{}) (PlanStepInterface, error)
 		}
 		typedStep = &step
 	case "todo_task":
-		var step TodoTaskPlanStep
+		var step OrchestratorPlanStep
 		if err := json.Unmarshal(stepJSON, &step); err != nil {
 			return nil, fmt.Errorf("failed to parse todo_task step: %w", err)
 		}
@@ -2651,11 +2651,11 @@ func unmarshalStepFromJSON(stepData json.RawMessage) (PlanStepInterface, error) 
 		step.Type = StepTypeHumanInput
 		typedStep = &step
 	case "todo_task":
-		var step TodoTaskPlanStep
+		var step OrchestratorPlanStep
 		if err := json.Unmarshal(stepData, &step); err != nil {
 			return nil, fmt.Errorf("failed to parse todo_task step: %w", err)
 		}
-		step.Type = StepTypeTodoTask
+		step.Type = StepTypeOrchestrator
 		typedStep = &step
 	case "routing":
 		var step RoutingPlanStep
@@ -2919,7 +2919,7 @@ func updateValidationSchemaOnStep(step PlanStepInterface, schema *ValidationSche
 		s.ValidationSchema = schema
 	case *HumanInputPlanStep:
 		s.ValidationSchema = schema
-	case *TodoTaskPlanStep:
+	case *OrchestratorPlanStep:
 		s.ValidationSchema = schema
 	case *RoutingPlanStep:
 		s.ValidationSchema = schema
@@ -3179,7 +3179,7 @@ func mergePartialStepUpdate(existingStep PlanStepInterface, partialUpdate Partia
 		}
 		return &updated
 
-	case *TodoTaskPlanStep:
+	case *OrchestratorPlanStep:
 		updated := *step
 		if partialUpdate.Title != "" {
 			updated.Title = partialUpdate.Title
@@ -3194,14 +3194,14 @@ func mergePartialStepUpdate(existingStep PlanStepInterface, partialUpdate Partia
 			updated.ContextOutput = partialUpdate.ContextOutput
 		}
 		// BACKWARDS COMPATIBILITY: if legacy todo_task_step map is present, extract fields from it
-		if partialUpdate.TodoTaskStep != nil {
-			if desc, ok := partialUpdate.TodoTaskStep["description"].(string); ok && desc != "" {
+		if partialUpdate.OrchestratorStep != nil {
+			if desc, ok := partialUpdate.OrchestratorStep["description"].(string); ok && desc != "" {
 				updated.Description = desc
 			}
-			if title, ok := partialUpdate.TodoTaskStep["title"].(string); ok && title != "" {
+			if title, ok := partialUpdate.OrchestratorStep["title"].(string); ok && title != "" {
 				updated.Title = title
 			}
-			if contextDeps, ok := partialUpdate.TodoTaskStep["context_dependencies"].([]interface{}); ok {
+			if contextDeps, ok := partialUpdate.OrchestratorStep["context_dependencies"].([]interface{}); ok {
 				updated.ContextDependencies = make([]string, 0, len(contextDeps))
 				for _, dep := range contextDeps {
 					if depStr, ok := dep.(string); ok {
@@ -3209,7 +3209,7 @@ func mergePartialStepUpdate(existingStep PlanStepInterface, partialUpdate Partia
 					}
 				}
 			}
-			if contextOutput, ok := partialUpdate.TodoTaskStep["context_output"]; ok {
+			if contextOutput, ok := partialUpdate.OrchestratorStep["context_output"]; ok {
 				if contextOutputMap, ok := contextOutput.(map[string]interface{}); ok {
 					contextOutputJSON, _ := json.Marshal(contextOutputMap)
 					json.Unmarshal(contextOutputJSON, &updated.ContextOutput)
@@ -3217,7 +3217,7 @@ func mergePartialStepUpdate(existingStep PlanStepInterface, partialUpdate Partia
 					updated.ContextOutput = FlexibleContextOutput(contextOutputStr)
 				}
 			}
-			if validationSchema, ok := partialUpdate.TodoTaskStep["validation_schema"]; ok {
+			if validationSchema, ok := partialUpdate.OrchestratorStep["validation_schema"]; ok {
 				if validationSchemaMap, ok := validationSchema.(map[string]interface{}); ok {
 					validationSchemaJSON, _ := json.Marshal(validationSchemaMap)
 					var vs ValidationSchema
@@ -3328,7 +3328,7 @@ func findStepByID(steps []PlanStepInterface, id string) (PlanStepInterface, int,
 
 		// Search in nested structures
 		switch s := step.(type) {
-		case *TodoTaskPlanStep:
+		case *OrchestratorPlanStep:
 			for _, route := range s.PredefinedRoutes {
 				if route.SubAgentStep != nil {
 					if foundStep, idx, slice := findStepByID([]PlanStepInterface{route.SubAgentStep}, id); foundStep != nil {
@@ -3352,7 +3352,7 @@ func updateStepRecursively(steps []PlanStepInterface, partialUpdate PartialPlanS
 
 		// Recursively search and update in nested structures
 		switch s := step.(type) {
-		case *TodoTaskPlanStep:
+		case *OrchestratorPlanStep:
 			for j := range s.PredefinedRoutes {
 				if s.PredefinedRoutes[j].SubAgentStep != nil {
 					tmpSlice := []PlanStepInterface{s.PredefinedRoutes[j].SubAgentStep}
@@ -3378,7 +3378,7 @@ func replaceStepRecursively(steps []PlanStepInterface, stepID string, replacemen
 			return true, i
 		}
 
-		if todoStep, ok := step.(*TodoTaskPlanStep); ok {
+		if todoStep, ok := step.(*OrchestratorPlanStep); ok {
 			for routeIndex := range todoStep.PredefinedRoutes {
 				routeStep := todoStep.PredefinedRoutes[routeIndex].SubAgentStep
 				if routeStep == nil {
@@ -3485,14 +3485,14 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 	}
 	// Loop fields ignored (feature removed)
 	// Legacy todo_task_step field — extract fields and track them as top-level changes
-	if partialUpdate.TodoTaskStep != nil {
-		if desc, ok := partialUpdate.TodoTaskStep["description"].(string); ok && desc != "" {
+	if partialUpdate.OrchestratorStep != nil {
+		if desc, ok := partialUpdate.OrchestratorStep["description"].(string); ok && desc != "" {
 			changedFields = append(changedFields, "description (via todo_task_step)")
-			if todoTaskStep, ok := existingStep.(*TodoTaskPlanStep); ok {
+			if orchestratorStep, ok := existingStep.(*OrchestratorPlanStep); ok {
 				*fieldChanges = append(*fieldChanges, PlanFieldChange{
 					StepID:   partialUpdate.ExistingStepID,
 					Field:    "description",
-					OldValue: todoTaskStep.Description,
+					OldValue: orchestratorStep.Description,
 					NewValue: desc,
 				})
 			}
@@ -3502,8 +3502,8 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 		changedFields = append(changedFields, "predefined_routes")
 		// Get old routes
 		var oldRoutes []PlanOrchestrationRoute
-		if todoTaskStep, ok := existingStep.(*TodoTaskPlanStep); ok {
-			oldRoutes = todoTaskStep.PredefinedRoutes
+		if orchestratorStep, ok := existingStep.(*OrchestratorPlanStep); ok {
+			oldRoutes = orchestratorStep.PredefinedRoutes
 		}
 		// Compare routes in detail
 		if !equalOrchestrationRoutes(oldRoutes, partialUpdate.PredefinedRoutes) {
@@ -3589,7 +3589,7 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 		switch step := existingStep.(type) {
 		case *RegularPlanStep:
 			oldNextStepID = step.NextStepID
-		case *TodoTaskPlanStep:
+		case *OrchestratorPlanStep:
 			oldNextStepID = step.NextStepID
 		case *HumanInputPlanStep:
 			oldNextStepID = step.NextStepID
@@ -3606,8 +3606,8 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 	if partialUpdate.Messages != nil {
 		changedFields = append(changedFields, "messages")
 		oldMessagesJSON := "[]"
-		if todoTaskStep, ok := existingStep.(*TodoTaskPlanStep); ok {
-			oldBytes, _ := json.Marshal(todoTaskStep.Messages)
+		if orchestratorStep, ok := existingStep.(*OrchestratorPlanStep); ok {
+			oldBytes, _ := json.Marshal(orchestratorStep.Messages)
 			oldMessagesJSON = string(oldBytes)
 		}
 		newBytes, _ := json.Marshal(partialUpdate.Messages)
@@ -4073,7 +4073,7 @@ func buildDeletedStepArtifactCleanupNotice(deletedIDs []string, prunedConfigIDs 
 	return b.String()
 }
 
-func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string, descriptionReviewCleared, driftReviewCleared, driftReviewFlagFailed bool) string {
+func buildOrchestratorRouteArtifactReviewNotice(parentStepID, routeID, action string, descriptionReviewCleared, driftReviewCleared, driftReviewFlagFailed bool) string {
 	var b strings.Builder
 	b.WriteString("\n\nTodo route artifact review required for ")
 	b.WriteString(action)
@@ -4103,7 +4103,7 @@ func buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action string
 	return b.String()
 }
 
-func handleTodoTaskRouteArtifactReview(ctx context.Context, workspacePath, parentStepID, routeID, action string, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, logger loggerv2.Logger) string {
+func handleOrchestratorRouteArtifactReview(ctx context.Context, workspacePath, parentStepID, routeID, action string, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, logger loggerv2.Logger) string {
 	fieldChanges := []PlanFieldChange{{
 		StepID: parentStepID,
 		Field:  "predefined_routes",
@@ -4118,7 +4118,7 @@ func handleTodoTaskRouteArtifactReview(ctx context.Context, workspacePath, paren
 		logger.Warn(fmt.Sprintf("⚠️ Failed to flag drift_review.needs_review after %s route %s on step %s (both attempts failed): %v", action, routeID, parentStepID, err))
 		driftReviewFlagFailed = true
 	}
-	return buildTodoTaskRouteArtifactReviewNotice(parentStepID, routeID, action, descriptionReviewCleared, driftReviewCleared, driftReviewFlagFailed)
+	return buildOrchestratorRouteArtifactReviewNotice(parentStepID, routeID, action, descriptionReviewCleared, driftReviewCleared, driftReviewFlagFailed)
 }
 
 // createUpdateRegularStepExecutor edits the internal regular plan type exposed as update_scripted_step.
@@ -4659,8 +4659,8 @@ func createUpdateHumanInputStepExecutor(workspacePath string, logger loggerv2.Lo
 	}
 }
 
-// createUpdateTodoTaskStepExecutor creates an executor function for update_todo_task_step tool
-func createUpdateTodoTaskStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
+// createUpdateOrchestratorStepExecutor creates an executor function for update_todo_task_step tool
+func createUpdateOrchestratorStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
@@ -4703,12 +4703,12 @@ func createUpdateTodoTaskStepExecutor(workspacePath string, logger loggerv2.Logg
 		}
 
 		// Validate it's a todo task step before updating
-		todoTaskStep, ok := existingStep.(*TodoTaskPlanStep)
+		orchestratorStep, ok := existingStep.(*OrchestratorPlanStep)
 		if !ok {
 			return "", fmt.Errorf("step with ID '%s' is not a todo task step", partialUpdate.ExistingStepID)
 		}
 		existingRegularRouteIDs := make(map[string]bool)
-		for _, regularStep := range collectRegularPlanSteps(todoTaskStep) {
+		for _, regularStep := range collectRegularPlanSteps(orchestratorStep) {
 			existingRegularRouteIDs[regularStep.ID] = true
 		}
 
@@ -4724,13 +4724,13 @@ func createUpdateTodoTaskStepExecutor(workspacePath string, logger loggerv2.Logg
 
 		// Get the updated step from the plan
 		updatedStep := plan.Steps[stepIndex]
-		updatedTodoTaskStep, ok := updatedStep.(*TodoTaskPlanStep)
+		updatedOrchestratorStep, ok := updatedStep.(*OrchestratorPlanStep)
 		if !ok {
 			return "", fmt.Errorf("updated step is not a todo task step")
 		}
 
 		// Validate the updated step has all required fields
-		if err := validateTodoTaskStepFieldsTyped(updatedTodoTaskStep); err != nil {
+		if err := validateOrchestratorStepFieldsTyped(updatedOrchestratorStep); err != nil {
 			return "", fmt.Errorf("validation failed after update: %w", err)
 		}
 
@@ -4750,7 +4750,7 @@ func createUpdateTodoTaskStepExecutor(workspacePath string, logger loggerv2.Logg
 			return "", fmt.Errorf("failed to write plan: %w", err)
 		}
 		var newRegularRoutes []*RegularPlanStep
-		for _, regularStep := range collectRegularPlanSteps(updatedTodoTaskStep) {
+		for _, regularStep := range collectRegularPlanSteps(updatedOrchestratorStep) {
 			if !existingRegularRouteIDs[regularStep.ID] {
 				newRegularRoutes = append(newRegularRoutes, regularStep)
 			}
@@ -4766,7 +4766,7 @@ func createUpdateTodoTaskStepExecutor(workspacePath string, logger loggerv2.Logg
 			Changes: fieldChanges,
 		}, readFile, writeFile, logger)
 
-		_ = todoTaskStep // Suppress unused variable warning
+		_ = orchestratorStep // Suppress unused variable warning
 		dependentReviewNotice := handlePlanStepDependentArtifactReview(ctx, workspacePath, partialUpdate.ExistingStepID, fieldChanges, readFile, writeFile, logger)
 		logger.Info(fmt.Sprintf("✅ Updated todo task step '%s' in plan", partialUpdate.ExistingStepID))
 		return fmt.Sprintf("Successfully updated todo task step '%s' in the plan%s", partialUpdate.ExistingStepID, dependentReviewNotice), nil
@@ -5227,7 +5227,7 @@ func collectRegularPlanSteps(step PlanStepInterface) []*RegularPlanStep {
 	switch typed := step.(type) {
 	case *RegularPlanStep:
 		return []*RegularPlanStep{typed}
-	case *TodoTaskPlanStep:
+	case *OrchestratorPlanStep:
 		var regularSteps []*RegularPlanStep
 		for _, route := range typed.PredefinedRoutes {
 			regularSteps = append(regularSteps, collectRegularPlanSteps(route.SubAgentStep)...)
@@ -5269,14 +5269,14 @@ func createAddHumanInputStepExecutor(workspacePath string, logger loggerv2.Logge
 	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "human_input")
 }
 
-// createAddTodoTaskStepExecutor creates an executor function for add_todo_task_step tool
-func createAddTodoTaskStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
+// createAddOrchestratorStepExecutor creates an executor function for add_todo_task_step tool
+func createAddOrchestratorStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
 	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "todo_task")
 }
 
-// validateTodoTaskStepFieldsTyped validates that a TodoTaskPlanStep has all required fields
+// validateOrchestratorStepFieldsTyped validates that a OrchestratorPlanStep has all required fields
 // Returns an error message suitable for returning as a tool response if validation fails
-func validateTodoTaskStepFieldsTyped(step *TodoTaskPlanStep) error {
+func validateOrchestratorStepFieldsTyped(step *OrchestratorPlanStep) error {
 	if step.ID == "" {
 		return fmt.Errorf("step (title: %q) has todo_task step type but is missing required id field", step.Title)
 	}
@@ -5312,13 +5312,13 @@ func validateTodoTaskStepFieldsTyped(step *TodoTaskPlanStep) error {
 			if err := validateMessageSequenceStepFieldsTyped(subStep); err != nil {
 				return fmt.Errorf("step (title: %q, ID: %s) predefined_route[%d] (route_id: %s): %w", step.Title, step.ID, i, route.RouteID, err)
 			}
-		case *TodoTaskPlanStep:
-			if err := validateTodoTaskStepFieldsTyped(subStep); err != nil {
+		case *OrchestratorPlanStep:
+			if err := validateOrchestratorStepFieldsTyped(subStep); err != nil {
 				return fmt.Errorf("step (title: %q, ID: %s) predefined_route[%d] (route_id: %s): %w", step.Title, step.ID, i, route.RouteID, err)
 			}
 		}
 	}
-	if err := validateTodoTaskNestingDepth(step, 0); err != nil {
+	if err := validateOrchestratorNestingDepth(step, 0); err != nil {
 		return err
 	}
 	for i, m := range step.Messages {
@@ -5424,7 +5424,7 @@ func setStepIdentity(step PlanStepInterface, id, title string) error {
 		if strings.TrimSpace(s.Title) == "" {
 			s.Title = title
 		}
-	case *TodoTaskPlanStep:
+	case *OrchestratorPlanStep:
 		s.ID = id
 		if strings.TrimSpace(s.Title) == "" {
 			s.Title = title
@@ -5460,9 +5460,9 @@ func setStepIdentity(step PlanStepInterface, id, title string) error {
 	return nil
 }
 
-func validateTodoTaskNestingDepth(step PlanStepInterface, todoRouteDepth int) error {
+func validateOrchestratorNestingDepth(step PlanStepInterface, todoRouteDepth int) error {
 	switch s := step.(type) {
-	case *TodoTaskPlanStep:
+	case *OrchestratorPlanStep:
 		if todoRouteDepth > 1 {
 			return fmt.Errorf(
 				"todo_task step %q (ID: %s) exceeds the supported nesting depth. Only one nested todo_task layer is allowed under a todo task route",
@@ -5474,7 +5474,7 @@ func validateTodoTaskNestingDepth(step PlanStepInterface, todoRouteDepth int) er
 			if route.SubAgentStep == nil {
 				continue
 			}
-			if err := validateTodoTaskNestingDepth(route.SubAgentStep, todoRouteDepth+1); err != nil {
+			if err := validateOrchestratorNestingDepth(route.SubAgentStep, todoRouteDepth+1); err != nil {
 				return fmt.Errorf("predefined_route[%d] (route_id: %s): %w", i, route.RouteID, err)
 			}
 		}
@@ -5536,8 +5536,8 @@ func createSingleStepAdder(workspacePath string, logger loggerv2.Logger, readFil
 		// This allows the agent to correct errors immediately via tool response
 		switch stepType {
 		case "todo_task":
-			if todoTaskStep, ok := typedStep.(*TodoTaskPlanStep); ok {
-				if err := validateTodoTaskStepFieldsTyped(todoTaskStep); err != nil {
+			if orchestratorStep, ok := typedStep.(*OrchestratorPlanStep); ok {
+				if err := validateOrchestratorStepFieldsTyped(orchestratorStep); err != nil {
 					return "", fmt.Errorf("validation failed: %w", err)
 				}
 			}
@@ -5920,16 +5920,16 @@ func registerPlanModificationTools(
 		return fmt.Errorf("failed to register add_human_input_step tool: %w", err)
 	}
 
-	todoTaskSchema := getAddTodoTaskStepSchema()
-	todoTaskParams, err := parseSchemaForToolParameters(todoTaskSchema)
+	orchestratorSchema := getAddOrchestratorStepSchema()
+	orchestratorParams, err := parseSchemaForToolParameters(orchestratorSchema)
 	if err != nil {
 		return fmt.Errorf("failed to parse todo task step schema: %w", err)
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"add_todo_task_step",
 		"Add a todo task orchestration step to the plan. Use this when you need to manage a dynamic todo list with trackable tasks. The main orchestrator creates/assigns tasks, then delegates to predefined sub-agents (with learning and prevalidation) or a generic agent (workspace tools only, no learning). Predefined routes have MCP tool access and accumulate learnings. A conversational route sub_agent_step must be message_sequence; use regular only for an explicitly scripted deterministic route, or todo_task for one nested orchestration layer. The generic agent is for simple, ad-hoc tasks. Provide: id, title, todo_task_step (main orchestrator metadata), predefined_routes (optional, specialized sub-agents), enable_generic_agent (optional, default true), next_step_id, insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
-		todoTaskParams,
-		createAddTodoTaskStepExecutor(workspacePath, logger, readFile, writeFile, moveFile),
+		orchestratorParams,
+		createAddOrchestratorStepExecutor(workspacePath, logger, readFile, writeFile, moveFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register add_todo_task_step tool: %w", err)
@@ -6028,62 +6028,62 @@ func registerPlanModificationTools(
 	// NOTE: add/update/delete_orchestration_route tools removed (deprecated in favor of todo_task).
 
 	// Register todo task step update tool
-	todoTaskUpdateSchema := getUpdateTodoTaskStepSchema()
-	todoTaskUpdateParams, err := parseSchemaForToolParameters(todoTaskUpdateSchema)
+	orchestratorUpdateSchema := getUpdateOrchestratorStepSchema()
+	orchestratorUpdateParams, err := parseSchemaForToolParameters(orchestratorUpdateSchema)
 	if err != nil {
 		return fmt.Errorf("failed to parse update_todo_task_step schema: %w", err)
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"update_todo_task_step",
 		"Update an Orchestrator step (todo_task type) in the plan. Provide existing_step_id (required) to identify which step to update, and only include the fields you want to change (title, todo_task_step, predefined_routes, next_step_id). The plan.json file is updated immediately when this tool is called. After a substantive change, review whether the step's saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
-		todoTaskUpdateParams,
-		createUpdateTodoTaskStepExecutor(workspacePath, logger, readFile, writeFile),
+		orchestratorUpdateParams,
+		createUpdateOrchestratorStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register update_todo_task_step tool: %w", err)
 	}
 
 	// Register todo task route management tools
-	addTodoTaskRouteSchema := getAddTodoTaskRouteSchema()
-	addTodoTaskRouteParams, err := parseSchemaForToolParameters(addTodoTaskRouteSchema)
+	addOrchestratorRouteSchema := getAddOrchestratorRouteSchema()
+	addOrchestratorRouteParams, err := parseSchemaForToolParameters(addOrchestratorRouteSchema)
 	if err != nil {
 		return fmt.Errorf("failed to parse add_todo_task_route schema: %w", err)
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"add_todo_task_route",
 		"Add a new predefined route (sub-agent) to an Orchestrator step (todo_task type). New conversational routes must use sub_agent_step.type=message_sequence, even for one turn. Use regular only for a deterministic scripted boundary; it is automatically configured as scripted. Provide parent_step_id and new_route with route_id, route_name, and condition, plus either sub_agent_step or orphan_step_ref. The plan.json file is updated immediately.",
-		addTodoTaskRouteParams,
-		createAddTodoTaskRouteExecutor(workspacePath, logger, readFile, writeFile),
+		addOrchestratorRouteParams,
+		createAddOrchestratorRouteExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register add_todo_task_route tool: %w", err)
 	}
 
-	updateTodoTaskRouteSchema := getUpdateTodoTaskRouteSchema()
-	updateTodoTaskRouteParams, err := parseSchemaForToolParameters(updateTodoTaskRouteSchema)
+	updateOrchestratorRouteSchema := getUpdateOrchestratorRouteSchema()
+	updateOrchestratorRouteParams, err := parseSchemaForToolParameters(updateOrchestratorRouteSchema)
 	if err != nil {
 		return fmt.Errorf("failed to parse update_todo_task_route schema: %w", err)
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"update_todo_task_route",
 		"Update an existing predefined route (sub-agent) within an Orchestrator step (todo_task type). Conversational route definitions use message_sequence; regular is reserved for deterministic scripted work. Provide parent_step_id, existing_route_id, and only the fields to change. Use orphan_step_ref for a reusable orphan step. The plan.json file is updated immediately.",
-		updateTodoTaskRouteParams,
-		createUpdateTodoTaskRouteExecutor(workspacePath, logger, readFile, writeFile),
+		updateOrchestratorRouteParams,
+		createUpdateOrchestratorRouteExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register update_todo_task_route tool: %w", err)
 	}
 
-	deleteTodoTaskRouteSchema := getDeleteTodoTaskRouteSchema()
-	deleteTodoTaskRouteParams, err := parseSchemaForToolParameters(deleteTodoTaskRouteSchema)
+	deleteOrchestratorRouteSchema := getDeleteOrchestratorRouteSchema()
+	deleteOrchestratorRouteParams, err := parseSchemaForToolParameters(deleteOrchestratorRouteSchema)
 	if err != nil {
 		return fmt.Errorf("failed to parse delete_todo_task_route schema: %w", err)
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"delete_todo_task_route",
 		"Delete a predefined route (sub-agent) from an Orchestrator step (todo_task type). Provide parent_step_id and deleted_route_id. Unlike routing steps, Orchestrator steps may have 0 predefined routes (generic-agent-only). The plan.json file is updated immediately when this tool is called.",
-		deleteTodoTaskRouteParams,
-		createDeleteTodoTaskRouteExecutor(workspacePath, logger, readFile, writeFile),
+		deleteOrchestratorRouteParams,
+		createDeleteOrchestratorRouteExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register delete_todo_task_route tool: %w", err)
@@ -6165,7 +6165,7 @@ func createValidatePlanChangeExecutor(
 					continue
 				}
 				steps[step.GetID()] = step
-				if todo, ok := step.(*TodoTaskPlanStep); ok {
+				if todo, ok := step.(*OrchestratorPlanStep); ok {
 					for _, route := range todo.PredefinedRoutes {
 						if route.SubAgentStep != nil {
 							collect([]PlanStepInterface{route.SubAgentStep})
@@ -6332,8 +6332,8 @@ func withPlanMutationWriteAccess(workspacePath string, writeFile func(context.Co
 	}
 }
 
-// createAddTodoTaskRouteExecutor creates an executor function for add_todo_task_route tool
-func createAddTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
+// createAddOrchestratorRouteExecutor creates an executor function for add_todo_task_route tool
+func createAddOrchestratorRouteExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
@@ -6415,7 +6415,7 @@ func createAddTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Logger
 			return "", fmt.Errorf("parent step ID '%s' not found in existing plan. Available top-level step IDs: %v", parentStepID, availableIDs)
 		}
 
-		todoTaskStep, ok := parentStep.(*TodoTaskPlanStep)
+		orchestratorStep, ok := parentStep.(*OrchestratorPlanStep)
 		if !ok {
 			return "", fmt.Errorf("step with ID '%s' is not a todo task step", parentStepID)
 		}
@@ -6426,7 +6426,7 @@ func createAddTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Logger
 		}
 
 		// Check if route_id already exists
-		for _, existingRoute := range todoTaskStep.PredefinedRoutes {
+		for _, existingRoute := range orchestratorStep.PredefinedRoutes {
 			if existingRoute.RouteID == newRoute.RouteID {
 				return "", fmt.Errorf("route with route_id '%s' already exists in todo task step '%s'", newRoute.RouteID, parentStepID)
 			}
@@ -6446,11 +6446,11 @@ func createAddTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Logger
 		}
 
 		// Add new route
-		todoTaskStep.PredefinedRoutes = append(todoTaskStep.PredefinedRoutes, newRoute)
+		orchestratorStep.PredefinedRoutes = append(orchestratorStep.PredefinedRoutes, newRoute)
 		if err := resolvePlanOrphanStepRefs(plan); err != nil {
 			return "", fmt.Errorf("failed to resolve orphan step references after adding route: %w", err)
 		}
-		if err := validateTodoTaskStepFieldsTyped(todoTaskStep); err != nil {
+		if err := validateOrchestratorStepFieldsTyped(orchestratorStep); err != nil {
 			return "", fmt.Errorf("validation failed after adding route: %w", err)
 		}
 
@@ -6467,7 +6467,7 @@ func createAddTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Logger
 		// resolution), not the pre-resolution local var, so the changelog's
 		// after_ref reflects what was really written (PLAT-074).
 		var addedRouteJSON []json.RawMessage
-		if addedRoute, err := json.Marshal(todoTaskStep.PredefinedRoutes[len(todoTaskStep.PredefinedRoutes)-1]); err == nil {
+		if addedRoute, err := json.Marshal(orchestratorStep.PredefinedRoutes[len(orchestratorStep.PredefinedRoutes)-1]); err == nil {
 			addedRouteJSON = []json.RawMessage{addedRoute}
 		} else {
 			logger.Warn(fmt.Sprintf("⚠️ Failed to marshal added route %s for changelog: %v", newRoute.RouteID, err))
@@ -6480,15 +6480,15 @@ func createAddTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Logger
 			AddedSteps: addedRouteJSON,
 		}, readFile, writeFile, logger)
 
-		routeReviewNotice := handleTodoTaskRouteArtifactReview(ctx, workspacePath, parentStepID, newRoute.RouteID, "added", readFile, writeFile, logger)
+		routeReviewNotice := handleOrchestratorRouteArtifactReview(ctx, workspacePath, parentStepID, newRoute.RouteID, "added", readFile, writeFile, logger)
 
-		logger.Info(fmt.Sprintf("✅ Added route '%s' (ID: %s) to todo task step '%s'", newRoute.RouteName, newRoute.RouteID, todoTaskStep.Title))
-		return fmt.Sprintf("Successfully added route '%s' (ID: %s) to todo task step '%s'%s", newRoute.RouteName, newRoute.RouteID, todoTaskStep.Title, routeReviewNotice), nil
+		logger.Info(fmt.Sprintf("✅ Added route '%s' (ID: %s) to todo task step '%s'", newRoute.RouteName, newRoute.RouteID, orchestratorStep.Title))
+		return fmt.Sprintf("Successfully added route '%s' (ID: %s) to todo task step '%s'%s", newRoute.RouteName, newRoute.RouteID, orchestratorStep.Title, routeReviewNotice), nil
 	}
 }
 
-// createUpdateTodoTaskRouteExecutor creates an executor function for update_todo_task_route tool
-func createUpdateTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
+// createUpdateOrchestratorRouteExecutor creates an executor function for update_todo_task_route tool
+func createUpdateOrchestratorRouteExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
@@ -6531,22 +6531,22 @@ func createUpdateTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 			return "", fmt.Errorf("parent step ID '%s' not found in existing plan. Available top-level step IDs: %v", parentStepID, availableIDs)
 		}
 
-		todoTaskStep, ok := parentStep.(*TodoTaskPlanStep)
+		orchestratorStep, ok := parentStep.(*OrchestratorPlanStep)
 		if !ok {
 			return "", fmt.Errorf("step with ID '%s' is not a todo task step", parentStepID)
 		}
 
 		// Find the route to update
 		var routeToUpdate *PlanOrchestrationRoute
-		for i := range todoTaskStep.PredefinedRoutes {
-			if todoTaskStep.PredefinedRoutes[i].RouteID == existingRouteID {
-				routeToUpdate = &todoTaskStep.PredefinedRoutes[i]
+		for i := range orchestratorStep.PredefinedRoutes {
+			if orchestratorStep.PredefinedRoutes[i].RouteID == existingRouteID {
+				routeToUpdate = &orchestratorStep.PredefinedRoutes[i]
 				break
 			}
 		}
 		if routeToUpdate == nil {
-			availableRouteIDs := make([]string, 0, len(todoTaskStep.PredefinedRoutes))
-			for _, route := range todoTaskStep.PredefinedRoutes {
+			availableRouteIDs := make([]string, 0, len(orchestratorStep.PredefinedRoutes))
+			for _, route := range orchestratorStep.PredefinedRoutes {
 				availableRouteIDs = append(availableRouteIDs, route.RouteID)
 			}
 			return "", fmt.Errorf("route with route_id '%s' not found in todo task step '%s'. Available route IDs: %v", existingRouteID, parentStepID, availableRouteIDs)
@@ -6625,7 +6625,7 @@ func createUpdateTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 		if err := resolvePlanOrphanStepRefs(plan); err != nil {
 			return "", fmt.Errorf("failed to resolve orphan step references after route update: %w", err)
 		}
-		if err := validateTodoTaskStepFieldsTyped(todoTaskStep); err != nil {
+		if err := validateOrchestratorStepFieldsTyped(orchestratorStep); err != nil {
 			return "", fmt.Errorf("validation failed after route update: %w", err)
 		}
 
@@ -6652,15 +6652,15 @@ func createUpdateTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 			AfterSnapshot:  afterRouteSnapshot,
 		}, readFile, writeFile, logger)
 
-		routeReviewNotice := handleTodoTaskRouteArtifactReview(ctx, workspacePath, parentStepID, existingRouteID, "updated", readFile, writeFile, logger)
+		routeReviewNotice := handleOrchestratorRouteArtifactReview(ctx, workspacePath, parentStepID, existingRouteID, "updated", readFile, writeFile, logger)
 
-		logger.Info(fmt.Sprintf("✅ Updated route '%s' (ID: %s) in todo task step '%s'", routeToUpdate.RouteName, existingRouteID, todoTaskStep.Title))
-		return fmt.Sprintf("Successfully updated route '%s' (ID: %s) in todo task step '%s'%s", routeToUpdate.RouteName, existingRouteID, todoTaskStep.Title, routeReviewNotice), nil
+		logger.Info(fmt.Sprintf("✅ Updated route '%s' (ID: %s) in todo task step '%s'", routeToUpdate.RouteName, existingRouteID, orchestratorStep.Title))
+		return fmt.Sprintf("Successfully updated route '%s' (ID: %s) in todo task step '%s'%s", routeToUpdate.RouteName, existingRouteID, orchestratorStep.Title, routeReviewNotice), nil
 	}
 }
 
-// createDeleteTodoTaskRouteExecutor creates an executor function for delete_todo_task_route tool
-func createDeleteTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
+// createDeleteOrchestratorRouteExecutor creates an executor function for delete_todo_task_route tool
+func createDeleteOrchestratorRouteExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
 	return func(ctx context.Context, args map[string]interface{}) (string, error) {
 		reason, err := requireReason(args)
 		if err != nil {
@@ -6701,7 +6701,7 @@ func createDeleteTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 			return "", fmt.Errorf("parent step ID '%s' not found in existing plan. Available top-level step IDs: %v", parentStepID, availableIDs)
 		}
 
-		todoTaskStep, ok := parentStep.(*TodoTaskPlanStep)
+		orchestratorStep, ok := parentStep.(*OrchestratorPlanStep)
 		if !ok {
 			return "", fmt.Errorf("step with ID '%s' is not a todo task step", parentStepID)
 		}
@@ -6709,16 +6709,16 @@ func createDeleteTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 		// Find the route to delete
 		var deletedRoute *PlanOrchestrationRoute
 		routeIndex := -1
-		for i, route := range todoTaskStep.PredefinedRoutes {
+		for i, route := range orchestratorStep.PredefinedRoutes {
 			if route.RouteID == deletedRouteID {
-				deletedRoute = &todoTaskStep.PredefinedRoutes[i]
+				deletedRoute = &orchestratorStep.PredefinedRoutes[i]
 				routeIndex = i
 				break
 			}
 		}
 		if deletedRoute == nil {
-			availableRouteIDs := make([]string, 0, len(todoTaskStep.PredefinedRoutes))
-			for _, route := range todoTaskStep.PredefinedRoutes {
+			availableRouteIDs := make([]string, 0, len(orchestratorStep.PredefinedRoutes))
+			for _, route := range orchestratorStep.PredefinedRoutes {
 				availableRouteIDs = append(availableRouteIDs, route.RouteID)
 			}
 			return "", fmt.Errorf("route with route_id '%s' not found in todo task step '%s'. Available route IDs: %v", deletedRouteID, parentStepID, availableRouteIDs)
@@ -6727,9 +6727,9 @@ func createDeleteTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 		// Note: Unlike orchestration steps, todo task steps may have 0 predefined routes (generic-agent-only)
 
 		// Remove the route
-		todoTaskStep.PredefinedRoutes = append(
-			todoTaskStep.PredefinedRoutes[:routeIndex],
-			todoTaskStep.PredefinedRoutes[routeIndex+1:]...,
+		orchestratorStep.PredefinedRoutes = append(
+			orchestratorStep.PredefinedRoutes[:routeIndex],
+			orchestratorStep.PredefinedRoutes[routeIndex+1:]...,
 		)
 
 		// Capture deleted route JSON before writing
@@ -6761,10 +6761,10 @@ func createDeleteTodoTaskRouteExecutor(workspacePath string, logger loggerv2.Log
 			}
 		}
 
-		routeReviewNotice := handleTodoTaskRouteArtifactReview(ctx, workspacePath, parentStepID, deletedRouteID, "deleted", readFile, writeFile, logger)
+		routeReviewNotice := handleOrchestratorRouteArtifactReview(ctx, workspacePath, parentStepID, deletedRouteID, "deleted", readFile, writeFile, logger)
 
-		logger.Info(fmt.Sprintf("✅ Deleted route '%s' (ID: %s) from todo task step '%s'", deletedRoute.RouteName, deletedRouteID, todoTaskStep.Title))
-		return fmt.Sprintf("Successfully deleted route '%s' (ID: %s) from todo task step '%s'%s", deletedRoute.RouteName, deletedRouteID, todoTaskStep.Title, routeReviewNotice), nil
+		logger.Info(fmt.Sprintf("✅ Deleted route '%s' (ID: %s) from todo task step '%s'", deletedRoute.RouteName, deletedRouteID, orchestratorStep.Title))
+		return fmt.Sprintf("Successfully deleted route '%s' (ID: %s) from todo task step '%s'%s", deletedRoute.RouteName, deletedRouteID, orchestratorStep.Title, routeReviewNotice), nil
 	}
 }
 

@@ -339,18 +339,18 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutePredefinedSubAgentFunc(
 		return syncExecute
 	}
 	return func(toolCtx context.Context, routeID, todoID, instructions string) (string, error) {
-		if execCtx == nil || execCtx.TodoTaskStep == nil {
+		if execCtx == nil || execCtx.OrchestratorStep == nil {
 			return "", fmt.Errorf("call_sub_agent is only available inside a todo_task step")
 		}
 		routeExists := false
-		for _, route := range execCtx.TodoTaskStep.PredefinedRoutes {
+		for _, route := range execCtx.OrchestratorStep.PredefinedRoutes {
 			if route.RouteID == routeID {
 				routeExists = true
 				break
 			}
 		}
 		if !routeExists {
-			return "", fmt.Errorf("route_id %q not found in todo task step %q", routeID, execCtx.TodoTaskStep.GetID())
+			return "", fmt.Errorf("route_id %q not found in todo task step %q", routeID, execCtx.OrchestratorStep.GetID())
 		}
 
 		executionID := fmt.Sprintf("todo-sub-%s-%s-%d",
@@ -374,7 +374,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecuteGenericAgentFunc(
 		return syncExecute
 	}
 	return func(toolCtx context.Context, todoID, instructions string) (string, error) {
-		if execCtx == nil || execCtx.TodoTaskStep == nil {
+		if execCtx == nil || execCtx.OrchestratorStep == nil {
 			return "", fmt.Errorf("call_generic_agent is only available inside a todo_task step")
 		}
 		executionID := fmt.Sprintf("todo-generic-%s-%d", workflowSafeIDPart(todoID, "todo"), time.Now().UnixNano())
