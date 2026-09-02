@@ -44,6 +44,21 @@ const WORKFLOW_SCHEDULE_TOOLBAR_LIMIT = 10_000
 // preference shared by all workflows.
 const TOOLBAR_OPEN_GROUPS_KEY = 'workflow-toolbar-open-groups'
 type ToolbarGroupId = 'views' | 'pulse' | 'setup'
+// One-word state text for the collapsed chips; the registry labels are the
+// long form used by panes and tooltips.
+const SHORT_VIEW_LABELS: Partial<Record<WorkspaceViewId, string>> = {
+  'execution-logs': 'Logs',
+  knowledgebase: 'Knowledge',
+  skills: 'Skills',
+  secrets: 'Secrets',
+  mcp: 'MCP',
+  browser: 'Browser',
+  llm: 'LLM',
+  bots: 'Bots',
+  folders: 'Folders',
+}
+const shortViewLabel = (view: { id: WorkspaceViewId; label: string } | undefined) =>
+  view ? SHORT_VIEW_LABELS[view.id] ?? view.label : undefined
 const readOpenGroups = (): Record<ToolbarGroupId, boolean> => {
   const fallback = { views: false, pulse: false, setup: false }
   try {
@@ -360,9 +375,10 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [workflowScheduleStats, setWorkflowScheduleStats] = useState<WorkflowScheduleStats>(EMPTY_WORKFLOW_SCHEDULE_STATS)
   const [manualPulseStarting, setManualPulseStarting] = useState(false)
   const [openGroups, setOpenGroups] = useState<Record<ToolbarGroupId, boolean>>(() => readOpenGroups())
+  // One group open at a time: opening one folds the others.
   const toggleGroup = useCallback((group: ToolbarGroupId) => {
     setOpenGroups(current => {
-      const next = { ...current, [group]: !current[group] }
+      const next: Record<ToolbarGroupId, boolean> = { views: false, pulse: false, setup: false, [group]: !current[group] }
       try { localStorage.setItem(TOOLBAR_OPEN_GROUPS_KEY, JSON.stringify(next)) } catch { /* preference only */ }
       return next
     })
@@ -684,7 +700,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
           {workspacePath && (
             <ToolbarGroup
               label="Views"
-              state={workspaceViewDefinitions.find(view => view.id === activeWorkspaceView)?.label}
+              state={shortViewLabel(workspaceViewDefinitions.find(view => view.id === activeWorkspaceView))}
               open={openGroups.views}
               onToggle={() => toggleGroup('views')}
               title={openGroups.views ? 'Hide views' : 'Show views: report, plan, costs, logs, learnings, knowledgebase, database, files'}
@@ -858,7 +874,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
         {canWriteWorkflow && (
           <ToolbarGroup
             label="Setup"
-            state={capabilityViewDefinitions.find(view => view.id === workflowWorkspaceView)?.label}
+            state={shortViewLabel(capabilityViewDefinitions.find(view => view.id === workflowWorkspaceView))}
             open={openGroups.setup}
             onToggle={() => toggleGroup('setup')}
             title={openGroups.setup ? 'Hide setup' : 'Show setup: skills, secrets, MCP servers, browser, LLM, bots, folders'}
