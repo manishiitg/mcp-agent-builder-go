@@ -2964,7 +2964,7 @@ export interface ScheduledJob {
   id: string
   name: string
   description: string
-  entity_type: 'workflow' | 'chat' | 'multi-agent'
+  entity_type: 'workflow' | 'chat' | 'multi-agent' | 'product'
   preset_query_id?: string
   workspace_path?: string
   workflow_id?: string

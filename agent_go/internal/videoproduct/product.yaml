@@ -296,6 +296,11 @@ profile:
       # model (~690MB, English, with a punctuation post-pass) is a one-time
       # download the composer offers on first use.
       voice: preferred
+  # schedules: a product may declare recurring jobs here (id, name,
+  # cron_expression, timezone, enabled, messages[]); the platform runs them
+  # for every user with the product, one message at a time, in the product
+  # conversation. Requires runtime.conversation.mode: singleton, which this
+  # per-project product is not -- see docs/workflow/workflow_scheduling.md.
   built_in: true
 
 branding:

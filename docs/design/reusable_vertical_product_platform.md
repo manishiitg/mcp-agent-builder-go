@@ -205,8 +205,24 @@ did, and a pairing attempt's timeout now only covers the wait for the first
 QR code (WhatsApp then paces the attempt itself), so the QR no longer dies
 after 30 s while the settings page polls. Verified live for SparkQuill
 (start, pairing QR, status); the AgentWorks side is covered by its service
-tests and compiles, but was not exercised against a phone. The decision
-itself stands; the migration plan is at step 2 (Pulse and secrets remain).
+tests and compiles, but was not exercised against a phone. Pulse followed on
+2026-09-03 and turned out not to be "Pulse" at all: SparkQuill's check-in is
+a product schedule (cron or cadence, a fixed list of messages sent one at a
+time into the product conversation), which AgentWorks' Pulse review/fix
+lifecycle is not. `pkg/productschedule` holds the definition, validation and
+timing rule (cron with timezone, or cadence hours with a preferred hour, plus
+a quiet rule) and a standalone runner with per-message status;
+`agentprofiles.Profile.Schedules` lets a product.yaml declare them (singleton
+conversations only); `cmd/server/product_schedules.go` runs them on the
+AgentWorks server for every user with the product, with per-user enable
+overrides and the same run-history file workflow schedules use, listed and
+controlled through the existing `/api/scheduler/jobs` routes as
+`entity_type: "product"`. family-server's Pulse is now one such schedule on
+the standalone runner (`GET /api/pulse/status` shows each check's state),
+verified live with a manual run. The platform side has unit tests but was
+not exercised against a real product turn. The decision itself stands; the
+migration plan is at step 2 with only secrets remaining (recommended:
+drop it).
 
 ### Revisit trigger
 

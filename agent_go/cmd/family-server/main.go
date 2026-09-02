@@ -102,7 +102,7 @@ func main() {
 		// messages arrive without waiting for the frontend to poll status.
 		whatsAppBot.EnsureConnecting(context.Background())
 	}
-	go startPulseTicker(context.Background())
+	go pulseRunner.Start(context.Background())
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", handleHealth)
@@ -153,6 +153,7 @@ func main() {
 		handleGetPulseConfig(w, r)
 	})
 	mux.HandleFunc("/api/pulse/run", handlePulseRunNow)
+	mux.HandleFunc("/api/pulse/status", handlePulseStatus)
 	mux.HandleFunc("/api/child-schedule", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			handleSetChildSchedule(w, r)

@@ -3,17 +3,18 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/agentsession"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/enginedetect"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/productschedule"
 	"github.com/manishiitg/mcpagent/llm"
 )
 
@@ -257,26 +258,34 @@ func recentActivityBySubjectForPulse(days int) string {
 	return strings.Join(parts, "; ")
 }
 
-// Pulse is SparkQuill's version of AgentWorks' Pulse feature (see the design
-// discussion this was built from): a periodic, opt-in check-in that reviews
-// recent learning activity and keeps reports/academic-map.html and
-// reports/progress.html current, proposing new study material where a
-// gap shows up. Deliberately much simpler than AgentWorks' multi-module
-// Gate/Reviewer/Fixer machinery (that exists because ONE workflow run can
-// touch ten disparate concern types with no natural home in its own output
-// files) — here there's exactly one output that matters and it already has a
-// durable, dated, human-readable home. No separate Pulse log file either
-// (see the "why do we need improve.html" conversation): findings are written
-// straight into the existing academic map/progress report, and the
-// parent-facing narrative goes into their own ongoing chat — nothing needs a
-// second log that just restates what's already visible elsewhere.
-//
-// Crucially, Pulse does NOT run in its own session/thread: it checks in on the
-// single parent conversation (parentConversationID) that web chat, WhatsApp, and
-// Pulse all share — so a check-in reads like Quill following up in the same
-// conversation the parent already has open, not a separate channel they'd have
-// to remember to check.
-const pulseTickInterval = 5 * time.Minute
+// pulseSchedule is Pulse expressed as a product schedule: the parent's
+// settings (enabled, cadence, preferred hour) plus the fixed quiet rule, with
+// this cycle's check-ins as its messages. The same definition shape a
+// product declares in product.yaml, so moving Pulse onto the platform
+// scheduler later is a data move, not a rewrite.
+func pulseSchedule(s familyState) productschedule.Schedule {
+	hours := s.Pulse.CadenceHours
+	if hours <= 0 {
+		hours = 24
+	}
+	sched := productschedule.Schedule{
+		ID:               "pulse",
+		Name:             "Check-in",
+		Description:      "Quill reviews recent learning, watched sites and upcoming deadlines, then sends the parent a summary.",
+		Enabled:          s.Pulse.Enabled,
+		CadenceHours:     hours,
+		QuietMinutes:     int(pulseQuietPeriod / time.Minute),
+		MaxDeferralHours: int(pulseMaxDeferral / time.Hour),
+	}
+	if s.Pulse.PreferredHourSet {
+		hour := s.Pulse.PreferredHour
+		sched.PreferredHour = &hour
+	}
+	for _, c := range pulseChecks(s) {
+		sched.Messages = append(sched.Messages, c.instruction)
+	}
+	return sched
+}
 
 // pulseQuietPeriod is how long the family must have been idle before a
 // scheduled Pulse may start. Pulse holds the agent for 25-250s per check and
@@ -289,32 +298,73 @@ const pulseQuietPeriod = 10 * time.Minute
 // lose their check-ins; past this much overdue it runs regardless.
 const pulseMaxDeferral = 4 * time.Hour
 
-// runPulseOnce runs one Pulse cycle. When force is false (the periodic
-// ticker's normal call), it's a no-op unless Pulse is actually enabled —
-// when force is true (a manual "run now" trigger), it runs regardless of the
-// enabled toggle, since testing it shouldn't require turning on the
-// recurring schedule first.
-//
-// A cycle runs each check in pulseChecks(s) as its OWN sequential agent turn,
-// persisting each as its own visible message before moving to the next — so
-// the parent sees distinct check-ins, and if the process dies mid-cycle the
-// checks that already completed are still saved.
-func runPulseOnce(ctx context.Context, force bool) error {
+func pulseLastRun() time.Time {
 	stateMu.Lock()
 	s := loadState()
 	stateMu.Unlock()
-	if !force && !s.Pulse.Enabled {
-		return nil
+	if s.Pulse.LastRunAt == "" {
+		return time.Time{}
 	}
+	last, err := time.Parse(time.RFC3339, s.Pulse.LastRunAt)
+	if err != nil {
+		return time.Time{}
+	}
+	return last
+}
+
+// pulseRunner drives Pulse on the shared schedule runtime: the ticker, the
+// due/quiet decision, single-flight and per-check status all live there.
+var pulseRunner = func() *productschedule.Runner {
+	r, err := productschedule.NewRunner(productschedule.Host{
+		Name: "pulse",
+		Schedule: func() productschedule.Schedule {
+			stateMu.Lock()
+			s := loadState()
+			stateMu.Unlock()
+			return pulseSchedule(s)
+		},
+		LastRun:          pulseLastRun,
+		SinceInteractive: sinceInteractiveTurn,
+		Begin:            beginPulseRun,
+		Timeout:          turnTimeout,
+		Tick:             5 * time.Minute,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return r
+}()
+
+// pulseRun is one Pulse cycle: every check runs as its OWN sequential agent
+// turn on the single parent conversation, persisting each as its own visible
+// message before moving to the next — so the parent sees distinct check-ins,
+// and if the process dies mid-cycle the checks that already completed are
+// still saved.
+type pulseRun struct {
+	state    familyState
+	provider llm.Provider
+	turns    []productschedule.Turn
+	checks   []pulseCheck
+	messages []enginedetect.ChatMessage
+	release  func()
+}
+
+// beginPulseRun prepares a cycle. Manual runs ignore the enabled toggle (the
+// runner only consults it for scheduled ticks), so testing Pulse does not
+// require turning the recurring schedule on first.
+func beginPulseRun(_ context.Context, _ productschedule.Source) (productschedule.Run, error) {
+	stateMu.Lock()
+	s := loadState()
+	stateMu.Unlock()
 	if s.Engine == "" {
-		return fmt.Errorf("no learning engine selected")
+		return nil, fmt.Errorf("no learning engine selected")
 	}
 	if s.Child == nil {
-		return fmt.Errorf("no child profile set up yet")
+		return nil, fmt.Errorf("no child profile set up yet")
 	}
 	provider, ok := engineToProvider(s.Engine)
 	if !ok {
-		return fmt.Errorf("engine %q has no provider mapping", s.Engine)
+		return nil, fmt.Errorf("engine %q has no provider mapping", s.Engine)
 	}
 
 	// Mechanical housekeeping, not an agent turn — see archive.go.
@@ -322,141 +372,105 @@ func runPulseOnce(ctx context.Context, force bool) error {
 
 	// Pulse checks in on the SINGLE parent conversation (same file + warm tmux
 	// session as the web chat and WhatsApp) — one unified thread, not a separate
-	// Pulse channel.
+	// Pulse channel. Parent and every child activity share the same physical
+	// workspace, so starting a session here would force-close whatever OTHER
+	// session is currently warm; skip the cycle instead.
 	convID := parentConversationID
-
-	// Parent and every child activity share the same physical workspace, so
-	// starting a new session here would force-close whatever OTHER session is
-	// currently warm (see agentsession.closeOtherInteractiveSessions) — fine
-	// for a direct user action, but Pulse fires on its own schedule with no
-	// idea whether the child is mid-conversation right now. Defer to the next
-	// cadence tick rather than silently evicting her live session the moment
-	// she pauses between messages.
 	if agentsession.HasOtherWarmInteractiveSession(convID) {
-		log.Printf("[pulse] deferring — another session is currently active on the shared workspace")
-		return nil
+		return nil, fmt.Errorf("%w: another session is currently active on the shared workspace", productschedule.ErrSkip)
 	}
 
 	existing, _ := loadStoredConversation("parent", convID)
 
-	agentTurnMu.Lock()
-	defer agentTurnMu.Unlock()
-	defer markAgentTurnStart("pulse")()
-
-	messages := existing.Messages
-	for _, c := range pulseChecks(s) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		reply, err := runPulseCheckTurn(ctx, provider, s, convID, messages, c)
-		if err != nil {
-			return fmt.Errorf("%q check failed: %w", c.trigger, err)
-		}
-		// Persist each check as its own visible turn immediately, so a later
-		// check failing (or the process dying) doesn't lose the ones already done.
-		messages = appendPulseTurn(messages, c.trigger, reply)
-		persistConversation("parent", convID, messages)
-	}
-
-	// Deadline readiness is built and run HERE, after the main loop — NOT as
-	// an entry in pulseChecks(s), which is called once at the very top of
-	// this function, before any check runs. school-deadlines.json is
-	// rewritten BY the school-portal check above, in this SAME cycle — a
-	// deadline-readiness check built inside pulseChecks(s) would read that
-	// file as it stood BEFORE this cycle's own portal check ran, defeating
-	// its purpose on exactly the cycle a new deadline first appears (it'd
-	// gate itself off or use stale data, only catching up next cycle, up to
-	// CadenceHours later). notifyCheck below already established this same
-	// pattern — read that cycle's own results — for the same reason.
+	checks := pulseChecks(s)
 	if deadlines := loadSchoolDeadlines(); len(deadlines) > 0 {
 		if upcoming := upcomingDeadlinesForPulse(deadlines, 14); len(upcoming) > 0 {
-			who := "the child"
-			if s.Child != nil && strings.TrimSpace(s.Child.Name) != "" {
-				who = s.Child.Name
-			}
-			deadlineCheck := pulseCheck{
-				trigger: "Automated check-in — checking deadline readiness",
-				instruction: "This is an automated Pulse check-in, focused ONLY on whether " + who + " is actually ready for what's " +
-					"coming up soon — not just whether it's on the calendar. UPCOMING (next 14 days): " + formatDeadlinesForPulse(upcoming) + ". " +
-					"RECENT PRACTICE BY SUBJECT (last 14 days, from the activity log): " + recentActivityBySubjectForPulse(14) + ". " +
-					"For each upcoming item, judge whether there's been recent practice in that SAME subject — if a test or " +
-					"assignment is close and you see little or no matching recent activity, that's worth mentioning specifically " +
-					"(which one, when it's due, what subject). You MAY prepare study material or a practice test for a genuine " +
-					"gap (skills/create-study-material/SKILL.md, skills/create-test/SKILL.md) — but do NOT create or hand off an " +
-					"activity for it; nothing gets handed to " + who + " without the parent explicitly asking, so just mention " +
-					"what you made. If everything upcoming already has reasonable recent practice, say so briefly rather than " +
-					"manufacturing a gap." + pulseReplyRules,
-			}
-			reply, err := runPulseCheckTurn(ctx, provider, s, convID, messages, deadlineCheck)
-			if err != nil {
-				return fmt.Errorf("%q check failed: %w", deadlineCheck.trigger, err)
-			}
-			messages = appendPulseTurn(messages, deadlineCheck.trigger, reply)
-			persistConversation("parent", convID, messages)
+			checks = append(checks, pulseDeadlineCheck(s, upcoming))
 		}
 	}
+	checks = append(checks, pulseNotifyCheck)
 
-	// The agent decides what's worth telling the parent and sends it — Go's
-	// job stops at asking. An earlier version of this function mechanically
-	// joined every check's raw reply into one string and rendered the email
-	// in Go, which meant the actual judgment call (what matters, what's too
-	// trivial to mention, how to weigh it against the parent's own known
-	// preferences in memory/preferences.md) never happened — Go doesn't have
-	// that judgment. The agent does, and it already has notify_user
-	// (parentTools) for exactly this, so this closing turn just asks it to
-	// use it: review this cycle (already in `messages`, no separate context
-	// needed) and call notify_user itself, once, with its own title, message,
-	// and a real email_html it composes — not a template Go fills in.
-	notifyCheck := pulseCheck{
-		trigger: "Automated check-in — sending you a summary",
-		instruction: "This automated Pulse cycle is done — you've just gone through everything above yourself, in this same " +
-			"conversation. Now decide what's ACTUALLY worth telling the parent: skip anything trivial or unchanged, weigh it " +
-			"against anything you know of their preferences (memory/preferences.md), and lead with whatever matters most. " +
-			"MORE THAN ONE PARENT MAY USE THIS FAMILY — one by chat, another only by WhatsApp — and notify_user is the ONLY " +
-			"thing that reaches WhatsApp, so it must not be scoped to Pulse's own checks alone. Also look back over this SAME " +
-			"conversation for anything a parent directly asked, decided, or had you do since your last check-in (a new activity, " +
-			"a real decision, a setting changed) that a parent who ONLY sees WhatsApp would otherwise never learn about. Fold " +
-			"anything genuinely worth surfacing into this summary too, so both parents stay in sync regardless of which one of " +
-			"them you actually spoke with. " +
-			"Then call notify_user EXACTLY ONCE to send it — a short title, a brief plain message (1-3 sentences, your usual " +
-			"voice; this is what appears on desktop/WhatsApp), and a well-structured, EMAIL-SAFE inline-styled email_html with " +
-			"its own heading per topic that actually has news (skip a topic entirely rather than write \"nothing new\" for " +
-			"it) so the email reads as organized sections, not one dense paragraph. If truly nothing meaningful happened " +
-			"across every check this cycle, still call notify_user with one short, honest line saying so — never skip the " +
-			"call itself; it's the parent's only signal this cycle ran at all. Afterward, report the outcome honestly in " +
-			"your reply (notify_user tells you what actually got delivered) — never claim it reached them if it didn't. " +
-			"If (and only if) the progress report actually gained genuinely new content THIS cycle — not just a re-save of " +
-			"the same picture — a WhatsApp-only parent still can't just click it open the way a parent using the app can, " +
-			"so also hand them the real document: export reports/progress.html to a PDF via agent_browser's \"pdf\" command " +
-			"(into reports/progress.pdf) and send it with send_whatsapp_file, a short caption naming what's new and what " +
-			"she should prepare for next. Skip this entirely on a cycle where nothing genuinely changed — a PDF resent every " +
-			"five minutes with no new content is noise, not help.",
+	run := &pulseRun{state: s, provider: provider, checks: checks, messages: existing.Messages}
+	for _, c := range checks {
+		run.turns = append(run.turns, productschedule.Turn{Label: c.trigger, Message: c.instruction})
 	}
-	reply, err := runPulseCheckTurn(ctx, provider, s, convID, messages, notifyCheck)
+	agentTurnMu.Lock()
+	clearHolder := markAgentTurnStart("pulse")
+	run.release = func() {
+		clearHolder()
+		agentTurnMu.Unlock()
+	}
+	return run, nil
+}
+
+func (r *pulseRun) Turns() []productschedule.Turn { return r.turns }
+
+func (r *pulseRun) Send(ctx context.Context, i int, _ productschedule.Turn) (string, error) {
+	reply, err := runPulseCheckTurn(ctx, r.provider, r.state, parentConversationID, r.messages, r.checks[i])
 	if err != nil {
-		return fmt.Errorf("summary notification failed: %w", err)
+		return "", err
 	}
-	messages = appendPulseTurn(messages, notifyCheck.trigger, reply)
-	persistConversation("parent", convID, messages)
-	// Which of these fired is otherwise unrecoverable from the log: the
-	// ticker (startPulseTicker) and the manual "Run Pulse Now" button
-	// (handlePulseRunNow) both land here with no other distinguishing trace,
-	// which made a real investigation (why did Pulse run 4 times in 4
-	// minutes when cadence_hours=12?) unable to rule out a scheduling bug
-	// versus repeated manual clicks — this is the only place that
-	// certainty could have come from.
-	source := "scheduled"
-	if force {
-		source = "manual"
-	}
-	log.Printf("[pulse] cycle complete (%s): %s", source, strings.TrimSpace(reply))
+	r.messages = appendPulseTurn(r.messages, r.checks[i].trigger, reply)
+	persistConversation("parent", parentConversationID, r.messages)
+	return reply, nil
+}
 
+func (r *pulseRun) Finish(_ context.Context, err error) {
+	r.release()
+	if err != nil {
+		return
+	}
 	stateMu.Lock()
 	cur := loadState()
 	cur.Pulse.LastRunAt = time.Now().UTC().Format(time.RFC3339)
 	_ = saveState(cur)
 	stateMu.Unlock()
-	return nil
+}
+
+func pulseDeadlineCheck(s familyState, upcoming []SchoolDeadline) pulseCheck {
+	who := "the child"
+	if s.Child != nil && strings.TrimSpace(s.Child.Name) != "" {
+		who = s.Child.Name
+	}
+	return pulseCheck{
+		trigger: "Automated check-in — checking deadline readiness",
+		instruction: "This is an automated Pulse check-in, focused ONLY on whether " + who + " is actually ready for what's " +
+			"coming up soon — not just whether it's on the calendar. UPCOMING (next 14 days): " + formatDeadlinesForPulse(upcoming) + ". " +
+			"RECENT PRACTICE BY SUBJECT (last 14 days, from the activity log): " + recentActivityBySubjectForPulse(14) + ". " +
+			"For each upcoming item, judge whether there's been recent practice in that SAME subject — if a test or " +
+			"assignment is close and you see little or no matching recent activity, that's worth mentioning specifically " +
+			"(which one, when it's due, what subject). You MAY prepare study material or a practice test for a genuine " +
+			"gap (skills/create-study-material/SKILL.md, skills/create-test/SKILL.md) — but do NOT create or hand off an " +
+			"activity for it; nothing gets handed to " + who + " without the parent explicitly asking, so just mention " +
+			"what you made. If everything upcoming already has reasonable recent practice, say so briefly rather than " +
+			"manufacturing a gap." + pulseReplyRules,
+	}
+}
+
+var pulseNotifyCheck = pulseCheck{
+	trigger: "Automated check-in — sending you a summary",
+	instruction: "This automated Pulse cycle is done — you've just gone through everything above yourself, in this same " +
+		"conversation. Now decide what's ACTUALLY worth telling the parent: skip anything trivial or unchanged, weigh it " +
+		"against anything you know of their preferences (memory/preferences.md), and lead with whatever matters most. " +
+		"MORE THAN ONE PARENT MAY USE THIS FAMILY — one by chat, another only by WhatsApp — and notify_user is the ONLY " +
+		"thing that reaches WhatsApp, so it must not be scoped to Pulse's own checks alone. Also look back over this SAME " +
+		"conversation for anything a parent directly asked, decided, or had you do since your last check-in (a new activity, " +
+		"a real decision, a setting changed) that a parent who ONLY sees WhatsApp would otherwise never learn about. Fold " +
+		"anything genuinely worth surfacing into this summary too, so both parents stay in sync regardless of which one of " +
+		"them you actually spoke with. " +
+		"Then call notify_user EXACTLY ONCE to send it — a short title, a brief plain message (1-3 sentences, your usual " +
+		"voice; this is what appears on desktop/WhatsApp), and a well-structured, EMAIL-SAFE inline-styled email_html with " +
+		"its own heading per topic that actually has news (skip a topic entirely rather than write \"nothing new\" for " +
+		"it) so the email reads as organized sections, not one dense paragraph. If truly nothing meaningful happened " +
+		"across every check this cycle, still call notify_user with one short, honest line saying so — never skip the " +
+		"call itself; it's the parent's only signal this cycle ran at all. Afterward, report the outcome honestly in " +
+		"your reply (notify_user tells you what actually got delivered) — never claim it reached them if it didn't. " +
+		"If (and only if) the progress report actually gained genuinely new content THIS cycle — not just a re-save of " +
+		"the same picture — a WhatsApp-only parent still can't just click it open the way a parent using the app can, " +
+		"so also hand them the real document: export reports/progress.html to a PDF via agent_browser's \"pdf\" command " +
+		"(into reports/progress.pdf) and send it with send_whatsapp_file, a short caption naming what's new and what " +
+		"she should prepare for next. Skip this entirely on a cycle where nothing genuinely changed — a PDF resent every " +
+		"five minutes with no new content is noise, not help.",
 }
 
 // runPulseCheckTurn runs one focused check as a single agent turn over the
@@ -500,65 +514,6 @@ func runPulseCheckTurn(ctx context.Context, provider llm.Provider, s familyState
 	return reply, nil
 }
 
-// startPulseTicker runs the periodic check forever until ctx is canceled.
-// A plain wall-clock ticker is enough at this scale — no cron parser needed,
-// since the only knob is "every N hours," configured via /api/pulse/config.
-func startPulseTicker(ctx context.Context) {
-	ticker := time.NewTicker(pulseTickInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			stateMu.Lock()
-			s := loadState()
-			stateMu.Unlock()
-			if !s.Pulse.Enabled {
-				continue
-			}
-			due := true
-			if s.Pulse.LastRunAt != "" {
-				if last, err := time.Parse(time.RFC3339, s.Pulse.LastRunAt); err == nil {
-					due = time.Since(last) >= s.Pulse.cadence()
-				}
-			}
-			// The cadence alone says "enough time has passed"; PreferredHour
-			// additionally holds off until the local clock has actually
-			// reached that hour, so a daily cadence lands around the same
-			// time each day instead of drifting to whenever the cadence
-			// window happens to elapse (a restart, a deferred run, etc.).
-			if due && s.Pulse.PreferredHourSet {
-				due = time.Now().Hour() >= s.Pulse.PreferredHour
-			}
-			if !due {
-				continue
-			}
-			// Stay out of the way of a conversation in progress — see
-			// lastInteractiveTurn in chat.go for the measured reason.
-			if quiet := sinceInteractiveTurn(); quiet < pulseQuietPeriod {
-				overdue := time.Duration(0)
-				if s.Pulse.LastRunAt != "" {
-					if last, err := time.Parse(time.RFC3339, s.Pulse.LastRunAt); err == nil {
-						overdue = time.Since(last) - s.Pulse.cadence()
-					}
-				}
-				if overdue < pulseMaxDeferral {
-					log.Printf("[pulse] deferring: family active %s ago (overdue by %s, forcing after %s)",
-						quiet.Round(time.Second), overdue.Round(time.Minute), pulseMaxDeferral)
-					continue
-				}
-				log.Printf("[pulse] running despite recent activity — overdue by %s", overdue.Round(time.Minute))
-			}
-			runCtx, cancel := context.WithTimeout(context.Background(), turnTimeout)
-			if err := runPulseOnce(runCtx, false); err != nil {
-				log.Printf("[pulse] scheduled run failed: %v", err)
-			}
-			cancel()
-		}
-	}
-}
-
 // --- HTTP routes ---------------------------------------------------------
 
 type pulseConfigResponse struct {
@@ -590,43 +545,32 @@ func pulseConfigResponseFrom(p PulseConfig) pulseConfigResponse {
 // a second HTTP call from spawning a redundant goroutine that would just
 // block, and lets the handler tell the parent plainly "already running"
 // instead of silently queuing.
-var pulseRunMu sync.Mutex
-var pulseRunning bool
-
-// POST /api/pulse/run — manual "run now" trigger (e.g. from the Pulse
-// popover, to test it without waiting for the ticker or turning on the
-// recurring schedule). Runs in the background; the caller polls
-// GET /api/pulse/config and watches last_run_at change to know it's done.
 func handlePulseRunNow(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	pulseRunMu.Lock()
-	if pulseRunning {
-		pulseRunMu.Unlock()
+	if pulseRunner.Status().Running {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "a Pulse check-in is already running"})
 		return
 	}
-	pulseRunning = true
-	pulseRunMu.Unlock()
-
 	go func() {
-		defer func() {
-			pulseRunMu.Lock()
-			pulseRunning = false
-			pulseRunMu.Unlock()
-		}()
-		ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
-		defer cancel()
-		if err := runPulseOnce(ctx, true); err != nil {
+		if err := pulseRunner.RunNow(context.Background(), productschedule.SourceManual); err != nil && !errors.Is(err, productschedule.ErrAlreadyRunning) {
 			log.Printf("[pulse] manual run failed: %v", err)
 		}
 	}()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
 }
 
-// GET /api/pulse/config
+// handlePulseStatus reports the running/last cycle with per-check status.
+func handlePulseStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, pulseRunner.Status())
+}
+
 func handleGetPulseConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

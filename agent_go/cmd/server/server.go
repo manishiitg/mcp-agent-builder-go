@@ -333,6 +333,7 @@ type StreamingAPI struct {
 	config           ServerConfig
 	cliSecurityStore *clisecurity.Store
 	agentProfiles    *agentprofiles.Registry
+	productSchedules *ProductScheduleService
 
 	// internalQueryHandler is a narrow test seam for server-owned follow-up
 	// turns. Production dispatch falls back to handleQuery.
@@ -2359,6 +2360,11 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 
 	// Register scheduler routes
+	productScheduleSvc := NewProductScheduleService(api, profileRegistry)
+	api.productSchedules = productScheduleSvc
+	if os.Getenv("SCHEDULER_ENABLED") != "false" {
+		go productScheduleSvc.Start(schedulerCtx)
+	}
 	SchedulerRoutes(router, schedulerSvc)
 
 	// Workflow API routes

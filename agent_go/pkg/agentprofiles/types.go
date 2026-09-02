@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/productschedule"
 )
 
 type CapabilityRequirement string
@@ -268,6 +270,12 @@ type Profile struct {
 	// GET /api/agent-profiles/{id}, the same response Commands and
 	// Runtime.ProviderOptions travel through.
 	UIPanels UIPanels `json:"ui_panels,omitempty" yaml:"ui_panels,omitempty"`
+	// Schedules are the product's recurring jobs: on a cron or cadence, run
+	// this profile for each user who has the product, sending the listed
+	// messages one at a time into the user's product conversation. The
+	// platform scheduler executes them; a product hosting itself runs the
+	// same definition through productschedule.Runner.
+	Schedules []productschedule.Schedule `json:"schedules,omitempty" yaml:"schedules,omitempty"`
 }
 
 // UIPanels are optional panels a product's surface can offer. Every field

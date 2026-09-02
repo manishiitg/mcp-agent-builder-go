@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/productschedule"
 )
 
 var (
@@ -42,6 +44,13 @@ func Validate(profile Profile) error {
 	case "", ProfileScopeProject, ProfileScopeGlobal:
 	default:
 		return fmt.Errorf("invalid profile scope %q (want %q, %q, or empty)", scope, ProfileScopeProject, ProfileScopeGlobal)
+	}
+
+	if err := productschedule.ValidateAll(profile.Schedules); err != nil {
+		return fmt.Errorf("profile %q schedules: %w", profile.ID, err)
+	}
+	if len(profile.Schedules) > 0 && strings.ToLower(strings.TrimSpace(profile.Runtime.Conversation.Mode)) != ConversationModeSingleton {
+		return fmt.Errorf("profile %q schedules: schedules run in the product's single conversation, so runtime.conversation.mode must be %q", profile.ID, ConversationModeSingleton)
 	}
 
 	seenSkills := make(map[string]struct{}, len(profile.Skills))
