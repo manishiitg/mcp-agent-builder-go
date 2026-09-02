@@ -224,6 +224,19 @@ not exercised against a real product turn. The decision itself stands; the
 migration plan is at step 2 with only secrets remaining (recommended:
 drop it).
 
+Decisions taken the same day, which fix the shape of steps 3-5:
+
+- **SparkQuill stays a standalone app.** The cutover target is a
+  single-product desktop build of the platform, not a surface inside
+  AgentWorks. Families never log into the shared server.
+- **The child is a PIN on the parent's account**, as today, not a user of
+  their own. The child profile is therefore a second profile of the same
+  product under the parent's user folder, gated by the existing PIN handoff;
+  the sharing model does not need to cover it.
+- **The RTS box is redeployed only at the end.** It keeps its pre-migration
+  build until the cutover; that deploy carries the shared WhatsApp connector,
+  the whatsmeow upgrade and product schedules together.
+
 ### Revisit trigger
 
 Reopen this decision when **either**: (a) `internal/agentsession` no longer
