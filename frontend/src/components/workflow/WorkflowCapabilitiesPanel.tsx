@@ -171,7 +171,7 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
     }
   }, [])
 
-  const save = useCallback(async () => {
+  const persist = useCallback(async (next: WorkflowCapabilities) => {
     if (!workspacePath) {
       setError('This panel needs an active workflow folder before it can save.')
       return
@@ -179,15 +179,17 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
     setSaving(true)
     setError(null)
     try {
-      await workflowManifestApi.updateWorkflowManifest({ workspace_path: workspacePath, capabilities })
-      setLoaded(capabilities)
+      await workflowManifestApi.updateWorkflowManifest({ workspace_path: workspacePath, capabilities: next })
+      setLoaded(next)
       await useWorkflowManifestStore.getState().refreshWorkflows()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to save workflow capabilities')
     } finally {
       setSaving(false)
     }
-  }, [capabilities, workspacePath])
+  }, [workspacePath])
+
+  const save = useCallback(() => persist(capabilities), [capabilities, persist])
 
   return (
     <section className="flex h-full min-h-0 w-full max-w-none flex-col bg-background">
@@ -252,21 +254,27 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
               </div>
             )}
             {section === 'secrets' && (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="shrink-0 overflow-y-auto">
-                  <SecretSelectionSection
-                    selectedSecrets={capabilities.selected_secrets}
-                    onSecretChange={(selected_secrets) => setCapabilities(current => ({ ...current, selected_secrets }))}
-                    selectedGlobalSecrets={capabilities.selected_global_secret_names}
-                    onGlobalSecretChange={(selected_global_secret_names) => setCapabilities(current => ({ ...current, selected_global_secret_names }))}
-                    workflowPath={workspacePath || ''}
-                  />
-                </div>
-                <div className="mt-3 flex min-h-0 flex-1 flex-col pt-1">
+              // Single continuous scroll for the whole pane: the checklist and
+              // "Manage secrets" used to each own a separate min-h-0/flex-1
+              // region with its own overflow-y-auto, which produced two
+              // independently-scrolling boxes stacked on top of each other
+              // instead of one page-like scroll. Only the outer div scrolls;
+              // nothing below propagates a bounded flex height, so the nested
+              // overflow-y-auto inside SecretsManagerPanel(compact) has no
+              // constrained height to scroll within and stays inert.
+              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+                <SecretSelectionSection
+                  selectedSecrets={capabilities.selected_secrets}
+                  onSecretChange={(selected_secrets) => setCapabilities(current => ({ ...current, selected_secrets }))}
+                  selectedGlobalSecrets={capabilities.selected_global_secret_names}
+                  onGlobalSecretChange={(selected_global_secret_names) => setCapabilities(current => ({ ...current, selected_global_secret_names }))}
+                  workflowPath={workspacePath || ''}
+                />
+                <div className="mt-3 flex flex-col pt-1">
                   <div className="shrink-0 text-sm font-medium text-muted-foreground">
                     Manage secrets
                   </div>
-                  <div className="mt-3 flex min-h-0 flex-1 flex-col">
+                  <div className="mt-3 flex flex-col">
                     <SecretsManagerPanel compact />
                   </div>
                 </div>
@@ -292,6 +300,11 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
                 workspacePath={workspacePath}
                 llmConfig={capabilities.llm_config}
                 onChange={(llm_config) => setCapabilities(current => ({ ...current, llm_config }))}
+                onUseProvider={async (llm_config) => {
+                  const next = { ...capabilities, llm_config }
+                  setCapabilities(next)
+                  await persist(next)
+                }}
               />
             )}
             {/* Bots write straight to the shared connector config (routes

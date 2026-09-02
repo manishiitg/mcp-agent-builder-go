@@ -23,6 +23,20 @@ interface CodingAgentSectionProps {
    * publish disable. Model/effort pickers stay usable since they're local
    * state until published. */
   readOnly?: boolean
+  /** 'library' (default) is the full LLM-library editor: model + effort
+   * pickers and Save-to-Library. 'workflow' is the workflow panel's
+   * drill-in, where the only decisions are "does this provider work here"
+   * and "use it for this workflow": model/effort come from the provider's
+   * tier defaults, so those pickers and the publish card are hidden. */
+  variant?: 'library' | 'workflow'
+  /** Model to test against when the picker is hidden (workflow variant):
+   * the row's default model, which for a Pi group also selects which
+   * provider key the auth card asks for. */
+  initialModelId?: string
+  /** True when this provider is already the workflow's selection. */
+  inUse?: boolean
+  /** Renders the "Use in this workflow" action (workflow variant). */
+  onUseInWorkflow?: () => void | Promise<void>
 }
 
 type PiTopLevelProviderKey =
@@ -173,13 +187,17 @@ function piAuthValue(keys: StoredProviderKeys | undefined, spec: PiAuthSpec): st
   return ''
 }
 
-export function CodingAgentSection({ provider, onPublished, groupFilter, readOnly = false }: CodingAgentSectionProps) {
+export function CodingAgentSection({ provider, onPublished, groupFilter, readOnly = false, variant = 'library', initialModelId, inUse = false, onUseInWorkflow }: CodingAgentSectionProps) {
   const saveLLM = useLLMStore(state => state.saveLLM)
   const savedLLMs = useLLMStore(state => state.savedLLMs)
+  const workflowMode = variant === 'workflow'
   // A group-scoped tab has no valid pi-cli-wide default to start from --
   // DynamicModelSelector picks the group's own default once its catalog
-  // loads (see its groupFilter-aware auto-select effect).
-  const [selectedModel, setSelectedModel] = useState(groupFilter ? '' : (provider.default_model_id || provider.id))
+  // loads (see its groupFilter-aware auto-select effect). In the workflow
+  // variant that picker is hidden, so the caller supplies the row's default
+  // model up front instead.
+  const [selectedModel, setSelectedModel] = useState(initialModelId ?? (groupFilter ? '' : (provider.default_model_id || provider.id)))
+  const [using, setUsing] = useState(false)
   const displayName = groupFilter || provider.display_name
   const [effortLevel, setEffortLevel] = useState('high')
   const [isPublishing, setIsPublishing] = useState(false)
@@ -368,7 +386,9 @@ export function CodingAgentSection({ provider, onPublished, groupFilter, readOnl
       {/* Capabilities */}
       <CodingAgentCapabilities provider={provider.id} modelId={selectedModel} />
 
-      {/* Model selection */}
+      {/* Model selection (library only: the workflow variant runs on the
+          provider's tier defaults, pinned per role under Advanced if needed) */}
+      {!workflowMode && (
       <Card className="p-4">
         <h4 className="font-medium text-foreground mb-3">Model</h4>
         {provider.id === 'pi-cli' && (
@@ -410,6 +430,7 @@ export function CodingAgentSection({ provider, onPublished, groupFilter, readOnl
           <p className="text-sm text-muted-foreground">No models available for this provider.</p>
         )}
       </Card>
+      )}
 
       {piAuthSpec && (
         <Card className="p-4">
@@ -462,7 +483,7 @@ export function CodingAgentSection({ provider, onPublished, groupFilter, readOnl
       )}
 
       {/* Effort/reasoning level (when model supports it) */}
-      {showEffort && (
+      {showEffort && !workflowMode && (
         <Card className="p-4">
           <h4 className="font-medium text-foreground mb-3">Effort Level</h4>
           <select
@@ -522,8 +543,42 @@ export function CodingAgentSection({ provider, onPublished, groupFilter, readOnl
         </div>
       </Card>
 
-      {/* Save reusable configuration */}
-      {canPublish && (
+      {/* Use in this workflow (workflow variant): the one decision this
+          drill-in exists for. Test first is recommended but not enforced --
+          a provider the status line already reports Ready needs no test. */}
+      {workflowMode && onUseInWorkflow && (
+      <Card className="p-4">
+        <h4 className="font-medium text-foreground mb-3">Use in this workflow</h4>
+        {inUse ? (
+          <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+            <CheckCircle className="w-4 h-4" />
+            This workflow already runs on {displayName}.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              {groupFilter
+                ? `Every role will use ${displayName} models through Pi: the saved provider key above is required at runtime.`
+                : `Every role will use ${displayName}'s default models (high, medium, and low tiers). Pin a different model per role under Advanced if needed.`}
+            </p>
+            <Button
+              size="sm"
+              onClick={async () => {
+                setUsing(true)
+                try { await onUseInWorkflow() } finally { setUsing(false) }
+              }}
+              disabled={readOnly || using || (piAuthSpec !== null && !piAuthKey.trim() && piAuthStatus !== 'saved')}
+              title={readOnly ? READ_ONLY_TITLE : piAuthSpec && !piAuthKey.trim() && piAuthStatus !== 'saved' ? 'Save the provider key first' : undefined}
+            >
+              {using ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving…</> : 'Use in this workflow'}
+            </Button>
+          </div>
+        )}
+      </Card>
+      )}
+
+      {/* Save reusable configuration (library only) */}
+      {canPublish && !workflowMode && (
       <Card className="p-4">
         <h4 className="font-medium text-foreground mb-3">Save Configuration</h4>
 

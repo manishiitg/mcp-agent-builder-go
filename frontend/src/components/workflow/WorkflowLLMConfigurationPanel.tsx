@@ -72,6 +72,9 @@ type WorkflowLLMConfigurationPanelProps = {
   workspacePath: string | null
   llmConfig?: PresetLLMConfig
   onChange: (config: PresetLLMConfig) => void
+  /** Persist a provider choice immediately (the drill-in's "Use in this
+   * workflow"), instead of leaving it as a draft for the footer Save. */
+  onUseProvider?: (config: PresetLLMConfig) => void | Promise<void>
 }
 
 const hasOptions = (options?: Record<string, unknown>) => Boolean(options && Object.keys(options).length > 0)
@@ -152,7 +155,7 @@ function statusTitle(label: string): string {
   return 'Needs setup before it can run'
 }
 
-export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig, onChange }: WorkflowLLMConfigurationPanelProps) {
+export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig, onChange, onUseProvider }: WorkflowLLMConfigurationPanelProps) {
   const {
     availableLLMs,
     providerManifest,
@@ -308,7 +311,25 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   // Which row the current config corresponds to, if any.
   const selectedRowId = useMemo<string | null>(() => {
     if (!llmConfig) return null
-    if (llmConfig.mode === 'provider_profile') return llmConfig.provider ?? null
+    if (llmConfig.mode === 'provider_profile') {
+      if (llmConfig.provider === 'pi-cli') {
+        // A bare `{mode: provider_profile, provider: "pi-cli"}` config (no
+        // per-role override) is fully valid and actively resolved on the
+        // backend: ResolveProviderProfileConfig reads it straight from
+        // pi-cli's default tier models -- there's no separate "group"
+        // concept there. The UI only groups pi-cli's models by family
+        // (Gemini, MiniMax, ...) for display, so without this the row
+        // lookup below never matches a bare "pi-cli" id and a workflow
+        // that is genuinely running on pi-cli's default model shows as
+        // "No provider selected". Resolve the provider's own default
+        // (High tier) model back to its display group instead.
+        const piEntry = manifestEntries.find(entry => entry.id === 'pi-cli')
+        const defaultModelId = piEntry?.default_tier_models?.high.model_id
+        const group = defaultModelId ? resolvePiModelGroup(defaultModelId) : null
+        return group ? piGroupRowId(group) : null
+      }
+      return llmConfig.provider ?? null
+    }
     const roles = ROLE_KEYS.map(key => roleConfig(llmConfig, key))
     if (roles.some(role => !role)) return null
     if (!roles.every(role => role!.provider === 'pi-cli')) return null
@@ -316,7 +337,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     if (groups.size !== 1) return null
     const [group] = Array.from(groups)
     return group ? piGroupRowId(group) : null
-  }, [llmConfig])
+  }, [llmConfig, manifestEntries])
 
   const visibleRows = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -360,24 +381,45 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     return selectedProfile ? getWorkflowLLMTierDefaults(selectedProfile, providerManifest) : null
   }, [piGroupOption, providerManifest, selectedProfile, selectedRow])
 
-  const selectRow = (row: ProviderRow) => {
-    if (!row.selectable) return
-    setExpandedRole(null)
+  // The workflow-level config a row stands for: a Pi group pins every role
+  // to that family's defaults (a provider profile can't say "pi-cli, but
+  // only Gemini"); any other coding agent is a plain provider profile.
+  const configForRow = (row: ProviderRow): PresetLLMConfig | null => {
+    if (!row.selectable) return null
     if (row.groupFilter) {
       const option = piGroupOption(row)
-      if (!option) return
+      if (!option) return null
       const groupDefaults = getWorkflowLLMTierDefaults(option, providerManifest)
-      onChange({
+      return {
         schema_version: 2,
         mode: 'explicit',
         builder_llm: groupDefaults.builder,
         maintenance_llm: groupDefaults.maintenance,
         pulse_llm: groupDefaults.pulse,
         tiered_config: { tier_1: groupDefaults.tier1, tier_2: groupDefaults.tier2, tier_3: groupDefaults.tier3 },
-      })
-      return
+      }
     }
-    onChange({ schema_version: 2, mode: 'provider_profile', provider: row.id as LLMProvider })
+    return { schema_version: 2, mode: 'provider_profile', provider: row.id as LLMProvider }
+  }
+
+  const selectRow = (row: ProviderRow) => {
+    const config = configForRow(row)
+    if (!config) return
+    setExpandedRole(null)
+    onChange(config)
+  }
+
+  // Drill-in action: select the provider and persist right away, then return
+  // to the list. Keeping this a separate path from the radio (draft + footer
+  // Save) means "Use in this workflow" never leaves the choice half-applied.
+  const useActiveRowInWorkflow = async () => {
+    if (!activeRow) return
+    const config = configForRow(activeRow)
+    if (!config) return
+    setExpandedRole(null)
+    onChange(config)
+    if (onUseProvider) await onUseProvider(config)
+    setActiveProviderId(null)
   }
 
   const useManagedDefaults = () => {
@@ -530,7 +572,16 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
             )
           })()
         ) : (
-          <CodingAgentSection key={activeProviderId} provider={activeRow.entry} groupFilter={activeRow.groupFilter} readOnly={readOnly} />
+          <CodingAgentSection
+            key={activeProviderId}
+            provider={activeRow.entry}
+            groupFilter={activeRow.groupFilter}
+            readOnly={readOnly}
+            variant="workflow"
+            initialModelId={activeRow.modelId ?? undefined}
+            inUse={activeRow.id === selectedRowId}
+            onUseInWorkflow={useActiveRowInWorkflow}
+          />
         )}
       </div>
     )
@@ -685,6 +736,23 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     )
   }
 
+  // Two kinds of provider live in one list and want different flows: a
+  // coding-agent CLI is signed in once and just needs test + use, while a
+  // Pi-backed model family needs its own API key saved first. Label them so
+  // the list reads as two categories instead of ten look-alike rows.
+  const renderGroup = (title: string, hint: string, groupRows: ProviderRow[]) => {
+    if (groupRows.length === 0) return null
+    return (
+      <div key={title} className="divide-y divide-border">
+        <div className="bg-muted/30 px-3 py-1.5">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</div>
+          <div className="text-[11px] text-muted-foreground/80">{hint}</div>
+        </div>
+        {groupRows.map(renderRow)}
+      </div>
+    )
+  }
+
   const renderRole = (row: RoleRow) => {
     const value = roleConfig(llmConfig, row.key) ?? defaultForRole(row.key)
     const fallbackList = value?.fallbacks ?? []
@@ -800,7 +868,25 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
           <div className="py-6 text-center text-sm text-muted-foreground">
             {query.trim() ? `No providers match "${query}".` : 'No providers available.'}
           </div>
-        ) : visibleRows.map(renderRow)}
+        ) : (
+          <>
+            {renderGroup(
+              'Coding agent CLIs',
+              'Sign in once on this machine. Test the connection, then use it in this workflow.',
+              visibleRows.filter(row => row.entry.integration_kind === 'coding_agent' && !row.groupFilter),
+            )}
+            {renderGroup(
+              'Models via Pi',
+              'Each provider needs its own API key saved. Add the key, test, then use it in this workflow.',
+              visibleRows.filter(row => Boolean(row.groupFilter)),
+            )}
+            {renderGroup(
+              'Direct API providers',
+              'Chat and library use only; not selectable for a workflow.',
+              visibleRows.filter(row => row.entry.integration_kind !== 'coding_agent' && !row.groupFilter),
+            )}
+          </>
+        )}
       </div>
 
       <div className="rounded-md border border-border">
