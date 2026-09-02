@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `implemented and pushed to main; unit/build green; live e2e reverify pending` |
+| Ticket state | `implemented, pushed, live e2e verified 2026-09-02` |
 | Last synchronized | `2026-09-02` |
 
 - **Priority:** P2 maintainability with a P1 side effect: every fix to the
@@ -138,16 +138,33 @@ that todo item.
   (rewrite only discriminators, idempotent, legacy parse normalizes); the
   upgrade-ladder tests gained the v1.0.35 rung; the PLAT-068 render test
   asserts the new invariant wording.
-- **Live e2e still pending** (unit tests count as zero coverage for agent
-  code). Blocked on 2026-09-02 because the session's permission classifier
-  refused to start the backend; run
-  `agent_go/run_server_with_logging.sh --with-workspace --without-electron --background`
-  and then: run a real orchestrator with routes (`testing` /
-  `execution-regression-router`, or `linkedin` / `step-p2-multi-drafter`)
-  via Workshop `execute_step` and confirm children launch async, the
-  completion batch lands, the step completes only after children settle,
-  `stepLogs.todo_task` is populated, the route-selection view renders, and the
-  folder guard excludes the workflow root; run one `todo_task` with a
-  `messages` list; run a plain `message_sequence` and confirm no sub-agent
-  tools appear; set `declared_execution_mode=scripted` on a `todo_task` and
-  confirm the rejection.
+- **Live e2e run 2026-09-02 11:09–11:13 (local backend, Workshop chat, session
+  `query_1788327581474529000`, `testing` / `execution-regression-router`,
+  run folder `iteration-0/default`):**
+  - Step completed on the sequence executor: `execution/execution-regression-router/session.json`
+    shows the opening turn and the synthetic `__automatic_final_validation__`
+    gate both `completed`; the orchestrator's own summary ends `STATUS: COMPLETED`.
+  - Delegation: all four routes ran (`math-solver`, `text-processor`,
+    `browser-probe`, `nested-manager`); the nested orchestrator ran its two
+    routes (`calc-task`, `word-task`) and has its own completed `session.json`.
+    The orchestrator conversation log holds 55 messages with **2 completion
+    batches**, i.e. two async waves reconciled through the seam.
+  - Log shape kept for the UI: `logs/execution-regression-router/execution/execution-attempt-1-iteration-0{,-conversation,-timing}.json`,
+    `todo-task-prompts.json`, and `execution-final-summary.json` all present.
+  - Events: the builder session received `todo_task_route_selected` ×6 and
+    `todo_task_step_completed` ×2 (top-level + nested), `pre_validation_completed` ×7.
+  - Folder guard: the routes' deliberate forbidden reads were blocked (the
+    `[TOOL_ERROR]` lines 11:10:01–11:10:32 are those probes); the step's
+    summary reports zero unexpected allows.
+  - Tool surface: `call_sub_agent` was registered only in the two orchestrator
+    sessions (`sub-todo-execution-regression-router-…`, `sub-todo-nested-manager-…`);
+    the plain route sessions (`msgseq-…-math-solver…`, 521 log lines) received none.
+  - Scripted-mode rejection (session `query_1788330178737018000`, 11:53):
+    `update_step_config(declared_execution_mode="scripted")` on the
+    orchestrator returned the new error ("… not supported on orchestrator
+    (todo_task) step … belongs in a regular scripted step whose main.py calls
+    the routes") and `step_config.json` stayed `agentic`.
+  - Not exercised live: an orchestrator with a non-empty `messages` list (no
+    live workflow has one; covered by the executor's item loop, which the
+    standalone message_sequence path already exercises), and the v1.0.35
+    migration on a real plan (unit-tested; runs at the next scheduled preflight).
