@@ -93,8 +93,9 @@ jobs:
       - name: Build Agent Server (arm64)
         run: |
           set -euo pipefail
-          cd agent_go
-          GOOS=darwin GOARCH=arm64 go build -o ../desktop/resources/agent-server .
+          # cgo on purpose: the agent links the shared speech engine's native
+          # libraries (pkg/voicestt); the script stages them in resources/lib.
+          bash scripts/build-darwin-voice-binary.sh agent_go desktop/resources/agent-server arm64
 
       - name: Build Workspace Server (arm64)
         run: |
@@ -197,8 +198,9 @@ jobs:
       - name: Build Agent Server (arm64)
         run: |
           set -euo pipefail
-          cd agent_go
-          GOOS=darwin GOARCH=arm64 go build -o ../desktop/resources/agent-server .
+          # cgo on purpose: the agent links the shared speech engine's native
+          # libraries (pkg/voicestt); the script stages them in resources/lib.
+          bash scripts/build-darwin-voice-binary.sh agent_go desktop/resources/agent-server arm64
 
       - name: Build Workspace Server (arm64)
         run: |

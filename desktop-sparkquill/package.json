@@ -40,8 +40,8 @@
         "to": "family-server"
       },
       {
-        "from": "resources/voice-helper",
-        "to": "voice-helper"
+        "from": "resources/lib",
+        "to": "lib"
       },
       {
         "from": "resources/web",

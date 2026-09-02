@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -1243,7 +1244,29 @@ func (api *StreamingAPI) checkLiveAttachOrigin(r *http.Request) bool {
 	if origin == "" {
 		return true
 	}
-	return isAllowedCORSOrigin(origin, api.config.CORSOrigins)
+	return isAllowedCORSOrigin(origin, api.config.CORSOrigins) || isSameOriginRequest(r, origin)
+}
+
+// isSameOriginRequest reports whether the Origin header names the very host
+// this request was addressed to. A same-origin page is the strictest thing a
+// browser can attest, so it is always admitted, independent of the CORS
+// allow-list — which exists for cross-port dev setups and cannot know a
+// production host. Caught live: behind the Video Studio gateway every request
+// is same-origin (the browser talks only to the public host, the gateway
+// proxies with Host preserved), yet the voice WebSocket was refused with 403
+// because the allow-list only held localhost dev ports. Ordinary XHR never
+// hit this, since same-origin requests skip CORS entirely; only the upgrader
+// inspects Origin by hand.
+func isSameOriginRequest(r *http.Request, origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	reqHost := r.Host
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwarded != "" {
+		reqHost = forwarded
+	}
+	return strings.EqualFold(u.Host, reqHost)
 }
 
 // handleTerminalStream is GET /api/terminals/{terminal_id}/stream — the

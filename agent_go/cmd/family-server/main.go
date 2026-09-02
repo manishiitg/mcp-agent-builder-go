@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/enginedetect"
 )
@@ -132,14 +131,10 @@ func main() {
 	mux.HandleFunc("/api/voice/status", handleVoiceStatus)
 	mux.HandleFunc("/api/voice/transcribe", handleVoiceTranscribe)
 	mux.HandleFunc("/api/voice/warm", handleVoiceWarm)
-	// Incremental dictation via the native helper. Falls back to the
-	// /transcribe path above when the helper isn't present — see
-	// docs/refactor/native_streaming_stt.md.
-	mux.HandleFunc("/api/voice/stream/start", handleVoiceStreamStart)
-	mux.HandleFunc("/api/voice/stream/chunk", handleVoiceStreamChunk)
-	mux.HandleFunc("/api/voice/stream/finish", handleVoiceStreamFinish)
-	mux.HandleFunc("/api/voice/native/warm", handleVoiceNativeWarm)
-	mux.HandleFunc("/api/voice/native/unload", handleVoiceNativeUnload)
+	mux.HandleFunc("/api/voice/unload", handleVoiceUnload)
+	// Live dictation: the shared AgentWorks WebSocket (pkg/voicestt), the
+	// same endpoint and protocol the agent server exposes.
+	mux.HandleFunc("/api/voice/stream", handleVoiceStream)
 	mux.HandleFunc("/api/voice/model/install", handleVoiceModelInstall)
 	mux.HandleFunc("/api/voice/model/remove", handleVoiceModelRemove)
 	mux.HandleFunc("/api/models", func(w http.ResponseWriter, r *http.Request) {
@@ -203,29 +198,13 @@ func main() {
 		log.Printf("serving frontend from %s", webDir)
 	}
 
-	// If voice was already installed in an earlier session, start warming the
-	// persistent worker in the background right away — a parent's FIRST use
-	// each session should find it already loaded rather than paying the
-	// ~2-3s cold-start cost on whatever happens to be the first click.
-	if mlxVoiceInstalled() {
-		go func() {
-			if err := warmParakeet(context.Background()); err != nil {
-				log.Printf("[voice] background warm-up (speech recognition) failed: %v", err)
-			}
-		}()
-	}
-	// Same idea for the native helper, where it matters more: its model load
-	// is 15-17s (measured), so without this the first mic click of a session
-	// pays all of it while the parent waits on a "Getting voice ready" banner.
-	if nativeVoiceAvailable() {
-		go func() {
-			started := time.Now()
-			if err := warmNativeVoice(context.Background()); err != nil {
-				log.Printf("[voice-native] background warm-up failed: %v", err)
-				return
-			}
-			log.Printf("[voice-native] warm and ready in %s", time.Since(started).Round(time.Millisecond))
-		}()
+	// If the speech model was already downloaded in an earlier session, load
+	// it in the background right away — a parent's FIRST use each session
+	// should find it ready rather than paying the ~1-2s load on whatever
+	// happens to be the first click. A machine that never enabled voice is
+	// not made to download 630MB just by launching the app.
+	if familyVoice.Status().Installed {
+		familyVoice.Warm()
 	}
 
 	addr := ":" + strings.TrimPrefix(strings.TrimSpace(*port), ":")

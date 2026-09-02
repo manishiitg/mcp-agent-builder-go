@@ -126,7 +126,7 @@ async function startServer() {
 // background, and still made the mic slow after any gap longer than the timeout.
 function voiceLifecycle(action) {
   const req = http.request(
-    { host: '127.0.0.1', port: serverPort, path: `/api/voice/native/${action}`, method: 'POST' },
+    { host: '127.0.0.1', port: serverPort, path: `/api/voice/${action}`, method: 'POST' },
     (res) => res.resume(),
   )
   // Best-effort: a window event must never surface an error, and the server

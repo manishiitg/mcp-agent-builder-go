@@ -1,103 +1,388 @@
-import { Mic, Loader2 } from 'lucide-react'
-import { useVoiceDictation } from './useVoiceDictation'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { Mic, Square, Loader2, Download } from 'lucide-react'
+import { useVoiceDictation } from '../../shared/voice/useVoiceDictation'
+import { getApiBaseUrl, getAuthToken } from '../services/api'
+import type { VoiceEngineStatus } from '../services/api-types'
+import { useCapabilitiesStore } from '../stores/useCapabilitiesStore'
+
+/** Same vocabulary as SparkQuill's composer (learning-app/src/voice/useMicDictation.ts). */
+export type MicState = 'idle' | 'preparing' | 'recording' | 'transcribing'
+
+export type MicButtonHandle = {
+  /** No-op unless currently recording: stops, waits for the committed
+   *  transcript, and places it in the composer — what Enter does mid-dictation. */
+  stopDictation: () => void
+}
 
 interface MicButtonProps {
+  /** Product profile whose runtime.capabilities.voice gates the stream, or ''
+   * from AgentWorks' own composer (gated by capabilities.voice.available). */
   profileId: string
-  onText: (text: string, final: boolean) => void
-  /** Fired once, synchronously, when the user starts a NEW dictation session
-   * (before mic permission is requested) — the caller's cue to reset whatever
-   * "text already in the composer" baseline it diffs partials against. */
-  onDictationStart?: () => void
+  /** Fired ONCE per session, on stop, with the whole utterance. It only ever
+   * lands in the composer: unlike SparkQuill, AgentWorks never sends on the
+   * user's behalf — they review and press send themselves. */
+  onText: (text: string) => void
+  /** Lets the composer know when Enter should stop+send instead of send. */
+  onStateChange?: (state: MicState) => void
+  /** Where the full-width live banner renders (a `relative` host above the
+   * composer). Falls back to a bubble beside the button. */
+  bannerHost?: HTMLElement | null
+  /** Only the visible composer should own the global ⌥ / ⌘⇧M shortcuts. */
+  shortcutEnabled?: boolean
   disabled?: boolean
 }
 
-/**
- * Push-to-talk mic control for a product composer. Only mounted when the
- * agent profile declares the shared voice capability (agentprofiles.
- * RuntimeCapabilities.Voice) — see loadAgentProfileCapabilityEnabled and its
- * call site in ChatInput.
- *
- * Ported from SparkQuill's MicButton (learning-app/src/voice/MicButton.tsx):
- * a small icon-only toggle looked identical whether it was recording,
- * connecting, or had silently failed, which is what a live test showed —
- * clicks toggling on and off within a second, because nothing confirmed
- * "yes, this is listening" strongly enough to stop a worried re-click. The
- * banner and level ring are that confirmation, shown the instant the click
- * happens, not after the first transcript arrives.
- */
-export function MicButton({ profileId, onText, onDictationStart, disabled }: MicButtonProps) {
-  const { state, error, level, liveText, start, stop } = useVoiceDictation(profileId, onText, onDictationStart)
-  const listening = state === 'listening'
-  const starting = state === 'starting'
-  const busy = listening || starting
+type SetupPhase = 'unknown' | 'needed' | 'offer' | 'downloading' | 'ready' | 'failed'
 
-  const label = starting
-    ? 'Getting voice ready…'
-    : listening
-      ? 'Stop dictation'
-      : error || 'Start dictation'
+/**
+ * Push-to-talk mic for the chat composer — SparkQuill's mic, on the shared
+ * AgentWorks engine (frontend/shared/voice/useVoiceDictation.ts →
+ * /api/voice/stream → agent_go/pkg/voicestt), with the same UX:
+ *
+ * - click / ⌥ tap / ⌘⇧M to start; the button turns red with a level ring that
+ *   scales with LIVE input, and a "Listening" banner above the composer shows
+ *   the running transcript as the engine hears it (it may revise itself
+ *   between updates, as any live captioning does);
+ * - click / ⌥ tap / Enter while recording = stop; the committed text lands
+ *   in the composer for the user to review and send (deliberately never
+ *   auto-sent here, unlike SparkQuill's stop-and-send);
+ * - "Starting — getting voice ready…" covers opening the mic and a cold
+ *   engine load, so an impatient re-click can't begin a second session;
+ * - errors (nearly always a denied mic permission) show in place, dismiss on
+ *   click.
+ *
+ * One addition SparkQuill puts in Settings instead: the engine's model is a
+ * one-time ~690MB download on the server, so the first click offers that
+ * explicitly and shows progress from GET /api/voice/status, rather than the
+ * first click silently waiting on it (60+ seconds looking broken, caught live).
+ *
+ * Only mounted where the stream can work — see the call site in ChatInput.
+ */
+export const MicButton = forwardRef(function MicButton({
+  profileId,
+  onText,
+  onStateChange,
+  bannerHost,
+  shortcutEnabled = true,
+  disabled,
+}: MicButtonProps, ref: React.ForwardedRef<MicButtonHandle>) {
+  const initialStatus = useCapabilitiesStore(state => state.capabilities?.voice)
+  const [setup, setSetup] = useState<SetupPhase>(() => phaseFor(initialStatus))
+  const [engine, setEngine] = useState<VoiceEngineStatus | undefined>(initialStatus)
+  const [setupError, setSetupError] = useState<string | null>(null)
+
+  // /api/voice/stream on this agent server. Auth rides in the query because
+  // a browser cannot set a custom header on a WebSocket upgrade; profile_id
+  // (when set) is what the server gates the product's capability on.
+  const streamUrl = useCallback(() => {
+    const params = new URLSearchParams()
+    if (profileId) params.set('profile_id', profileId)
+    const token = getAuthToken()
+    if (token) params.set('token', token)
+    // Same-origin deployments (the EC2 gateway) leave the API base empty; a
+    // WebSocket needs an absolute URL, so fall back to the page origin like
+    // getTerminalStreamUrl does. http(s) -> ws(s).
+    const httpBase = getApiBaseUrl() || (typeof window !== 'undefined' ? window.location.origin : '')
+    return `${httpBase.replace(/^http/i, 'ws')}/api/voice/stream?${params.toString()}`
+  }, [profileId])
+  const { state, error, level, transcript, start, stop, clearError } = useVoiceDictation({ streamUrl })
+
+  const micState: MicState =
+    state === 'starting' ? 'preparing'
+      : state === 'listening' ? 'recording'
+        : state === 'finishing' ? 'transcribing'
+          : 'idle'
+  const micStateRef = useRef<MicState>(micState)
+  micStateRef.current = micState
+  useEffect(() => { onStateChange?.(micState) }, [micState, onStateChange])
+
+  const authHeaders = useCallback((): HeadersInit | undefined => {
+    const token = getAuthToken()
+    return token ? { Authorization: `Bearer ${token}` } : undefined
+  }, [])
+
+  const refreshStatus = useCallback(async (): Promise<VoiceEngineStatus | undefined> => {
+    try {
+      const res = await fetch(`${getApiBaseUrl()}/api/voice/status`, { headers: authHeaders() })
+      if (!res.ok) return undefined
+      const status = (await res.json()) as VoiceEngineStatus
+      setEngine(status)
+      setSetup(phaseFor(status))
+      return status
+    } catch {
+      return undefined
+    }
+  }, [authHeaders])
+
+  // Poll only while a download or load is in flight — the progress bar is
+  // the only reason to hit the server repeatedly.
+  useEffect(() => {
+    if (setup !== 'downloading') return
+    let misses = 0
+    const id = window.setInterval(() => {
+      void refreshStatus().then((status) => {
+        if (status) {
+          misses = 0
+          // While setting up, only "ready" or an error ends the banner: a
+          // snapshot that merely hasn't caught up yet must not dismiss it.
+          if (!status.ready && !status.error) setSetup('downloading')
+          return
+        }
+        // Ten seconds without an answer: the server went away mid-download
+        // (seen live). Say so rather than showing a frozen spinner.
+        if (++misses >= 10) {
+          setSetup('failed')
+          setSetupError('The server stopped answering during the download. Once it is back, click the mic to resume.')
+        }
+      })
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [setup, refreshStatus])
+
+  const beginSetup = useCallback(async () => {
+    setSetup('downloading')
+    try {
+      const params = new URLSearchParams()
+      if (profileId) params.set('profile_id', profileId)
+      const res = await fetch(`${getApiBaseUrl()}/api/voice/warm?${params.toString()}`, { method: 'POST', headers: authHeaders() })
+      if (!res.ok) { setSetup('failed'); return }
+      const status = (await res.json()) as VoiceEngineStatus
+      setEngine(status)
+      // The server has just been ASKED to download; keep the progress banner
+      // up regardless of what this first snapshot says. Polling below moves
+      // to ready/failed when the server actually gets there.
+      setSetup(status.ready ? 'ready' : status.error ? 'failed' : 'downloading')
+    } catch {
+      setSetup('failed')
+    }
+  }, [profileId, authHeaders])
+
+  const finish = useCallback(async () => {
+    const text = (await stop()).trim()
+    if (text) onText(text)
+  }, [stop, onText])
+
+  const begin = useCallback(async () => {
+    setSetupError(null)
+    if (setup === 'ready') { void start(); return }
+    if (setup === 'downloading') return
+    if (setup === 'offer') { void beginSetup(); return }
+    // 'unknown' / 'needed' / 'failed': ask the server what the truth is now,
+    // then either start or put the offer up.
+    const status = await refreshStatus()
+    if (status?.ready) { void start(); return }
+    if (status && (status.downloading || status.loading)) { setSetup('downloading'); return }
+    if (status && !status.installed) { setSetup('offer'); return }
+    if (status?.installed && !status.ready) {
+      // On disk but cold: warm and start; the stream waits for the load.
+      void fetch(`${getApiBaseUrl()}/api/voice/warm?${profileId ? `profile_id=${encodeURIComponent(profileId)}` : ''}`, { method: 'POST', headers: authHeaders() }).catch(() => {})
+      void start()
+      return
+    }
+    setSetupError('Voice isn’t reachable right now.')
+  }, [setup, start, beginSetup, refreshStatus, profileId, authHeaders])
+
+  const toggle = useCallback(() => {
+    if (micStateRef.current === 'recording') void finish()
+    else if (micStateRef.current === 'idle') void begin()
+  }, [finish, begin])
+
+  const stopDictation = useCallback(() => {
+    if (micStateRef.current !== 'recording') return
+    void finish()
+  }, [finish])
+  useImperativeHandle(ref, () => ({ stopDictation }), [stopDictation])
+
+  // ⌘⇧M (Ctrl⇧M) toggles dictation from anywhere in the window.
+  useEffect(() => {
+    if (!shortcutEnabled || disabled) return
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'm' || e.key === 'M')) {
+        e.preventDefault()
+        toggle()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [shortcutEnabled, disabled, toggle])
+
+  // A solo tap of ⌥ (Option) toggles too — the one-finger shortcut. A held or
+  // combined ⌥ (⌥+arrow, ⌥+letter) is left alone.
+  useEffect(() => {
+    if (!shortcutEnabled || disabled) return
+    let downAt = 0
+    let soloTap = false
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Alt') {
+        if (e.repeat) return
+        downAt = Date.now()
+        soloTap = true
+        return
+      }
+      soloTap = false
+    }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== 'Alt') return
+      const wasTap = soloTap && Date.now() - downAt < 500
+      soloTap = false
+      if (wasTap) toggle()
+    }
+    const cancel = () => { soloTap = false }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('mousedown', cancel)
+    window.addEventListener('blur', cancel)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('mousedown', cancel)
+      window.removeEventListener('blur', cancel)
+    }
+  }, [shortcutEnabled, disabled, toggle])
+
+  const stopOrStart = () => toggle()
+
+  const preparing = micState === 'preparing'
+  const recording = micState === 'recording'
+  const busy = micState === 'transcribing' || preparing || setup === 'downloading'
+  const pct = engine && engine.total_bytes > 0 ? Math.min(100, Math.round((engine.got_bytes / engine.total_bytes) * 100)) : 0
+  const sizeLabel = `${engine?.size_mb ?? 690}MB`
+  const shownError = setupError ?? error
+
+  const label = recording
+    ? 'Stop dictation (tap ⌥)'
+    : preparing
+      ? 'Getting voice ready…'
+      : micState === 'transcribing'
+        ? 'Transcribing…'
+        : setup === 'downloading'
+          ? (engine?.downloading ? `Downloading the voice model… ${pct}%` : 'Loading the voice model…')
+          : setup === 'offer'
+            ? `Set up voice (one-time ${sizeLabel} download)`
+            : 'Speak your message (tap ⌥, or ⌘⇧M)'
+
+  const bannerClass = 'flex items-center gap-2.5 rounded-2xl bg-slate-900 px-4 py-3 text-sm text-white shadow-[0_14px_32px_rgba(13,35,76,0.3)] dark:bg-slate-950 dark:ring-1 dark:ring-slate-700'
+  const bannerLabelClass = 'shrink-0 text-[11px] font-extrabold uppercase tracking-wider text-amber-300'
+  let banner: React.ReactNode = null
+  if (preparing) {
+    banner = (
+      <span className={bannerClass} role="status">
+        <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
+        <span className={bannerLabelClass}>Starting</span>
+        <span className="min-w-0 flex-1 italic text-slate-300">Getting voice ready — this can take a moment the first time…</span>
+      </span>
+    )
+  } else if (recording || micState === 'transcribing') {
+    banner = (
+      <span className={bannerClass} role="status">
+        <span className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-red-500" aria-hidden="true" />
+        <span className={bannerLabelClass}>{recording ? 'Listening' : 'Finishing'}</span>
+        <span className={`min-w-0 flex-1 truncate ${transcript ? '' : 'italic text-slate-300'}`}>
+          {transcript || 'Go ahead — start talking'}
+        </span>
+      </span>
+    )
+  } else if (setup === 'downloading') {
+    const gotMB = Math.round((engine?.got_bytes ?? 0) / (1024 * 1024))
+    const totalMB = Math.round((engine?.total_bytes ?? 0) / (1024 * 1024)) || (engine?.size_mb ?? 690)
+    banner = (
+      <span className={bannerClass} role="status">
+        <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
+        <span className={bannerLabelClass}>Setting up</span>
+        <span className="min-w-0 flex-1">
+          {engine?.downloading
+            ? `Downloading the voice model: ${gotMB} of ${totalMB}MB (${pct}%). One time only — you can talk as soon as it finishes.`
+            : 'Loading the voice model… almost there.'}
+        </span>
+        <span className="relative h-2 w-36 shrink-0 overflow-hidden rounded-full bg-slate-700" aria-hidden="true">
+          <span className="absolute inset-y-0 left-0 rounded-full bg-amber-400 transition-[width] duration-500" style={{ width: `${engine?.downloading ? pct : 100}%` }} />
+        </span>
+      </span>
+    )
+  } else if (setup === 'offer') {
+    banner = (
+      <span className={bannerClass} role="status">
+        <Download className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span className={bannerLabelClass}>Voice</span>
+        <span className="min-w-0 flex-1">Talking instead of typing needs a one-time {sizeLabel} download on the server. It runs there, not in the cloud.</span>
+        <button type="button" className="shrink-0 rounded-full bg-amber-400 px-3 py-1 text-xs font-bold text-slate-900 hover:bg-amber-300" onClick={() => { void beginSetup() }}>
+          Download
+        </button>
+        <button type="button" className="shrink-0 text-slate-400 hover:text-white" onClick={() => setSetup('needed')} aria-label="Not now">✕</button>
+      </span>
+    )
+  }
+
+  const bannerNode = banner && (
+    bannerHost
+      ? createPortal(<div className="mb-2">{banner}</div>, bannerHost)
+      : <span className="absolute left-full top-1/2 z-10 ml-2 w-max max-w-[420px] -translate-y-1/2">{banner}</span>
+  )
 
   return (
     <span className="relative inline-flex items-center">
       <button
         type="button"
-        onClick={() => (busy ? stop() : start())}
-        disabled={disabled}
+        onClick={stopOrStart}
+        disabled={disabled || busy}
         title={label}
         aria-label={label}
         data-testid="chat-input-mic-button"
-        data-voice-state={state}
+        data-voice-state={micState}
+        data-voice-setup={setup}
         className={`relative inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
-          listening
-            ? 'bg-red-500/15 text-red-500 dark:text-red-400'
+          recording
+            ? 'bg-red-100 text-red-700 ring-1 ring-red-300 dark:bg-red-500/15 dark:text-red-400 dark:ring-red-500/40'
             : 'text-slate-500 hover:bg-slate-200/60 dark:text-slate-400 dark:hover:bg-slate-700/60'
         } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
       >
-        {starting ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          <Mic className="h-4 w-4" />
-        )}
-        {listening && (
+        {busy
+          ? <Loader2 className="h-4 w-4 animate-spin" />
+          : recording
+            ? <Square className="h-3.5 w-3.5" />
+            : setup === 'offer'
+              ? <Download className="h-4 w-4" />
+              : <Mic className="h-4 w-4" />}
+        {recording && (
           // Scales with LIVE input level, not a fixed pulse — a silent or
           // wrong input device shows a dead ring instead of silently
-          // recording nothing, which a live test proved is otherwise
-          // invisible: the connection can stay open for a minute receiving
-          // real audio CHUNKS that are pure silence, and nothing else in this
-          // UI would ever reveal that.
+          // recording nothing.
           <span
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 rounded-md border-2 border-red-400"
-            style={{ transform: `scale(${1 + level * 0.6})`, opacity: 0.3 + level * 0.5 }}
+            className="pointer-events-none absolute -inset-[3px] rounded-full border-2 border-red-400/40 transition-transform duration-75"
+            style={{ transform: `scale(${1 + level * 0.7})` }}
           />
         )}
       </button>
-      {(starting || listening) && (
+      {setup === 'downloading' && engine?.downloading && (
+        <span className="ml-1 text-[11px] tabular-nums text-slate-500 dark:text-slate-400" aria-hidden="true">{pct}%</span>
+      )}
+      {bannerNode}
+      {shownError && !busy && !recording && (
         <span
           role="status"
-          className="absolute left-full top-1/2 z-10 ml-2 flex -translate-y-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-200 shadow-lg"
+          className="absolute bottom-[calc(100%+8px)] left-0 z-20 w-max max-w-[260px] cursor-pointer rounded-xl bg-slate-900 px-2.5 py-1.5 text-xs leading-snug text-white shadow-lg dark:bg-slate-950 dark:ring-1 dark:ring-slate-700"
+          onClick={() => { setSetupError(null); clearError() }}
+          title="Dismiss"
         >
-          {starting ? (
-            <>
-              <Loader2 className="h-3 w-3 shrink-0 animate-spin text-violet-400" />
-              <span>Getting voice ready — this can take a moment the first time…</span>
-            </>
-          ) : (
-            <>
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" style={{ opacity: 0.5 + level * 0.5 }} />
-              <span className="font-medium text-red-400">Listening</span>
-              <span className="max-w-[220px] truncate text-slate-400">
-                {liveText || 'Go ahead — start talking'}
-              </span>
-            </>
-          )}
-        </span>
-      )}
-      {error && !busy && (
-        <span role="status" className="absolute left-full top-1/2 z-10 ml-2 -translate-y-1/2 whitespace-nowrap rounded-full border border-red-900/60 bg-red-950/80 px-2.5 py-1 text-xs text-red-300">
-          {error}
+          {friendlyError(shownError)}
         </span>
       )}
     </span>
   )
+})
+
+function friendlyError(message: string): string {
+  if (/not reachable|failed to connect/i.test(message)) return 'Voice isn’t available right now — the server didn’t answer.'
+  if (/Permission|NotAllowed|denied/i.test(message)) return 'Could not use the microphone. Check permission for this app.'
+  return message
+}
+
+function phaseFor(status: VoiceEngineStatus | undefined): SetupPhase {
+  if (!status) return 'unknown'
+  if (status.ready) return 'ready'
+  if (status.downloading || status.loading) return 'downloading'
+  if (status.error) return 'failed'
+  return 'needed'
 }

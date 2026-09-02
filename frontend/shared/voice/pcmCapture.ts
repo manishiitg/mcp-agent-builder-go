@@ -35,6 +35,24 @@ registerProcessor('pcm-collector', PcmCollector)
 
 export type PcmCapture = { stop: () => void }
 
+// Contexts whose worklet module is already registered, so a capture started
+// after ensurePcmWorklet() does not pay the module load twice.
+const registered = new WeakSet<AudioContext>()
+
+/** Registers the PCM worklet on `ctx`. Safe to call early and concurrently
+ *  with the microphone prompt — that overlap is where the visible startup
+ *  delay used to go (measured: ~3s from socket open to first chunk). */
+export async function ensurePcmWorklet(ctx: AudioContext): Promise<void> {
+  if (registered.has(ctx)) return
+  const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }))
+  try {
+    await ctx.audioWorklet.addModule(url)
+    registered.add(ctx)
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
 /**
  * Streams `stream`'s audio to `onChunk` as PCM16 little-endian bytes, in
  * PCM_CHUNK_SAMPLES-sample slices. The caller owns both the AudioContext and
@@ -45,11 +63,11 @@ export async function startPcmCapture(
   stream: MediaStream,
   onChunk: (pcm16: ArrayBuffer) => void,
 ): Promise<PcmCapture> {
-  const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }))
-  try {
-    await ctx.audioWorklet.addModule(url)
-  } finally {
-    URL.revokeObjectURL(url)
+  await ensurePcmWorklet(ctx)
+  if (ctx.state === 'suspended') {
+    // Created outside a user gesture, or the tab was backgrounded: without
+    // this the worklet never runs and nothing is ever sent.
+    await ctx.resume()
   }
 
   const source = ctx.createMediaStreamSource(stream)

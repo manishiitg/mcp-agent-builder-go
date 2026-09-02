@@ -1,9 +1,15 @@
 //go:build cgo
 
-// Package voicestt is the shared AgentWorks streaming speech-to-text
-// capability (see agentprofiles.RuntimeCapabilities.Voice). A product opts in
-// by declaring the capability in its product.yaml; it never bundles its own
-// STT engine, model, or websocket handling.
+// Package voicestt is the ONE AgentWorks speech-to-text engine. The agent
+// server (AgentWorks' composer and every product that declares
+// agentprofiles.RuntimeCapabilities.Voice in its product.yaml), SparkQuill's
+// family-server, and the desktop builds of both all embed this package: the
+// same model, the same Manager (download/load/warm/unload), the same
+// /api/voice/stream WebSocket (ServeStream), the same file decoding
+// (DecodeFile). No product bundles its own STT engine, model, or transport.
+//
+// It needs a CGO build; engine_nocgo.go is the stub for builds without one,
+// and Available tells a UI which it got.
 //
 // Engine wraps sherpa-onnx-go (github.com/k2-fsa/sherpa-onnx-go), running
 // NVIDIA's Nemotron cache-aware streaming ASR model. Verified live (2026-08-16):
@@ -14,15 +20,10 @@
 package voicestt
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"io"
-	"net/http"
-	"os"
 	"path/filepath"
+	"strings"
 	"sync"
-	"time"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 )
@@ -39,22 +40,15 @@ type ModelFiles struct {
 	Tokens  string
 }
 
-// DefaultModelURLs is the maintainer's own (k2-fsa/sherpa-onnx author)
-// int8-quantized export of NVIDIA's Nemotron-3.5 streaming ASR model.
-// Chosen over other community re-exports specifically because sherpa-onnx's
-// own author publishes it, and because int8 keeps download + memory bounded
-// (~630MB total) without giving up the accuracy verified in the spike.
-var DefaultModelURLs = map[string]string{
-	"encoder.int8.onnx": "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/encoder.int8.onnx",
-	"decoder.int8.onnx": "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/decoder.int8.onnx",
-	"joiner.int8.onnx":  "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/joiner.int8.onnx",
-	"tokens.txt":        "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/tokens.txt",
-}
-
 // SampleRate the model was trained on. AcceptWaveform expects audio already at
 // this rate; resampling is the caller's job (browser mic capture is usually
 // 48kHz).
 const SampleRate = 16000
+
+// Available reports whether this build carries the native recognizer. The
+// non-CGO build (engine_nocgo.go) flips it to false so /api/capabilities can
+// hide the mic control up front instead of the first click discovering a 503.
+const Available = true
 
 // Engine holds ONE loaded recognizer shared across every session. Loading is
 // the expensive part (encoder.onnx is ~620MB and takes ~1.7s to initialize in
@@ -64,6 +58,7 @@ const SampleRate = 16000
 type Engine struct {
 	mu         sync.RWMutex
 	recognizer *sherpa.OnlineRecognizer
+	punct      *sherpa.OnlinePunctuation
 	modelDir   string
 }
 
@@ -71,7 +66,7 @@ type Engine struct {
 // file from DefaultModelURLs first. Loading blocks the caller (~1-2s); do this
 // once at server startup or lazily behind a sync.Once, not per request.
 func NewEngine(modelDir string) (*Engine, error) {
-	if err := ensureModelFiles(modelDir); err != nil {
+	if err := EnsureModelFiles(modelDir, nil); err != nil {
 		return nil, fmt.Errorf("voicestt: prepare model: %w", err)
 	}
 	files := ModelFiles{
@@ -111,7 +106,43 @@ func NewEngine(modelDir string) (*Engine, error) {
 	if recognizer == nil {
 		return nil, fmt.Errorf("voicestt: sherpa.NewOnlineRecognizer returned nil (check model files under %s)", modelDir)
 	}
-	return &Engine{recognizer: recognizer, modelDir: modelDir}, nil
+	e := &Engine{recognizer: recognizer, modelDir: modelDir}
+	// The punctuation model is small and optional: a directory that has the
+	// speech model but not this (an install interrupted between the two)
+	// still dictates, just without punctuation, rather than failing outright.
+	if punctuationInstalled(modelDir) {
+		e.punct = sherpa.NewOnlinePunctuation(&sherpa.OnlinePunctuationConfig{
+			Model: sherpa.OnlinePunctuationModelConfig{
+				CnnBilstm:  filepath.Join(modelDir, PunctuationDirName, "model.int8.onnx"),
+				BpeVocab:   filepath.Join(modelDir, PunctuationDirName, "bpe.vocab"),
+				NumThreads: 1,
+				Provider:   "cpu",
+			},
+		})
+	}
+	return e, nil
+}
+
+// Punctuate adds capitalization and punctuation to a raw transcript. The
+// model is English-only, so text with any non-ASCII letters is returned as
+// is rather than mangled; empty input stays empty.
+//
+// Input is lower-cased first: the model does its own casing (names, "I",
+// sentence starts) and reads existing capitals as proper nouns — measured
+// live, the recognizer's capitalized first word turned "fox" into "Fox".
+func (e *Engine) Punctuate(text string) string {
+	if text == "" || e.punct == nil || !isASCIIText(text) {
+		return text
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.punct == nil {
+		return text
+	}
+	if out := e.punct.AddPunct(strings.ToLower(text)); out != "" {
+		return out
+	}
+	return text
 }
 
 // Close releases the native recognizer. Safe to call once at server shutdown.
@@ -121,6 +152,10 @@ func (e *Engine) Close() {
 	if e.recognizer != nil {
 		sherpa.DeleteOnlineRecognizer(e.recognizer)
 		e.recognizer = nil
+	}
+	if e.punct != nil {
+		sherpa.DeleteOnlinePunctuation(e.punct)
+		e.punct = nil
 	}
 }
 
@@ -185,73 +220,4 @@ func (s *Stream) Finish() Result {
 // Close releases this stream's native state. The shared Engine is unaffected.
 func (s *Stream) Close() {
 	sherpa.DeleteOnlineStream(s.stream)
-}
-
-// ensureModelFiles downloads any file in DefaultModelURLs missing from dir,
-// verifying each download is non-empty before accepting it (an interrupted
-// download silently truncated is worse than a clear "missing" error).
-func ensureModelFiles(dir string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	for name, url := range DefaultModelURLs {
-		path := filepath.Join(dir, name)
-		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
-			continue
-		}
-		if err := downloadFile(url, path); err != nil {
-			return fmt.Errorf("download %s: %w", name, err)
-		}
-	}
-	return nil
-}
-
-func downloadFile(url, dest string) error {
-	client := &http.Client{Timeout: 15 * time.Minute}
-	resp, err := client.Get(url) //nolint:gosec // G107: fixed, hardcoded HuggingFace URLs, not user input.
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("http %d", resp.StatusCode)
-	}
-	tmp := dest + ".partial"
-	f, err := os.Create(tmp) //nolint:gosec // G304: dest is derived from a fixed internal file list, not user input.
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return os.Rename(tmp, dest)
-}
-
-// modelDirFingerprint is a short, filesystem-safe identifier for a model
-// directory derived from its source URLs — used so a shared cache path stays
-// stable across process restarts without needing a config file to name it.
-func modelDirFingerprint(urls map[string]string) string {
-	h := sha256.New()
-	for name, url := range urls {
-		h.Write([]byte(name))
-		h.Write([]byte(url))
-	}
-	return hex.EncodeToString(h.Sum(nil))[:12]
-}
-
-// DefaultModelDir returns a stable, user-scoped cache location for the model
-// files, keyed by DefaultModelURLs so a change to the pinned model version
-// naturally lands in a fresh directory instead of colliding with stale files.
-func DefaultModelDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = os.TempDir()
-	}
-	return filepath.Join(home, ".agentworks", "voice-models", "nemotron-streaming-"+modelDirFingerprint(DefaultModelURLs))
 }

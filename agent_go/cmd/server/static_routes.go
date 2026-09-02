@@ -268,6 +268,14 @@ func (api *StreamingAPI) handleCapabilities(w http.ResponseWriter, r *http.Reque
 		// /api/terminals/{id}/stream instead of the snapshot/replay polling.
 		// See docs/refactor/terminal_live_attach_transport.md.
 		"terminal_live_attach": runtimeDiagnosticsEnabled() && api.liveAttach != nil,
+		// Streaming microphone dictation (pkg/voicestt, voicestt.Status).
+		// `available` is a build-time fact: false in a CGO_ENABLED=0 build,
+		// where the mic must not be offered at all. `ready` flips once the
+		// model has loaded, which on a first run means a ~690MB download after
+		// startup. AgentWorks' own composer gates its mic on `available`;
+		// product composers keep gating on their profile's
+		// runtime.capabilities.voice instead.
+		"voice": voiceManager.Status(),
 	})
 }
 
