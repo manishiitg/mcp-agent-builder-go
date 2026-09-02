@@ -431,11 +431,15 @@ func cascadeDeleteStepConfigsRetried(ctx context.Context, workspacePath string, 
 type StepType string
 
 const (
-	StepTypeRegular    StepType = "regular"
-	StepTypeHumanInput StepType = "human_input"
-	StepTypeOrchestrator   StepType = "todo_task"
-	StepTypeRouting    StepType = "routing"
-	StepTypeMessageSeq StepType = "message_sequence"
+	StepTypeRegular      StepType = "regular"
+	StepTypeHumanInput   StepType = "human_input"
+	StepTypeOrchestrator StepType = "orchestrator"
+	// StepTypeTodoTaskLegacy is the pre-v1.0.35 name of the orchestrator step. It is
+	// accepted on read everywhere a plan type is parsed and never written back;
+	// migrate_orchestrator_step_type rewrites it in plan.json.
+	StepTypeTodoTaskLegacy StepType = "todo_task"
+	StepTypeRouting        StepType = "routing"
+	StepTypeMessageSeq     StepType = "message_sequence"
 	// StepTypeBranch is a small in-flow next-step decision — same executor
 	// as StepTypeRouting, distinct type so guidance/reporting/eval tooling
 	// can tell it apart from routing, which is now the "route" (major fork)
@@ -786,13 +790,13 @@ func (m *MessageSequencePlanStep) MarshalJSON() ([]byte, error) {
 // NOTE: Todo task steps are orchestration-like wrappers that manage todo lists instead of success criteria.
 // Loops are NOT supported on todo task wrappers - the step completes when all todos are done.
 type OrchestratorPlanStep struct {
-	Type             StepType                 `json:"type"` // Always "todo_task" - required for JSON marshaling/unmarshaling
-	CommonStepFields                          // Embeds ID, Title, Description, SuccessCriteria, ContextDependencies, ContextOutput, ValidationSchema
-	PredefinedRoutes []PlanOrchestrationRoute `json:"predefined_routes,omitempty"` // Predefined sub-agents (with learning/prevalidation)
-	NextStepID       string                   `json:"next_step_id,omitempty"`      // ID of step after todo task completes (or "end")
-	Messages         []MessageSequenceItem    `json:"messages,omitempty"`          // Optional scripted message sequence fed into the orchestrator's own conversation after its first turn
-	OrchestratorDecision *OrchestratorDecision        `json:"-"`                           // runtime: stores orchestrator decisions - not stored in plan.json
-	AgentConfigs     *AgentConfigs            `json:"-"`                           // runtime: per-agent configuration - not stored in plan.json
+	Type                 StepType                 `json:"type"` // Always "todo_task" - required for JSON marshaling/unmarshaling
+	CommonStepFields                              // Embeds ID, Title, Description, SuccessCriteria, ContextDependencies, ContextOutput, ValidationSchema
+	PredefinedRoutes     []PlanOrchestrationRoute `json:"predefined_routes,omitempty"` // Predefined sub-agents (with learning/prevalidation)
+	NextStepID           string                   `json:"next_step_id,omitempty"`      // ID of step after todo task completes (or "end")
+	Messages             []MessageSequenceItem    `json:"messages,omitempty"`          // Optional scripted message sequence fed into the orchestrator's own conversation after its first turn
+	OrchestratorDecision *OrchestratorDecision    `json:"-"`                           // runtime: stores orchestrator decisions - not stored in plan.json
+	AgentConfigs         *AgentConfigs            `json:"-"`                           // runtime: per-agent configuration - not stored in plan.json
 }
 
 // A todo_task step's optional scripted message sequence reuses MessageSequenceItem
@@ -861,7 +865,7 @@ func (t *OrchestratorPlanStep) UnmarshalJSON(data []byte) error {
 		ContextOutput       FlexibleContextOutput `json:"context_output"`
 		ValidationSchema    *ValidationSchema     `json:"validation_schema,omitempty"`
 		// Legacy nested field (backwards compatibility)
-		OrchestratorStep     json.RawMessage `json:"todo_task_step,omitempty"`
+		OrchestratorStep json.RawMessage `json:"todo_task_step,omitempty"`
 		PredefinedRoutes []struct {
 			RouteID       string          `json:"route_id"`
 			RouteName     string          `json:"route_name"`
@@ -977,11 +981,12 @@ func parseStepFromJSON(stepData json.RawMessage, index int, label string) (PlanS
 			return nil, fmt.Errorf("failed to parse human_input %s %d: %w", label, index, err)
 		}
 		return &step, nil
-	case "todo_task":
+	case "orchestrator", "todo_task":
 		var step OrchestratorPlanStep
 		if err := json.Unmarshal(stepData, &step); err != nil {
-			return nil, fmt.Errorf("failed to parse todo_task %s %d: %w", label, index, err)
+			return nil, fmt.Errorf("failed to parse orchestrator %s %d: %w", label, index, err)
 		}
+		step.Type = StepTypeOrchestrator
 		return &step, nil
 	case "routing":
 		var step RoutingPlanStep
@@ -1095,7 +1100,7 @@ type PartialPlanStep struct {
 	MaxIterations       *int                  `json:"max_iterations,omitempty"`       // DEPRECATED: loop feature removed
 	LoopDescription     string                `json:"loop_description,omitempty"`     // DEPRECATED: loop feature removed
 	// Todo task step fields
-	OrchestratorStep     map[string]interface{}   `json:"todo_task_step,omitempty"`    // Optional: Updated todo task step - will be converted to PlanStepInterface
+	OrchestratorStep map[string]interface{}   `json:"todo_task_step,omitempty"`    // Optional: Updated todo task step - will be converted to PlanStepInterface
 	PredefinedRoutes []PlanOrchestrationRoute `json:"predefined_routes,omitempty"` // Optional: Updated predefined routes for todo task steps
 	Messages         []MessageSequenceItem    `json:"messages,omitempty"`          // Optional: Updated scripted message sequence for todo task steps
 	// Routing fields
@@ -2024,7 +2029,7 @@ func getAddOrchestratorStepSchema() string {
 							"type": "object",
 							"description": "REQUIRED: The sub-agent step definition. Use type='message_sequence' for every new conversational or judgment-heavy specialist, even a one-turn specialist. Use type='regular' only for a deterministic scripted boundary, or type='todo_task' for one nested orchestrator layer.",
 							"properties": {
-								"type": {"type": "string", "enum": ["message_sequence", "regular", "todo_task"], "description": "REQUIRED: Use message_sequence for conversational work. Regular is scripted-only. Nested todo_task routes may not contain another todo_task route."},
+								"type": {"type": "string", "enum": ["message_sequence", "regular", "orchestrator", "todo_task"], "description": "REQUIRED: Use message_sequence for conversational work. Regular is scripted-only. Nested todo_task routes may not contain another todo_task route."},
 								"id": {"type": "string", "description": "REQUIRED: Stable step ID for the sub-agent step"},
 								"title": {"type": "string", "description": "REQUIRED: Title of the sub-agent step"},
 								"description": {"type": "string", "description": "REQUIRED: What this specialized agent does AND its standing brief. This IS EXECUTED as the agent's opening instruction (turn 0) on the first call — the orchestrator's per-call call_sub_agent instructions are added on top. Write it as an actionable brief, not throwaway metadata."},
@@ -2143,7 +2148,7 @@ func getUpdateOrchestratorStepSchema() string {
 							"type": "object",
 							"description": "The sub-agent step definition. Use message_sequence for conversational or judgment-heavy work, regular only for deterministic scripted work, or todo_task for one nested orchestrator layer.",
 							"properties": {
-								"type": {"type": "string", "enum": ["message_sequence", "regular", "todo_task"]},
+								"type": {"type": "string", "enum": ["message_sequence", "regular", "orchestrator", "todo_task"]},
 								"id": {"type": "string"},
 								"title": {"type": "string"},
 								"description": {"type": "string"},
@@ -2210,7 +2215,7 @@ func getAddOrchestratorRouteSchema() string {
 						"type": "object",
 						"description": "OPTIONAL: The inline sub-agent step definition. Use type='message_sequence' for every new conversational or judgment-heavy specialist, even one turn. Use type='regular' only for a deterministic scripted boundary, or type='todo_task' for one nested orchestrator layer. Omit this when using orphan_step_ref.",
 						"properties": {
-							"type": {"type": "string", "enum": ["message_sequence", "regular", "todo_task"], "description": "REQUIRED: message_sequence for conversational work; regular only for deterministic scripted work; todo_task for one nested orchestrator layer."},
+							"type": {"type": "string", "enum": ["message_sequence", "regular", "orchestrator", "todo_task"], "description": "REQUIRED: message_sequence for conversational work; regular only for deterministic scripted work; todo_task for one nested orchestrator layer."},
 							"id": {"type": "string", "description": "REQUIRED: Stable step ID for the sub-agent step"},
 							"title": {"type": "string", "description": "REQUIRED: Title of the sub-agent step"},
 							"description": {"type": "string", "description": "REQUIRED: What this specialized agent does AND its standing brief. This IS EXECUTED as the agent's opening instruction (turn 0) on the first call — the orchestrator's per-call call_sub_agent instructions are added on top. Write it as an actionable brief, not throwaway metadata."},
@@ -2267,7 +2272,7 @@ func getUpdateOrchestratorRouteSchema() string {
 				"type": "object",
 				"description": "OPTIONAL: Updated inline sub-agent step. Use message_sequence for conversational or judgment-heavy work, regular only for deterministic scripted work, or todo_task for one nested orchestrator layer. Omit this when using orphan_step_ref.",
 				"properties": {
-					"type": {"type": "string", "enum": ["message_sequence", "regular", "todo_task"]},
+					"type": {"type": "string", "enum": ["message_sequence", "regular", "orchestrator", "todo_task"]},
 					"id": {"type": "string"},
 					"title": {"type": "string"},
 					"description": {"type": "string", "description": "OPTIONAL: Replaces what this specialized agent does AND its standing brief. This IS EXECUTED as the agent's opening instruction (turn 0) on the first call — the orchestrator's per-call call_sub_agent instructions are added on top. Write it as an actionable brief, not throwaway metadata. Omit to preserve the existing description."},
@@ -2387,7 +2392,7 @@ func updateToolForStepType(stepType StepType) string {
 	case StepTypeMessageSeq:
 		return "update_message_sequence_step"
 	case StepTypeOrchestrator:
-		return "update_todo_task_step"
+		return "update_orchestrator_step"
 	case StepTypeRouting:
 		return "update_routing_step"
 	case StepTypeBranch:
@@ -2584,11 +2589,12 @@ func convertMapToStep(stepMap map[string]interface{}) (PlanStepInterface, error)
 			return nil, fmt.Errorf("failed to parse human_input step: %w", err)
 		}
 		typedStep = &step
-	case "todo_task":
+	case "orchestrator", "todo_task":
 		var step OrchestratorPlanStep
 		if err := json.Unmarshal(stepJSON, &step); err != nil {
-			return nil, fmt.Errorf("failed to parse todo_task step: %w", err)
+			return nil, fmt.Errorf("failed to parse orchestrator step: %w", err)
 		}
+		step.Type = StepTypeOrchestrator
 		typedStep = &step
 	case "routing":
 		var step RoutingPlanStep
@@ -2650,10 +2656,10 @@ func unmarshalStepFromJSON(stepData json.RawMessage) (PlanStepInterface, error) 
 		}
 		step.Type = StepTypeHumanInput
 		typedStep = &step
-	case "todo_task":
+	case "orchestrator", "todo_task":
 		var step OrchestratorPlanStep
 		if err := json.Unmarshal(stepData, &step); err != nil {
-			return nil, fmt.Errorf("failed to parse todo_task step: %w", err)
+			return nil, fmt.Errorf("failed to parse orchestrator step: %w", err)
 		}
 		step.Type = StepTypeOrchestrator
 		typedStep = &step
@@ -4760,7 +4766,7 @@ func createUpdateOrchestratorStepExecutor(workspacePath string, logger loggerv2.
 		}
 
 		logPlanChange(ctx, workspacePath, PlanChangelogEntry{
-			Tool:    "update_todo_task_step",
+			Tool:    "update_orchestrator_step",
 			Reason:  reason,
 			StepIDs: []string{partialUpdate.ExistingStepID},
 			Changes: fieldChanges,
@@ -5271,7 +5277,7 @@ func createAddHumanInputStepExecutor(workspacePath string, logger loggerv2.Logge
 
 // createAddOrchestratorStepExecutor creates an executor function for add_todo_task_step tool
 func createAddOrchestratorStepExecutor(workspacePath string, logger loggerv2.Logger, readFile func(context.Context, string) (string, error), writeFile func(context.Context, string, string) error, moveFile func(context.Context, string, string) error) func(context.Context, map[string]interface{}) (string, error) {
-	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, "todo_task")
+	return createSingleStepAdder(workspacePath, logger, readFile, writeFile, moveFile, string(StepTypeOrchestrator))
 }
 
 // validateOrchestratorStepFieldsTyped validates that a OrchestratorPlanStep has all required fields
@@ -5535,7 +5541,7 @@ func createSingleStepAdder(workspacePath string, logger loggerv2.Logger, readFil
 		// Validate step type-specific required fields BEFORE writing to plan
 		// This allows the agent to correct errors immediately via tool response
 		switch stepType {
-		case "todo_task":
+		case "orchestrator", "todo_task":
 			if orchestratorStep, ok := typedStep.(*OrchestratorPlanStep); ok {
 				if err := validateOrchestratorStepFieldsTyped(orchestratorStep); err != nil {
 					return "", fmt.Errorf("validation failed: %w", err)
@@ -5787,6 +5793,20 @@ func registerPlanModificationTools(
 		return fmt.Errorf("failed to register migrate_message_sequence_code_items tool: %w", err)
 	}
 
+	migrateOrchestratorTypeParams, err := parseSchemaForToolParameters(`{"type":"object","properties":{}}`)
+	if err != nil {
+		return fmt.Errorf("failed to parse migrate_orchestrator_step_type schema: %w", err)
+	}
+	if err := mcpAgent.RegisterCustomTool(
+		"migrate_orchestrator_step_type",
+		"Product-managed workflow-version migration for contract v1.0.35. Rewrites every legacy `\"type\": \"todo_task\"` step discriminator in planning/plan.json to `orchestrator`, validates the plan, and records the change. Behavior is unchanged: the runtime reads both names. Idempotent. Call only during the v1.0.35 workflow preflight.",
+		migrateOrchestratorTypeParams,
+		createMigrateOrchestratorStepTypeExecutor(workspacePath, logger, readFile, rawWriteFile),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register migrate_orchestrator_step_type tool: %w", err)
+	}
+
 	// Register workflow-specific plan update tools with "workflow" category
 	// Individual update tools for each step type
 	regularUpdateSchema := getUpdateRegularStepSchema()
@@ -5926,13 +5946,22 @@ func registerPlanModificationTools(
 		return fmt.Errorf("failed to parse todo task step schema: %w", err)
 	}
 	if err := mcpAgent.RegisterCustomTool(
-		"add_todo_task_step",
-		"Add a todo task orchestration step to the plan. Use this when you need to manage a dynamic todo list with trackable tasks. The main orchestrator creates/assigns tasks, then delegates to predefined sub-agents (with learning and prevalidation) or a generic agent (workspace tools only, no learning). Predefined routes have MCP tool access and accumulate learnings. A conversational route sub_agent_step must be message_sequence; use regular only for an explicitly scripted deterministic route, or todo_task for one nested orchestration layer. The generic agent is for simple, ad-hoc tasks. Provide: id, title, todo_task_step (main orchestrator metadata), predefined_routes (optional, specialized sub-agents), enable_generic_agent (optional, default true), next_step_id, insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
+		"add_orchestrator_step",
+		"Add an orchestrator step (type orchestrator; todo_task is the legacy alias) to the plan. Use it only when the parent must make a real runtime delegation decision the static plan cannot express. The orchestrator delegates to predefined sub-agents (with learning and prevalidation) or a generic agent (workspace tools only, no learning). Predefined routes have MCP tool access and accumulate learnings. A conversational route sub_agent_step must be message_sequence; use regular only for an explicitly scripted deterministic route, or orchestrator for one nested orchestration layer. The generic agent is for simple, ad-hoc tasks. Provide: id, title, todo_task_step (main orchestrator metadata), predefined_routes (optional, specialized sub-agents), enable_generic_agent (optional, default true), next_step_id, insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
 		orchestratorParams,
 		createAddOrchestratorStepExecutor(workspacePath, logger, readFile, writeFile, moveFile),
 		"workflow",
 	); err != nil {
-		return fmt.Errorf("failed to register add_todo_task_step tool: %w", err)
+		return fmt.Errorf("failed to register add_orchestrator_step tool: %w", err)
+	}
+	if err := mcpAgent.RegisterCustomTool(
+		"add_todo_task_step",
+		"Deprecated alias of add_orchestrator_step kept for one contract version; call add_orchestrator_step instead. Same parameters and behavior.",
+		orchestratorParams,
+		createAddOrchestratorStepExecutor(workspacePath, logger, readFile, writeFile, moveFile),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register add_todo_task_step alias: %w", err)
 	}
 
 	routingSchema := getAddRoutingStepSchema()
@@ -6034,13 +6063,22 @@ func registerPlanModificationTools(
 		return fmt.Errorf("failed to parse update_todo_task_step schema: %w", err)
 	}
 	if err := mcpAgent.RegisterCustomTool(
-		"update_todo_task_step",
-		"Update an Orchestrator step (todo_task type) in the plan. Provide existing_step_id (required) to identify which step to update, and only include the fields you want to change (title, todo_task_step, predefined_routes, next_step_id). The plan.json file is updated immediately when this tool is called. After a substantive change, review whether the step's saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
+		"update_orchestrator_step",
+		"Update an Orchestrator step (orchestrator type; todo_task is the legacy alias) in the plan. Provide existing_step_id (required) to identify which step to update, and only include the fields you want to change (title, todo_task_step, predefined_routes, next_step_id). The plan.json file is updated immediately when this tool is called. After a substantive change, review whether the step's saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		orchestratorUpdateParams,
 		createUpdateOrchestratorStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
-		return fmt.Errorf("failed to register update_todo_task_step tool: %w", err)
+		return fmt.Errorf("failed to register update_orchestrator_step tool: %w", err)
+	}
+	if err := mcpAgent.RegisterCustomTool(
+		"update_todo_task_step",
+		"Deprecated alias of update_orchestrator_step kept for one contract version; call update_orchestrator_step instead. Same parameters and behavior.",
+		orchestratorUpdateParams,
+		createUpdateOrchestratorStepExecutor(workspacePath, logger, readFile, writeFile),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register update_todo_task_step alias: %w", err)
 	}
 
 	// Register todo task route management tools
@@ -6050,13 +6088,22 @@ func registerPlanModificationTools(
 		return fmt.Errorf("failed to parse add_todo_task_route schema: %w", err)
 	}
 	if err := mcpAgent.RegisterCustomTool(
-		"add_todo_task_route",
-		"Add a new predefined route (sub-agent) to an Orchestrator step (todo_task type). New conversational routes must use sub_agent_step.type=message_sequence, even for one turn. Use regular only for a deterministic scripted boundary; it is automatically configured as scripted. Provide parent_step_id and new_route with route_id, route_name, and condition, plus either sub_agent_step or orphan_step_ref. The plan.json file is updated immediately.",
+		"add_orchestrator_route",
+		"Add a new predefined route (sub-agent) to an Orchestrator step (orchestrator type; todo_task is the legacy alias). New conversational routes must use sub_agent_step.type=message_sequence, even for one turn. Use regular only for a deterministic scripted boundary; it is automatically configured as scripted. Provide parent_step_id and new_route with route_id, route_name, and condition, plus either sub_agent_step or orphan_step_ref. The plan.json file is updated immediately.",
 		addOrchestratorRouteParams,
 		createAddOrchestratorRouteExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
-		return fmt.Errorf("failed to register add_todo_task_route tool: %w", err)
+		return fmt.Errorf("failed to register add_orchestrator_route tool: %w", err)
+	}
+	if err := mcpAgent.RegisterCustomTool(
+		"add_todo_task_route",
+		"Deprecated alias of add_orchestrator_route kept for one contract version; call add_orchestrator_route instead. Same parameters and behavior.",
+		addOrchestratorRouteParams,
+		createAddOrchestratorRouteExecutor(workspacePath, logger, readFile, writeFile),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register add_todo_task_route alias: %w", err)
 	}
 
 	updateOrchestratorRouteSchema := getUpdateOrchestratorRouteSchema()
@@ -6065,13 +6112,22 @@ func registerPlanModificationTools(
 		return fmt.Errorf("failed to parse update_todo_task_route schema: %w", err)
 	}
 	if err := mcpAgent.RegisterCustomTool(
-		"update_todo_task_route",
-		"Update an existing predefined route (sub-agent) within an Orchestrator step (todo_task type). Conversational route definitions use message_sequence; regular is reserved for deterministic scripted work. Provide parent_step_id, existing_route_id, and only the fields to change. Use orphan_step_ref for a reusable orphan step. The plan.json file is updated immediately.",
+		"update_orchestrator_route",
+		"Update an existing predefined route (sub-agent) within an Orchestrator step (orchestrator type; todo_task is the legacy alias). Conversational route definitions use message_sequence; regular is reserved for deterministic scripted work. Provide parent_step_id, existing_route_id, and only the fields to change. Use orphan_step_ref for a reusable orphan step. The plan.json file is updated immediately.",
 		updateOrchestratorRouteParams,
 		createUpdateOrchestratorRouteExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
-		return fmt.Errorf("failed to register update_todo_task_route tool: %w", err)
+		return fmt.Errorf("failed to register update_orchestrator_route tool: %w", err)
+	}
+	if err := mcpAgent.RegisterCustomTool(
+		"update_todo_task_route",
+		"Deprecated alias of update_orchestrator_route kept for one contract version; call update_orchestrator_route instead. Same parameters and behavior.",
+		updateOrchestratorRouteParams,
+		createUpdateOrchestratorRouteExecutor(workspacePath, logger, readFile, writeFile),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register update_todo_task_route alias: %w", err)
 	}
 
 	deleteOrchestratorRouteSchema := getDeleteOrchestratorRouteSchema()
@@ -6080,13 +6136,22 @@ func registerPlanModificationTools(
 		return fmt.Errorf("failed to parse delete_todo_task_route schema: %w", err)
 	}
 	if err := mcpAgent.RegisterCustomTool(
-		"delete_todo_task_route",
-		"Delete a predefined route (sub-agent) from an Orchestrator step (todo_task type). Provide parent_step_id and deleted_route_id. Unlike routing steps, Orchestrator steps may have 0 predefined routes (generic-agent-only). The plan.json file is updated immediately when this tool is called.",
+		"delete_orchestrator_route",
+		"Delete a predefined route (sub-agent) from an Orchestrator step (orchestrator type; todo_task is the legacy alias). Provide parent_step_id and deleted_route_id. Unlike routing steps, Orchestrator steps may have 0 predefined routes (generic-agent-only). The plan.json file is updated immediately when this tool is called.",
 		deleteOrchestratorRouteParams,
 		createDeleteOrchestratorRouteExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
-		return fmt.Errorf("failed to register delete_todo_task_route tool: %w", err)
+		return fmt.Errorf("failed to register delete_orchestrator_route tool: %w", err)
+	}
+	if err := mcpAgent.RegisterCustomTool(
+		"delete_todo_task_route",
+		"Deprecated alias of delete_orchestrator_route kept for one contract version; call delete_orchestrator_route instead. Same parameters and behavior.",
+		deleteOrchestratorRouteParams,
+		createDeleteOrchestratorRouteExecutor(workspacePath, logger, readFile, writeFile),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register delete_todo_task_route alias: %w", err)
 	}
 
 	// Register validation schema update tool
@@ -6474,7 +6539,7 @@ func createAddOrchestratorRouteExecutor(workspacePath string, logger loggerv2.Lo
 		}
 
 		logPlanChange(ctx, workspacePath, PlanChangelogEntry{
-			Tool:       "add_todo_task_route",
+			Tool:       "add_orchestrator_route",
 			Reason:     reason,
 			StepIDs:    []string{parentStepID, newRoute.RouteID},
 			AddedSteps: addedRouteJSON,
@@ -6645,7 +6710,7 @@ func createUpdateOrchestratorRouteExecutor(workspacePath string, logger loggerv2
 		}
 
 		logPlanChange(ctx, workspacePath, PlanChangelogEntry{
-			Tool:           "update_todo_task_route",
+			Tool:           "update_orchestrator_route",
 			Reason:         reason,
 			StepIDs:        []string{parentStepID, existingRouteID},
 			BeforeSnapshot: beforeRouteSnapshot,
@@ -6744,7 +6809,7 @@ func createDeleteOrchestratorRouteExecutor(workspacePath string, logger loggerv2
 		}
 
 		logPlanChange(ctx, workspacePath, PlanChangelogEntry{
-			Tool:         "delete_todo_task_route",
+			Tool:         "delete_orchestrator_route",
 			Reason:       reason,
 			StepIDs:      []string{parentStepID, deletedRouteID},
 			DeletedSteps: deletedRouteJSON,

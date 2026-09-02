@@ -4,11 +4,10 @@ These are the recurring shapes that real workflows in this system take. When des
 
 Each pattern lists: industry-alignment line (for users with prior vocabulary), trigger phrases, primitive layout, common pitfalls.
 
-The builder's primitives referenced below: `regular`, `todo_task`, `routing`, `human_input`, `message_sequence`.
+The builder's primitives referenced below: `regular`, `orchestrator`, `routing`, `human_input`, `message_sequence`.
 
 The `plan-design` reference is authoritative for step-type eligibility; these
-patterns do not override it. A fixed child set and order does not justify
-`todo_task`, even when separate tools, learnings, or debugging would be useful.
+patterns do not override it. A fixed child set and order does not justify an `orchestrator` step, even when separate tools, learnings, or debugging would be useful.
 
 ---
 
@@ -20,7 +19,7 @@ patterns do not override it. A fixed child set and order does not justify
 
 **Layout**:
 - Top-level `routing` step on a mode/flag (e.g., `$RUN_MODE`) → 2–N branches
-- Each branch uses one large `message_sequence` per shared-context span, coherent scripted deterministic boundaries where needed, or a `todo_task` only for independent delegation
+- Each branch uses one large `message_sequence` per shared-context span, coherent scripted deterministic boundaries where needed, or a `orchestrator` only for independent delegation
 - Optional small terminate `routing` near the end of each branch to converge or end cleanly
 
 **When to use**: one logical workflow has distinct entry modes (dry-run vs apply, learn vs execute, daily vs weekly). Avoids two near-duplicate plans.
@@ -41,14 +40,14 @@ patterns do not override it. A fixed child set and order does not justify
 **Layout**:
 - Use scope, target, and hypotheses already supplied by the user, launch variables, or upstream durable context. Add `human_input` only when the running workflow genuinely cannot proceed without missing scope.
 - Use one large `message_sequence` to investigate and produce the proof-bearing deliverable when the work shares one context.
-- Use a `todo_task` only when independently delegated sources, hypotheses, or attack surfaces need isolated contexts, parallel progress, or independent retries; then feed their durable outputs to one large final `message_sequence` that consolidates, proves each finding, and repairs gaps.
+- Use a `orchestrator` only when independently delegated sources, hypotheses, or attack surfaces need isolated contexts, parallel progress, or independent retries; then feed their durable outputs to one large final `message_sequence` that consolidates, proves each finding, and repairs gaps.
 
 **When to use**: the scope cannot be known at design time and the investigation has to fan out across angles the orchestrator decides at runtime.
 
 **Pitfalls**:
-- Pre-defining too many routes in the `todo_task` — for investigations, the generic agent often handles dynamic sub-tasks better than fixed routes.
+- Pre-defining too many routes in the `orchestrator` — for investigations, the generic agent often handles dynamic sub-tasks better than fixed routes.
 - Asking for scope again when it is already present in the request or variables. If required scope is truly absent at runtime, use `human_input`; never let the orchestrator invent it.
-- Putting report-writing inside the `todo_task` instead of after it — splits the report across runs and breaks consolidation.
+- Putting report-writing inside the `orchestrator` instead of after it — splits the report across runs and breaks consolidation.
 
 ---
 
@@ -61,7 +60,7 @@ patterns do not override it. A fixed child set and order does not justify
 **Layout**:
 - One coherent scripted `regular` owns related deterministic credential/API/CLI/fetch/parse/transform/persist work under one source/auth/retry/output contract
 - If judgment is required, its validated output feeds one large `message_sequence` that completes the semantic outcome, proves it from evidence, and repairs gaps
-- No `routing`, no `todo_task`, no fan-out
+- No `routing`, no `orchestrator`, no fan-out
 - Each producing step has a strict `validation_schema`; the script or sequence performs its own evidence-based double-check before completion
 
 **When to use**: sequential, deterministic automation where each step depends on the previous and there is no real branching. Common for bank statements, document parsing, GST/tax audits, scheduled imports.
@@ -69,7 +68,7 @@ patterns do not override it. A fixed child set and order does not justify
 **Pitfalls**:
 - Splitting login, fetch, parse, transform, and persistence merely because they are separate actions even though they share one deterministic execution contract.
 - Creating a separate verify step when the owning script or message sequence can re-read the authoritative system and prove the result in the same retry domain — see pattern #5.
-- Forcing a `todo_task` when the work is genuinely linear — adds orchestration overhead with no gain.
+- Forcing a `orchestrator` when the work is genuinely linear — adds orchestration overhead with no gain.
 
 ---
 
@@ -80,7 +79,7 @@ patterns do not override it. A fixed child set and order does not justify
 **Trigger phrases**: "process every item", "for each section / source / team", "research multiple angles", "test every component", "run X for each Y".
 
 **Layout**:
-- One or more `todo_task` steps with predefined routes per item type (or generic agent for unknowns)
+- One or more `orchestrator` steps with predefined routes per item type (or generic agent for unknowns)
 - Followed by one large `message_sequence` consolidator/synthesizer that reads every route output, proves coverage and consistency, and repairs the final deliverable
 - The consolidator owns its verification and top-level validation unless an independent clean-room boundary is required
 
@@ -143,7 +142,7 @@ patterns do not override it. A fixed child set and order does not justify
 - One large `message_sequence` drafts/proposes, re-opens evidence, proves the approval package, and repairs it before the human boundary
 - `human_input` approves, selects, or edits; this is an intentional context boundary because new external information enters the run
 - After approval, use a scripted `regular` for a fixed API/CLI publish/execute action with authoritative read-back verification, or another large `message_sequence` only when adaptive post-approval judgment needs its own shared context
-- Or `human_input` directly inside a `todo_task` route when the orchestrator should pause per item
+- Or `human_input` directly inside a `orchestrator` route when the orchestrator should pause per item
 - Different from pattern #2's seed: this `human_input` sits mid-pipeline, not at the start
 
 **When to use**: irreversible actions (publish, submit, send), creative judgment (topic, tone), or contested decisions (which lead to pursue).
@@ -164,7 +163,7 @@ patterns do not override it. A fixed child set and order does not justify
 **Layout**:
 - Default: one large `message_sequence` owns `[execute] → [re-open evidence and critique with an explicit rubric] → [repair and double-check]`
 - When genuine clean-room independence matters, use separate large maker and reviewer sequences with intentionally isolated context, then an explicit repair handoff
-- A todo_task variant is reserved for independently delegated maker/reviewer work, not ordinary self-checking
+- An orchestrator variant is reserved for independently delegated maker/reviewer work, not ordinary self-checking
 
 **When to use**: outputs where quality matters and the critic can spot issues the maker missed (reports, code, strategy proposals, content).
 
@@ -203,7 +202,7 @@ patterns do not override it. A fixed child set and order does not justify
 
 **Layout**:
 - A producer step writes canonical rows to `db/db.sqlite`, normally with an idempotent scripted upsert and a documented table contract
-- A consumer uses a `foreach` entry with read-only `source_sql`: `message_sequence.items[]` when one agent should retain shared context across rows, or `todo_task.messages[]` when the orchestrator should decide independent delegation. The runtime sends one turn per SQL result row, bound to `.` in the message template.
+- A consumer uses a `foreach` entry with read-only `source_sql`: `message_sequence.items[]` when one agent should retain shared context across rows, or `orchestrator.messages[]` when the orchestrator should decide independent delegation. The runtime sends one turn per SQL result row, bound to `.` in the message template.
 - The owning step's top-level `validation_schema` proves complete processing. Add an explicit `prevalidation` only when an intermediate aggregate must pass before later items run.
 
 **When to use**: an earlier step materializes rows and **every** selected row must receive a conversational turn. Runtime SQL expansion enumerates the result deterministically instead of trusting an LLM to remember the list. Validate processed-versus-selected counts so caps, failures, or filtered rows cannot look complete.

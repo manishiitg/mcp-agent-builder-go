@@ -139,6 +139,7 @@ export function terminalRailVisualKind(terminal: TerminalSnapshot): TerminalRail
   ) return 'orchestrator'
   if (
     stepType === 'todo_task' ||
+    stepType === 'orchestrator' ||
     executionKind === 'orchestrator' ||
     executionKind === 'todo_task'
   ) return 'orchestrator'

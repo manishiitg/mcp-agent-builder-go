@@ -89,11 +89,16 @@ that todo item.
 
 ## Not changed (by decision)
 
-- The plan type name `todo_task`, the planning tools, the drift-review check
-  IDs, the event wire names, and the frontend compound-node graph. Same
-  pattern PLAT-259 used for branch vs routing: one executor, distinct type. A
-  rename of the type string to `orchestrator` (with a parse-time alias and a
-  contract-version migration) is a separate follow-up.
+- The event wire names (`todo_task_route_selected`, `todo_task_step_completed`,
+  execution kind `todo_task`) and the frontend compound-node graph. Same
+  pattern PLAT-259 used for branch vs routing: one executor, distinct type.
+- Follow-up done in the same series: the plan type string is now
+  `orchestrator` with `todo_task` accepted as a read alias, the planning tools
+  are `add/update_orchestrator_step` and `add/update/delete_orchestrator_route`
+  (old names kept as deprecated aliases for one contract version), the drift
+  check is `orchestrator_best_practices` (legacy records still satisfy it), the
+  guidance doc is `orchestrator.md`, and contract v1.0.35 adds
+  `migrate_orchestrator_step_type` to rewrite plan.json.
 - The PLAT-068 eligibility invariant. Reworded from "use todo_task only when"
   to the same rule about giving a step routes; the render test still asserts
   it in all four guides.

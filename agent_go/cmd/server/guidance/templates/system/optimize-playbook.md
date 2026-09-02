@@ -169,7 +169,7 @@ The step **description** in plan.json is the primary instruction the execution a
 - **Incorporate patterns from learnings**: If learnings consistently capture the same pattern (e.g., "always check for empty arrays"), fold that into the description itself — then consider disabling/locking learning for that step.
 - **Keep the boundary coherent**: The description may include many tool calls or sub-actions, but it should still serve one durable output contract. If it starts mixing unrelated outputs, validation gates, retry domains, stores, or approval/routing decisions, split at those boundaries.
 
-**How to update**: Use the plan modification tools (`update_scripted_step`, `update_message_sequence_step`, `update_todo_task_step`, `update_todo_task_route`, `update_routing_step`, `update_human_input_step`, or `update_validation_schema`) to update step descriptions and validation. Do not patch `planning/plan.json` directly; it is system-managed and guarded. The change takes effect on the next execution.
+**How to update**: Use the plan modification tools (`update_scripted_step`, `update_message_sequence_step`, `update_orchestrator_step`, `update_orchestrator_route`, `update_routing_step`, `update_human_input_step`, or `update_validation_schema`) to update step descriptions and validation. Do not patch `planning/plan.json` directly; it is system-managed and guarded. The change takes effect on the next execution.
 
 **Description review bookkeeping is required**: After you change or approve a description, immediately call `update_step_config` to record:
 - `description_reviewed` + `review_notes`
@@ -195,7 +195,7 @@ After running a step, review it for optimization — but follow this priority or
   - **Simple steps** (single tool call, straightforward output): leave `learning_objective` empty (the default). Learning is opt-in; simple steps don't earn their keep with the learning-agent overhead.
   - **Medium steps** (2-5 tool calls, clear pattern): Run with write access for **2-3 successful runs**, review learnings, then change to `learnings_access="read"` when new contributions become redundant.
   - **Complex steps** (many tool calls, branching logic, API interactions, error handling): Run with write access for **3-5 successful runs**. Review and curate learnings after each run — edit out noise and keep actionable patterns. Retain write access only while the step is still producing useful reusable HOW.
-  - **Sub-agent steps** (todo_task routes): Each sub-agent has its own learning access and objective; review them independently.
+  - **Sub-agent steps** (orchestrator routes): Each sub-agent has its own learning access and objective; review them independently.
 - **When to stop writes**: Change to `learnings_access="read"` when the same patterns repeat across successful runs. The execution agent still consumes the curated shared learnings without paying for a contribution turn.
 - **When to resume writes**: Restore `read-write` with a concrete objective if the description/tools change materially or failures reveal new reusable HOW.
 
@@ -271,11 +271,11 @@ When the user asks to enable scripted execution for a step, use: update_step_con
 - Boundary: if you can describe the instruction as one concrete file/topic transformation, use `targeted`. If the justification depends on comparing multiple steps, runs, or topic files, use `cross_step`.
 
 ### 9. Orchestrator (Sub-Workflow / Pipeline) — For Dynamic Delegation
-The `plan-design` reference owns step-type eligibility. Use `todo_task` only
+The `plan-design` reference owns step-type eligibility. Use `orchestrator` only
 when the parent makes a real runtime orchestration decision the static plan
 cannot directly express. Several routine actions do not justify an orchestrator.
 
-**When to use todo_task:**
+**When to use orchestrator:**
 - Runtime evidence determines which or how many specialist tasks are needed
 - The parent conditionally selects or fans out workers
 - The parent coordinates material runtime parallelism or adaptive retry/recovery
@@ -283,10 +283,9 @@ cannot directly express. Several routine actions do not justify an orchestrator.
 
 Different tools/skills/servers, separate learnings, progress visibility, and
 granular debugging can help choose boundaries **after** eligibility is proven;
-none is sufficient by itself. **A fixed child set and order does not justify
-`todo_task`.**
+none is sufficient by itself. **A fixed child set and order does not justify an `orchestrator` step.**
 
-**When NOT to use todo_task:**
+**When NOT to use orchestrator:**
 - Fixed API/SDK/CLI/data acquisition and stable transforms — use coherent scripted regular fetchers
 - One substantial reasoning outcome with same-context verification and repair — use one large message_sequence
 - A known linear checklist whose items share one output/retry boundary — keep it inside the owning step rather than delegating micro-tasks
@@ -298,15 +297,15 @@ none is sufficient by itself. **A fixed child set and order does not justify
 - Each sub-agent has its own **learning files**, **server/tool scoping**, **skills (via enabled_skills in step_config)**, and **validation schemas**
 - Sub-agents can be **individually debugged, re-run, and hardened** via the workshop tools
 - The orchestrator stays lean — it manages task flow, while sub-agents handle execution details
-- If one route still needs **multiple independently delegated sub-tasks with isolated contexts**, its **sub_agent_step** may be another **todo_task** — but stop at one nested layer. A known checklist or several same-context actions stay inside one large route `message_sequence`.
+- If one route still needs **multiple independently delegated sub-tasks with isolated contexts**, its **sub_agent_step** may be another **orchestrator** — but stop at one nested layer. A known checklist or several same-context actions stay inside one large route `message_sequence`.
 
-**Design principle:** Split by durable control boundary, not action count. A scripted fetcher may perform many related calls/transforms under one source/auth/retry/output contract, and a message sequence may perform a large reasoning job plus verification/repair. Use todo_task only when independent delegation itself adds value.
+**Design principle:** Split by durable control boundary, not action count. A scripted fetcher may perform many related calls/transforms under one source/auth/retry/output contract, and a message sequence may perform a large reasoning job plus verification/repair. Use orchestrator only when independent delegation itself adds value.
 
-**Rule of thumb:** For data workflows start with scripted fetcher(s) → durable DB/file evidence → one large agentic message sequence. Add routing, human gates, or todo_task only for real control boundaries.
+**Rule of thumb:** For data workflows start with scripted fetcher(s) → durable DB/file evidence → one large agentic message sequence. Add routing, human gates, or orchestrator only for real control boundaries.
 
 ### 9a. Deterministic delegation belongs in a scripted step, not an orchestrator
 
-There is no scripted mode for `todo_task`. If an orchestrator's delegation turns out to be
+There is no scripted mode for `orchestrator`. If an orchestrator's delegation turns out to be
 a fixed set of route calls that only branches on success/failure, the orchestrator is not
 making a runtime decision and should not exist: express the fixed calls as plan steps, or
 as one regular scripted step whose `main.py` calls the routes through the workflow's

@@ -194,7 +194,7 @@ export interface RegularPlanStep extends CommonStepFields {
 //   description, success_criteria, context_dependencies, context_output, validation_schema
 // These are inherited from CommonStepFields already.
 export interface TodoTaskPlanStep extends CommonStepFields {
-  type: 'todo_task';
+  type: 'todo_task' | 'orchestrator';  // 'orchestrator' since contract v1.0.35; 'todo_task' is the legacy on-disk alias
   todo_task_step?: PlanStep;                // DEPRECATED: kept for backwards compat with old plan.json
   predefined_routes?: PlanRoutingRoute[];   // Predefined sub-agents with learning/prevalidation
   enable_generic_agent?: boolean;           // Allow generic execution agent (no learning/prevalidation)
@@ -312,8 +312,11 @@ export function isHumanInputStep(step: PlanStep): step is HumanInputPlanStep {
 }
 
 export function isTodoTaskStep(step: PlanStep): step is TodoTaskPlanStep {
-  return step.type === 'todo_task';
+  return step.type === 'todo_task' || step.type === 'orchestrator';
 }
+
+// Preferred name; the plan type is `orchestrator` and `todo_task` is its legacy alias.
+export const isOrchestratorStep = isTodoTaskStep;
 
 export function isMessageSequenceStep(step: PlanStep): step is MessageSequencePlanStep {
   return step.type === 'message_sequence';

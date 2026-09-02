@@ -3021,7 +3021,7 @@ func (api *StreamingAPI) handleAddStep(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		newStep = &s
-	case "todo_task":
+	case "orchestrator", "todo_task":
 		var s todo_creation_human.OrchestratorPlanStep
 		if err := json.Unmarshal(stepJSON, &s); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to parse todo_task step: %v", err), http.StatusBadRequest)

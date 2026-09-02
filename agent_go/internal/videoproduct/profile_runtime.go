@@ -317,7 +317,8 @@ func shouldRefreshGeneratedVideoStudioPlan(content string) bool {
 	// the workflow, and nothing else brings it forward. Video Studio now exposes
 	// every production task as one message_sequence; refresh the older todo_task
 	// plans rather than leaving a hidden orchestrator in existing projects.
-	if strings.Contains(content, `"type": "todo_task"`) || strings.Contains(content, `"type":"todo_task"`) {
+	if strings.Contains(content, `"type": "todo_task"`) || strings.Contains(content, `"type":"todo_task"`) ||
+		strings.Contains(content, `"type": "orchestrator"`) || strings.Contains(content, `"type":"orchestrator"`) {
 		return true
 	}
 	required := []string{`"shortform-characters"`, `"shortform-look-sound"`, `"shortform-narration"`, `"longform-shotlist"`}

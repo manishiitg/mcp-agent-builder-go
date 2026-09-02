@@ -1498,11 +1498,11 @@ func subAgentConversationPage(records []SubAgentCallRecord, executionID string, 
 // SubAgentExecutionContext holds the context needed for sub-agent execution from tools
 type SubAgentExecutionContext struct {
 	OrchestratorStep *OrchestratorPlanStep
-	StepIndex    int
-	StepPath     string
-	AllSteps     []PlanStepInterface
-	Progress     *StepProgress
-	StepConfig   *AgentConfigs // Step-level configuration for LLM overrides
+	StepIndex        int
+	StepPath         string
+	AllSteps         []PlanStepInterface
+	Progress         *StepProgress
+	StepConfig       *AgentConfigs // Step-level configuration for LLM overrides
 
 	// HumanInputs is the run_full_workflow human_inputs map, unscoped. A route
 	// dispatch (executePredefinedSubAgent) looks up its own entry by the

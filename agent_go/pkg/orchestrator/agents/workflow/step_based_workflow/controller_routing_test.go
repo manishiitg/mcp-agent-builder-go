@@ -17,7 +17,7 @@ func TestRoutingNextStepTypesByID(t *testing.T) {
 	if got := stepTypes["route"]; got != "routing" {
 		t.Fatalf("route step type = %q, want routing", got)
 	}
-	if got := stepTypes["orchestrate"]; got != "todo_task" {
-		t.Fatalf("orchestrate step type = %q, want todo_task", got)
+	if got := stepTypes["orchestrate"]; got != "orchestrator" {
+		t.Fatalf("orchestrate step type = %q, want orchestrator", got)
 	}
 }

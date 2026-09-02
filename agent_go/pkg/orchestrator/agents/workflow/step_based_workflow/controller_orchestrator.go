@@ -217,7 +217,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeOrchestratorStep(
 		humanInputs = execCtx.HumanInputs
 	}
 	subAgentExecCtx := &SubAgentExecutionContext{
-		OrchestratorStep:          orchestratorStep,
+		OrchestratorStep:      orchestratorStep,
 		StepIndex:             stepIndex,
 		StepPath:              orchestratorStepPath,
 		AllSteps:              allSteps,

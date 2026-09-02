@@ -938,7 +938,7 @@ function findPlanStepByID(steps: PlanStep[] | undefined, stepID: string): PlanSt
     visited.add(step)
 
     if (step.id === stepID) return step
-    if (step.type !== 'todo_task') continue
+    if (step.type !== 'todo_task' && step.type !== 'orchestrator') continue
 
     if (step.todo_task_step) pending.push(step.todo_task_step)
     for (const route of step.predefined_routes || []) {

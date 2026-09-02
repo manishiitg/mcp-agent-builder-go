@@ -283,7 +283,7 @@ func TestOrchestratorEligibilityStaysConsistentAcrossGuidance(t *testing.T) {
 	}
 	for _, want := range []string{
 		"real runtime orchestration decision",
-		"A fixed child set and order does not justify `todo_task`",
+		"A fixed child set and order does not justify an `orchestrator` step",
 		"supporting properties after this eligibility gate",
 		"known independent fixed work belongs in explicit plan steps/dependencies",
 	} {
@@ -292,14 +292,14 @@ func TestOrchestratorEligibilityStaysConsistentAcrossGuidance(t *testing.T) {
 		}
 	}
 
-	for _, kind := range []string{"plan-design", "todo-task", "optimize-playbook", "workflow-patterns"} {
+	for _, kind := range []string{"plan-design", "orchestrator", "optimize-playbook", "workflow-patterns"} {
 		doc := RenderSystemDoc(kind)
-		if !containsNormalizedText(doc, "fixed child set and order does not justify `todo_task`") {
+		if !containsNormalizedText(doc, "fixed child set and order does not justify an `orchestrator` step") {
 			t.Fatalf("%s guidance weakened the canonical fixed-child invariant", kind)
 		}
 	}
 
-	for _, kind := range []string{"todo-task", "optimize-playbook"} {
+	for _, kind := range []string{"orchestrator", "optimize-playbook"} {
 		doc := RenderSystemDoc(kind)
 		if strings.Contains(doc, "Scripted-mode todo_task") || strings.Contains(doc, "Orchestrator scripted mode (deterministic delegation") {
 			t.Fatalf("%s still documents the removed orchestrator scripted fast path", kind)
@@ -1349,7 +1349,7 @@ func TestDeterministicFetchersFeedLargeAgenticProcessors(t *testing.T) {
 		"planning-steps":    {registry: referenceKinds, text: "one atomic action with no"},
 		"optimize-playbook": {registry: referenceKinds, text: "add a separate step after it that reads the output"},
 		"workflow-patterns": {registry: referenceKinds, text: "`regular`(action) → `regular`(verify"},
-		"todo-task":         {registry: referenceKinds, text: "manages multiple discrete tasks"},
+		"orchestrator":         {registry: referenceKinds, text: "manages multiple discrete tasks"},
 	}
 	for kind, check := range stale {
 		rendered, err := renderFromRegistry(kind, tmplData{}, check.registry)
@@ -1435,7 +1435,7 @@ func TestWorkflowPatternsUseCurrentRuntimeAndStoreContracts(t *testing.T) {
 		"HTML reports read report-facing rows live with `window.report.query`",
 		"read-only `source_sql`",
 		"message_sequence.items[]",
-		"todo_task.messages[]",
+		"orchestrator.messages[]",
 		"processed-versus-selected counts",
 	} {
 		if !strings.Contains(rendered, want) {

@@ -40,7 +40,7 @@ For a fixed choice the user already gave the builder, prefer a deterministic
 switch instead of asking again — `branch` for a small in-flow decision,
 `routing` when the choice forks into a major, self-contained sub-workflow —
 and pass `route_selections` when running either.
-Use `todo_task` only when independent sub-agent delegation itself adds value;
+Use `orchestrator` only when independent sub-agent delegation itself adds value;
 several known actions in one shared context are not enough. Do not add a
 `human_input` step just to ask the same branch choice again.
 
@@ -53,8 +53,8 @@ several known actions in one shared context are not enough. Do not add a
   parsing, normalization, and mechanical persistence; batch related calls
   rather than making micro-steps. Conversational work uses `message_sequence`,
   even for one turn
-- **`todo_task`** — orchestrator with `predefined_routes`; each route
-  is `message_sequence` / `regular` / nested `todo_task` (1 level
+- **`orchestrator`** — orchestrator with `predefined_routes`; each route
+  is `message_sequence` / `regular` / nested `orchestrator` (1 level
   deep only)
 - **`routing`** — choose next step from a fixed route map; a major,
   self-contained sub-workflow fork
@@ -72,7 +72,7 @@ step-types reference, inner steps, reusable orphan-route pattern),
 call **`read_skill(skills=[{"name":"builder-reference","path":"references/plan-design.md"}])`** — this is the entry
 point for any plan-composition decision. From there:
 
-- **Per-step-type deep dives**: `todo-task` (anatomy + routes +
+- **Per-step-type deep dives**: `orchestrator` (anatomy + routes +
   nested + scripted fast-path), `human-input` (input types + routing
   pairing + unattended schedules), `message-sequence` (full pattern
   catalog: Stateful Specialist, Test/Fix Loop, Maker+Reviewer, Panel,

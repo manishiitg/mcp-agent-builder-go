@@ -69,6 +69,14 @@ func validateStepTypeDriftChecks(stepType string, checks []StepDriftCheck) error
 	if requiredCheckID == "" {
 		return nil
 	}
+	if requiredCheckID == orchestratorBestPracticesDriftCheckID {
+		// Records reviewed before contract v1.0.35 carry the legacy ID.
+		for _, check := range checks {
+			if strings.TrimSpace(check.CheckID) == legacyOrchestratorBestPracticesDriftCheckID {
+				return nil
+			}
+		}
+	}
 	for _, check := range checks {
 		if strings.TrimSpace(check.CheckID) == requiredCheckID {
 			return nil
@@ -167,7 +175,7 @@ func getRecordPlanDriftReviewSchema() string {
 					"properties": {
 						"check_id": {
 							"type": "string",
-							"description": "Stable check identifier. For the deterministic checks, use their real names: report_query_compatibility, validation_schema_db_rules, validation_schema_file_rules, scripted_code_db_queries, db_readme_contract, orphaned_tables. Step types require their matching reference-backed check: scripted_best_practices, message_sequence_best_practices, todo_task_best_practices, routing_best_practices, or branch_best_practices. For another judgment check, invent a clear, stable id, e.g. step_description_accuracy, learnings_content_staleness, kb_content_relevance, db_schema_normalization, learnings_kb_access_appropriateness."
+							"description": "Stable check identifier. For the deterministic checks, use their real names: report_query_compatibility, validation_schema_db_rules, validation_schema_file_rules, scripted_code_db_queries, db_readme_contract, orphaned_tables. Step types require their matching reference-backed check: scripted_best_practices, message_sequence_best_practices, orchestrator_best_practices (legacy orchestrator_best_practices accepted), routing_best_practices, or branch_best_practices. For another judgment check, invent a clear, stable id, e.g. step_description_accuracy, learnings_content_staleness, kb_content_relevance, db_schema_normalization, learnings_kb_access_appropriateness."
 						},
 						"status": {
 							"type": "string",

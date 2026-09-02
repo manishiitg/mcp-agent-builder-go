@@ -1123,10 +1123,10 @@ function ReadOnlyStepDetailPanel({
   const type = step?.type || node.type || 'node'
   const routes = step?.type === 'routing' || step?.type === 'branch'
     ? step.routes
-    : step?.type === 'todo_task'
+    : (step?.type === 'todo_task' || step?.type === 'orchestrator')
       ? step.predefined_routes
       : undefined
-  const todoMessages = step?.type === 'todo_task' ? step.messages : undefined
+  const todoMessages = (step?.type === 'todo_task' || step?.type === 'orchestrator') ? step.messages : undefined
   const sequenceItems = (step ? (step as { items?: MessageSequenceItem[] }).items : undefined) || undefined
   const validationSchema = step?.validation_schema || ('validation_schema' in data ? data.validation_schema : undefined)
   const agentConfigs = step?.agent_configs

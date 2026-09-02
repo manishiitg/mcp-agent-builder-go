@@ -412,6 +412,7 @@ const getStepIcon = (type: string) => {
   switch (type) {
     case 'orchestration':
       return <Network className="w-4 h-4 text-purple-500" />
+    case 'orchestrator':
     case 'todo_task':
       return <ListTodo className="w-4 h-4 text-purple-500" />
     case 'human_input':
@@ -805,8 +806,9 @@ const getStepTypeLabel = (type: string): string => {
       return 'Routing'
     case 'branch':
       return 'Branch'
+    case 'orchestrator':
     case 'todo_task':
-      return 'Todo Task'
+      return 'Orchestrator'
     case 'human_input':
       return 'Human Input'
     case 'sub-agent':
@@ -821,6 +823,7 @@ const getStepTypeLabel = (type: string): string => {
 
 const getStepTypeDescription = (type: string): string => {
   switch (type) {
+    case 'orchestrator':
     case 'todo_task':
       return 'Orchestrator: decides which delegated tasks to run and tracks their outcomes.'
     case 'sub-agent':
@@ -847,6 +850,7 @@ const getStepTypeBadgeStyle = (type: string): string => {
       return 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20 dark:bg-indigo-500/20 dark:text-indigo-300'
     case 'branch':
       return 'bg-cyan-500/10 text-cyan-600 border-cyan-500/20 dark:bg-cyan-500/20 dark:text-cyan-300'
+    case 'orchestrator':
     case 'todo_task':
       return 'bg-fuchsia-500/10 text-fuchsia-600 border-fuchsia-500/20 dark:bg-fuchsia-500/20 dark:text-fuchsia-300'
     case 'human_input':
