@@ -95,10 +95,9 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>(compact ? 'available' : 'all')
   // Local to this instance -- deliberately independent of the store's global
-  // showConfigEditor/showMCPDetails (which the top-menu modal in
-  // MCPServersSection.tsx owns and whose onClose reopens that modal). Reusing
-  // that global flag here would either double-render the popup or incorrectly
-  // pop the top-menu modal open when this is embedded in a workflow panel.
+  // showConfigEditor/showMCPDetails flags, which were owned by the (since
+  // removed) top-menu MCP modal. Reusing a global flag here would let two
+  // embedded browsers fight over one popup.
   const [showJsonConfig, setShowJsonConfig] = useState(false)
 
   const toggleLogs = async (serverName: string) => {
