@@ -3,6 +3,24 @@ import type { PollingEvent } from '../../services/api-types'
 
 const RESTORABLE_CHAT_CONTENT_EVENTS = new Set(['user_message', 'conversation_end', 'unified_completion'])
 
+const WORKFLOW_CHAT_CONTENT_EVENT_TYPES = new Set(['user_message', 'conversation_end', 'unified_completion'])
+
+export function hasWorkflowChatContent(events?: PollingEvent[]): boolean {
+  return (events || []).some(event => WORKFLOW_CHAT_CONTENT_EVENT_TYPES.has(event.type || ''))
+}
+
+// createChatTab always mints a fresh crypto.randomUUID() sessionId for a
+// brand-new tab, even one with zero conversation behind it -- so a tab's
+// `sessionId` alone is truthy even when nothing has ever been loaded into
+// it. The real "already has something" signal is whether that session has
+// any actual content. Shared by WorkflowLayout.tsx ("+ New chat" reuse) and
+// ChatArea.tsx (rename-on-first-message) -- lives here rather than in either
+// of those two files since they import each other (ChatArea <- WorkflowLayout)
+// and a shared helper needs a leaf module both can safely import from.
+export function workflowTabAlreadyHasContent(tab: ChatTab | undefined, tabEvents: Record<string, PollingEvent[]>): boolean {
+  return Boolean(tab?.sessionId) && hasWorkflowChatContent(tabEvents[tab!.sessionId!])
+}
+
 /** Find an untouched interactive Chat placeholder that can safely receive a
  * restored conversation. A read-only Schedule/full-run tab must never be
  * repurposed for restore: doing so leaves schedule metadata and the conversion

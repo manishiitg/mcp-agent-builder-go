@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { CheckCircle, Info, XCircle } from 'lucide-react';
 
@@ -25,21 +25,26 @@ export const Toast: React.FC<ToastProps> = ({
 }) => {
   const [isVisible, setIsVisible] = useState(true);
 
+  // The parent rebuilds onClose on every render, so depending on it directly
+  // would restart the dismiss timer each time and keep the toast on screen.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setIsVisible(false);
-      setTimeout(onClose, 300); // Allow fade out animation
+      setTimeout(() => onCloseRef.current(), 300); // Allow fade out animation
     }, duration);
 
     return () => clearTimeout(timer);
-  }, [duration, onClose]);
+  }, [duration]);
 
   if (!isVisible) return null;
 
   const { icon: Icon, bgColor } = TOAST_CONFIG[type];
 
   return (
-    <div className="fixed top-4 right-4 z-[100000] animate-in slide-in-from-right-full duration-300">
+    <div className="animate-in slide-in-from-right-full duration-300">
       <div className={`${bgColor} text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 max-w-sm`}>
         <Icon className="w-4 h-4 flex-shrink-0" />
         <span className="text-sm font-medium">{message}</span>
@@ -56,8 +61,11 @@ interface ToastContainerProps {
 export const ToastContainer: React.FC<ToastContainerProps> = ({ toasts, onRemoveToast }) => {
   if (typeof document === 'undefined') return null;
 
+  // The stack owns the positioning so multiple toasts sit above each other
+  // instead of stacking on the same fixed coordinates. Newest lands nearest
+  // the corner.
   return createPortal(
-    <>
+    <div className="fixed bottom-4 right-4 z-[100000] flex flex-col items-end gap-2 pointer-events-none">
       {toasts.map((toast) => (
         <Toast
           key={toast.id}
@@ -66,7 +74,7 @@ export const ToastContainer: React.FC<ToastContainerProps> = ({ toasts, onRemove
           onClose={() => onRemoveToast(toast.id)}
         />
       ))}
-    </>,
+    </div>,
     document.body
   );
 };

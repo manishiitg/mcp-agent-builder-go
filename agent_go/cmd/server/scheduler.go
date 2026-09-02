@@ -34,6 +34,13 @@ type ScheduleContext struct {
 	WorkflowLabel string
 	Schedule      WorkflowSchedule
 	Capabilities  WorkflowCapabilities
+	// OwnerUserID is the workflow's WorkflowManifest.CreatedBy, threaded
+	// through so startSessionInternal resolves secrets against the account
+	// that actually configured them instead of the "default" placeholder
+	// user, who never has any stored. Empty for a workflow created before
+	// CreatedBy existed -- startSessionInternal's own empty-string handling
+	// (falling through to GetDefaultUserID()) is unchanged for that case.
+	OwnerUserID   string
 	TriggerSource string // "cron" (default) or "manual"; encoded into the session ID
 	// OriginSessionID is the chat session that triggered this run, when one did.
 	// A scheduled run mints its own session, so without this link its terminals
@@ -587,6 +594,7 @@ func buildScheduleContext(workspacePath string, manifest *WorkflowManifest, sche
 		WorkflowLabel: manifest.Label,
 		Schedule:      sched,
 		Capabilities:  manifest.Capabilities,
+		OwnerUserID:   manifest.CreatedBy,
 	}
 	if sched.PulseReviewOnly {
 		// PLAT-115: a workflow's own periodic Pulse-review schedule reuses the
@@ -2311,7 +2319,7 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 			includesIntro = true
 		}
 		reqMap["query"] = query
-		if err := s.api.startSessionInternal(ctx, reqMap, sessionID, "", nil); err != nil {
+		if err := s.api.startSessionInternal(ctx, reqMap, sessionID, sctx.OwnerUserID, nil); err != nil {
 			s.sessionLogf(sctx, sessionID, "[PULSE] step %q did not finish: %v", st.label, err)
 			outcome := pulseLifecycleStepWaitFailed
 			if errors.Is(err, errWorkshopSequenceInterrupted) || errors.Is(err, context.Canceled) {
@@ -3543,7 +3551,7 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 		}
 
 		turnStartedAt := time.Now().UTC()
-		if err := s.api.startSessionInternal(ctx, reqMap, sessionID, "", nil); err != nil {
+		if err := s.api.startSessionInternal(ctx, reqMap, sessionID, sctx.OwnerUserID, nil); err != nil {
 			// A non-blocking direct decision turn that cannot start must not cost
 			// the operator the run itself. The decisions stay answered-and-
 			// unapplied, exactly as before this turn existed, and the post-run

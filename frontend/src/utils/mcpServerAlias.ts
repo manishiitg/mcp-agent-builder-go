@@ -33,6 +33,29 @@ export const hasServerTool = (tools: string[], serverName: string, toolName: str
   });
 };
 
+// Shared by ToolSelectionSection's own checkbox and any other UI that lets a
+// user add/remove a server from a workflow's tool list (e.g. the "Connect a
+// new MCP server" browser embedded in the workflow panel) — keeps the
+// alias-safety and default-tool-mode behavior identical no matter which
+// surface triggered the toggle.
+export const toggleServerSelection = (
+  serverName: string,
+  selectedServers: string[],
+  selectedTools: string[],
+): { servers: string[]; tools: string[] } => {
+  if (isSelectedServer(selectedServers, serverName)) {
+    return {
+      servers: selectedServers.filter(s => !serverNamesMatch(s, serverName)),
+      tools: selectedTools.filter(t => !toolBelongsToServer(t, serverName)),
+    };
+  }
+
+  const hasSpecificTools = selectedTools.some(t => toolBelongsToServer(t, serverName) && !t.endsWith(':*'));
+  const servers = [...selectedServers.filter(s => !serverNamesMatch(s, serverName)), serverName];
+  const tools = hasSpecificTools ? selectedTools : [...selectedTools, `${serverName}:*`];
+  return { servers, tools };
+};
+
 // dedupeServerNames collapses alias-equivalent duplicates to a single entry
 // (first occurrence wins), so a manifest that already has both spellings —
 // e.g. from before this alias-awareness existed — self-heals the next time

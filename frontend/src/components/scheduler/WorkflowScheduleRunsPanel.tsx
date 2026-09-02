@@ -7,12 +7,19 @@ import {
   ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Square, Radio, Search, MessageSquare, MoreHorizontal
 } from 'lucide-react'
 import { schedulerApi } from '../../api/scheduler'
+import { agentApi } from '../../services/api'
 import { useGlobalPresetStore } from '../../stores/useGlobalPresetStore'
 import { useChatStore } from '../../stores/useChatStore'
-import type { ScheduledJob, SchedulerConfig } from '../../services/api-types'
+import { useModeStore } from '../../stores/useModeStore'
+import { useWorkflowStore } from '../../stores/useWorkflowStore'
+import { activateTab } from '../../utils/activateTab'
+import { selectWorkflowPreset } from '../../utils/workflowNavigation'
+import { scheduleTabLabel } from '../../utils/scheduleTabLabel'
+import type { ScheduledJob, ScheduledJobRun, SchedulerConfig } from '../../services/api-types'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '../ui/tooltip'
 import { useAuthStore } from '../../stores/useAuthStore'
 import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
+import { ScheduleExecutionHistoryList } from '../ScheduleExecutionHistoryList'
 
 interface WorkflowScheduleRunsPanelProps {
   onClose: () => void
@@ -504,6 +511,13 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
 
   const [triggering, setTriggering] = useState<string | null>(null)
 
+  // Execution history — only wired up in the per-workflow scoped (embedded)
+  // view; the global cross-workflow popup does not show this.
+  const [expandedRunHistoryJobIds, setExpandedRunHistoryJobIds] = useState<Set<string>>(new Set())
+  const [runsByJob, setRunsByJob] = useState<Record<string, ScheduledJobRun[]>>({})
+  const [runsLoadingJobIds, setRunsLoadingJobIds] = useState<Set<string>>(new Set())
+  const [deletingRunSessionIds, setDeletingRunSessionIds] = useState<Set<string>>(new Set())
+
   useEffect(() => {
     if (!openActionMenuJobId) return
     const closeMenu = () => setOpenActionMenuJobId(null)
@@ -948,6 +962,166 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     }
   }
 
+  const toggleRunHistory = useCallback(async (job: ScheduledJob) => {
+    const alreadyOpen = expandedRunHistoryJobIds.has(job.id)
+    if (alreadyOpen) {
+      setExpandedRunHistoryJobIds(current => {
+        const next = new Set(current)
+        next.delete(job.id)
+        return next
+      })
+      return
+    }
+
+    setExpandedRunHistoryJobIds(current => new Set(current).add(job.id))
+    if (runsByJob[job.id]) return
+    setRunsLoadingJobIds(current => new Set(current).add(job.id))
+    try {
+      const response = await schedulerApi.getJobRuns(job.id, 200)
+      setRunsByJob(current => ({ ...current, [job.id]: response.runs || [] }))
+    } catch {
+      setExpandedRunHistoryJobIds(current => {
+        const next = new Set(current)
+        next.delete(job.id)
+        return next
+      })
+      useChatStore.getState().addToast(`Could not load execution history for ${job.name}`, 'error')
+    } finally {
+      setRunsLoadingJobIds(current => {
+        const next = new Set(current)
+        next.delete(job.id)
+        return next
+      })
+    }
+  }, [expandedRunHistoryJobIds, runsByJob])
+
+  // Opens a scheduled run's session directly from run.session_id — no session
+  // list to fetch first, unlike PreviousChatHistoryPanel's onSelectSession
+  // (which resolves a ChatHistorySession because it's browsing durable chat
+  // history broadly, not one workflow's own schedule runs).
+  const openScheduledRun = useCallback(async (run: ScheduledJobRun, job: ScheduledJob) => {
+    const sessionId = run.session_id
+    if (!sessionId) return
+
+    const chatStore = useChatStore.getState()
+    const existingTab = Object.values(chatStore.chatTabs).find(t => t.sessionId === sessionId)
+
+    let effectivePresetQueryId = job.preset_query_id || existingTab?.metadata?.presetQueryId
+    if (!effectivePresetQueryId) {
+      try {
+        const running = await agentApi.getRunningWorkflow(sessionId)
+        effectivePresetQueryId = running.preset_query_id || undefined
+      } catch {
+        // Leave undefined rather than rebinding the scheduled run to whichever
+        // workflow is currently open.
+      }
+    }
+
+    if (effectivePresetQueryId) {
+      selectWorkflowPreset(effectivePresetQueryId)
+    }
+    useModeStore.getState().setModeCategory('workflow')
+    useWorkflowStore.getState().setShowChatArea(true)
+
+    const desiredName = scheduleTabLabel(job.name)
+    const metadata = {
+      mode: 'workflow' as const,
+      phaseId: undefined,
+      phaseName: undefined,
+      ...(effectivePresetQueryId ? { presetQueryId: effectivePresetQueryId } : {}),
+      isViewOnly: true,
+      isScheduledRun: true,
+      scheduledJobName: job.name,
+    }
+
+    if (existingTab) {
+      chatStore.setTabMetadata(existingTab.tabId, metadata)
+      if (existingTab.name !== desiredName) {
+        useChatStore.setState((state) => {
+          const t = state.chatTabs[existingTab.tabId]
+          if (!t) return state
+          return { chatTabs: { ...state.chatTabs, [existingTab.tabId]: { ...t, name: desiredName } } }
+        })
+      }
+      try {
+        const existingEvents = chatStore.getTabEvents(sessionId)
+        const response = existingEvents.length === 0
+          ? await agentApi.getRecentSessionEvents(sessionId)
+          : await agentApi.getSessionEvents(sessionId, chatStore.getTabLastEventIndex(sessionId))
+        if (response.events.length > 0) {
+          if (existingEvents.length === 0) {
+            chatStore.setTabEvents(sessionId, response.events)
+          } else {
+            chatStore.addTabEvents(sessionId, response.events)
+          }
+        }
+        if (response.last_processed_index !== undefined) {
+          chatStore.setTabLastEventIndex(sessionId, response.last_processed_index)
+        }
+        if (response.has_more !== undefined) {
+          chatStore.setTabHasMoreOlderEvents(sessionId, response.has_more)
+        }
+        const isDone = response.session_status === 'completed' || response.session_status === 'stopped'
+        const isError = response.session_status === 'error'
+        chatStore.setTabCompleted(existingTab.tabId, isDone)
+        chatStore.setTabStreaming(existingTab.tabId, !isDone && !isError && response.session_status === 'running')
+        chatStore.setTabHasRunningBgAgents(existingTab.tabId, !!response.has_running_background_agents)
+        chatStore.setTabSyntheticTurn(existingTab.tabId, !!response.is_synthetic_turn)
+        chatStore.setTabCanSteer(existingTab.tabId, !!response.can_steer)
+      } catch {
+        // Leave the tab attached even if the ephemeral session buffer is gone.
+      }
+      activateTab(existingTab.tabId)
+      onClose()
+      return
+    }
+
+    const tabId = await chatStore.createChatTab(desiredName, metadata, sessionId)
+    try {
+      const response = await agentApi.getRecentSessionEvents(sessionId)
+      if (response.events.length > 0) {
+        chatStore.setTabEvents(sessionId, response.events)
+      }
+      if (response.last_processed_index !== undefined) {
+        chatStore.setTabLastEventIndex(sessionId, response.last_processed_index)
+      }
+      if (response.has_more !== undefined) {
+        chatStore.setTabHasMoreOlderEvents(sessionId, response.has_more)
+      }
+      const isDone = response.session_status === 'completed' || response.session_status === 'stopped'
+      const isError = response.session_status === 'error'
+      chatStore.setTabCompleted(tabId, isDone)
+      chatStore.setTabStreaming(tabId, !isDone && !isError && response.session_status === 'running')
+      chatStore.setTabHasRunningBgAgents(tabId, !!response.has_running_background_agents)
+      chatStore.setTabSyntheticTurn(tabId, !!response.is_synthetic_turn)
+      chatStore.setTabCanSteer(tabId, !!response.can_steer)
+    } catch {
+      // Scheduled run sessions are in-memory only; after restart there may be nothing to hydrate.
+    }
+    activateTab(tabId)
+    onClose()
+  }, [onClose])
+
+  const deleteScheduledRunSession = useCallback(async (run: ScheduledJobRun) => {
+    const sessionId = run.session_id
+    if (!sessionId || !workflowScope?.workspacePath) return
+    if (!window.confirm('Delete this conversation record? The schedule execution itself remains.')) return
+
+    setDeletingRunSessionIds(current => new Set(current).add(sessionId))
+    try {
+      await agentApi.deleteChatHistorySession(sessionId, workflowScope.workspacePath)
+      useChatStore.getState().addToast('Deleted conversation record', 'success')
+    } catch {
+      useChatStore.getState().addToast('Failed to delete conversation record', 'error')
+    } finally {
+      setDeletingRunSessionIds(current => {
+        const next = new Set(current)
+        next.delete(sessionId)
+        return next
+      })
+    }
+  }, [workflowScope?.workspacePath])
+
   const handleToggleGlobalPause = async () => {
     setIsUpdatingSchedulerPause(true)
     try {
@@ -1174,6 +1348,20 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
             </div>
           </div>
         </div>
+
+        {isWorkflowScoped && (
+          <ScheduleExecutionHistoryList
+            job={job}
+            runs={runsByJob[job.id] ?? []}
+            historyOpen={expandedRunHistoryJobIds.has(job.id)}
+            historyLoading={runsLoadingJobIds.has(job.id)}
+            recordedRunCount={job.run_count ?? (runsByJob[job.id]?.length ?? 0)}
+            onToggle={() => void toggleRunHistory(job)}
+            onOpen={run => void openScheduledRun(run, job)}
+            onDelete={isReadOnlyUser ? undefined : run => void deleteScheduledRunSession(run)}
+            deletingRunIds={deletingRunSessionIds}
+          />
+        )}
       </div>
     )
   }

@@ -149,7 +149,7 @@ export default function SkillImportDialog({ onClose, onSuccess }: SkillImportDia
               onClick={() => handleMethodChange('github')}
               className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 importMethod === 'github'
-                  ? 'border-purple-500 text-purple-600 dark:text-purple-400'
+                  ? 'border-primary text-primary'
                   : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
               }`}
             >
@@ -159,7 +159,7 @@ export default function SkillImportDialog({ onClose, onSuccess }: SkillImportDia
               onClick={() => handleMethodChange('zip')}
               className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 importMethod === 'zip'
-                  ? 'border-purple-500 text-purple-600 dark:text-purple-400'
+                  ? 'border-primary text-primary'
                   : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
               }`}
             >
@@ -182,7 +182,7 @@ export default function SkillImportDialog({ onClose, onSuccess }: SkillImportDia
                   setError(null)
                 }}
                 placeholder="https://github.com/user/repo/tree/main/skills/my-skill"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
               />
               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 Paste a URL to a skill folder containing SKILL.md
@@ -196,7 +196,7 @@ export default function SkillImportDialog({ onClose, onSuccess }: SkillImportDia
                     setIsPrivate(e.target.checked)
                     if (!e.target.checked) setPat('')
                   }}
-                  className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
+                  className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary focus:ring-primary"
                 />
                 <span className="text-sm text-gray-700 dark:text-gray-300">Private repository</span>
               </label>
@@ -208,7 +208,7 @@ export default function SkillImportDialog({ onClose, onSuccess }: SkillImportDia
                     value={pat}
                     onChange={(e) => setPat(e.target.value)}
                     placeholder="ghp_..."
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
                   />
                   <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                     Personal Access Token with repo scope. Your token is only used for this request and is not stored anywhere.
@@ -230,8 +230,8 @@ export default function SkillImportDialog({ onClose, onSuccess }: SkillImportDia
                 onClick={() => fileInputRef.current?.click()}
                 className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
                   selectedFile
-                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
-                    : 'border-gray-300 dark:border-gray-600 hover:border-purple-400 dark:hover:border-purple-500'
+                    ? 'border-primary bg-primary/10'
+                    : 'border-gray-300 dark:border-gray-600 hover:border-primary/60'
                 }`}
               >
                 <input
@@ -243,7 +243,7 @@ export default function SkillImportDialog({ onClose, onSuccess }: SkillImportDia
                 />
                 {selectedFile ? (
                   <div className="flex items-center justify-center gap-2">
-                    <FileArchive className="w-6 h-6 text-purple-500" />
+                    <FileArchive className="w-6 h-6 text-muted-foreground" />
                     <span className="text-sm text-gray-900 dark:text-gray-100 font-medium">
                       {selectedFile.name}
                     </span>
@@ -322,7 +322,7 @@ export default function SkillImportDialog({ onClose, onSuccess }: SkillImportDia
               href="https://skills.sh"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-sm text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-1"
+              className="text-sm text-primary hover:underline flex items-center gap-1"
             >
               <ExternalLink className="w-3 h-3" />
               Browse skills on skills.sh
@@ -347,7 +347,7 @@ export default function SkillImportDialog({ onClose, onSuccess }: SkillImportDia
               <button
                 onClick={handleImport}
                 disabled={isImporting || !validationResult?.valid}
-                className="px-4 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary hover:bg-primary/90 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {isImporting ? (
                   <>

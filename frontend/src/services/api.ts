@@ -23,6 +23,7 @@ import type {
   WorkflowConstantsResponse,
   WorkflowSelectedOptions,
   GetActiveSessionsResponse,
+  HeaderSummaryResponse,
   ReconnectSessionResponse,
   SessionStatusResponse,
   SessionExecutionTreeResponse,
@@ -901,6 +902,16 @@ export const agentApi = {
   getActiveSessions: async (): Promise<GetActiveSessionsResponse> => {
     return coalesceRuntimeRead('active-sessions', async () => {
       const response = await api.get('/api/sessions/active', { timeout: RUNTIME_READ_TIMEOUT_MS })
+      return response.data
+    })
+  },
+
+  // Combined poll for the app header (ModePresetBar + GlobalActivityMonitor):
+  // active sessions + workflow schedule counts in one round trip, replacing
+  // what used to be two independently-timed requests.
+  getHeaderSummary: async (): Promise<HeaderSummaryResponse> => {
+    return coalesceRuntimeRead('header-summary', async () => {
+      const response = await api.get('/api/header-summary', { timeout: RUNTIME_READ_TIMEOUT_MS })
       return response.data
     })
   },

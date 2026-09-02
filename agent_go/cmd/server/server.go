@@ -307,6 +307,7 @@ type ActiveSessionInfo struct {
 	PresetName                  string           `json:"preset_name,omitempty"`
 	PresetQueryID               string           `json:"preset_query_id,omitempty"`
 	PhaseID                     string           `json:"phase_id,omitempty"`
+	PhaseName                   string           `json:"phase_name,omitempty"`
 	WorkshopMode                string           `json:"workshop_mode,omitempty"`
 	BotPlatform                 string           `json:"bot_platform,omitempty"`
 	TriggeredBy                 string           `json:"triggered_by,omitempty"`
@@ -2036,6 +2037,10 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/mcp-config/status", api.handleGetMCPConfigStatus).Methods("GET")
 	apiRouter.HandleFunc("/mcp-config/logs", api.handleGetServerLogs).Methods("GET")
 
+	// Connector connection state (from oauth_routes.go)
+	apiRouter.HandleFunc("/mcp/connect", api.handleConnectServer).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/mcp/disconnect", api.handleDisconnectServer).Methods("POST", "OPTIONS")
+
 	// Secrets encryption API routes (from secrets_routes.go)
 	apiRouter.HandleFunc("/secrets/encrypt", api.handleEncryptSecret).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/secrets/decrypt", api.handleDecryptSecret).Methods("POST", "OPTIONS")
@@ -2082,6 +2087,9 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Active Session API routes (from polling.go)
 	apiRouter.HandleFunc("/sessions/active", api.handleGetActiveSessions).Methods("GET")
+	// Combined poll for the app header (ModePresetBar + GlobalActivityMonitor):
+	// active sessions + workflow schedule counts in one round trip.
+	apiRouter.HandleFunc("/header-summary", api.handleGetHeaderSummary).Methods("GET")
 	apiRouter.HandleFunc("/sessions/{session_id}/events", api.handleGetSessionEvents).Methods("GET")
 	apiRouter.HandleFunc("/sessions/{session_id}/events/stream", api.handleSSEStream).Methods("GET")
 	apiRouter.HandleFunc("/sessions/{session_id}/reconnect", api.handleReconnectSession).Methods("POST")
@@ -3042,14 +3050,22 @@ func (api *StreamingAPI) apiRequestLogMiddleware(next http.Handler) http.Handler
 
 // shouldTraceAPIRequest keeps normal logs focused on user actions and writes.
 // The frontend makes frequent successful GET requests for state refreshes; their
-// failures are still logged by apiRequestLogMiddleware.
+// failures are still logged by apiRequestLogMiddleware. Set
+// API_REQUEST_LOG_INCLUDE_GET=true to temporarily trace GET/HEAD too, e.g. to
+// measure real polling frequency from server logs instead of the browser
+// Network tab — remove this override once the investigation is done.
 func shouldTraceAPIRequest(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
-		return false
+		return apiRequestLogIncludeGET()
 	default:
 		return true
 	}
+}
+
+func apiRequestLogIncludeGET() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("API_REQUEST_LOG_INCLUDE_GET")))
+	return value == "true" || value == "1"
 }
 
 func shouldLogAPIRequests() bool {

@@ -115,8 +115,9 @@ export const useMCPStore = create<MCPState>()(
           try {
             const toolList = await agentApi.getTools() as ToolDefinition[]
 
-            // Get the list of properly discovered servers (status === 'ok') from the fresh tool list
-            const availableServers = [...new Set(toolList.filter((tool: ToolDefinition) => tool.status === 'ok').map((tool: ToolDefinition) => tool.server).filter((server): server is string => typeof server === 'string'))]
+            // Servers the user has connected. Reachability (status === 'ok') is a
+            // separate question — a connected server that is down stays in this list.
+            const availableServers = [...new Set(toolList.filter((tool: ToolDefinition) => tool.connection === 'connected').map((tool: ToolDefinition) => tool.server).filter((server): server is string => typeof server === 'string'))]
 
             // Filter persisted enabledServers to only include servers that still exist
             // This removes servers that were deleted from the config
@@ -150,10 +151,9 @@ export const useMCPStore = create<MCPState>()(
             set({
               toolList,
               isLoadingTools: false,
-              // Auto-enable all servers on first load if none are enabled, otherwise use filtered list
-              enabledServers: filteredEnabledServers.length === 0
-                ? availableServers
-                : filteredEnabledServers,
+              // No auto-enable: connecting a server is an explicit user action,
+              // so an empty list stays empty.
+              enabledServers: filteredEnabledServers,
               chatSelectedServers: filteredChatSelectedServers,
               workflowSelectedServers: filteredWorkflowSelectedServers,
               // Update toolDetails to remove deleted servers
@@ -257,7 +257,7 @@ export const useMCPStore = create<MCPState>()(
         // Helper methods
         getAvailableServers: () => {
           const state = get()
-          return [...new Set(state.toolList.filter((tool: ToolDefinition) => tool.status === 'ok').map((tool: ToolDefinition) => tool.server).filter((server): server is string => typeof server === 'string'))]
+          return [...new Set(state.toolList.filter((tool: ToolDefinition) => tool.connection === 'connected').map((tool: ToolDefinition) => tool.server).filter((server): server is string => typeof server === 'string'))]
         },
 
         getServerGroups: () => {

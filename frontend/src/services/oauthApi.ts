@@ -40,8 +40,10 @@ export interface OAuthDiscoveryResponse {
 export interface OAuthStatusResponse {
   server_name: string;
   valid: boolean;
-  expires_in: string;
-  token_path: string;
+  /** False for servers with no oauth block. Absent on older responses. */
+  has_oauth?: boolean;
+  expires_in?: string;
+  token_path?: string;
 }
 
 export interface OAuthLogoutRequest {
