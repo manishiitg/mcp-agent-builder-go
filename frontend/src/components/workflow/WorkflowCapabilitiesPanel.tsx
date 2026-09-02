@@ -62,8 +62,11 @@ const SECTION_COPY: Record<WorkflowCapabilitySection, { title: string; descripti
   },
   llm: {
     title: 'Workflow LLM configuration',
-    description: 'Review the provider profile and any role-specific model overrides.',
-    savesViaManifest: true,
+    description: 'Pick the provider this workflow runs on. Changes apply immediately.',
+    // Every change here (provider pick, "Use in this workflow", Advanced
+    // role pins) writes the manifest on its own, so the footer Save would
+    // only ever show "nothing to save".
+    savesViaManifest: false,
   },
   bots: {
     title: 'Workflow bots',
@@ -299,7 +302,11 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
               <WorkflowLLMConfigurationPanel
                 workspacePath={workspacePath}
                 llmConfig={capabilities.llm_config}
-                onChange={(llm_config) => setCapabilities(current => ({ ...current, llm_config }))}
+                onChange={(llm_config) => {
+                  const next = { ...capabilities, llm_config }
+                  setCapabilities(next)
+                  void persist(next)
+                }}
                 onUseProvider={async (llm_config) => {
                   const next = { ...capabilities, llm_config }
                   setCapabilities(next)

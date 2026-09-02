@@ -370,7 +370,10 @@ export function CodingAgentSection({ provider, onPublished, groupFilter, readOnl
         <h3 className="text-lg font-semibold text-foreground">{displayName}</h3>
       </div>
 
-      {/* Info card */}
+      {/* Info card and capabilities: library only. The workflow drill-in is
+          two actions (test, use); the provider blurb and capability grid
+          belong to the library editor. */}
+      {!workflowMode && (
       <Card className="p-4">
         <div className="flex items-start gap-3">
           <Terminal className="w-5 h-5 text-primary mt-0.5 flex-shrink-0" />
@@ -383,8 +386,8 @@ export function CodingAgentSection({ provider, onPublished, groupFilter, readOnl
         </div>
       </Card>
 
-      {/* Capabilities */}
-      <CodingAgentCapabilities provider={provider.id} modelId={selectedModel} />
+      )}
+      {!workflowMode && <CodingAgentCapabilities provider={provider.id} modelId={selectedModel} />}
 
       {/* Model selection (library only: the workflow variant runs on the
           provider's tier defaults, pinned per role under Advanced if needed) */}
@@ -463,9 +466,11 @@ export function CodingAgentSection({ provider, onPublished, groupFilter, readOnl
                 </Button>
               </div>
             </div>
+            {!workflowMode && (
             <p className="text-xs leading-relaxed text-muted-foreground">
               {piAuthSpec.help} Testing or saving this configuration stores the key encrypted for runtime, then exports it to Pi as {piAuthSpec.envNames.join(' / ')}.
             </p>
+            )}
             {piAuthStatus === 'saved' && (
               <div className="flex items-start gap-2 text-sm text-green-600 dark:text-green-400">
                 <CheckCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
@@ -506,9 +511,11 @@ export function CodingAgentSection({ provider, onPublished, groupFilter, readOnl
       {/* Test connection */}
       <Card className="p-4">
         <h4 className="font-medium text-foreground mb-3">Test Connection</h4>
+        {!workflowMode && (
         <p className="text-sm text-muted-foreground mb-3">
           Sends a test prompt to verify the CLI is installed and authenticated. For Pi, a typed key is saved encrypted after a successful test.
         </p>
+        )}
         <div className="space-y-3">
           <Button
             variant="outline"
@@ -556,11 +563,6 @@ export function CodingAgentSection({ provider, onPublished, groupFilter, readOnl
           </div>
         ) : (
           <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              {groupFilter
-                ? `Every role will use ${displayName} models through Pi: the saved provider key above is required at runtime.`
-                : `Every role will use ${displayName}'s default models (high, medium, and low tiers). Pin a different model per role under Advanced if needed.`}
-            </p>
             <Button
               size="sm"
               onClick={async () => {
