@@ -1410,18 +1410,13 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   // The global workspace toggle now maps to the workflow's right-side Files
   // pane instead of the old app-level far-right file column.
   //
-  // The preview views are exempt. WorkflowCanvasWithProvider returns a
-  // *different component type* per view — WorkflowFilesCanvasInner vs
-  // WorkflowReportCanvasInner vs the ReactFlow tree — so switching
-  // workflowWorkspaceView does not re-render the pane, it unmounts and rebuilds
-  // it. Forcing 'files' while the user is on Report therefore tears the report
-  // down, and the branch below immediately restores it, producing a visible
-  // flash. It reads as a data refresh but nothing is refetched: the remounted
-  // viewer repopulates synchronously from the module-level reportDataCache,
-  // which is exactly why it is fast and why no report event fires.
-  //
-  // Cost of the exemption: un-minimizing the workspace while a preview view is
-  // open no longer auto-switches to Files — click Files to get there.
+  // The preview views are exempt: un-minimizing the workspace while Report or
+  // Pulse is open leaves that view alone instead of auto-switching to Files —
+  // click Files to get there. (The exemption was originally added because the
+  // pane host remounted the whole pane per view kind, so the forced switch and
+  // its immediate reversal flashed the report; WorkspaceViewHost keeps the pane
+  // mounted across switches now, but the leave-the-preview-alone behavior is
+  // kept as-is.)
   useEffect(() => {
     if (selectedModeCategory !== 'workflow') return
     const onPreviewView = isPreviewView(workflowWorkspaceView)

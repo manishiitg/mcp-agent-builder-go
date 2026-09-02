@@ -64,7 +64,7 @@ export type WorkspaceViewDef = {
 }
 
 const VIEWS = [
-  // -- canvas / preview (dispatched by WorkflowCanvasWithProvider) --------
+  // -- canvas / preview (dispatched by WorkspaceViewHost) ------------------
   { id: 'builder', kind: 'canvas', label: 'Builder', icon: Route, pane: false },
   { id: 'report', kind: 'preview', label: 'Report', icon: LayoutDashboard, toolbarGroup: 'views', pane: true },
   { id: 'flow', kind: 'canvas', label: 'Plan', icon: Route, toolbarGroup: 'views', pane: true },
