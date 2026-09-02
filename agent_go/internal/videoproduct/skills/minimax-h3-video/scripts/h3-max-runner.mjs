@@ -29,7 +29,8 @@ Input JSON must include endpoint and prompt. endpoint is one of:
   minimax/h3-max/image-to-video
   minimax/h3-max/reference-to-video
 
-The runner writes JSON-lines progress to stdout and <state>.log.jsonl. It never
+An omitted duration falls back to 15 seconds. Plan and send an explicit duration
+for every shot; the fallback is not a reason to pad a shorter beat. The runner writes JSON-lines progress to stdout and <state>.log.jsonl. It never
 re-submits an existing state file; use status or wait to resume that request.`)
   process.exit(exitCode)
 }
@@ -81,7 +82,7 @@ function validateInput(raw) {
   const input = { ...raw }
   delete input.endpoint
   input.prompt = input.prompt.trim()
-  input.duration ??= 5
+  input.duration ??= 15
   input.resolution ??= '480P'
   input.prompt_expansion_mode ??= 'balanced'
   input.enable_safety_checker ??= true

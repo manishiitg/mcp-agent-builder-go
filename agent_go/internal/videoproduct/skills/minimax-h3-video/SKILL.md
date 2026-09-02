@@ -47,7 +47,9 @@ another provider.
 
 Every H3 Max route generates 5–15-second clips at `480P` or `768P`. Video
 Studio defaults to `resolution: "480P"` and
-`prompt_expansion_mode: "balanced"`. Fal recommends balanced for H3 Max;
+`prompt_expansion_mode: "balanced"`. The runner uses **15 seconds only as its
+fallback when a planned duration was accidentally omitted**; choose and send an
+explicit duration for every planned shot. Fal recommends balanced for H3 Max;
 quality can spend up to 30 seconds rewriting a prompt, so use it only when the
 user explicitly requests that slower treatment. Use 768P only when the user
 explicitly requests and approves the higher cost; do not offer or use 2K or
@@ -58,6 +60,14 @@ suggestion to optimise away. For example, when the user asks for 5-second
 clips, request 5 seconds for every applicable H3 generation; do not replace
 them with longer 10–15-second takes to reduce cost or seam count. Recommend a
 duration tradeoff only when the user has not fixed one.
+
+Choose duration from the actual scene: the measured spoken words at natural
+pace, the needed performance/action, and any entrance/settling beat. Use the
+shortest complete take in the 5–15 second range—do not pad a simple 5-second
+reaction to 15 seconds. Prefer 15 seconds when the dialogue or action genuinely
+needs that room, because one complete take removes paid calls and visible
+boundaries. Use 5–10 seconds for a genuinely short approved beat, deliberate
+editorial cut, or an explicit user duration.
 
 ## Plan continuity honestly before spending
 
