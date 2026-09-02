@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { AlertCircle, ArrowLeft, CheckCircle, ChevronRight, Loader2, Lock, RefreshCw, Search, X } from 'lucide-react'
-import LLMRoleSelector from '../LLMRoleSelector'
 import LLMSelectionDropdown from '../LLMSelectionDropdown'
 import { WorkflowProviderCredentialField } from '../WorkflowProviderCredentialField'
 import { CodingAgentSection } from '../llm/CodingAgentSection'
@@ -918,7 +917,15 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
         </div>
         <div className="min-w-0 flex-1 space-y-1.5">
           {value ? (
-            <LLMRoleSelector availableLLMs={workflowOptions} value={value} onLLMSelect={llm => updateRole(row.key, toAgentLLMConfig(llm), true)} disabled={readOnly} />
+            <LLMSelectionDropdown
+              availableLLMs={workflowOptions}
+              selectedLLM={optionForConfig(value)}
+              onLLMSelect={llm => updateRole(row.key, toAgentLLMConfig(llm), true)}
+              onRefresh={loadDefaultsFromBackend}
+              title={row.label}
+              placeholder="Select a model"
+              disabled={readOnly}
+            />
           ) : (
             <span className="text-xs text-muted-foreground">Select a provider first.</span>
           )}
