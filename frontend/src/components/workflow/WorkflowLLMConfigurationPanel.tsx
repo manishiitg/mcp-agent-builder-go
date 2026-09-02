@@ -68,6 +68,16 @@ type ProviderRow = {
   groupFilter?: string
 }
 
+// "Models per role" starts collapsed; once the user opens it, it stays open on
+// later visits (a single preference for all workflows, kept in localStorage).
+const ROLES_OPEN_STORAGE_KEY = 'workflow_llm_roles_open'
+const readRolesOpen = (): boolean => {
+  try { return window.localStorage.getItem(ROLES_OPEN_STORAGE_KEY) === '1' } catch { return false }
+}
+const writeRolesOpen = (open: boolean) => {
+  try { window.localStorage.setItem(ROLES_OPEN_STORAGE_KEY, open ? '1' : '0') } catch { /* storage unavailable */ }
+}
+
 type WorkflowLLMConfigurationPanelProps = {
   workspacePath: string | null
   llmConfig?: PresetLLMConfig
@@ -231,6 +241,8 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   // A workflow that already runs on a provider opens on the compact "runs on
   // X" line; the provider list only appears on "Change provider".
   const [changing, setChanging] = useState(false)
+  const [rolesOpen, setRolesOpen] = useState<boolean>(() => readRolesOpen())
+  const toggleRolesOpen = () => setRolesOpen(open => { writeRolesOpen(!open); return !open })
 
   useEffect(() => {
     if (!providerManifestLoaded) void loadProviderManifest()
@@ -975,15 +987,23 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <div className="text-sm font-medium text-foreground">Models per role</div>
-            <div className="text-xs text-muted-foreground">
-              {advanced
-                ? 'Pinned per role. Changes save immediately.'
-                : "Following the selected provider's defaults. Change any role to pin it."}
-            </div>
-          </div>
-          {advanced && (
+          <button
+            type="button"
+            onClick={toggleRolesOpen}
+            aria-expanded={rolesOpen}
+            className="flex min-w-0 items-start gap-2 text-left"
+          >
+            <ChevronRight className={`mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${rolesOpen ? 'rotate-90' : ''}`} />
+            <span>
+              <span className="block text-sm font-medium text-foreground">Models per role</span>
+              <span className="block text-xs text-muted-foreground">
+                {advanced
+                  ? 'Pinned per role. Changes save immediately.'
+                  : "Following the selected provider's defaults. Change any role to pin it."}
+              </span>
+            </span>
+          </button>
+          {advanced && rolesOpen && (
             <button
               type="button"
               onClick={useManagedDefaults}
@@ -995,7 +1015,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
             </button>
           )}
         </div>
-        {(['Execution', 'Workflow agents'] as const).map(group => (
+        {rolesOpen && (['Execution', 'Workflow agents'] as const).map(group => (
           <div key={group}>
             <div className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div>
             <div className="overflow-hidden rounded-md border border-border bg-background">
