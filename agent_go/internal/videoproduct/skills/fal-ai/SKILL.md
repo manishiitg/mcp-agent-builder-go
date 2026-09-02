@@ -53,13 +53,15 @@ requires the user's explicit approval.
 
 The user stores the fal.ai key as a workflow secret named `FAL_KEY` (via
 `set_workflow_secret`). The secret-injection mechanism prefixes every secret
-name with `SECRET_` in the shell environment, so the variable actually
-present is `$SECRET_FAL_KEY`, not `$FAL_KEY`. fal.ai's client reads the
+name with `SECRET_` in the shell environment, so the variable normally
+present is `$SECRET_FAL_KEY`, not `$FAL_KEY`. Some older Video Studio runtime
+paths supply the equivalent `$SECRET_FAL_AI_KEY`; accept it as a compatibility
+alias. fal.ai's client reads the
 unprefixed `FAL_KEY` by default, so bridge the two explicitly rather than
 assuming the client will find it on its own:
 
 ```bash
-export FAL_KEY="$SECRET_FAL_KEY"
+export FAL_KEY="${SECRET_FAL_KEY:-$SECRET_FAL_AI_KEY}"
 node generate.mjs
 ```
 
@@ -69,13 +71,13 @@ or pass it directly to the client instead of relying on ambient env:
 import { fal } from "@fal-ai/client";
 
 fal.config({
-  credentials: process.env.SECRET_FAL_KEY ?? process.env.FAL_KEY,
+  credentials: process.env.SECRET_FAL_KEY ?? process.env.SECRET_FAL_AI_KEY ?? process.env.FAL_KEY ?? process.env.FAL_AI_KEY,
 });
 ```
 
-Accept either name: `SECRET_FAL_KEY` is what the injection mechanism
-provides, but a key set directly in the environment as `FAL_KEY` is equally
-valid and should not be treated as missing. If neither is set, stop and
+Accept all four names: `SECRET_FAL_KEY` is what the current injection mechanism
+provides, `SECRET_FAL_AI_KEY` is an older equivalent, and a key set directly
+as `FAL_KEY` or `FAL_AI_KEY` is equally valid. If none is set, stop and
 report the blocker -- do not proceed without generation credentials, and
 never print or log the key value itself.
 

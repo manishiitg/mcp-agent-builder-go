@@ -1,6 +1,6 @@
 ---
 name: minimax-h3-video
-description: Plan and generate Video Studio's MiniMax H3 Max routes through fal.ai: Text-to-Video for prompt-only shots, Image-to-Video for approved first/last-frame control, and Reference-to-Video for identity and continuity. Read with video-provider-capabilities and fal-ai before any paid H3 Max call.
+description: "Plan and generate Video Studio's MiniMax H3 Max routes through fal.ai: Text-to-Video for prompt-only shots, Image-to-Video for approved first/last-frame control, and Reference-to-Video for identity and continuity. Read with video-provider-capabilities and fal-ai before any paid H3 Max call."
 ---
 
 # Use MiniMax H3 Max deliberately
@@ -12,6 +12,32 @@ live machine-readable guide for the selected route before every paid call:
 - `https://fal.ai/models/minimax/h3-max/text-to-video/llms.txt`;
 - `https://fal.ai/models/minimax/h3-max/image-to-video/llms.txt`;
 - `https://fal.ai/models/minimax/h3-max/reference-to-video/llms.txt`.
+
+## Use the guarded H3 runner
+
+For every paid H3 Max request, use `scripts/h3-max-runner.mjs`; do not write a
+new inline Fal client call or use `fal.subscribe()`. The runner permits only
+the three approved H3 Max endpoints, validates route-specific inputs before a
+paid submit, saves the request ID and resolved non-secret input immediately,
+and emits JSON-lines console progress plus a sibling `*.log.jsonl` file.
+
+Write a non-secret job JSON with `endpoint`, `prompt`, and the selected route's
+controls. Then validate, submit once, and wait/rejoin the *same* state file:
+
+```bash
+BASE="work/<production>/h3/<shot-id>"
+node .claude/skills/minimax-h3-video/scripts/h3-max-runner.mjs validate --input "$BASE/job.json"
+node .claude/skills/minimax-h3-video/scripts/h3-max-runner.mjs submit --input "$BASE/job.json" --state "$BASE/request.json"
+node .claude/skills/minimax-h3-video/scripts/h3-max-runner.mjs wait --state "$BASE/request.json" --output "$BASE/candidate.mp4" --timeout-seconds 900
+```
+
+`SECRET_FAL_KEY`, `SECRET_FAL_AI_KEY`, `FAL_KEY`, or `FAL_AI_KEY` must be
+present in the environment. Never put a secret in the job or state JSON. If a local wait ends, run `status` or `wait`
+again with the existing state file; never submit a replacement. Read the
+runner's `request.json` and `request.json.log.jsonl` for the exact endpoint,
+resolved input, request ID, queue states, provider logs, result timings, and
+download path. After its `completed` event, run the normal file receipt
+(`ffprobe`, stable-frame inspection, then `show_video`) before accepting it.
 
 Use H3 Max only. Do not substitute standard H3, another H3 Max route, or
 another provider.
