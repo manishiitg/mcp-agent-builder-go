@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { Key, CheckCircle, AlertCircle, Loader2, BookOpen, Globe, MapPin, RefreshCw } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
@@ -44,7 +45,12 @@ export function APIProviderSection({
   const [azureModels, setAzureModels] = useState<string[]>([])
   const [isFetchingModels, setIsFetchingModels] = useState(false)
 
-  const { saveLLM, testAPIKey: testAPIKeyFromStore, lockedProviders, llmConfigLocked } = useLLMStore()
+  const { saveLLM, testAPIKey: testAPIKeyFromStore, lockedProviders, llmConfigLocked } = useLLMStore(useShallow(state => ({
+    saveLLM: state.saveLLM,
+    testAPIKey: state.testAPIKey,
+    lockedProviders: state.lockedProviders,
+    llmConfigLocked: state.llmConfigLocked,
+  })))
   const isLocked = llmConfigLocked || lockedProviders.includes(provider.id)
   const isAzure = provider.id === 'azure'
   const isBedrock = provider.id === 'bedrock'

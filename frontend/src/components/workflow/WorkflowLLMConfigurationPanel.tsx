@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { ArrowLeft, ChevronDown, ChevronRight, Lock, RefreshCw, Search, X } from 'lucide-react'
 import LLMRoleSelector from '../LLMRoleSelector'
 import LLMSelectionDropdown from '../LLMSelectionDropdown'
@@ -174,7 +175,29 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     setAnthropicConfig,
     setAzureConfig,
     testAPIKey,
-  } = useLLMStore()
+  } = useLLMStore(useShallow(state => ({
+    availableLLMs: state.availableLLMs,
+    providerManifest: state.providerManifest,
+    providerManifestLoaded: state.providerManifestLoaded,
+    loadProviderManifest: state.loadProviderManifest,
+    defaultsLoaded: state.defaultsLoaded,
+    loadDefaultsFromBackend: state.loadDefaultsFromBackend,
+    getProviderDynamicModels: state.getProviderDynamicModels,
+    isProviderSupported: state.isProviderSupported,
+    llmConfigLocked: state.llmConfigLocked,
+    lockedProviders: state.lockedProviders,
+    bedrockConfig: state.bedrockConfig,
+    openaiConfig: state.openaiConfig,
+    vertexConfig: state.vertexConfig,
+    anthropicConfig: state.anthropicConfig,
+    azureConfig: state.azureConfig,
+    setBedrockConfig: state.setBedrockConfig,
+    setOpenaiConfig: state.setOpenaiConfig,
+    setVertexConfig: state.setVertexConfig,
+    setAnthropicConfig: state.setAnthropicConfig,
+    setAzureConfig: state.setAzureConfig,
+    testAPIKey: state.testAPIKey,
+  })))
 
   // Provider selection goes through the panel's Save, but the drill-ins (API
   // keys, publish, Pi keys) and role edits write immediately -- disable all of

@@ -525,7 +525,8 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     return () => document.removeEventListener('pointerdown', closeMenu)
   }, [openActionMenuJobId])
 
-  const { workflowPresets, refreshPresets } = useGlobalPresetStore()
+  const workflowPresets = useGlobalPresetStore(state => state.workflowPresets)
+  const refreshPresets = useGlobalPresetStore(state => state.refreshPresets)
 
   // Build presetId → {label, workspacePath} map
   const presetMap = React.useMemo(() => {

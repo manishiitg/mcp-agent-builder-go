@@ -471,6 +471,12 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
     focusStep: () => {},
   }), [handleRefresh, plan])
 
+  // Stable identity: the toolbar is 1,100 lines with a dozen subscriptions,
+  // and an inline arrow here re-rendered it on every inspector render.
+  const handleStartPhase = useCallback((phaseId: string, options?: ExecutionOptions) => {
+    onStartPhase?.(phaseId, options)
+  }, [onStartPhase])
+
   const closeInspector = useCallback(() => {
     useWorkflowStore.getState().setShowWorkspacePane(false)
   }, [])
@@ -570,7 +576,7 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
             runFolders={runFoldersForToolbar}
             variablesManifest={variablesManifest}
             isLoadingWorkspaceState={isLoadingWorkspaceState}
-            onStartPhase={(phaseId, options) => onStartPhase?.(phaseId, options)}
+            onStartPhase={handleStartPhase}
             onCreatePlan={onCreatePlan || (() => {})}
             showChatArea={showChatArea}
             onToggleChatArea={onToggleChatArea}
@@ -1557,7 +1563,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   }, [embeddedPlanOnly, previewDevice, effectiveCanvasViewMode, fitView, toolbarOnly])
   // Highlight execution folder in workspace when selectedRunFolder changes
   // This ensures workspace shows the correct group folder during multi-group execution
-  const { highlightFile } = useWorkspaceStore()
+  const highlightFile = useWorkspaceStore(state => state.highlightFile)
   const prevSelectedRunFolderRef = useRef<string | null>(null)
   useEffect(() => {
     // Reset ref if selectedRunFolder is cleared

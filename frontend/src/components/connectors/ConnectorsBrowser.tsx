@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import {
   Loader2,
   AlertCircle,
@@ -69,7 +70,15 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
     refreshTools,
     serverLogs,
     fetchServerLogs,
-  } = useMCPStore()
+  } = useMCPStore(useShallow(state => ({
+    toolList: state.toolList,
+    isLoadingTools: state.isLoadingTools,
+    toolsError: state.toolsError,
+    getServerGroups: state.getServerGroups,
+    refreshTools: state.refreshTools,
+    serverLogs: state.serverLogs,
+    fetchServerLogs: state.fetchServerLogs,
+  })))
 
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set())
   const [loadingLogs, setLoadingLogs] = useState<Set<string>>(new Set())

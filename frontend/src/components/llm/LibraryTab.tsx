@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import {
   AudioLines,
   Box,
@@ -115,7 +116,12 @@ const groupSavedLLMsByProvider = (
 }
 
 export function LibraryTab({ providers, onSelectProvider, isProviderLocked }: LibraryTabProps) {
-  const { savedLLMs, deleteSavedLLM, defaultPublishedLLMsLocked, loadDefaultsFromBackend } = useLLMStore()
+  const { savedLLMs, deleteSavedLLM, defaultPublishedLLMsLocked, loadDefaultsFromBackend } = useLLMStore(useShallow(state => ({
+    savedLLMs: state.savedLLMs,
+    deleteSavedLLM: state.deleteSavedLLM,
+    defaultPublishedLLMsLocked: state.defaultPublishedLLMsLocked,
+    loadDefaultsFromBackend: state.loadDefaultsFromBackend,
+  })))
   const [metadataMap, setMetadataMap] = useState<Record<string, ModelMetadata>>({})
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')

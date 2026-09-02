@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { agentApi, getSessionId } from '../../../services/api'
 import type { PollingEvent, AgentQueryRequest } from '../../../services/api-types'
 import { useLLMStore, useMCPStore, useChatStore } from '../../../stores'
@@ -42,21 +43,32 @@ export interface UseWorkflowExecutionReturn {
  * - isCompleted: whether execution completed (source of truth for 'completed' status)
  */
 export function useWorkflowExecution(): UseWorkflowExecutionReturn {
-  // Get active tab (for multi-tab support - works for both chat and workflow)
-  const activeTab = useChatStore(state => state.getActiveTab())
+  // Narrow selector: the active tab object is replaced on every streaming
+  // event, and this hook sits under all four canvas variants, so subscribing
+  // to the object re-rendered the React Flow tree per event. Pick only the
+  // primitives render actually reads (streaming status is derived inside the
+  // selector so it still flips exactly when the store says it does).
+  const activeTab = useChatStore(useShallow(state => {
+    const tab = state.getActiveTab()
+    if (!tab) return null
+    return {
+      tabId: tab.tabId,
+      sessionId: tab.sessionId,
+      isCompleted: tab.isCompleted,
+      isStreaming: state.getTabStreamingStatus(tab.tabId),
+    }
+  }))
   const selectedModeCategory = useModeStore(state => state.selectedModeCategory)
-  
+
   // CRITICAL: Always use tab's session ID - never fall back to global to prevent mixing
   const tabSessionId = activeTab?.sessionId
-  
-  // Get tab-specific events and status
+
+  // Get tab-specific events
   const getTabEvents = useChatStore(state => state.getTabEvents)
-  const getTabStreamingStatus = useChatStore(state => state.getTabStreamingStatus)
-  
+
   // Use tab-specific data - never fall back to global
   const sessionId = tabSessionId || null
-  const tabIsStreaming = activeTab ? getTabStreamingStatus(activeTab.tabId) : false
-  const isStreaming = tabIsStreaming
+  const isStreaming = activeTab?.isStreaming ?? false
   const isCompleted = activeTab?.isCompleted || false
   const events = useMemo(() => {
     return sessionId ? getTabEvents(sessionId) : []
@@ -76,17 +88,21 @@ export function useWorkflowExecution(): UseWorkflowExecutionReturn {
   const [error, setError] = useState<string | null>(null)
   const [manualStatus, setManualStatus] = useState<WorkflowExecutionStatus | null>(null)
 
-  // Store subscriptions
-  const { primaryConfig: llmConfig } = useLLMStore()
-  const { toolList: allTools, workflowSelectedServers } = useMCPStore()
+  // Store subscriptions -- field selectors, not whole stores: an API-key test
+  // or a tool-list poll must not re-render the canvas.
+  const llmConfig = useLLMStore(state => state.primaryConfig)
+  const allTools = useMCPStore(state => state.toolList)
+  const workflowSelectedServers = useMCPStore(state => state.workflowSelectedServers)
   const { currentPresetServers, currentPresetTools, getActivePreset } = usePresetApplication()
 
   // Get effective servers
   const effectiveServers = currentPresetServers.length > 0 ? currentPresetServers : workflowSelectedServers
 
-  // Filter tools to only include those from effective servers
-  const enabledTools = allTools.filter(tool =>
-    tool.server && effectiveServers.includes(tool.server)
+  // Filter tools to only include those from effective servers. Memoized so the
+  // start/run callbacks below keep their identity between unrelated renders.
+  const enabledTools = useMemo(
+    () => allTools.filter(tool => tool.server && effectiveServers.includes(tool.server)),
+    [allTools, effectiveServers],
   )
 
   // Derive status from store states (ChatArea is the source of truth)

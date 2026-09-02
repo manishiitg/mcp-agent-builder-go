@@ -174,10 +174,8 @@ function piAuthValue(keys: StoredProviderKeys | undefined, spec: PiAuthSpec): st
 }
 
 export function CodingAgentSection({ provider, onPublished, groupFilter, readOnly = false }: CodingAgentSectionProps) {
-  const {
-    saveLLM,
-    savedLLMs,
-  } = useLLMStore()
+  const saveLLM = useLLMStore(state => state.saveLLM)
+  const savedLLMs = useLLMStore(state => state.savedLLMs)
   // A group-scoped tab has no valid pi-cli-wide default to start from --
   // DynamicModelSelector picks the group's own default once its catalog
   // loads (see its groupFilter-aware auto-select effect).
