@@ -52,7 +52,9 @@ const SECTION_COPY: Record<WorkflowCapabilitySection, { title: string; descripti
   secrets: {
     title: 'Workflow secrets',
     description: 'Choose which workflow and global secrets this workflow may access.',
-    savesViaManifest: true,
+    // A tick is the whole action: it writes the manifest right away, like
+    // the LLM section, so there is nothing left for a footer Save to do.
+    savesViaManifest: false,
   },
   browser: {
     title: 'Browser automation',
@@ -265,9 +267,17 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
               <div>
                 <SecretSelectionSection
                   selectedSecrets={capabilities.selected_secrets}
-                  onSecretChange={(selected_secrets) => setCapabilities(current => ({ ...current, selected_secrets }))}
+                  onSecretChange={(selected_secrets) => {
+                    const next = { ...capabilities, selected_secrets }
+                    setCapabilities(next)
+                    void persist(next)
+                  }}
                   selectedGlobalSecrets={capabilities.selected_global_secret_names}
-                  onGlobalSecretChange={(selected_global_secret_names) => setCapabilities(current => ({ ...current, selected_global_secret_names }))}
+                  onGlobalSecretChange={(selected_global_secret_names) => {
+                    const next = { ...capabilities, selected_global_secret_names }
+                    setCapabilities(next)
+                    void persist(next)
+                  }}
                   workflowPath={workspacePath || ''}
                 />
               </div>
