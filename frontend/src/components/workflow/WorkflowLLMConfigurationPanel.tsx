@@ -890,6 +890,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
         <div className="min-w-0 flex-1 space-y-1.5">
           {value ? (
             <LLMSelectionDropdown
+              inModal
               availableLLMs={workflowOptions}
               selectedLLM={optionForConfig(value)}
               onLLMSelect={llm => updateRole(row.key, toAgentLLMConfig(llm), true)}
@@ -920,6 +921,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
                     </span>
                   ))}
                   <LLMSelectionDropdown
+                    inModal
                     availableLLMs={workflowOptions.filter(option => optionKey(option) !== configKey(value) && !fallbackList.some(fallback => configKey(fallback) === optionKey(option)))}
                     selectedLLM={null}
                     onLLMSelect={llm => updateFallbacks(row.key, [...fallbackList, toFallback(llm)])}
