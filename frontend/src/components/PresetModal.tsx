@@ -6,8 +6,6 @@ import { Card } from './ui/Card';
 import { ChevronDown, Folder, Loader2, Plus, Settings, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import { FolderSelectionDialog } from './FolderSelectionDialog';
 import { ToolSelectionSection } from './ToolSelectionSection';
-import { SkillSelectionSection } from './skills/SkillSelectionSection';
-import { SecretSelectionSection } from './secrets/SecretSelectionSection';
 import { WorkflowProviderCredentialField } from './WorkflowProviderCredentialField';
 import ConfirmationDialog from './ui/ConfirmationDialog';
 import type { CustomPreset } from '../types/preset';
@@ -24,7 +22,6 @@ import { getWorkflowLLMOptions, getWorkflowLLMTierDefaults, getWorkflowProviderO
 import { llmOptionMatchesRef, llmOptionsKey } from '../utils/llmConfigDisplay';
 import { mergeCdpPorts } from '../utils/cdpSetup';
 import { useChatStore } from '../stores/useChatStore';
-import BrowserAutomationSettings from './BrowserAutomationSettings';
 
 type WorkflowLLMRoleKey = 'tier1' | 'tier2' | 'tier3' | 'builder' | 'maintenance' | 'pulse';
 
@@ -1033,66 +1030,9 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
                   </div>
                 </div>
 
-                {/* MCP Server Selection */}
-                {availableServers.length > 0 ? (
-                    <ToolSelectionSection
-                      availableServers={availableServers}
-                      selectedServers={selectedServers}
-                      selectedTools={selectedTools}
-                      onServerChange={setSelectedServers}
-                      onToolChange={setSelectedTools}
-                      agentMode={effectiveAgentMode}
-                    />
-                  ) : (
-                    <div className="space-y-2">
-                      <label className="block text-sm font-medium text-gray-900 dark:text-gray-100">
-                        MCP Server Selection
-                      </label>
-                      <div className="p-3 border border-gray-200 dark:border-gray-700 rounded-md text-xs text-gray-500 dark:text-gray-400">
-                        No MCP servers configured. Add servers in the MCP settings sidebar.
-                      </div>
-                    </div>
-                )}
-
-                {/* Skills Selection - Workflow mode only */}
-                {effectiveAgentMode === 'workflow' && (
-                  <SkillSelectionSection
-                    selectedSkills={selectedSkills}
-                    onSkillChange={setSelectedSkills}
-                  />
-                )}
-
-                {/* Secrets Selection - Workflow mode only */}
-                {effectiveAgentMode === 'workflow' && (
-                  <SecretSelectionSection
-                    selectedSecrets={selectedSecrets}
-                    onSecretChange={setSelectedSecrets}
-                    selectedGlobalSecrets={selectedGlobalSecrets}
-                    onGlobalSecretChange={setSelectedGlobalSecrets}
-                    workflowPath={workflowSecretPath}
-                  />
-                )}
-
-                <BrowserAutomationSettings
-                  browserMode={browserMode}
-                  onBrowserModeChange={setBrowserMode}
-                  cdpPort={cdpPort}
-                  onCdpPortChange={setCdpPort}
-                  cdpConnected={cdpConnected}
-                  cdpError={cdpError}
-                  cdpChecking={cdpChecking}
-                  onCheckCdpConnection={checkCdpConnection}
-                />
-                {/* Agent Mode Display (read-only for workflow) */}
-                {hideAgentModeSelection && fixedAgentMode && (
-                  <div className="p-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Mode:</span>
-                      <span className="text-sm font-medium text-gray-900 dark:text-white">Automation</span>
-                      <span className="text-xs text-gray-500 dark:text-gray-400">- Todo-list execution</span>
-                    </div>
-                  </div>
-                )}
+                {/* MCP servers, skills, secrets, and browser mode moved to the
+                    workflow panel (their values are preserved on save); this
+                    dialog is name, folder, and LLM configuration only. */}
               </div>
             </div>
           ) : (
