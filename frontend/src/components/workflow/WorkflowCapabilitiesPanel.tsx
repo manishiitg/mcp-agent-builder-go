@@ -3,7 +3,6 @@ import { LoaderCircle, Save } from 'lucide-react'
 import { ToolSelectionSection } from '../ToolSelectionSection'
 import SkillsManagerPanel from '../skills/SkillsManagerPanel'
 import { SecretSelectionSection } from '../secrets/SecretSelectionSection'
-import SecretsManagerPanel from '../secrets/SecretsManagerPanel'
 import BrowserAutomationSettings, { type BrowserAutomationMode } from '../BrowserAutomationSettings'
 import WorkflowLLMConfigurationPanel from './WorkflowLLMConfigurationPanel'
 import WorkflowBotsPanel from './WorkflowBotsPanel'
@@ -257,14 +256,11 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
               </div>
             )}
             {section === 'secrets' && (
-              // Single continuous scroll for the whole pane: the checklist and
-              // "Manage secrets" used to each own a separate min-h-0/flex-1
-              // region with its own overflow-y-auto, which produced two
-              // independently-scrolling boxes stacked on top of each other
-              // instead of one page-like scroll. Only the outer div scrolls;
-              // nothing below propagates a bounded flex height, so the nested
-              // overflow-y-auto inside SecretsManagerPanel(compact) has no
-              // constrained height to scroll within and stays inert.
+              // Only the workflow's own checklist lives here: automation secrets
+              // (the folder-scoped box) and global secrets. Account-level "Your
+              // Secrets" are a different store that workflow runs never read
+              // (chat tools and bots use them), so the account-wide manager is
+              // not mounted in this pane; it stays in the Secrets modal.
               <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
                 <SecretSelectionSection
                   selectedSecrets={capabilities.selected_secrets}
@@ -273,14 +269,6 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
                   onGlobalSecretChange={(selected_global_secret_names) => setCapabilities(current => ({ ...current, selected_global_secret_names }))}
                   workflowPath={workspacePath || ''}
                 />
-                <div className="mt-3 flex flex-col pt-1">
-                  <div className="shrink-0 text-sm font-medium text-muted-foreground">
-                    Manage secrets
-                  </div>
-                  <div className="mt-3 flex flex-col">
-                    <SecretsManagerPanel compact />
-                  </div>
-                </div>
               </div>
             )}
             {section === 'browser' && (
