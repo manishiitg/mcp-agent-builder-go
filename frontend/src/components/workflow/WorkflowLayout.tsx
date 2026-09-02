@@ -860,7 +860,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   const setFocusedPane = useWorkflowStore(state => state.setFocusedPane)
   const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
   const setWorkflowWorkspaceView = useWorkflowStore(state => state.setWorkflowWorkspaceView)
-  const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
+  const lastCanvasView = useWorkflowStore(state => state.lastCanvasView)
   const minimizeWorkflow = useRunningWorkflowsStore(state => state.minimizeWorkflow)
   const showRunningDrawer = useShowRunningDrawer()
 
@@ -1172,7 +1172,8 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       })
     if (options?.composerFirst) {
       openDefaultPreview()
-      setWorkflowWorkspaceView('builder')
+      // No explicit view: the pane falls back to the last canvas view.
+      setWorkflowWorkspaceView(null)
       setShowWorkspacePane(true)
       setFocusedPane('chat')
     }
@@ -1410,9 +1411,9 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   // The global workspace toggle now maps to the workflow's right-side Files
   // pane instead of the old app-level far-right file column.
   //
-  // The preview views are exempt: un-minimizing the workspace while Report or
-  // Pulse is open leaves that view alone instead of auto-switching to Files —
-  // click Files to get there. (The exemption was originally added because the
+  // The report preview is exempt: un-minimizing the workspace while Report is
+  // open leaves it alone instead of auto-switching to Files — click Files to
+  // get there. (The exemption was originally added because the
   // pane host remounted the whole pane per view kind, so the forced switch and
   // its immediate reversal flashed the report; WorkspaceViewHost keeps the pane
   // mounted across switches now, but the leave-the-preview-alone behavior is
@@ -1426,9 +1427,9 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       return
     }
     if (workspaceMinimized && workflowWorkspaceView === 'files') {
-      setWorkflowWorkspaceView(canvasViewMode)
+      setWorkflowWorkspaceView(lastCanvasView)
     }
-  }, [selectedModeCategory, workspaceMinimized, workflowWorkspaceView, showWorkspacePane, canvasViewMode, setShowWorkspacePane, setWorkflowWorkspaceView])
+  }, [selectedModeCategory, workspaceMinimized, workflowWorkspaceView, showWorkspacePane, lastCanvasView, setShowWorkspacePane, setWorkflowWorkspaceView])
 
   // Auto-minimize the file workspace sidebar when entering Report so the report
   // has room. Do not reopen it on exit: workflow switches can unmount/remount
@@ -2148,7 +2149,8 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     })
 
     setCurrentWorkflowPhase(phaseId)
-    setWorkflowWorkspaceView('builder')
+    // Clear any explicit view so the pane shows the last canvas view.
+    setWorkflowWorkspaceView(null)
 
     // For chat-compatible phases, just open the tab without auto-submitting a query.
     // The user will type naturally in the chat input.
@@ -2245,7 +2247,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   const handleWorkflowNewChat = useCallback(async () => {
     if (activePresetId) {
       openDefaultPreview()
-      setWorkflowWorkspaceView('builder')
+      setWorkflowWorkspaceView(null)
       setShowWorkspacePane(true)
       setFocusedPane('chat')
       setShowChatArea(true)
@@ -2290,7 +2292,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     // sites, and nothing here guarantees they stay in lockstep. Left in place
     // as a harmless fallback rather than deleted without full certainty.
     openDefaultPreview()
-    setWorkflowWorkspaceView('builder')
+    setWorkflowWorkspaceView(null)
     setShowWorkspacePane(true)
     setFocusedPane('chat')
     chatAreaRef.current?.handleNewChat()

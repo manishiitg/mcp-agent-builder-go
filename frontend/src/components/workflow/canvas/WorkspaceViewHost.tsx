@@ -22,7 +22,6 @@ import { useWorkflowExecution } from '../hooks/useWorkflowExecution'
 import { useWorkspaceState } from '../hooks/useWorkspaceState'
 import { useWorkflowStore } from '../../../stores/useWorkflowStore'
 import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestStore'
-import { useAppStore } from '../../../stores/useAppStore'
 import { agentApi } from '../../../services/api'
 import type {
   ExecutionOptions,
@@ -33,7 +32,7 @@ import type {
   VariablesManifest,
 } from '../../../services/api-types'
 import { PULSE_FIXED_COMMANDS, PULSE_MODULE_COMMANDS } from './pulseSections'
-import { assertNeverView, isInspectorView, type InspectorViewId } from '../workspaceViews'
+import { assertNeverView, getWorkspaceView, isInspectorView, type InspectorViewId, type WorkspaceViewId, type WorkspaceViewKind } from '../workspaceViews'
 import {
   WorkspaceViewDataContext,
   useWorkspaceViewData,
@@ -80,8 +79,6 @@ function formatPulseTimestamp(value?: string): string {
   })
 }
 
-type ViewKind = 'flow' | 'report' | 'files' | 'inspector'
-
 const noop = () => {}
 const dispatchReportExport = () => window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_EXPORT_EVENT))
 
@@ -107,15 +104,16 @@ function ReportBody({ workspacePath }: { workspacePath: string | null }) {
 }
 
 function FilesBody() {
-  const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
+  const lastCanvasView = useWorkflowStore(state => state.lastCanvasView)
   // While a file is open the pane shows the viewer instead of the tree. The
   // tree stays mounted (hidden) so its scroll position and any in-progress
   // search survive a round trip into a file and back.
   const showFileContent = useWorkspaceStore(state => state.showFileContent)
+  // Closing the tree returns to the last canvas view; openWorkspaceView
+  // minimizes the file workspace for every view except Files itself.
   const handleCloseFiles = useCallback(() => {
-    useAppStore.getState().setWorkspaceMinimized(true)
-    useWorkflowStore.getState().setWorkflowWorkspaceView(canvasViewMode)
-  }, [canvasViewMode])
+    useWorkflowStore.getState().openWorkspaceView(lastCanvasView)
+  }, [lastCanvasView])
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-background">
       <div className="min-h-0 flex-1" hidden={showFileContent}>
@@ -273,26 +271,20 @@ export const WorkspaceViewHost = React.memo(forwardRef<WorkflowCanvasRef, Workfl
     chatTabsSlot,
     paneClassName = '',
     className = '',
-    viewMode,
     hideToolbar = false,
     embeddedPlanOnly = false,
     openPulseOnMount = false,
   } = props
 
   const selectedRunFolder = useWorkflowStore(state => state.selectedRunFolder)
-  const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
   const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
-  const effectiveCanvasViewMode = viewMode || canvasViewMode
+  const lastCanvasView = useWorkflowStore(state => state.lastCanvasView)
 
-  // Legacy saved Soul state opens Pulse; Goal context now lives inside the
-  // database-native Pulse workspace.
-  const kind: ViewKind = !embeddedPlanOnly && workflowWorkspaceView === 'files'
-    ? 'files'
-    : isInspectorView(workflowWorkspaceView)
-      ? 'inspector'
-      : !embeddedPlanOnly && (effectiveCanvasViewMode === 'report' || effectiveCanvasViewMode === 'log' || effectiveCanvasViewMode === 'soul')
-        ? 'report'
-        : 'flow'
+  // The registry decides what renders: no explicit view means the last canvas
+  // view (Plan or Report). An embedded plan-only canvas (Video Studio) is
+  // always the flow body regardless of the shared store.
+  const effectiveView: WorkspaceViewId = workflowWorkspaceView ?? lastCanvasView
+  const kind: WorkspaceViewKind = embeddedPlanOnly ? 'canvas' : getWorkspaceView(effectiveView).kind
 
   // --- Toolbar data, loaded once for every view ---------------------------
   const planData = usePlanData(workspacePath)
@@ -374,7 +366,7 @@ export const WorkspaceViewHost = React.memo(forwardRef<WorkflowCanvasRef, Workfl
   // into Pulse).
   const openedInitialPulseRef = useRef(false)
   useEffect(() => {
-    if (!openPulseOnMount || openedInitialPulseRef.current || kind !== 'flow') return
+    if (!openPulseOnMount || openedInitialPulseRef.current || kind !== 'canvas') return
     openedInitialPulseRef.current = true
     useWorkflowStore.getState().openWorkspaceView('pulse')
     void refreshPulseModuleStates()
@@ -485,10 +477,10 @@ export const WorkspaceViewHost = React.memo(forwardRef<WorkflowCanvasRef, Workfl
   }, [])
 
   const hasPlan = Boolean(plan?.steps?.length)
-  const onExport = kind === 'report'
+  const onExport = kind === 'preview'
     ? dispatchReportExport
-    : kind === 'flow' && flowShell === 'ready' && hasPlan
-      ? (effectiveCanvasViewMode === 'report' ? dispatchReportExport : exportFlowImage)
+    : kind === 'canvas' && flowShell === 'ready' && hasPlan
+      ? exportFlowImage
       : undefined
 
   // Stable identity: the toolbar is 1,100 lines with a dozen subscriptions,
@@ -507,7 +499,7 @@ export const WorkspaceViewHost = React.memo(forwardRef<WorkflowCanvasRef, Workfl
   }, [loadPlanRefresh, refreshWorkspaceState])
   useImperativeHandle(ref, () => ({
     refresh: async (changedStepIDs?: string[], deletedStepIDs?: string[]) => {
-      if (kind === 'flow' && flowRef.current) {
+      if (kind === 'canvas' && flowRef.current) {
         return flowRef.current.refresh(changedStepIDs, deletedStepIDs)
       }
       await sharedRefresh()
@@ -541,11 +533,12 @@ export const WorkspaceViewHost = React.memo(forwardRef<WorkflowCanvasRef, Workfl
     pulse,
   ])
 
-  const showToolbar = !hideToolbar && !(kind === 'flow' && flowShell !== 'ready')
+  const showToolbar = !hideToolbar && !(kind === 'canvas' && flowShell !== 'ready')
   const gridToolbar = sharedToolbar && showChatArea
+  const isInspectorKind = kind === 'inspector' || kind === 'capability'
 
   let body: React.ReactNode
-  if (kind === 'flow') {
+  if (kind === 'canvas') {
     // The flow canvas handles `toolbarOnly` itself: its loading and error
     // screens still show in that mode, only the plan is skipped.
     body = (
@@ -555,7 +548,7 @@ export const WorkspaceViewHost = React.memo(forwardRef<WorkflowCanvasRef, Workfl
     )
   } else if (toolbarOnly) {
     body = null
-  } else if (kind === 'report') {
+  } else if (kind === 'preview') {
     body = <ReportBody workspacePath={workspacePath} />
   } else if (kind === 'files') {
     body = <FilesBody />
@@ -591,7 +584,7 @@ export const WorkspaceViewHost = React.memo(forwardRef<WorkflowCanvasRef, Workfl
         <div
           data-tour="workflow-canvas-pane"
           data-testid="tour-workflow-canvas-pane"
-          className={`${gridToolbar ? 'flex-1 col-start-1 row-start-2 md:col-start-2' : 'flex-1'} ${paneClassName} min-h-0 ${kind === 'inspector' ? 'overflow-hidden border-l border-border' : ''}`}
+          className={`${gridToolbar ? 'flex-1 col-start-1 row-start-2 md:col-start-2' : 'flex-1'} ${paneClassName} min-h-0 ${isInspectorKind ? 'overflow-hidden border-l border-border' : ''}`}
         >
           {body}
         </div>

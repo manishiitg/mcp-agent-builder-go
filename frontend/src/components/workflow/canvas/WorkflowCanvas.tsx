@@ -26,9 +26,6 @@ import { edgeTypes } from '../edges'
 import { VariablesSidebar } from './VariablesSidebar'
 import { BatchProgressHeader } from '../BatchProgressHeader'
 import {
-  ReportView,
-} from '../ReportViewer'
-import {
   REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
   isReportPreviewDevice,
   readReportPreviewPreference,
@@ -38,7 +35,7 @@ import type { PlanChanges } from '../hooks/usePlanData'
 import { usePlanToFlow, type WorkflowNode, type WorkflowEdge, type WorkflowNodeData, type StepNodeData, type EvaluationStepNodeData } from '../hooks/usePlanToFlow'
 import type { VariablesNodeData } from '../nodes/VariablesNode'
 import { useWorkspaceViewData, type WorkflowImageExportFormat } from './workspaceViewData'
-import { useWorkflowStore, type CanvasViewMode } from '../../../stores/useWorkflowStore'
+import { useWorkflowStore } from '../../../stores/useWorkflowStore'
 import { useWorkspaceStore } from '../../../stores/useWorkspaceStore'
 import { useChatStore } from '../../../stores/useChatStore'
 import { agentApi } from '../../../services/api'
@@ -136,7 +133,6 @@ export interface WorkflowCanvasProps {
   chatTabsSlot?: React.ReactNode  // Chat tab strip rendered inline in the toolbar (shared-toolbar mode)
   paneClassName?: string
   className?: string
-  viewMode?: CanvasViewMode
   hideToolbar?: boolean
   readOnly?: boolean
   /** Embed only the reusable read-only Plan canvas, without global workflow view switching. */
@@ -990,7 +986,6 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   onCreatePlan,
   showChatArea = false,
   toolbarOnly = false,
-  viewMode,
   readOnly = false,
   embeddedPlanOnly = false,
 }, ref) => {
@@ -1016,16 +1011,15 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   const viewportStateRef = React.useRef<{ x: number; y: number; zoom: number } | null>(null)
   const viewportSaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Get workflow mode, layout direction, and canvas view mode
-  // Flow view is vertical-only.
+  // Flow view is vertical-only. WorkspaceViewHost only mounts this component
+  // for the Plan view, so there is no per-mode branching in here.
   const layoutDirection: 'LR' | 'TB' = 'TB'
-  const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
-  const effectiveCanvasViewMode = viewMode || canvasViewMode
   const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
   const selectedGroupIds = useWorkflowStore(state => state.selectedGroupIds)
   const setSelectedRunFolder = useWorkflowStore(state => state.setSelectedRunFolder)
 
-  const isBuilderWorkspace = workflowWorkspaceView === null || workflowWorkspaceView === 'builder'
+  // No explicit view: the default builder workspace.
+  const isBuilderWorkspace = workflowWorkspaceView === null
 
   // Generate localStorage key for viewport state (workspace-specific)
   const getViewportStorageKey = React.useCallback(() => {
@@ -1135,21 +1129,15 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   const selectedRunFolder = useWorkflowStore(state => state.selectedRunFolder)
   // Device-width preview also constrains the plan/flow pane (centered shell).
   const previewDevice = usePreviewDevice(workspacePath)
-  // In Mobile, a chat-focused report stays mobile-framed to fit its narrow column.
-  // Laptop keeps the desktop report beside its own compact chat column.
-  const reportFocusTier: 'mobile' | undefined =
-    useWorkflowStore(state => state.focusedPane === 'chat' && previewDevice === 'mobile')
-      ? 'mobile'
-      : undefined
   // Changing the device width resizes the flow pane; re-fit the diagram after the
   // CSS width transition (~300ms) so it recenters into the new width.
   useEffect(() => {
-    if (embeddedPlanOnly || effectiveCanvasViewMode === 'report' || toolbarOnly || previewDevice === 'tablet') return
+    if (embeddedPlanOnly || toolbarOnly || previewDevice === 'tablet') return
     const t = setTimeout(() => {
       try { void fitView({ padding: FLOW_FIT_PADDING, duration: 350, minZoom: FLOW_FIT_MIN_ZOOM, maxZoom: FLOW_FIT_MAX_ZOOM }) } catch { /* ignore */ }
     }, 360)
     return () => clearTimeout(t)
-  }, [embeddedPlanOnly, previewDevice, effectiveCanvasViewMode, fitView, toolbarOnly])
+  }, [embeddedPlanOnly, previewDevice, fitView, toolbarOnly])
   // Highlight execution folder in workspace when selectedRunFolder changes
   // This ensures workspace shows the correct group folder during multi-group execution
   const highlightFile = useWorkspaceStore(state => state.highlightFile)
@@ -1331,7 +1319,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   }, [edges])
 
   const handleExportImage = useCallback(async (format: WorkflowImageExportFormat) => {
-    if (toolbarOnly || effectiveCanvasViewMode !== 'flow') return
+    if (toolbarOnly) return
     setIsExportingImage(true)
     const previousViewport = getViewport()
     try {
@@ -1372,7 +1360,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
       setViewport(previousViewport, { duration: 0 })
       setIsExportingImage(false)
     }
-  }, [effectiveCanvasViewMode, fitView, getViewport, setViewport, toolbarOnly, workspacePath])
+  }, [fitView, getViewport, setViewport, toolbarOnly, workspacePath])
 
   // Map of parent node ID to child node IDs (for grouped movement)
   const nodeGroupsRef = React.useRef<Map<string, string[]>>(new Map())
@@ -1388,7 +1376,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   const currentOffsetsRef = React.useRef<Map<string, { parentId: string; dx: number; dy: number }>>(new Map())
 
   const saveCurrentLayout = useCallback(async (currentNodes: WorkflowNode[]) => {
-    if (toolbarOnly || effectiveCanvasViewMode !== 'flow') return
+    if (toolbarOnly) return
 
     const layoutPath = getLayoutFilePath()
     if (!layoutPath) return
@@ -1435,7 +1423,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     } catch (error) {
       console.error('[WorkflowCanvas] Failed to save custom layout:', error)
     }
-  }, [effectiveCanvasViewMode, getLayoutFilePath, layoutDirection, toolbarOnly])
+  }, [getLayoutFilePath, layoutDirection, toolbarOnly])
 
   // Build node groups: map parent nodes to their child nodes (validation, learning, evaluation, sub-agents)
   const buildNodeGroups = useCallback((currentNodes: WorkflowNode[]) => {
@@ -1825,18 +1813,18 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
       if (!detail?.stepId) return
       if (detail.workspacePath && workspacePath && detail.workspacePath !== workspacePath) return
       pendingPlanStepFocusRef.current = detail.stepId
-      if (!toolbarOnly && effectiveCanvasViewMode === 'flow' && showStepNode(detail.stepId)) {
+      if (!toolbarOnly && showStepNode(detail.stepId)) {
         pendingPlanStepFocusRef.current = null
       }
     }
 
     window.addEventListener(WORKFLOW_PLAN_STEP_FOCUS_EVENT, handlePlanStepFocus)
     return () => window.removeEventListener(WORKFLOW_PLAN_STEP_FOCUS_EVENT, handlePlanStepFocus)
-  }, [effectiveCanvasViewMode, showStepNode, toolbarOnly, workspacePath])
+  }, [showStepNode, toolbarOnly, workspacePath])
 
   useEffect(() => {
     const pendingStepID = pendingPlanStepFocusRef.current
-    if (!pendingStepID || toolbarOnly || effectiveCanvasViewMode !== 'flow' || nodes.length === 0) return
+    if (!pendingStepID || toolbarOnly || nodes.length === 0) return
 
     // Re-attempt after React Flow has received the newly enabled plan nodes.
     const timer = window.setTimeout(() => {
@@ -1845,7 +1833,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
       }
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [effectiveCanvasViewMode, nodes, showStepNode, toolbarOnly])
+  }, [nodes, showStepNode, toolbarOnly])
 
   useEffect(() => {
     pendingPlanStepFocusRef.current = null
@@ -1956,26 +1944,26 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
       if (varsNode) updateNode('variables', { position: varsNode.position })
       if (startNode) updateNode('start', { position: startNode.position })
     }
-  }, [nodes, initialNodes, updateNode, toolbarOnly, effectiveCanvasViewMode])
+  }, [nodes, initialNodes, updateNode, toolbarOnly])
 
   // Rebuild node groups when nodes change
   React.useEffect(() => {
     if (toolbarOnly) return // Skip when canvas is hidden
     hasInitializedView.current = false
-  }, [effectiveCanvasViewMode, toolbarOnly])
+  }, [toolbarOnly])
 
   React.useEffect(() => {
     if (toolbarOnly) return // Skip when canvas is hidden
     if (nodes.length > 0) {
       buildNodeGroups(nodes)
     }
-  }, [nodes, buildNodeGroups, toolbarOnly, effectiveCanvasViewMode])
+  }, [nodes, buildNodeGroups, toolbarOnly])
 
   // Update nodes when plan changes (only if nodes actually changed)
   React.useEffect(() => {
     // Skip node/edge updates when the flow canvas is hidden. The saved layout
-    // only applies to React Flow; report/toolbar-only views should not fetch it.
-    if (toolbarOnly || effectiveCanvasViewMode !== 'flow') return
+    // only applies to React Flow; a toolbar-only render should not fetch it.
+    if (toolbarOnly) return
 
     // Compare by reference first (fast path)
     if (prevNodesRef.current === initialNodes && prevEdgesRef.current === initialEdges) {
@@ -2338,7 +2326,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
       prevEdgesRef.current = initialEdges
     }
 
-  }, [initialNodes, initialEdges, setNodes, setEdges, focusNode, buildNodeGroups, loadSavedLayout, layoutDirection, updateNode, presetQueryId, toolbarOnly, effectiveCanvasViewMode])
+  }, [initialNodes, initialEdges, setNodes, setEdges, focusNode, buildNodeGroups, loadSavedLayout, layoutDirection, updateNode, presetQueryId, toolbarOnly])
 
   // Fit the full plan on first render so the workflow shape is visible by default.
   React.useEffect(() => {
@@ -2375,7 +2363,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
 
       return () => window.clearTimeout(fitTimer)
     }
-  }, [embeddedPlanOnly, nodes, fitView, getViewport, previewDevice, setViewport, toolbarOnly, effectiveCanvasViewMode])
+  }, [embeddedPlanOnly, nodes, fitView, getViewport, previewDevice, setViewport, toolbarOnly])
 
   // Track previous stepStatusMap to detect actual changes
   const prevStepStatusMapRef = React.useRef<Map<string, 'pending' | 'running' | 'completed' | 'failed'>>(new Map())
@@ -2426,7 +2414,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     
     // Update previous status map (for tracking changes)
     prevStepStatusMapRef.current = new Map(stepStatusMap)
-  }, [stepStatusMap, setNodes, toolbarOnly, effectiveCanvasViewMode])
+  }, [stepStatusMap, setNodes, toolbarOnly])
 
 
   useEffect(() => {
@@ -2565,11 +2553,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   return (
     <div className="h-full min-h-0" ref={reactFlowWrapper}>
         {/* Canvas area — skip when toolbarOnly to avoid rendering 1000+ SVG nodes */}
-        {toolbarOnly ? null : effectiveCanvasViewMode === 'report' ? (
-          <div className="h-full min-h-0 relative">
-            {workspacePath && <ReportView workspacePath={workspacePath} focusTier={reportFocusTier} />}
-          </div>
-        ) : <div className="h-full min-h-0 relative flex">
+        {toolbarOnly ? null : <div className="h-full min-h-0 relative flex">
           <button
             type="button"
             onPointerDown={event => event.stopPropagation()}

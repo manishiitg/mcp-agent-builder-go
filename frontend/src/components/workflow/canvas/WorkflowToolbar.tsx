@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import ModalPortal from '../../ui/ModalPortal'
 import { useWorkflowStore, type RunFolder } from '../../../stores/useWorkflowStore'
-import { WORKSPACE_VIEWS, isInspectorView, type WorkspaceViewId } from '../workspaceViews'
+import { WORKSPACE_VIEWS, type WorkspaceViewId } from '../workspaceViews'
 import { useChatStore } from '../../../stores/useChatStore'
 import { useAuthStore } from '../../../stores/useAuthStore'
 import type { ScheduledJob, VariablesManifest } from '../../../services/api-types'
@@ -283,13 +283,12 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   })))
 
   const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
-  const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
+  const lastCanvasView = useWorkflowStore(state => state.lastCanvasView)
   const showWorkspacePane = useWorkflowStore(state => state.showWorkspacePane)
   const openWorkspaceView = useWorkflowStore(state => state.openWorkspaceView)
 
-  const activeWorkspaceView: WorkspaceViewId = workflowWorkspaceView === 'files' || isInspectorView(workflowWorkspaceView)
-    ? workflowWorkspaceView
-    : canvasViewMode === 'flow' ? 'flow' : 'report'
+  // No explicit view means the pane is on whichever canvas view was last open.
+  const activeWorkspaceView: WorkspaceViewId = workflowWorkspaceView ?? lastCanvasView
 
   // Button clusters come from the view registry, in registry order. The
   // Plan button is the one view that hides itself until a plan exists.
