@@ -5072,6 +5072,9 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       events={selectedTerminalEventSource}
                       terminal={selectedTerminalView}
                       siblingTerminals={terminals}
+                      // The diagnostic terminal transcript is intentionally a
+                      // live inspection surface, unlike the product chats.
+                      autoScrollMode="follow-turn"
                       loading={selectedTerminalUsesSessionEvents
                         ? mainEventHydration.sessionId === currentSessionId && mainEventHydration.loading
                         : selectedTerminalEventPage.loading}

@@ -320,12 +320,23 @@ function handleLiveStreamingEvent(
     // classification. Both are carried on StreamingChunkEvent — dropping them
     // here is what made block-provider output render as one run-on blob.
     const rawIsDelta = innerData?.is_delta ?? agentEvent?.is_delta
-    const rawSource = innerData?.source ?? agentEvent?.source
+    // Modern streaming packets put this on the typed chunk payload; a few
+    // retained/bridge envelopes preserve it in metadata instead. Either way,
+    // source is authoritative and must not be inferred from the screen text.
+    const rawSource = innerData?.source ?? agentEvent?.source ?? metadata?.source
     const chunkMeta = {
       isDelta: typeof rawIsDelta === 'boolean' ? rawIsDelta : undefined,
       source: typeof rawSource === 'string' ? rawSource : undefined,
     }
     if (ownedTerminalKeys.length > 0) {
+      return
+    } else if (chunkMeta.source?.trim().toLowerCase() === 'terminal' && scope.kind === 'session') {
+      // A terminal chunk is a complete tmux/pane frame, not assistant prose.
+      // Keeping it in streamingText made the chat render the previous Claude
+      // screen again after a follow-up message. Store it only in the dedicated
+      // snapshot channel; the product transcript deliberately never renders
+      // that channel as a chat response.
+      chatStore.setStreamingTerminalSnapshot(actualSessionId, chunkIndex, content)
       return
     } else if (scope.kind === 'delegation' && scope.id) {
       if (chunkIndex === 0 || chunkIndex === 1) chatStore.clearDelegationStreamingText(scope.id)
