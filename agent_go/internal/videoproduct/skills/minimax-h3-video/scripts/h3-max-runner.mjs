@@ -7,6 +7,7 @@
  * are never serialized or printed.
  */
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
 import { basename, dirname, resolve } from 'node:path'
 
 const QUEUE_ORIGIN = 'https://queue.fal.run'
@@ -23,6 +24,7 @@ function usage(exitCode = 0) {
   node ${basename(process.argv[1])} submit --input job.json --state job-state.json
   node ${basename(process.argv[1])} status --state job-state.json
   node ${basename(process.argv[1])} wait --state job-state.json --output shot.mp4 [--timeout-seconds 900] [--poll-seconds 10]
+  node ${basename(process.argv[1])} tail-reference --input predecessor.mp4 --output predecessor-tail.mp4 [--seconds 2|3]
 
 Input JSON must include endpoint and prompt. endpoint is one of:
   minimax/h3-max/text-to-video
@@ -66,6 +68,44 @@ async function writeJsonAtomic(path, value) {
   const temp = `${path}.tmp-${process.pid}`
   await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`)
   await rename(temp, path)
+}
+
+function run(command, args) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', chunk => { stdout += chunk })
+    child.stderr.on('data', chunk => { stderr += chunk })
+    child.on('error', error => reject(new Error(`Could not start ${command}: ${error.message}`)))
+    child.on('close', code => code === 0
+      ? resolvePromise({ stdout, stderr })
+      : reject(new Error(`${command} failed (${code}): ${stderr.trim() || stdout.trim()}`)))
+  })
+}
+
+async function mediaDuration(path) {
+  const { stdout } = await run('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path])
+  const duration = Number.parseFloat(stdout.trim())
+  if (!Number.isFinite(duration) || duration <= 0) throw new Error(`ffprobe returned no usable duration for ${path}`)
+  return duration
+}
+
+async function extractTailReference(inputPath, outputPath, seconds) {
+  const sourceDuration = await mediaDuration(inputPath)
+  if (sourceDuration < seconds) throw new Error(`Predecessor is ${sourceDuration.toFixed(2)}s; cannot extract the requested ${seconds}s continuity tail`)
+  await mkdir(dirname(outputPath), { recursive: true })
+  const temporary = `${outputPath}.tmp-${process.pid}.mp4`
+  try {
+    // Deterministic reference preparation only; do not modify delivery clips.
+    await run('ffmpeg', ['-y', '-sseof', `-${seconds}`, '-i', inputPath, '-t', String(seconds), '-map', '0:v:0', '-map', '0:a?', '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-c:a', 'aac', '-movflags', '+faststart', temporary])
+    const actualDuration = await mediaDuration(temporary)
+    if (actualDuration < seconds - 0.15 || actualDuration > seconds + 0.15) throw new Error(`Tail extraction produced ${actualDuration.toFixed(2)}s, expected ${seconds}s`)
+    await rename(temporary, outputPath)
+    event('continuity_tail_ready', { input_path: inputPath, output_path: outputPath, seconds, source_duration_seconds: sourceDuration, output_duration_seconds: actualDuration })
+  } finally {
+    await import('node:fs/promises').then(({ rm }) => rm(temporary, { force: true }))
+  }
 }
 
 function isUrl(value) {
@@ -200,7 +240,16 @@ async function downloadResult(state, outputPath) {
 }
 
 async function main() {
-  if (!['validate', 'submit', 'status', 'wait'].includes(command)) usage(1)
+  if (!['validate', 'submit', 'status', 'wait', 'tail-reference'].includes(command)) usage(1)
+  if (command === 'tail-reference') {
+    const seconds = Number(arg('--seconds', { fallback: '3' }))
+    if (!Number.isInteger(seconds) || seconds < 2 || seconds > 3) throw new Error('continuity-tail seconds must be either 2 or 3')
+    const input = resolve(arg('--input', { required: true }))
+    const output = resolve(arg('--output', { required: true }))
+    if (input === output) throw new Error('continuity-tail input and output must be different files')
+    await extractTailReference(input, output, seconds)
+    return
+  }
   const state = command === 'validate' || command === 'submit' ? null : await loadState(statePath())
   if (command === 'validate') {
     const job = validateInput(await readJson(resolve(arg('--input', { required: true }))))
