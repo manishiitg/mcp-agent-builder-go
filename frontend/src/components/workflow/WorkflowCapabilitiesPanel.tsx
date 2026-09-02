@@ -36,36 +36,66 @@ const EMPTY_CAPABILITIES: WorkflowCapabilities = {
   use_code_execution_mode: false,
 }
 
-const SECTION_COPY: Record<WorkflowCapabilitySection, { title: string; description: string }> = {
+// `savesViaManifest`: the section edits `capabilities` and persists through the
+// Save footer. Sections that write straight to shared state (bots routing and
+// credentials) never touch the manifest, so the footer would save nothing.
+const SECTION_COPY: Record<WorkflowCapabilitySection, { title: string; description: string; savesViaManifest: boolean }> = {
   skills: {
     title: 'Workflow skills',
     description: 'Select reusable skills for this workflow’s builder context.',
+    savesViaManifest: true,
   },
   mcp: {
     title: 'Workflow MCP',
     description: 'Select the MCP servers and tools this workflow may use.',
+    savesViaManifest: true,
   },
   secrets: {
     title: 'Workflow secrets',
     description: 'Choose which workflow and global secrets this workflow may access.',
+    savesViaManifest: true,
   },
   browser: {
     title: 'Browser automation',
     description: 'Control whether this workflow uses visible Chrome or managed headless browsing.',
+    savesViaManifest: true,
   },
   llm: {
     title: 'Workflow LLM configuration',
     description: 'Review the provider profile and any role-specific model overrides.',
+    savesViaManifest: true,
   },
   bots: {
     title: 'Workflow bots',
     description: 'Slack channels and WhatsApp slugs this workflow answers on. Connections are shared by all workflows.',
+    savesViaManifest: false,
   },
+}
+
+// Structural equality for the manifest capabilities: a flat object of
+// primitives, string arrays, and one nested plain-JSON `llm_config`.
+function capabilitiesEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') return false
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((item, index) => capabilitiesEqual(item, b[index]))
+  }
+  const left = a as Record<string, unknown>
+  const right = b as Record<string, unknown>
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)])
+  for (const key of keys) {
+    if (!capabilitiesEqual(left[key], right[key])) return false
+  }
+  return true
 }
 
 export default function WorkflowCapabilitiesPanel({ section, workspacePath }: WorkflowCapabilitiesPanelProps) {
   const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
   const [capabilities, setCapabilities] = useState<WorkflowCapabilities>(EMPTY_CAPABILITIES)
+  // What the manifest last held, so the footer can tell "edited" from "saved".
+  const [loaded, setLoaded] = useState<WorkflowCapabilities>(EMPTY_CAPABILITIES)
+  const dirty = useMemo(() => !capabilitiesEqual(capabilities, loaded), [capabilities, loaded])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -110,7 +140,9 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
     setError(null)
     try {
       const response = await workflowManifestApi.getWorkflowManifest(workspacePath)
-      setCapabilities({ ...EMPTY_CAPABILITIES, ...response.manifest.capabilities })
+      const next = { ...EMPTY_CAPABILITIES, ...response.manifest.capabilities }
+      setCapabilities(next)
+      setLoaded(next)
       setCdpPort(response.manifest.capabilities.cdp_ports?.[0] || 9222)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to load workflow capabilities')
@@ -148,6 +180,7 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
     setError(null)
     try {
       await workflowManifestApi.updateWorkflowManifest({ workspace_path: workspacePath, capabilities })
+      setLoaded(capabilities)
       await useWorkflowManifestStore.getState().refreshWorkflows()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to save workflow capabilities')
@@ -271,13 +304,15 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
 
       {/* PLAT-262: Save hidden for a read-only user — nothing in this panel
           can actually persist for that account, so hide the button that
-          implies otherwise rather than let it fail after the fact. */}
-      {!loading && !isReadOnlyUser && (
-        <footer className="flex shrink-0 justify-end border-t px-4 py-3">
+          implies otherwise rather than let it fail after the fact. Also
+          hidden for sections that don't save through the manifest at all. */}
+      {!loading && !isReadOnlyUser && copy.savesViaManifest && (
+        <footer className="flex shrink-0 items-center justify-end gap-3 border-t px-4 py-3">
+          {dirty && <span className="text-xs text-muted-foreground">Unsaved changes</span>}
           <button
             type="button"
             onClick={() => void save()}
-            disabled={saving}
+            disabled={saving || !dirty}
             className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {saving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
