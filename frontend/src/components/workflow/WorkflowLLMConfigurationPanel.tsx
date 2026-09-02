@@ -228,10 +228,9 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   })
 
   const advanced = llmConfig?.mode === 'explicit'
-  const [advancedOpen, setAdvancedOpen] = useState(advanced)
-  useEffect(() => {
-    if (advanced) setAdvancedOpen(true)
-  }, [advanced])
+  // A workflow that already runs on a provider opens on the compact "runs on
+  // X" line; the provider list only appears on "Change provider".
+  const [changing, setChanging] = useState(false)
 
   useEffect(() => {
     if (!providerManifestLoaded) void loadProviderManifest()
@@ -425,6 +424,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     try {
       onChange(config)
       if (onUseProvider) await onUseProvider(config)
+      setChanging(false)
     } finally {
       setRowUsing(null)
     }
@@ -458,19 +458,6 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     if (!selectedProfile) return
     onChange({ schema_version: 2, mode: 'provider_profile', provider: selectedProfile.provider as LLMProvider })
     setExpandedRole(null)
-  }
-
-  const startAdvancedSetup = () => {
-    if (!defaults) return
-    onChange({
-      schema_version: 2,
-      mode: 'explicit',
-      builder_llm: defaults.builder,
-      maintenance_llm: defaults.maintenance,
-      pulse_llm: defaults.pulse,
-      tiered_config: { tier_1: defaults.tier1, tier_2: defaults.tier2, tier_3: defaults.tier3 },
-    })
-    setAdvancedOpen(true)
   }
 
   const updateRole = (key: RoleKey, next: AgentLLMConfig, preserveFallbacks = true) => {
@@ -647,6 +634,15 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
                 Set up
               </button>
             </>
+          )}
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => setChanging(open => !open)}
+              className="ml-auto rounded-md border border-border px-2 py-0.5 text-xs font-medium text-foreground hover:bg-muted"
+            >
+              {changing ? 'Cancel' : 'Change provider'}
+            </button>
           )}
         </div>
       )
@@ -840,67 +836,64 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     )
   }
 
+  // One flat row per role: what it runs on now, and the picker right there.
+  // Changing a role switches the workflow to per-role (explicit) mode via
+  // updateRole, which seeds the other roles from the provider's defaults, so
+  // there is no separate "pin models" step.
   const renderRole = (row: RoleRow) => {
     const value = roleConfig(llmConfig, row.key) ?? defaultForRole(row.key)
     const fallbackList = value?.fallbacks ?? []
-    const expanded = expandedRole === row.key
     const defaultValue = defaultForRole(row.key)
-    const isCustomized = configKey(value ?? {}) !== configKey(defaultValue ?? {}) || fallbackList.length > 0
+    const isCustomized = advanced && (configKey(value ?? {}) !== configKey(defaultValue ?? {}) || fallbackList.length > 0)
 
     return (
-      <div key={row.key} className="border-t border-border first:border-t-0">
-        <button
-          type="button"
-          onClick={() => setExpandedRole(expanded ? null : row.key)}
-          className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
-          aria-expanded={expanded}
-        >
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-medium text-foreground">{row.label}</span>
-              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${isCustomized ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'}`}>
-                {isCustomized ? 'Customized' : 'Provider default'}
-              </span>
-            </div>
-            <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{row.description}</div>
+      <div key={row.key} className="flex flex-col gap-2 border-t border-border px-3 py-2.5 first:border-t-0 sm:flex-row sm:items-center sm:gap-3">
+        <div className="min-w-0 sm:w-[38%]">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-foreground">{row.label}</span>
+            {isCustomized && (
+              <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">Customized</span>
+            )}
           </div>
-          <div className="min-w-0 max-w-[45%] text-right">
-            <div className="truncate font-mono text-[11px] text-foreground" title={configLabel(value)}>{configLabel(value)}</div>
-            {fallbackList.length > 0 && <div className="text-[10px] text-muted-foreground">{fallbackList.length} fallback{fallbackList.length === 1 ? '' : 's'}</div>}
-          </div>
-          <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
-        </button>
-        {expanded && value && (
-          <div className="space-y-3 border-t border-border bg-muted/20 px-3 py-3">
-            <LLMRoleSelector availableLLMs={workflowOptions} value={value} onLLMSelect={llm => updateRole(row.key, toAgentLLMConfig(llm))} disabled={readOnly} />
+          <div className="mt-0.5 text-[11px] text-muted-foreground">{row.description}</div>
+        </div>
+        <div className="min-w-0 flex-1 space-y-1.5">
+          {value ? (
+            <LLMRoleSelector availableLLMs={workflowOptions} value={value} onLLMSelect={llm => updateRole(row.key, toAgentLLMConfig(llm), true)} disabled={readOnly} />
+          ) : (
+            <span className="text-xs text-muted-foreground">Select a provider first.</span>
+          )}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             {isCustomized && defaultValue && (
-              <button type="button" onClick={() => resetRole(row.key)} disabled={readOnly} title={readOnly ? READ_ONLY_TITLE : undefined} className="text-xs text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline">
-                Reset this role to provider default
+              <button type="button" onClick={() => resetRole(row.key)} disabled={readOnly} title={readOnly ? READ_ONLY_TITLE : undefined} className="text-[11px] text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline">
+                Reset to provider default
               </button>
             )}
-            <details className="rounded-md border border-border bg-background px-2.5 py-2">
-              <summary className="cursor-pointer text-xs font-medium text-foreground">Fallbacks{fallbackList.length ? ` (${fallbackList.length})` : ''}</summary>
-              <div className="mt-2 space-y-2">
-                {fallbackList.map((fallback, index) => (
-                  <span key={`${row.key}-${configKey(fallback)}-${index}`} className="mr-1 inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-foreground">
-                    {fallback.provider}/{fallback.model_id.split('/').pop()}
-                    <button type="button" onClick={() => updateFallbacks(row.key, fallbackList.filter((_, itemIndex) => itemIndex !== index))} disabled={readOnly} title={readOnly ? READ_ONLY_TITLE : undefined} className="text-muted-foreground hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50" aria-label={`Remove ${row.label} fallback`}>
-                      <X className="h-3 w-3" />
-                    </button>
-                  </span>
-                ))}
-                <LLMSelectionDropdown
-                  availableLLMs={workflowOptions.filter(option => optionKey(option) !== configKey(value) && !fallbackList.some(fallback => configKey(fallback) === optionKey(option)))}
-                  selectedLLM={null}
-                  onLLMSelect={llm => updateFallbacks(row.key, [...fallbackList, toFallback(llm)])}
-                  onRefresh={loadDefaultsFromBackend}
-                  placeholder="+ Add fallback"
-                  disabled={readOnly}
-                />
-              </div>
-            </details>
+            {value && (
+              <details className="text-[11px]">
+                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Fallbacks{fallbackList.length ? ` (${fallbackList.length})` : ''}</summary>
+                <div className="mt-1.5 space-y-1.5">
+                  {fallbackList.map((fallback, index) => (
+                    <span key={`${row.key}-${configKey(fallback)}-${index}`} className="mr-1 inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-foreground">
+                      {fallback.provider}/{fallback.model_id.split('/').pop()}
+                      <button type="button" onClick={() => updateFallbacks(row.key, fallbackList.filter((_, itemIndex) => itemIndex !== index))} disabled={readOnly} title={readOnly ? READ_ONLY_TITLE : undefined} className="text-muted-foreground hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50" aria-label={`Remove ${row.label} fallback`}>
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                  <LLMSelectionDropdown
+                    availableLLMs={workflowOptions.filter(option => optionKey(option) !== configKey(value) && !fallbackList.some(fallback => configKey(fallback) === optionKey(option)))}
+                    selectedLLM={null}
+                    onLLMSelect={llm => updateFallbacks(row.key, [...fallbackList, toFallback(llm)])}
+                    onRefresh={loadDefaultsFromBackend}
+                    placeholder="+ Add fallback"
+                    disabled={readOnly}
+                  />
+                </div>
+              </details>
+            )}
           </div>
-        )}
+        </div>
       </div>
     )
   }
@@ -924,6 +917,8 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
         {renderTokenLine()}
       </div>
 
+      {(!selectedRow || changing) && (
+      <>
       <div className="flex items-center gap-2">
         <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -975,61 +970,39 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
           </>
         )}
       </div>
+      </>
+      )}
 
-      <div className="rounded-md border border-border">
-        <button
-          type="button"
-          onClick={() => setAdvancedOpen(open => !open)}
-          aria-expanded={advancedOpen}
-          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-foreground transition-colors hover:bg-muted/50"
-        >
-          <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${advancedOpen ? 'rotate-90' : ''}`} />
-          Advanced
-          <span className="font-normal text-muted-foreground">— pin a model per role</span>
-        </button>
-        {advancedOpen && (
-          <div className="space-y-3 border-t border-border p-3">
-            {!advanced ? (
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs text-muted-foreground">
-                  Roles currently follow the selected provider's managed defaults. Pin them to choose a model, effort, and fallbacks per role.
-                </p>
-                <button
-                  type="button"
-                  onClick={startAdvancedSetup}
-                  disabled={readOnly || !defaults}
-                  title={readOnly ? READ_ONLY_TITLE : defaults ? undefined : 'Select a provider first'}
-                  className="shrink-0 text-xs font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Pin models per role
-                </button>
-              </div>
-            ) : (
-              <>
-                <div className="flex items-start justify-between gap-3">
-                  <p className="text-xs text-muted-foreground">Each role is pinned. Open a row to change its model, effort, or fallbacks.</p>
-                  <button
-                    type="button"
-                    onClick={useManagedDefaults}
-                    disabled={readOnly || !selectedProfile}
-                    title={readOnly ? READ_ONLY_TITLE : selectedProfile ? undefined : 'No provider profile to return to'}
-                    className="shrink-0 text-xs font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Use managed defaults
-                  </button>
-                </div>
-                {(['Execution', 'Workflow agents'] as const).map(group => (
-                  <div key={group}>
-                    <div className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div>
-                    <div className="overflow-hidden rounded-md border border-border bg-background">
-                      {ROLE_ROWS.filter(row => row.group === group).map(renderRole)}
-                    </div>
-                  </div>
-                ))}
-              </>
-            )}
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-medium text-foreground">Models per role</div>
+            <div className="text-xs text-muted-foreground">
+              {advanced
+                ? 'Pinned per role. Changes save immediately.'
+                : "Following the selected provider's defaults. Change any role to pin it."}
+            </div>
           </div>
-        )}
+          {advanced && (
+            <button
+              type="button"
+              onClick={useManagedDefaults}
+              disabled={readOnly || !selectedProfile}
+              title={readOnly ? READ_ONLY_TITLE : selectedProfile ? undefined : 'No provider profile to return to'}
+              className="shrink-0 text-xs font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Use provider defaults for all roles
+            </button>
+          )}
+        </div>
+        {(['Execution', 'Workflow agents'] as const).map(group => (
+          <div key={group}>
+            <div className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div>
+            <div className="overflow-hidden rounded-md border border-border bg-background">
+              {ROLE_ROWS.filter(row => row.group === group).map(renderRole)}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )

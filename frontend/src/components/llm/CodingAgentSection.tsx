@@ -574,6 +574,9 @@ export function CodingAgentSection({ provider, onPublished, groupFilter, readOnl
             >
               {using ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving…</> : 'Use in this workflow'}
             </Button>
+            {piAuthSpec && !piAuthKey.trim() && piAuthStatus !== 'saved' && (
+              <p className="text-xs text-muted-foreground">Save a provider key above to enable this.</p>
+            )}
           </div>
         )}
       </Card>
