@@ -29,10 +29,10 @@ func resolvePlanOrphanStepRefs(plan *PlanningResponse) error {
 
 	validOrchestratorIDs := make(map[string]bool)
 	for _, step := range plan.Steps {
-		collectTodoTaskStepIDs(step, validOrchestratorIDs)
+		collectOrchestratorStepIDs(step, validOrchestratorIDs)
 	}
 	for _, step := range plan.OrphanSteps {
-		collectTodoTaskStepIDs(step, validOrchestratorIDs)
+		collectOrchestratorStepIDs(step, validOrchestratorIDs)
 	}
 
 	for _, step := range plan.OrphanSteps {
@@ -61,19 +61,19 @@ func resolvePlanOrphanStepRefs(plan *PlanningResponse) error {
 	return nil
 }
 
-func collectTodoTaskStepIDs(step PlanStepInterface, ids map[string]bool) {
+func collectOrchestratorStepIDs(step PlanStepInterface, ids map[string]bool) {
 	if step == nil {
 		return
 	}
 
 	switch s := step.(type) {
-	case *TodoTaskPlanStep:
+	case *OrchestratorPlanStep:
 		if s.GetID() != "" {
 			ids[s.GetID()] = true
 		}
 		for _, route := range s.PredefinedRoutes {
 			if route.SubAgentStep != nil {
-				collectTodoTaskStepIDs(route.SubAgentStep, ids)
+				collectOrchestratorStepIDs(route.SubAgentStep, ids)
 			}
 		}
 	}
@@ -85,7 +85,7 @@ func resolveOrphanRefsInStep(step PlanStepInterface, orphanByID map[string]PlanS
 	}
 
 	switch s := step.(type) {
-	case *TodoTaskPlanStep:
+	case *OrchestratorPlanStep:
 		for i := range s.PredefinedRoutes {
 			route := &s.PredefinedRoutes[i]
 			if route.OrphanStepRef != "" {

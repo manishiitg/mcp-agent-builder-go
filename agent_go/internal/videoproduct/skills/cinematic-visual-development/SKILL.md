@@ -1,6 +1,6 @@
 ---
 name: cinematic-visual-development
-description: Create and present the user-approved visual evidence that a cinematic sequence needs before video generation: subject reference packs, locations, wardrobe, props, lighting, camera language, and start/exit/bridge frames. Use before an anchor or follow-up clip.
+description: Create and present the user-approved visual evidence that a cinematic sequence needs before video generation: FLUX.2 Max character/background masters and controlled derivatives, subject reference packs, locations, wardrobe, props, lighting, camera language, and start/exit/bridge frames. Use before an anchor or follow-up clip.
 ---
 
 # Build the evidence before the footage
@@ -12,6 +12,31 @@ which approved files are actual endpoint inputs versus editorial targets.
 Read `video-provider-capabilities`, `video-cinematography`,
 `multi-clip-cinematic-generation`, and the selected provider/model skill.
 Never invent an API field merely because a planned end image would be useful.
+
+## Generate the reference pack with FLUX.2 Max
+
+Video Studio uses Fal's **FLUX.2 Max** for all paid character and background
+reference imagery. Read the live documentation before each paid call:
+
+- `https://fal.ai/models/fal-ai/flux-2-max/llms.txt` for a new character or
+  environment master;
+- `https://fal.ai/models/fal-ai/flux-2-max/edit/llms.txt` for a controlled
+  derivative from one or more approved masters.
+
+Use `fal-ai/flux-2-max` to generate one reviewable master character sheet or
+location/background plate. Once the user approves it, use
+`fal-ai/flux-2-max/edit` to derive different camera angles, poses, wardrobe
+or prop states, return angles, and character-in-location composites while
+preserving the approved subject and world. State which input is the character,
+which is the location, and exactly what may change. Do not make a recurring
+character or return location from text alone after its master exists, and do
+not replace FLUX.2 Max with another still-image model without the user's
+explicit approval.
+
+Present and approve the master before creating derivatives. Treat a poor
+derivative as a failed reference image to revise, not as evidence that the
+character or background has changed. Record each actual endpoint, exact
+non-secret input, source references, and approved output in the manifest.
 
 ## Classify the recurring subject
 
@@ -74,9 +99,10 @@ supports them.
 Block the anchor or continuation when any required reference is missing,
 unapproved, inconsistent with the chosen sequence, or unsupported as the
 claimed endpoint input. A model change is a new sequence boundary unless the
-handoff pack, target-model bridge still, and seam proof are explicitly
-approved.
+handoff pack and target-model references are explicitly approved.
 
-After a follow-up clip, prove the join with the seam-preview recipe before
-generating another clip. Visual development makes a good seam possible; it
-does not replace seam proof.
+After a follow-up clip, perform its lightweight receipt: confirm the file with
+`ffprobe` and inspect stable opening/ending frames. If the new opening visibly
+breaks continuity, revise the H3 prompt/reference set and regenerate that
+successor. Visual development makes a good H3 handoff possible; it does not
+authorize an FFmpeg seam repair.

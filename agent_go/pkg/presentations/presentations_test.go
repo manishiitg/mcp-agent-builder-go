@@ -47,6 +47,7 @@ func validPresentation() Presentation {
 		Title:         "Launch video",
 		WorkspacePath: "Chats/Video Studio/projects/demo",
 		SessionID:     "video-studio:project:demo",
+		Activity:      &orchestratorevents.PresentationActivity{Label: "Video ready", Destination: "Videos panel", Detail: "Ready to review"},
 		Payload:       map[string]interface{}{"path": "outputs/final.mp4", "verdict": "pass"},
 		Resources:     []map[string]string{{"kind": "workspace.file", "path": "outputs/final.mp4", "role": "primary"}},
 	}
@@ -128,6 +129,17 @@ func TestUpsertRequiresEveryField(t *testing.T) {
 	}
 }
 
+func TestDeleteRemovesOnlyTheRequestedPresentation(t *testing.T) {
+	server, lastParams := capturingWorkspaceServer(t)
+	defer server.Close()
+	if err := Delete(context.Background(), workspace.NewClient(server.URL), "Chats/Video Studio/projects/demo", "presentation-video", "media.video"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if len(*lastParams) != 2 || (*lastParams)[0] != "presentation-video" || (*lastParams)[1] != "media.video" {
+		t.Fatalf("delete params = %#v, want presentation id and kind", *lastParams)
+	}
+}
+
 // Event is a type alias for orchestrator_events.PresentationUpdatedEvent, so
 // this has nothing to unmarshal or convert by hand — the struct itself is
 // what reaches the frontend, registered in cmd/schema-gen so it gets a real
@@ -155,7 +167,7 @@ func TestUpsertReturnsEnoughToRenderWithoutASecondFetch(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 	if event.PresentationID == "" || event.Kind != "media.video" || event.Title == "" ||
-		event.WorkspacePath == "" || len(event.Payload) == 0 {
+		event.WorkspacePath == "" || len(event.Payload) == 0 || event.Activity == nil || event.Activity.Destination != "Videos panel" {
 		t.Fatalf("event is missing fields a listener needs: %+v", event)
 	}
 }

@@ -122,21 +122,21 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		name         string
 		requiredText []string
 	}{
-		{"fal-ai", []string{"SECRET_FAL_KEY", "Never invent a model ID", "@fal-ai/client"}},
-		{"google-ai", []string{"SECRET_GEMINI_API_KEY", "Never invent a model ID", "@google/genai"}},
+		{"fal-ai", []string{"SECRET_FAL_KEY", "Never invent a model ID", "@fal-ai/client", "up to **15 minutes**", "request ID, input, and submission timestamp", "provider failure: rejoin"}},
+		{"google-ai", []string{"SECRET_GEMINI_API_KEY", "Google image and TTS", "@google/genai"}},
 		{"seeddance-api", []string{"SECRET_SEEDANCE_API_KEY", "/v1/videos/generations", "task_id", "show_video"}},
-		{"longform-cinematic-video", []string{"longform-sequence-plan.json", "longform-edit-decision-list.json", "longform-seam-report.json", "one film"}},
-		{"cinematic-visual-development", []string{"Subject type", "Human / presenter", "Animal / pet", "Product / object", "show_reference", "endpoint_input", "seam proof"}},
-		{"multi-clip-cinematic-generation", []string{"reference manifest", "orientation", "structured multi-shot", "Cut on action", "HyperFrames"}},
+		{"longform-cinematic-video", []string{"longform-sequence-plan.json", "longform-edit-decision-list.json", "single final `video-quality` report", "one film"}},
+		{"cinematic-visual-development", []string{"FLUX.2 Max", "fal-ai/flux-2-max", "fal-ai/flux-2-max/edit", "Subject type", "Human / presenter", "Animal / pet", "Product / object", "show_reference", "endpoint_input", "lightweight receipt"}},
+		{"multi-clip-cinematic-generation", []string{"reference manifest", "orientation", "reference-to-video", "Cut on action", "HyperFrames"}},
 		{"video-provider-capabilities", []string{"official API", "capability record", "maximum_approved_cost", "pending_user_review", "continuity-plan.json", "generation-ledger.json"}},
 		{"kling-video", []string{"multi_prompt", "@Element1", "motion-transfer", "show_video"}},
 		{"seedance-video", []string{"@Image1", "bytedance/seedance-2.0", "bytedance/seedance-2.5", "30-second", "show_video"}},
 		{"veo-video", []string{"fal-ai/veo3.1/lite/image-to-video", "4s", "6s", "8s", "first plus last frame", "previously generated Veo", "long-running", "show_video"}},
-		{"minimax-h3-video", []string{"minimax/hailuo-03", "native stereo audio", "reference ledger", "show_video"}},
+		{"minimax-h3-video", []string{"minimax/h3-max/text-to-video", "minimax/h3-max/image-to-video", "minimax/h3-max/reference-to-video", "reference_video_urls", "Video 1", "resolution: \"480P\"", "show_video"}},
 		{"gemini-omni-video", []string{"google/gemini-omni-flash", "<IMAGE_REF_0>", "fal-ai", "show_video"}},
 		{"video-model-selection", []string{"video-cinematography", "fal-ai", "google-ai", "seeddance-api", "model-capabilities.md", "Shot count vs. budget", "Present a costed choice", "least-expensive option", "Veo 3.1 Lite", "Seedance 2.5", "maximum cost", "visible native dialogue", "off-camera TTS voiceover", "must never silently turn"}},
-		{"video-cinematography", []string{"dolly is not zoom", "reference-image conditioning", "video-model-selection"}},
-		{"video-storytelling", []string{"video-cinematography", "video-model-selection", "But-therefore, not and-then", "Scaling to true long-form"}},
+		{"video-cinematography", []string{"dolly is not zoom", "reference-image conditioning", "minimax-h3-video"}},
+		{"video-storytelling", []string{"video-cinematography", "MiniMax H3", "But-therefore, not and-then", "Scaling to true long-form"}},
 		{"generated-video-quality", []string{"character_consistency", "generation_artifacts", "temporal_coherence", "video-quality"}},
 		{"video-look-sound", []string{"Locations and backgrounds", "Visible native dialogue", "Off-camera TTS voiceover", "Hybrid", "cost", "explicit choice", "without native audio", "constraint to", "Use separate TTS only for off-camera voiceover", "ffprobe", "silent visual preview", "not_applicable", "render report"}},
 	}
@@ -174,8 +174,35 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 	}
 	for _, name := range []string{"longform-cinematic-video", "kling-video", "seedance-video", "seeddance-api", "veo-video", "minimax-h3-video", "gemini-omni-video"} {
 		attached := skills.LoadAttachable("", []string{name})
-		if len(attached) != 1 || len(attached[0].SupportingFiles) != 1 || attached[0].SupportingFiles[0].RelPath != "agents/openai.yaml" {
+		if len(attached) != 1 {
 			t.Fatalf("%s must carry its generated UI metadata: %+v", name, attached)
+		}
+		hasGeneratedMetadata := false
+		for _, file := range attached[0].SupportingFiles {
+			if file.RelPath == "agents/openai.yaml" {
+				hasGeneratedMetadata = true
+				break
+			}
+		}
+		if !hasGeneratedMetadata {
+			t.Fatalf("%s must carry its generated UI metadata: %+v", name, attached)
+		}
+	}
+
+	h3Attached := skills.LoadAttachable("", []string{"minimax-h3-video"})
+	if len(h3Attached) != 1 {
+		t.Fatalf("minimax-h3-video bundle = %v", h3Attached)
+	}
+	h3PromptingReference := ""
+	for _, file := range h3Attached[0].SupportingFiles {
+		if file.RelPath == "references/fal-h3-max-prompting.md" {
+			h3PromptingReference = string(file.Content)
+			break
+		}
+	}
+	for _, want := range []string{"Assign every reference exactly one job", "timed shot list", "Static true-POV dialogue pattern"} {
+		if !strings.Contains(h3PromptingReference, want) {
+			t.Fatalf("minimax-h3-video prompting reference missing %q: %q", want, h3PromptingReference)
 		}
 	}
 
@@ -187,9 +214,14 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 	for _, name := range manifest.Profile.Skills {
 		inDefaultSet[name] = true
 	}
-	for _, tc := range cases {
-		if !inDefaultSet[tc.name] {
-			t.Fatalf("%s is not in the product's default skill set: %v", tc.name, manifest.Profile.Skills)
+	for _, name := range []string{"fal-ai", "google-ai", "video-provider-capabilities", "minimax-h3-video", "video-cinematography"} {
+		if !inDefaultSet[name] {
+			t.Fatalf("%s is not in the product's default skill set: %v", name, manifest.Profile.Skills)
+		}
+	}
+	for _, name := range []string{"kling-video", "seedance-video", "seeddance-api", "veo-video", "gemini-omni-video", "video-model-selection"} {
+		if inDefaultSet[name] {
+			t.Fatalf("%s must not be attached by default when MiniMax H3 is the only video route: %v", name, manifest.Profile.Skills)
 		}
 	}
 
@@ -204,7 +236,8 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 }
 
 func TestGenerationPipelinesAttachCapabilityDiscoveryBeforePaidVideo(t *testing.T) {
-	requiredSkills := []string{"video-provider-capabilities", "kling-video", "seedance-video", "seeddance-api", "veo-video", "minimax-h3-video", "gemini-omni-video"}
+	requiredSkills := []string{"video-provider-capabilities", "minimax-h3-video"}
+	forbiddenSkills := []string{"kling-video", "seedance-video", "seeddance-api", "veo-video", "gemini-omni-video", "video-model-selection"}
 	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
 		for _, stageID := range []string{pipeline.ID + "-brief", pipeline.ID + "-shotlist", pipeline.ID + "-anchor-shot", pipeline.ID + "-next-shot"} {
 			var stage *PipelineStage
@@ -226,6 +259,21 @@ func TestGenerationPipelinesAttachCapabilityDiscoveryBeforePaidVideo(t *testing.
 					t.Fatalf("%s must attach %s: %v", stage.ID, required, stage.Skills)
 				}
 			}
+			for _, forbidden := range forbiddenSkills {
+				if attached[forbidden] {
+					t.Fatalf("%s must not attach alternate video route %s: %v", stage.ID, forbidden, stage.Skills)
+				}
+			}
+		}
+	}
+}
+
+func TestCinematicWorkflowStagesCarryTheH3ReferenceRouteInvariant(t *testing.T) {
+	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
+		for _, stage := range pipeline.Stages {
+			if !strings.Contains(stage.Description, "minimax/h3-max/text-to-video") || !strings.Contains(stage.Description, "minimax/h3-max/reference-to-video") || !strings.Contains(stage.Description, "minimax/h3-max/image-to-video") || !strings.Contains(stage.Description, "resolution: \"480P\"") || !strings.Contains(stage.Description, "prompt_expansion_mode: \"balanced\"") {
+				t.Fatalf("%s stage %q is missing the MiniMax H3 Max 480P seam-bridge route invariant", pipeline.ID, stage.ID)
+			}
 		}
 	}
 }
@@ -233,11 +281,8 @@ func TestGenerationPipelinesAttachCapabilityDiscoveryBeforePaidVideo(t *testing.
 // Character specs and reference images are the load-bearing artifact for
 // keeping a subject consistent across a long-form production's many shots,
 // and the workspace UI surfaces them by path. video-cinematography owns the
-// `characters/` layout, but video-creation owns the file-layout convention
-// it has to sit inside (work/ in chat, the step folder as a workflow stage)
-// and the production.json record that points at it. A bare top-level
-// `characters/` path would contradict both, so this pins that the two
-// skills still agree on where the folder lives and who records it.
+// direct-chat `characters/` layout. A bare top-level `characters/` path would
+// mix multiple productions, so this pins the concrete per-production path.
 func TestCharacterArtifactsHaveOneAgreedLocation(t *testing.T) {
 	if err := RegisterProductSkills(); err != nil {
 		t.Fatalf("RegisterProductSkills: %v", err)
@@ -256,19 +301,12 @@ func TestCharacterArtifactsHaveOneAgreedLocation(t *testing.T) {
 			t.Fatalf("video-cinematography no longer establishes %q as the character artifact path", want)
 		}
 	}
-	if !strings.Contains(cinematography, "video-creation") {
-		t.Fatal("video-cinematography does not defer to video-creation's file-layout rule for where characters/ sits")
-	}
 	// The reference is only worth generating early if the user gets to reject
 	// it early; a character shown after its shots exist is a bill, not a check.
 	if !strings.Contains(cinematography, "show_character") {
 		t.Fatal("video-cinematography no longer tells the agent to present a character before generating shots of it")
 	}
 
-	creation := loadOne("video-creation")
-	if !strings.Contains(creation, "work/productions/<slug>/characters/") {
-		t.Fatal("video-creation's chat file layout no longer accounts for per-production character folders")
-	}
 }
 
 // Two mechanics the whole long-form route depends on, both of which read as

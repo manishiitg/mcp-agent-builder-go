@@ -58,16 +58,17 @@ not as a second separate interview later.
 Write the resolved answers into `production.json` so a revision does not
 re-ask what was already decided.
 
-## Character references: the user chooses before the first image
+## Character references: lock the approved reference model before the first image
 
 When a recurring character, presenter, or product needs a generated reference,
-do not treat the general provider preference as permission to choose its model.
-Before the reference-image call, present at most three live-verified choices
-that can actually condition later video shots on the reference. For each give
-the exact provider/model, why it fits the subject, the relevant controls or
-limits, and current billing evidence. Recommend one, but wait for the user to
-select a named option and approve the reference-pack spend. Record that choice,
-the pack size, retry allowance, and billing evidence alongside the character.
+Video Studio's system policy selects `fal-ai/flux-2-max` for the first approved
+character or background master and `fal-ai/flux-2-max/edit` for controlled
+derivatives. Verify the current Fal schemas and billing before the first
+reference-image call, present the bounded reference-pack cost for approval,
+and record the exact endpoint, pack size, retry allowance, and billing evidence
+alongside the character. Do not offer a model-selection menu or substitute a
+different still-image model unless the user explicitly asks to change the
+policy.
 
 The selected provider/model is the character arc's default: every later shot
 with that subject uses it and the approved reference unless the user explicitly

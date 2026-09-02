@@ -26,7 +26,7 @@ const WorkflowManifestSchemaVersion = 1
 // contract version. Unlike schema_version, this gates agent-run workflow
 // upgrades: Pulse can add version-specific messages and stamp this value only
 // after the workflow has been checked or migrated.
-const WorkflowContractCurrentVersion = "1.0.34"
+const WorkflowContractCurrentVersion = "1.0.35"
 
 const workflowContractInitialVersion = "1.0.0"
 const workflowContractMessageSequenceCodeVersion = "1.0.10"
@@ -53,6 +53,7 @@ const workflowContractReportActivityTabVersion = "1.0.31"
 const workflowContractPulseLifecycleReconciliationVersion = "1.0.32"
 const workflowContractPulseBacklogTriageVersion = "1.0.33"
 const workflowContractPulseActionableBacklogVersion = "1.0.34"
+const workflowContractOrchestratorStepTypeVersion = "1.0.35"
 
 const (
 	DefaultRunRetentionCount = 10
@@ -61,13 +62,26 @@ const (
 
 // WorkflowManifest is the top-level workflow.json structure that lives in each workspace.
 type WorkflowManifest struct {
-	SchemaVersion        int                                         `json:"schema_version"`
-	ID                   string                                      `json:"id"`
-	Version              string                                      `json:"version,omitempty"`
-	Label                string                                      `json:"label"`
-	Capabilities         WorkflowCapabilities                        `json:"capabilities"`
-	ExecutionDefs        WorkflowExecutionDefaults                   `json:"execution_defaults"`
-	Schedules            []WorkflowSchedule                          `json:"schedules"`
+	SchemaVersion int                       `json:"schema_version"`
+	ID            string                    `json:"id"`
+	Version       string                    `json:"version,omitempty"`
+	Label         string                    `json:"label"`
+	Capabilities  WorkflowCapabilities      `json:"capabilities"`
+	ExecutionDefs WorkflowExecutionDefaults `json:"execution_defaults"`
+	Schedules     []WorkflowSchedule        `json:"schedules"`
+	// CreatedBy is the user ID that created this workflow, stamped once at
+	// creation time (handleCreateWorkflowManifest) from the authenticated
+	// request. Scheduled/cron runs have no logged-in user of their own --
+	// this is how they resolve which account's stored secrets
+	// ($SECRET_<NAME>) they should actually see, instead of silently
+	// falling through to the placeholder "default" user, who never has any
+	// secrets stored (nobody configures a workflow's API keys while logged
+	// in as "default"). Confirmed live on the Dominion deployment
+	// 2026-08-31/09-01: real Polygon/Finnhub keys existed under the actual
+	// creating user's account the whole time; scheduled runs simply never
+	// looked there. Empty for any workflow created before this field
+	// existed -- those keep today's "default" fallback until backfilled.
+	CreatedBy            string                                      `json:"created_by,omitempty"`
 	CreatedAt            string                                      `json:"created_at,omitempty"`
 	UpdatedAt            string                                      `json:"updated_at,omitempty"`
 	RunRetentionCount    *int                                        `json:"run_retention_count,omitempty"`

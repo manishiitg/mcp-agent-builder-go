@@ -559,7 +559,7 @@ func TestApplyStepConfigToAgentConfigEnablesWorkspaceIsolation(t *testing.T) {
 // IsolateCodingAgentWorkspace=true so the session runs in os.MkdirTemp instead
 // of CodingAgentWorkingDir. These factories live in two files:
 //   - controller_agent_factory.go (2): regular-step path (applyStepConfigToAgentConfig)
-//     and the todo-task orchestrator (createTodoTaskOrchestratorAgent).
+//     and the todo-task orchestrator (createOrchestratorAgent).
 //   - interactive_workshop_manager.go (5): the workshop background agents — the
 //     `run_in_background` task agent plus the review-plan / review-timing /
 //     review-costs / review-step-code agents —

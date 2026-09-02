@@ -1,16 +1,16 @@
 ---
 name: video-cinematography
-description: Construct the actual generation prompt for an AI video/image shot -- the five-aspect formula (subject, motion, scene, spatial framing, camera), a precise camera-movement and lighting vocabulary, and keeping a character or subject visually consistent across shots. Use after video-storytelling has placed a beat in the narrative arc and video-model-selection has picked a model, and whenever a generated shot needs re-prompting because framing, motion, lighting, or identity drifted from the brief.
+description: Construct the actual MiniMax H3 video prompt -- the five-aspect formula (subject, motion, scene, spatial framing, camera), precise camera vocabulary, and character consistency across shots. Use after video-storytelling has placed a beat and whenever framing, motion, lighting, or identity drifted from the brief.
 ---
 
 # Cinematography and consistency for generated video
 
 A generation model responds to specific technical direction far better than
 a vague creative brief. This skill turns a storyboard beat into that
-direction. It is provider- and model-agnostic -- `video-storytelling` places
-the beat in the narrative arc, `video-model-selection` picks the model,
-`fal-ai`/`google-ai` make the call; this skill decides what you tell the
-model to do once you're ready to write the actual prompt.
+direction. In Video Studio, `video-storytelling` places the beat in the
+narrative arc, `minimax-h3-video` and `video-provider-capabilities` define
+the permitted H3 request, and `fal-ai` makes the call. This skill decides the
+camera and visual direction inside that H3 request.
 
 ## The self-contained-prompt test
 
@@ -47,10 +47,10 @@ Camera           playback speed, then lens effects, then height, then
 
 Shorter prompts leave the model more creative freedom; longer, fully-specified
 prompts give more control. Neither is universally right -- match the prompt's
-density to how much this specific shot needs to be controlled versus
-discovered, and check `video-model-selection`'s dated notes for how much
-prompt length a given model actually rewards (some plateau past ~250 words,
-others are built for 200-400 word structured prompts).
+density to how much this specific H3 shot needs to be controlled versus
+discovered. Use `minimax-h3-video` and the live H3 prompting/schema guidance
+for route-specific constraints rather than selecting a different model to
+accommodate the prompt.
 
 ### Ordering multiple subjects or events
 
@@ -207,10 +207,9 @@ On-screen text, captions, titles, HUD elements, and watermarks are not part
 of a scene's foreground/midground/background depth axis -- list them
 separately with their exact content and placement, never as "overlay in the
 foreground." Exact text, logos, and prices belong in a deterministic
-overlay layer added in `video-editing`, not baked into the generation
-prompt -- models render text unreliably, and some (Google's Veo family
-specifically) may add unrequested subtitles by default for dialogue unless
-told not to.
+overlay layer added in `video-editing`, not baked into the H3 generation
+prompt -- models render text unreliably and exact copy belongs in a
+deterministic layer.
 
 ## Define every recurring character before generating its first shot
 
@@ -232,22 +231,17 @@ subject**, not after an inconsistency is already noticed:
    identity across independent generations -- each generation is evaluated
    cold, as if it had never seen the earlier one. Do not let the
    description drift by paraphrasing it differently per shot.
-2. **A generated character-sheet reference image.** Use `fal-ai` or
-   `google-ai` (whichever the chosen model needs -- see
-   `video-model-selection`) to generate one strong reference image of the
-   character/subject from the spec, saved alongside its spec as
+2. **A generated character-sheet reference image.** Use `fal-ai`, or
+   `google-ai` only for optional still-image work, to generate one strong
+   reference image of the character/subject from the spec, saved alongside its spec as
    `characters/<character-name>.png`. Text descriptions alone drift across
    independent generations even with an identical prompt; a shared image
    reference does not.
 
-Both live in a `characters/` folder, and where that folder sits follows
-`video-creation`'s file-layout rule rather than being a third convention:
-in direct chat it is `work/productions/<slug>/characters/`, namespaced per
-production because one project can hold several; running as a workflow
-stage it is `characters/` inside your own step folder. Keep the spec and
-its reference image side by side under the same character name -- a spec
-whose reference image has to be hunted for is a spec that gets paraphrased
-instead of reused.
+Both live at `work/productions/<slug>/characters/`, namespaced per production
+because one project can hold several. Keep the spec and its reference image
+side by side under the same character name -- a spec whose reference image has
+to be hunted for is a spec that gets paraphrased instead of reused.
 
 Call `show_character` as soon as both exist and **before generating any
 shot that uses them**. Every later shot is conditioned on that reference,
@@ -261,20 +255,12 @@ reference-image conditioning, the most reliable of the techniques below, and
 it only works if the reference was made first and reused deliberately, not
 regenerated per shot.
 
-## Keep the whole character arc on one model and provider
+## Keep the whole character arc on H3
 
-Once a model is chosen for a character (based on which one actually supports
-reference-image conditioning well -- see `video-model-selection`), commit to
-that same model and provider for every shot of that character in the
-production. This is a default to follow, not a preference: even with an
-identical reference image, different models and providers interpret and
-render a reference differently, so switching mid-arc routinely breaks
-consistency in a way that switching shots *within* one model, sharing its
-own reference, generally does not. Treat a mid-arc model or provider switch
-as a last resort requiring the user's explicit sign-off, not a routine
-production decision -- and if it happens, re-verify consistency against the
-reference image explicitly rather than assuming the new model's output
-matches by prompt alone.
+Generate every video shot of a recurring subject through MiniMax H3's
+Reference-to-Video route on fal.ai. Use the same approved character image and
+canonical spec on every request, then add the accepted predecessor as Video 1
+for normal continuations. Do not switch video providers or models mid-arc.
 
 ## Other consistency techniques
 
@@ -287,31 +273,18 @@ default above:
   reference image, never use it as a substitute for one. Lock a seed once a
   shot's composition reads well, and reuse it for controlled variations of
   that same shot.
-- **Shot-to-shot anchoring.** For an image-to-video model, extracting a
-  frame from an approved shot and using it as the reference/first-frame
-  input for the next shot in the same sequence can carry appearance
-  continuity forward through a scene, on top of the character-sheet
-  reference. When chaining independently-generated clips this way, write
-  the two adjoining prompts so the last described moment of clip N matches
-  the first described moment of clip N+1 -- overlapping the description at
-  the seam, not just the reference image, reduces visible discontinuity at
-  the stitch point (see `video-editing`'s stitching guidance).
-- **Multi-shot generation in one call.** Some models (check
-  `video-model-selection`'s dated notes) accept an explicit shot list
-  inside a single generation call (`Shot 1 (...)`, `Shot 2 (...)`, etc.)
-  and hold identity more reliably across shots generated together than
-  across separate calls, since the identity anchor only has to be
-  interpreted once per call rather than re-cold-started per shot. Prefer
-  this for a tight sequence of the same subject when the model supports it.
+- **Shot-to-shot anchoring.** For an H3 continuation, add the accepted
+  predecessor as Video 1 alongside the approved character image. Write the
+  two adjoining prompts so the final described moment of clip N matches the
+  first described moment of clip N+1. Use an extracted stable boundary frame
+  to inspect a failed direct cut and correct the Reference-to-Video successor
+  prompt; do not use it to generate a third bridge clip.
 
 **When none of the above holds well enough**, treat that as a real
-constraint to report, not a defect to hide: tell the user the chosen model
-cannot reliably hold the character/subject consistent across this many
-shots, and offer the tradeoff (fewer shots of that subject, or accepting
-visible variation). Do not offer a model or provider switch as a casual
-equal option here -- per the rule above, that trades a known consistency
-problem for a second one and needs the user's explicit sign-off, not a
-silent default.
+constraint to report, not a defect to hide: tell the user H3 cannot reliably
+hold the character/subject consistent across this many shots, and offer the
+tradeoff (fewer shots of that subject, or accepting visible variation). Do not
+offer a model or provider switch as a casual equal option.
 
 ## Prompt iteration strategy
 
@@ -357,11 +330,10 @@ under-specified prompt rather than an unreliable model.
 
 ## Where this fits
 
-- Use `video-creation` to plan the shot list and own the overall brief.
+- Use `longform-cinematic-video` to plan the shot list and own the overall brief.
 - Use `video-storytelling` to place each beat in the narrative arc before
   writing its shot.
-- Use `video-model-selection` to choose a model per shot.
 - Use this skill to turn the beat into the actual generation prompt --
-  camera, lighting, consistency -- before calling `fal-ai` or `google-ai`.
+  camera, lighting, consistency -- before calling H3 through `fal-ai`.
 - Use `video-editing` to assemble the results, `video-quality` before
   presenting any version as complete.

@@ -405,6 +405,43 @@ func TestHandleNotifyUserBuildsChannelNeutralOrgDashboardSummary(t *testing.T) {
 	}
 }
 
+func TestHandleNotifyUserPreservesWorkspacePathAcrossSessionRegistry(t *testing.T) {
+	ch := make(chan *services.NotificationDestination, 1)
+	connector := &testUserNotificationConnector{name: "org_dashboard_session_contract", ch: ch}
+	manager := services.GetNotificationManager()
+	manager.RegisterConnector(connector)
+	t.Cleanup(func() { manager.UnregisterConnector(connector.Name()) })
+
+	const sessionID = "org-dashboard-session-workspace-path"
+	RegisterSessionNotificationDestination(sessionID, &services.NotificationDestination{
+		WorkspacePath: "Workflow/demo",
+	})
+	t.Cleanup(func() { DeleteSessionNotificationDestination(sessionID) })
+
+	// Custom tools execute through a separate MCP request context. Only the
+	// trusted session ID crosses that boundary, so notify_user must recover the
+	// workflow path from the session destination registry.
+	ctx := context.WithValue(context.Background(), common.ChatSessionIDKey, sessionID)
+	_, err := handleNotifyUser(ctx, map[string]interface{}{
+		"message_for_user":  "Run completed.",
+		"notification_kind": "run_summary",
+		"summary_title":     "Daily run",
+		"summary_status":    "success",
+	})
+	if err != nil {
+		t.Fatalf("handleNotifyUser returned error: %v", err)
+	}
+
+	select {
+	case dest := <-ch:
+		if dest == nil || dest.WorkspacePath != "Workflow/demo" {
+			t.Fatalf("session notification workspace path = %#v, want Workflow/demo", dest)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected Org Dashboard notification contract")
+	}
+}
+
 func TestHandleNotifyUserSendsWorkflowSlackWebhook(t *testing.T) {
 	original := sendRichSlackIncomingWebhook
 	t.Cleanup(func() { sendRichSlackIncomingWebhook = original })

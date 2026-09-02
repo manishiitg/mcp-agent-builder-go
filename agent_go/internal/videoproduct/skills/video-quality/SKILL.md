@@ -5,7 +5,11 @@ description: Validate a candidate video technically, visually, and editorially b
 
 # Validate video quality
 
-Do not call a video complete because rendering succeeded. Validate the exact output file the user will receive.
+This is the **final-delivery** gate, not a per-clip preview gate. Do not call a
+video complete because rendering succeeded; validate the exact output file the
+user will receive. For an individual H3 preview, use the lightweight receipt in
+`fal-ai`/`minimax-h3-video` instead: download verification, `ffprobe`, and
+opening/ending-frame inspection.
 
 For a candidate assembled from `fal-ai`/`google-ai` clips, this skill is the baseline, not the whole review -- add `generated-video-quality`'s checks (identity drift, generation artifacts, temporal discontinuity at stitch points, motion plausibility, lip-sync, prompt adherence) to the same pass. Generated footage fails in ways a technical decode check and a general visual-coherence pass both miss, because nothing about them fails to decode and nothing about them is a black frame.
 

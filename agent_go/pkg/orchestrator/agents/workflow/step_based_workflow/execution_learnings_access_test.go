@@ -13,7 +13,7 @@ func TestResolveExecutionLearningsAccessMatchesPromptGate(t *testing.T) {
 	}{
 		{name: "regular", step: &RegularPlanStep{}, want: LearningsAccessReadWrite},
 		{name: "message sequence", step: &MessageSequencePlanStep{}, want: LearningsAccessReadWrite},
-		{name: "todo orchestrator", step: &TodoTaskPlanStep{}, want: LearningsAccessReadWrite},
+		{name: "todo orchestrator", step: &OrchestratorPlanStep{}, want: LearningsAccessReadWrite},
 		{name: "evaluation", step: &EvaluationStep{}, evalMode: true, want: LearningsAccessNone},
 		{name: "deterministic routing", step: &RoutingPlanStep{}, want: LearningsAccessNone},
 	}

@@ -4,8 +4,11 @@ Description=Video Studio workspace API (user service)
 [Service]
 EnvironmentFile=%h/video-studio/.env
 Environment=HOME=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=%h/video-studio/current
 ExecStart=%h/video-studio/current/bin/video-studio-workspace server --port 8080 --docs-dir /data/video-studio/docs
+StandardOutput=append:%h/video-studio/logs/workspace.log
+StandardError=append:%h/video-studio/logs/workspace.log
 Restart=always
 RestartSec=5
 

@@ -112,7 +112,7 @@ func collectKnownWorkflowStepIDs(steps []PlanStepInterface, known map[string]str
 		if id := strings.TrimSpace(step.GetID()); id != "" {
 			known[id] = struct{}{}
 		}
-		if todo, ok := step.(*TodoTaskPlanStep); ok {
+		if todo, ok := step.(*OrchestratorPlanStep); ok {
 			for _, route := range todo.PredefinedRoutes {
 				if route.SubAgentStep == nil {
 					continue
@@ -1515,7 +1515,7 @@ func (b *workflowProgressBridge) HandleEvent(ctx context.Context, event *baseeve
 			// the same conversation. Treating that turn boundary as step completion
 			// sends a false AUTO-NOTIFICATION to the workshop chat and closes the
 			// parent execution while its child is still live. The controller emits a
-			// TodoTaskStepCompleted event only after all owned children have settled
+			// OrchestratorStepCompleted event only after all owned children have settled
 			// and their results have been reconciled; that is the success boundary.
 			if agentType == "todo_task_orchestrator" && endEvent.Success {
 				break
@@ -1587,8 +1587,8 @@ func (b *workflowProgressBridge) HandleEvent(ctx context.Context, event *baseeve
 				}
 			}
 		}
-	case orchestrator_events.TodoTaskStepCompleted:
-		if completedEvent, ok := event.Data.(*TodoTaskStepCompletedEvent); ok {
+	case orchestrator_events.OrchestratorStepCompleted:
+		if completedEvent, ok := event.Data.(*OrchestratorStepCompletedEvent); ok {
 			stepName := strings.TrimSpace(completedEvent.StepTitle)
 			if stepName == "" {
 				stepName = strings.TrimSpace(completedEvent.StepID)

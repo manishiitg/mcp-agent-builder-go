@@ -604,13 +604,13 @@ func TestWorkflowMessageSequenceForeach(t *testing.T) {
 	t.Logf("✅ foreach message_sequence: %d human turns, %d ai turns, token→turn: %v", len(humans), len(ais), tokenTurn)
 }
 
-// TestWorkflowTodoTaskForeachMessages proves a todo_task step's scripted
+// TestWorkflowOrchestratorForeachMessages proves a todo_task step's scripted
 // `messages` with a `foreach` entry feeds ONE orchestrator turn per db row.
 // Assertion reads the todo_task execution logs (which capture each turn's
 // conversation_history) and checks every row's token appears.
 //
 // Gated like the other e2e tests; no-ops otherwise.
-func TestWorkflowTodoTaskForeachMessages(t *testing.T) {
+func TestWorkflowOrchestratorForeachMessages(t *testing.T) {
 	wo, cleanup, ok := buildEdgeCaseOrchestrator(t)
 	if !ok {
 		return
@@ -683,10 +683,10 @@ func TestWorkflowTodoTaskForeachMessages(t *testing.T) {
 	t.Logf("✅ todo_task foreach messages: %d log file(s) scanned, all %d row tokens present", len(matches), len(rows))
 }
 
-// readTodoTaskLogs concatenates every todo_task execution log for a step (each
+// readOrchestratorLogs concatenates every todo_task execution log for a step (each
 // turn — including scripted messages/foreach rows — is logged with its
 // conversation_history).
-func readTodoTaskLogs(t *testing.T, workspaceDisk, stepID string) string {
+func readOrchestratorLogs(t *testing.T, workspaceDisk, stepID string) string {
 	t.Helper()
 	pat := filepath.Join(workspaceDisk, "runs", "*", "*", "logs", stepID, "execution", "execution-attempt-*-iteration-*.json")
 	matches, _ := filepath.Glob(pat)
@@ -705,10 +705,10 @@ func readTodoTaskLogs(t *testing.T, workspaceDisk, stepID string) string {
 	return b.String()
 }
 
-// TestWorkflowTodoTaskScriptedMessages covers the plain (type=message) scripted
+// TestWorkflowOrchestratorScriptedMessages covers the plain (type=message) scripted
 // `messages` happy path: after the orchestrator's first turn, each scripted
 // message is fed into the SAME conversation, in order. Gated like the others.
-func TestWorkflowTodoTaskScriptedMessages(t *testing.T) {
+func TestWorkflowOrchestratorScriptedMessages(t *testing.T) {
 	wo, cleanup, ok := buildEdgeCaseOrchestrator(t)
 	if !ok {
 		return
@@ -742,7 +742,7 @@ func TestWorkflowTodoTaskScriptedMessages(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	logs := readTodoTaskLogs(t, wo.workspaceDisk, stepID)
+	logs := readOrchestratorLogs(t, wo.workspaceDisk, stepID)
 	for _, tok := range []string{"SCRIPTED_ONE", "SCRIPTED_TWO"} {
 		if !strings.Contains(logs, tok) {
 			t.Errorf("token %q not found in todo_task logs — scripted message turn did not run/reply", tok)
@@ -751,12 +751,12 @@ func TestWorkflowTodoTaskScriptedMessages(t *testing.T) {
 	t.Logf("✅ todo_task scripted messages: both scripted-turn tokens present")
 }
 
-// TestWorkflowTodoTaskPrevalidationGate covers the prevalidation-gate happy
+// TestWorkflowOrchestratorPrevalidationGate covers the prevalidation-gate happy
 // path on todo_task `messages`: a scripted turn runs, then a prevalidation gate
 // passes (the required artifact is present) and the step completes. The artifact
 // is pre-seeded so "gate passes → sequence continues" is deterministic (the
 // failure/corrective-retry path is a separate concern).
-func TestWorkflowTodoTaskPrevalidationGate(t *testing.T) {
+func TestWorkflowOrchestratorPrevalidationGate(t *testing.T) {
 	wo, cleanup, ok := buildEdgeCaseOrchestrator(t)
 	if !ok {
 		return
@@ -804,7 +804,7 @@ func TestWorkflowTodoTaskPrevalidationGate(t *testing.T) {
 		t.Fatalf("Execute returned error (gate should pass with pre-seeded gate.txt): %v", err)
 	}
 
-	logs := readTodoTaskLogs(t, wo.workspaceDisk, stepID)
+	logs := readOrchestratorLogs(t, wo.workspaceDisk, stepID)
 	if !strings.Contains(logs, "GATE_OK") {
 		t.Errorf("GATE_OK not in todo_task logs — the scripted turn before the gate did not run")
 	}

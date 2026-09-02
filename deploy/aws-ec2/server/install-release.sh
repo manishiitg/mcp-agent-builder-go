@@ -74,6 +74,9 @@ cp "$RELEASE_DIR/server/video-studio-agent.service" /etc/systemd/system/video-st
 cp "$RELEASE_DIR/server/video-studio-workspace.service" /etc/systemd/system/video-studio-workspace.service
 cp "$RELEASE_DIR/server/video-studio-gateway.service" /etc/systemd/system/video-studio-gateway.service
 
+install -m 0644 "$RELEASE_DIR/server/video-studio-userns.apparmor" /etc/apparmor.d/video-studio-userns
+apparmor_parser -r /etc/apparmor.d/video-studio-userns
+
 docker build -t video-studio-frontend:latest -f "$RELEASE_DIR/server/Dockerfile.frontend" "$RELEASE_DIR"
 cd /opt/video-studio
 docker compose up -d --force-recreate

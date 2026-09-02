@@ -127,6 +127,7 @@ func (api *StreamingAPI) handleCreateWorkflowManifest(w http.ResponseWriter, r *
 
 	// Build manifest
 	manifest := NewWorkflowManifest(req.Label)
+	manifest.CreatedBy = GetUserIDFromContext(r.Context())
 	if req.Capabilities != nil {
 		manifest.Capabilities = *req.Capabilities
 	}

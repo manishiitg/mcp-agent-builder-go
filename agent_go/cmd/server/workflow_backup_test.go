@@ -1,6 +1,18 @@
 package server
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
+
+func TestWorkflowBackupHashIncludesManagedDatabaseSnapshot(t *testing.T) {
+	if !slices.Contains(backupHashFiles, "backup/database/db.sqlite.sha256") {
+		t.Fatal("managed database checksum is absent from the backup freshness hash")
+	}
+	if slices.Contains(backupHashFiles, "db/db.sqlite") {
+		t.Fatal("backup freshness hash must never read protected live db/db.sqlite")
+	}
+}
 
 func TestWorkflowBackupEffectiveState(t *testing.T) {
 	sourceHash := "current-hash"

@@ -84,7 +84,7 @@ Each entry in `routes[]` has:
 
 Branch routes do **not** define inline sub-agents. Every `next_step_id`
 must reference a step that already exists in the plan. Add those
-downstream steps separately (as regular, message_sequence, todo_task, or
+downstream steps separately (as regular, message_sequence, orchestrator, or
 human_input steps), then point the routes at their IDs.
 
 ### Convergence — options MUST rejoin via `next_step_id`
@@ -104,7 +104,7 @@ each option a `next_step_id` pointing to the shared downstream step, or
   self-contained sub-workflow fork; use it when the alternatives lead to
   substantially different continuations of the plan. Branch is the small
   in-flow decision.
-- **Branch vs. todo_task**: todo_task can run multiple sub-tasks. Branch
+- **Branch vs. orchestrator**: orchestrator can run multiple sub-tasks. Branch
   runs exactly one alternative.
 - **Branch vs. message_sequence**: message_sequence is one ordered
   conversation with no branching.

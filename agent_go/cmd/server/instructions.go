@@ -862,7 +862,7 @@ func buildSingleWorkflowContext(client *skills.WorkspaceAPIClient, wsPath string
 **Key Log Files Per Step:**
 - All steps: `+"`logs/{step-id}/validation-{N}.json`"+` (validation attempts), `+"`logs/{step-id}/execution/execution-attempt-{A}-iteration-{I}.json`"+` (execution result)
 - Full LLM conversation: `+"`logs/{step-id}/execution/execution-attempt-{A}-iteration-{I}-conversation.json`"+`
-- Orchestration/TodoTask: `+"`logs/{step-id}/orchestration-execution.json`"+` (JSONL, one line per iteration)
+- Orchestration/Orchestrator: `+"`logs/{step-id}/orchestration-execution.json`"+` (JSONL, one line per iteration)
 
 **How to Investigate:**
 - Read plan: `+"`read_file`"+` on `+"`{path}/planning/plan.json`"+`

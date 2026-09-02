@@ -1,20 +1,29 @@
-## todo_task — Orchestrator / Sub-Workflow / Pipeline Step
+## orchestrator — Orchestrator / Sub-Workflow / Pipeline Step
 
-`todo_task` is the multi-task orchestration step type. Users call it
+`orchestrator` is the multi-task orchestration step type. Users call it
 "orchestrator," "sub-workflow," or "pipeline," and the things inside it
-"sub-agents." The internal type name is `todo_task`. Load this skill when
-designing a new todo_task step, adding/restructuring routes, deciding
+"sub-agents." The plan type is `orchestrator`; `todo_task` is the legacy
+alias older plans still carry, which the runtime keeps reading (contract
+v1.0.35 rewrites it via migrate_orchestrator_step_type). Load this skill when
+designing a new orchestrator step, adding/restructuring routes, deciding
 between inline `sub_agent_step` and shared `orphan_step_ref`, or
 debugging route behavior.
 
-For the broader plan-design framing (when to pick todo_task vs routing
+At runtime an orchestrator **is a `message_sequence` that owns routes**: it
+runs on the same executor (one conversation, ordered items, in-place
+prevalidation repairs, a final validation gate, a closing reflection turn),
+plus the sub-agent tools, an async child lifecycle, and a narrower folder
+guard. Everything in the `message-sequence` reference about items, foreach,
+prevalidation, and write access applies here unchanged.
+
+For the broader plan-design framing (when to pick orchestrator vs routing
 vs message_sequence vs regular), the `plan-design` skill is the authoritative
 parent reference. This file explains how to author an already-justified
 orchestrator; it does not relax that parent's eligibility rule.
 
-## When to use todo_task
+## When to use orchestrator
 
-A todo_task step is right only when its parent makes a **real runtime
+An orchestrator step is right only when its parent makes a **real runtime
 orchestration decision that the static plan cannot directly express**, such as:
 
 - The set of tasks is dynamic — discovered at runtime — and each must be
@@ -23,11 +32,11 @@ orchestration decision that the static plan cannot directly express**, such as:
 - The parent coordinates material runtime parallelism or adaptive retries
 - An approval boundary or interim synthesis changes subsequent delegation
 
-**A fixed child set and order does not justify `todo_task`.** Different tools,
+**A fixed child set and order does not justify an `orchestrator` step.** Different tools,
 separate learnings, progress visibility, and easier debugging are supporting
 properties after this eligibility gate, not sufficient reasons by themselves.
 
-**Don't use todo_task when:**
+**Don't use orchestrator when:**
 
 - The flow is a single linear conversation — use `message_sequence`
 - Several known actions share one objective, context, and output/retry contract — keep them in one large `message_sequence`
@@ -41,12 +50,12 @@ properties after this eligibility gate, not sufficient reasons by themselves.
 
 ## Anatomy
 
-A todo_task plan step has two big parts:
+An orchestrator plan step has two big parts:
 
 ```jsonc
 {
   "id": "extract-bank-statements",
-  "type": "todo_task",
+  "type": "orchestrator",
   "description": "...high-level orchestration intent...",
   "todo_task_step": {
     // The orchestrator's own LLM-driven step — picks routes, tracks
@@ -60,7 +69,7 @@ A todo_task plan step has two big parts:
       // EITHER an inline sub-agent step:
       "sub_agent_step": {
         "id": "process-account-inline",
-        "type": "regular",  // or message_sequence, or todo_task (nested, 1 level only)
+        "type": "regular",  // or message_sequence, or orchestrator (nested, 1 level only)
         "description": "...what this sub-agent does..."
       }
       // OR a reference to a plan-local orphan step (see below):
@@ -91,12 +100,12 @@ A route's `sub_agent_step` can be:
   invocations of this route.
 - **`regular`** — an explicitly scripted deterministic route that needs no same-context
   proof/repair follow-up, or deterministic scripted route work.
-- **`todo_task`** (nested) — one nested orchestration layer for a route
+- **`orchestrator`** (nested) — one nested orchestration layer for a route
   whose work itself decomposes into multiple sub-tasks.
 
-**Nested todo_task limit**: only ONE nested layer is allowed.
-top-level → nested-todo_task is valid; nested-todo_task containing
-another nested todo_task is rejected. Break deeper hierarchies into
+**Nested orchestrator limit**: only ONE nested layer is allowed.
+top-level → nested-orchestrator is valid; nested-orchestrator containing
+another nested orchestrator is rejected. Break deeper hierarchies into
 sibling orphan steps or message_sequence specialists.
 
 ## Routes vs generic agent vs self-execution
@@ -130,41 +139,38 @@ than the isolation saves.
 ## Variables and group_name
 
 `run_full_workflow(group_name, ...)` and `execute_step(step_id, group_name, ...)`
-both require explicit `group_name` because todo_task orchestrators
+both require explicit `group_name` because orchestrator orchestrators
 typically iterate over the variables in that group. The orchestrator
 sees `$VAR_GROUP_NAME` and any per-group variables as env. When you
-add a todo_task step, write the description so it explicitly reads
+add an orchestrator step, write the description so it explicitly reads
 the group's variables / inputs rather than guessing.
 
-## Scripted messages (long, multi-phase tasks)
+## Messages (long, multi-phase tasks)
 
-A todo_task step can carry an optional ordered `messages` list. After the
-orchestrator's first turn, each entry is fed into the **same orchestrator
-conversation** in order — so it keeps going through the phases with full memory
-of its prior turns and every sub-agent result. Use this when one orchestrator
-needs to work a long, multi-phase task as a continuous conversation ("do phase
-1" → "now phase 2 using what you found" → "now reconcile and write the report").
+An orchestrator step can carry an optional ordered `messages` list. These are
+ordinary message-sequence items: after the opening turn (the step description),
+each entry is fed into the **same orchestrator conversation** in order, so the
+orchestrator works through the phases with full memory of prior turns and every
+sub-agent result ("do phase 1" → "now phase 2 using what you found" → "now
+reconcile and write the report").
 
-- Three entry types: `message` (an instruction for one orchestrator turn),
-  `prevalidation` (a hard gate between turns — on failure the orchestrator gets
-  the failed checks as a corrective turn and retries up to `max_corrections`),
-  and `foreach` (data-driven — see below).
-- **`foreach`** iterates `db/db.sqlite` table rows and feeds **one orchestrator
-  turn per row** (row bound to `.` in a Go template via `message`; `source_sql` =
-  a read-only query e.g. `SELECT id, task FROM tasks WHERE status='pending'`,
-  optional `max_iterations`). The query runs against `db/db.sqlite` and each
-  result row (an object keyed by column) is rendered through the `message`
-  template. The loop is deterministic (in code, not the LLM), so the orchestrator
-  reliably works through **every** row — delegating to sub-agents per row as
-  needed. This is the producer/consumer pattern: one step fills a table, this one
-  drains it.
-- It all runs in **one execution** — there is **no persistence and no re-entry**.
-  For a specialist that resumes across the orchestrator's *own repeated calls*,
-  or anything that must "rerun later", use a `message_sequence` **route** instead
-  (see the `message-sequence` reference doc) — that is the only place persistence
-  lives.
-- Retries of the step (on final pre-validation failure) continue the existing
-  conversation with feedback; they do **not** replay the scripted messages.
+- Item types: `user_message` (alias `message`), `prevalidation` (a hard gate
+  between turns — on failure the orchestrator receives the failed checks as a
+  repair turn in the same conversation and re-runs the gate, up to three
+  repairs), and `foreach` (one orchestrator turn per `db/db.sqlite` row from a
+  read-only `source_sql`, row bound to `.` in the `message` template — the
+  deterministic producer/consumer loop; delegate per row as needed).
+- Code and file items are rejected at plan validation and again at runtime:
+  the orchestrator delegates that work to a sub-agent route.
+- After every item the runtime waits for the children that item launched and
+  feeds one completion batch back before the next item starts. A `foreach`
+  that launches a child per row therefore blocks per row, not per step.
+- The step-level `validation_schema` runs as a synthetic final gate after the
+  last item, with the same in-place repair loop. There is no restart-the-step
+  retry: repairs keep the conversation and its sub-agent results.
+- It all runs in **one execution** — no persistence and no re-entry. For a
+  specialist that resumes across the orchestrator's *own repeated calls*, use a
+  `message_sequence` **route** instead (see the `message-sequence` reference).
 
 ## Anti-patterns
 
@@ -174,10 +180,10 @@ needs to work a long, multi-phase task as a continuous conversation ("do phase
   totals, then write to db"), those sub-tasks should be routes with
   their own sub-agent steps. The orchestrator's description should be
   about *coordination*, not *execution*.
-- **One-route orchestrators**: a todo_task with only one route and no
+- **One-route orchestrators**: an orchestrator with only one route and no
   branching is over-engineered. Make it a `regular` step instead — the
   orchestrator shell adds no value.
-- **Routing inside todo_task description**: if the orchestrator picks
+- **Routing inside orchestrator description**: if the orchestrator picks
   between mutually exclusive paths based on a single decision, use a
   `routing` step at that point, not narrative branching in the
   description.
@@ -185,41 +191,16 @@ needs to work a long, multi-phase task as a continuous conversation ("do phase
   multiple orchestrators only when its `shared_with.orchestrator_ids`
   explicitly lists each one. Don't assume reuse is automatic.
 
-## Scripted-mode todo_task (fast-path orchestrator)
-
-When the orchestrator's routing decisions are **stable and
-deterministic** — the set of route calls is known in advance and only
-branches on success/failure — you can author a
-`learnings/{step-id}/main.py` and mark the step
-`declared_execution_mode="scripted"` when the user explicitly asks
-(don't auto-promote on your own). 10+ scenario-covering successful runs
-proving the route behavior is stable are the bar for freezing it
-(`lock_code`), not for creating the scripted route the user requested.
-
-At runtime the script runs first; any failure falls back to the normal
-LLM orchestrator with a fresh start. The orchestrator scripted path is
-**read-only at runtime** — the builder writes main.py once at design
-time, the runtime only runs it. There is no fix loop and no save-back.
-Script failures surface so you can regenerate `main.py` manually.
-
-This is an optimization for an already-justified orchestrator whose delegation
-later stabilized. It is not permission to create a `todo_task` merely because a
-fixed child sequence can be scripted.
-
-For the full scripted-orchestrator authoring rules, call
-`read_skill(skills=[{"name":"builder-reference","path":"references/optimize-playbook.md"}])` and read the
-"Orchestrator scripted mode" section.
-
 ## Tools
 
-- `add_todo_task_step(step_id, description, todo_task_step, ...)` — add
-  a new todo_task to the plan.
-- `update_todo_task_step(step_id, ...)` — update orchestrator metadata.
-- `add_todo_task_route(step_id, route_id, condition, sub_agent_step | orphan_step_ref)` — add a route.
-- `update_todo_task_route(step_id, route_id, ...)` — update a route.
-- `delete_todo_task_route(step_id, route_id)` — remove a route.
+- `add_orchestrator_step(step_id, description, todo_task_step, ...)` — add
+  a new orchestrator to the plan.
+- `update_orchestrator_step(step_id, ...)` — update orchestrator metadata.
+- `add_orchestrator_route(step_id, route_id, condition, sub_agent_step | orphan_step_ref)` — add a route.
+- `update_orchestrator_route(step_id, route_id, ...)` — update a route.
+- `delete_orchestrator_route(step_id, route_id)` — remove a route.
 
-When inspecting a todo_task step, prefer
+When inspecting an orchestrator step, prefer
 `jq '.steps[] | select(.id == "<step-id>") | {type, todo_task_step, predefined_routes}' planning/plan.json`
 over `cat planning/plan.json | less`.
 
@@ -234,7 +215,7 @@ over `cat planning/plan.json | less`.
 3. For each route, decide: inline `sub_agent_step` (specific, not
    reusable) or `orphan_step_ref` (shared, reusable).
 4. If a route's work is multi-step + dynamic, consider making it a
-   nested `todo_task` — but only one nested layer.
+   nested `orchestrator` — but only one nested layer.
 5. **Validation** lives on the orchestrator's `todo_task_step` (whether
    the overall set of tasks completed successfully) and on each
    sub-agent step (whether that task's specific output is valid).

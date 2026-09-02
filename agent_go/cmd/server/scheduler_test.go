@@ -197,6 +197,66 @@ func TestScheduleStateLockKeyFromRuntimeKey(t *testing.T) {
 	}
 }
 
+// TestBuildScheduleContextThreadsOwnerUserID is the regression test for a
+// real production incident on the Dominion deployment 2026-08-31/09-01:
+// scheduled/cron runs always passed an empty user ID to startSessionInternal,
+// which falls through to the "default" placeholder user for secret lookup.
+// Nobody configures a workflow's API keys while logged in as "default", so
+// every scheduled run's own secrets were silently empty even though the
+// same secrets worked fine in an interactive chat session as the real
+// owning user. Confirms buildScheduleContext (the single place a
+// WorkflowManifest becomes a ScheduleContext before either
+// startSessionInternal call site) actually carries CreatedBy forward.
+func TestBuildScheduleContextThreadsOwnerUserID(t *testing.T) {
+	manifest := &WorkflowManifest{ID: "demo", CreatedBy: "ac513919db5b67ed95b2263679e51052"}
+	sctx := buildScheduleContext("Workflow/demo", manifest, WorkflowSchedule{ID: "daily"})
+	if sctx.OwnerUserID != "ac513919db5b67ed95b2263679e51052" {
+		t.Fatalf("OwnerUserID = %q, want the manifest's CreatedBy", sctx.OwnerUserID)
+	}
+
+	// A workflow created before CreatedBy existed must not regress into an
+	// error -- it keeps today's already-broken "default" fallback via
+	// startSessionInternal's own empty-string handling, not a new failure.
+	legacy := buildScheduleContext("Workflow/demo", &WorkflowManifest{ID: "demo"}, WorkflowSchedule{ID: "daily"})
+	if legacy.OwnerUserID != "" {
+		t.Fatalf("OwnerUserID = %q, want empty for a manifest with no CreatedBy", legacy.OwnerUserID)
+	}
+}
+
+// TestHandleCreateWorkflowManifestStampsCreatedBy proves the other half of
+// the same fix: a newly created workflow actually records who created it,
+// using the authenticated request's own user ID -- not a hardcoded or
+// inferred value -- so buildScheduleContext has something real to thread
+// through later.
+func TestHandleCreateWorkflowManifestStampsCreatedBy(t *testing.T) {
+	workspace := &mockWorkspaceAPI{files: map[string]string{}}
+	wsServer := httptest.NewServer(workspace)
+	defer wsServer.Close()
+	t.Setenv("WORKSPACE_API_URL", wsServer.URL)
+
+	const workspacePath = "Workflow/created-by-test"
+	body := `{"label":"CreatedBy Test","workspace_path":"` + workspacePath + `"}`
+	req := httptest.NewRequest("POST", "/api/workflows/manifest", strings.NewReader(body))
+	claims := &UserClaims{UserID: "user-abc-123", Username: "tester"}
+	req = req.WithContext(context.WithValue(req.Context(), UserContextKey, claims))
+	w := httptest.NewRecorder()
+
+	api := &StreamingAPI{}
+	api.handleCreateWorkflowManifest(w, req)
+
+	if w.Code != 201 {
+		t.Fatalf("handleCreateWorkflowManifest status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	saved, exists, err := ReadWorkflowManifest(context.Background(), workspacePath)
+	if err != nil || !exists {
+		t.Fatalf("ReadWorkflowManifest: exists=%v err=%v", exists, err)
+	}
+	if saved.CreatedBy != "user-abc-123" {
+		t.Fatalf("saved manifest CreatedBy = %q, want the authenticated request's user ID", saved.CreatedBy)
+	}
+}
+
 func TestPulseAndWorkflowScheduleUseSeparateDurableLanes(t *testing.T) {
 	store, err := schedulerstate.Open(filepath.Join(t.TempDir(), "schedule-state.sqlite"))
 	if err != nil {
@@ -1960,10 +2020,42 @@ func TestPulseFinalBackupRunsOnlyInParentTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read finalizer contract: %v", err)
 	}
-	for _, required := range []string{"directly in this parent", "never through a reviewer/sub-agent", "zero-config local-git default"} {
+	for _, required := range []string{"directly in this parent", "never through a reviewer/sub-agent", "zero-config local-git default", "backup/database/db.sqlite", "Publish is independent of Backup"} {
 		if !strings.Contains(string(raw), required) {
 			t.Fatalf("finalizer contract missing parent-only backup guard %q", required)
 		}
+	}
+	if strings.Contains(string(raw), "publish unbacked changes after backup failure") {
+		t.Fatalf("finalizer still couples publish eligibility to backup success")
+	}
+}
+
+func TestWorkflowBackupRequiresDatabaseSnapshotOnlyForDueTriggerAndCoverage(t *testing.T) {
+	config := &WorkflowBackupConfig{
+		Enabled:  true,
+		Triggers: WorkflowBackupTriggers{AfterScheduledRun: true},
+		Destinations: []WorkflowBackupDestination{{
+			ID: "config-repo", Covers: []string{"workflow", "db-sqlite"},
+		}},
+	}
+	if !workflowBackupRequiresDatabaseSnapshot(config, "cron") {
+		t.Fatal("scheduled db-sqlite backup did not require a managed snapshot")
+	}
+	if workflowBackupRequiresDatabaseSnapshot(config, "manual") {
+		t.Fatal("manual trigger incorrectly used after_scheduled_run")
+	}
+	config.Triggers.AfterManualRun = true
+	if !workflowBackupRequiresDatabaseSnapshot(config, "manual") {
+		t.Fatal("manual db-sqlite backup did not require a managed snapshot")
+	}
+	config.Destinations[0].Covers = []string{"workflow"}
+	if workflowBackupRequiresDatabaseSnapshot(config, "cron") {
+		t.Fatal("backup without db-sqlite coverage requested a database snapshot")
+	}
+	config.Enabled = false
+	config.Destinations[0].Covers = []string{"db-sqlite"}
+	if workflowBackupRequiresDatabaseSnapshot(config, "cron") {
+		t.Fatal("disabled backup requested a database snapshot")
 	}
 }
 
@@ -2216,6 +2308,7 @@ func TestLightweightFinalizeStepNeverRunsGateOrPublishesFindings(t *testing.T) {
 		"publish it normally",
 		"is fresh this run regardless of whether Pulse reviewed anything",
 		"The \"pulse\" target specifically has nothing new this pass",
+		"Never suppress a valid report publish merely because backup was partial or failed",
 		"do not include a Pulse findings/fixes section",
 	} {
 		if !strings.Contains(query, want) {

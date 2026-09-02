@@ -19,7 +19,7 @@ func TestHandleCallSubAgentReturnsTypedFailedEnvelope(t *testing.T) {
 
 	result, err := handleCallSubAgent(ctx, map[string]interface{}{
 		"route_id":       "review",
-		"todo_id":        "todo-1",
+		"task_id":        "todo-1",
 		"instructions":   "review the output",
 		"preferred_tier": float64(1),
 	})
@@ -43,7 +43,7 @@ func TestHandleCallGenericAgentReturnsTypedFailedEnvelope(t *testing.T) {
 	))
 
 	result, err := handleCallGenericAgent(ctx, map[string]interface{}{
-		"todo_id":        "todo-1",
+		"task_id":        "todo-1",
 		"instructions":   "inspect",
 		"preferred_tier": float64(1),
 	})
@@ -72,7 +72,7 @@ func TestHandleCallGenericAgentPropagatesMessageSequence(t *testing.T) {
 	))
 
 	_, err := handleCallGenericAgent(ctx, map[string]interface{}{
-		"todo_id":        "review",
+		"task_id":        "review",
 		"instructions":   "collect shared evidence",
 		"preferred_tier": float64(1),
 		"message_sequence": []interface{}{
@@ -130,7 +130,7 @@ func TestHandleCallSubAgentPropagatesMessageSequenceRestart(t *testing.T) {
 
 	result, err := handleCallSubAgent(ctx, map[string]interface{}{
 		"route_id":                 "seq-route",
-		"todo_id":                  "todo-1",
+		"task_id":                  "todo-1",
 		"instructions":             "run again",
 		"preferred_tier":           float64(1),
 		"message_sequence_restart": true,
@@ -156,7 +156,7 @@ func TestHandleCallSubAgentPassesThroughAsyncStart(t *testing.T) {
 
 	result, err := handleCallSubAgent(ctx, map[string]interface{}{
 		"route_id":       "review",
-		"todo_id":        "todo-1",
+		"task_id":        "todo-1",
 		"instructions":   "review the output",
 		"preferred_tier": float64(1),
 	})
@@ -215,10 +215,10 @@ func TestGetSubAgentConversationDispatchesByExecutionID(t *testing.T) {
 		t.Fatalf("result=%q", result)
 	}
 	if _, err := handleGetSubAgentConversation(ctx, map[string]interface{}{
-		"todo_id":     "todo-1",
+		"task_id":     "todo-1",
 		"from_last_x": float64(20),
 	}); err == nil || !strings.Contains(err.Error(), "execution_id is required") {
-		t.Fatalf("legacy ambiguous todo_id unexpectedly accepted: %v", err)
+		t.Fatalf("legacy ambiguous task_id unexpectedly accepted: %v", err)
 	}
 }
 
@@ -232,7 +232,7 @@ func TestGetSubAgentConversationSchemaRequiresExecutionID(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := string(encoded)
-		if !strings.Contains(text, `"execution_id"`) || strings.Contains(text, `"todo_id"`) {
+		if !strings.Contains(text, `"execution_id"`) || strings.Contains(text, `"task_id"`) || strings.Contains(text, `"todo_id"`) {
 			t.Fatalf("conversation lookup schema must use exact execution identity: %s", text)
 		}
 		return

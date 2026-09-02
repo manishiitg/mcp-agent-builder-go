@@ -1,8 +1,5 @@
 import React from 'react'
 import type { 
-  TodoTaskItemCreatedEvent, 
-  TodoTaskItemUpdatedEvent, 
-  TodoTaskItemCompletedEvent, 
   TodoTaskRouteSelectedEvent, 
   TodoTaskStepCompletedEvent 
 } from '../../../generated/event-types'
@@ -10,78 +7,6 @@ import type {
 interface TodoTaskEventProps<T> {
   event: T
   compact?: boolean
-}
-
-export const TodoTaskItemCreatedEventDisplay: React.FC<TodoTaskEventProps<TodoTaskItemCreatedEvent>> = ({ event, compact }) => {
-  return (
-    <div className={`border-l-2 border-purple-400 pl-3 py-1 ${compact ? 'text-xs' : 'text-sm'}`}>
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-purple-600 dark:text-purple-400">📝</span>
-        <span className="font-semibold text-purple-700 dark:text-purple-300">Task Created</span>
-        {event.priority && (
-          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
-            event.priority === 'high' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
-            event.priority === 'medium' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' :
-            'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-          }`}>
-            {event.priority}
-          </span>
-        )}
-      </div>
-      <div className="font-medium">{event.title}</div>
-      {event.description && !compact && (
-        <div className="text-gray-600 dark:text-gray-400 mt-1 italic">{event.description}</div>
-      )}
-    </div>
-  )
-}
-
-export const TodoTaskItemUpdatedEventDisplay: React.FC<TodoTaskEventProps<TodoTaskItemUpdatedEvent>> = ({ event, compact }) => {
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'in_progress': return 'text-blue-600 dark:text-blue-400'
-      case 'blocked': return 'text-red-600 dark:text-red-400'
-      case 'open': return 'text-gray-600 dark:text-gray-400'
-      case 'completed': return 'text-green-600 dark:text-green-400'
-      default: return 'text-gray-600 dark:text-gray-400'
-    }
-  }
-
-  return (
-    <div className={`border-l-2 border-purple-400 pl-3 py-1 ${compact ? 'text-xs' : 'text-sm'}`}>
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-purple-600 dark:text-purple-400">🔄</span>
-        <span className="font-semibold text-purple-700 dark:text-purple-300">Task Updated</span>
-      </div>
-      <div className="flex flex-wrap items-baseline gap-x-2">
-        <span className="font-medium">{event.title}</span>
-        <span className="text-gray-500">changed to</span>
-        <span className={`font-bold capitalize ${getStatusColor(event.new_status || '')}`}>
-          {(event.new_status || '').replace('_', ' ')}
-        </span>
-      </div>
-      {event.notes && !compact && (
-        <div className="text-gray-600 dark:text-gray-400 mt-1 italic">{event.notes}</div>
-      )}
-    </div>
-  )
-}
-
-export const TodoTaskItemCompletedEventDisplay: React.FC<TodoTaskEventProps<TodoTaskItemCompletedEvent>> = ({ event, compact }) => {
-  return (
-    <div className={`border-l-2 border-green-500 pl-3 py-1 ${compact ? 'text-xs' : 'text-sm'}`}>
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-green-600 dark:text-green-400">✅</span>
-        <span className="font-semibold text-green-700 dark:text-green-300">Task Completed</span>
-      </div>
-      <div className="font-medium">{event.title}</div>
-      {event.result && (
-        <div className="mt-1 bg-green-50 dark:bg-green-900/10 p-2 rounded border border-green-100 dark:border-green-900/30 text-green-800 dark:text-green-200 font-mono text-[11px] whitespace-pre-wrap">
-          {event.result}
-        </div>
-      )}
-    </div>
-  )
 }
 
 export const TodoTaskRouteSelectedEventDisplay: React.FC<TodoTaskEventProps<TodoTaskRouteSelectedEvent>> = ({ event, compact }) => {

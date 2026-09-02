@@ -42,6 +42,13 @@ Do not guess a fal.ai model slug from memory or pattern-match one that
 A run whose model ID cannot be confirmed is a blocker to report, not a guess
 to make.
 
+**Video Studio reference-pack exception:** its system policy already selects
+`fal-ai/flux-2-max` for a new cinematic character/background master and
+`fal-ai/flux-2-max/edit` for an approved derivative. Verify those IDs and the
+live schema, then use them; do not ask the user to reselect a still-image
+model or silently substitute a cheaper route. A different still-image model
+requires the user's explicit approval.
+
 ## Authentication
 
 The user stores the fal.ai key as a workflow secret named `FAL_KEY` (via
@@ -110,6 +117,24 @@ const result = await fal.subscribe("<resolved-model-id>", {
 });
 ```
 
+### Long-running video jobs: use a durable request, not a short blocking call
+
+Video generation is asynchronous provider work, not an instant shell command.
+For a single H3 shot, budget up to **15 minutes** when the calling tool permits
+it, surface queue/progress updates, and keep one request alive rather than
+creating another paid job. Do not declare a job failed merely because a short
+local command or tool wait expires.
+
+For a video job, prefer the submit/poll flow even when only one shot is in
+flight: it gives the production a durable `request_id` to resume. Persist the
+model ID, request ID, input, and submission timestamp in `production.json`
+immediately after submission. Poll the same request at a measured interval
+(for example, 5--10 seconds), report meaningful state changes (`IN_QUEUE`,
+`IN_PROGRESS`, `COMPLETED`), and retrieve the result exactly once when it is
+complete. If a local wait times out or the chat reconnects, resume with that
+request ID; never submit a replacement until fal reports this request failed
+or the user expressly approves a paid retry.
+
 For several independent jobs in flight at once (e.g. generating multiple
 shots in parallel), use the non-blocking submit/poll pair instead so one slow
 job does not serialize the rest:
@@ -118,15 +143,17 @@ job does not serialize the rest:
 const { request_id } = await fal.queue.submit("<resolved-model-id>", {
   input: { /* ... */ },
 });
-// fal.queue.status(modelId, { requestId: request_id }) to poll, then
+// Save request_id durably before waiting. Then use
+// fal.queue.status(modelId, { requestId: request_id }) to poll, and
 // fal.queue.result(modelId, { requestId: request_id }) once completed;
 // confirm the exact method names against the installed package version,
 // since client APIs move independently of this skill.
 ```
 
-Treat a job that errors or times out as a real failure to report with the
-request ID and error payload -- do not silently retry with different input
-hoping one succeeds, and do not fabricate a result if generation fails.
+Treat a provider-reported failure as a real failure to report with the request
+ID and error payload -- do not silently retry with different input hoping one
+succeeds, and do not fabricate a result if generation fails. A local timeout
+is not a provider failure: rejoin and poll the existing request first.
 
 ## Sending a local file as input
 
@@ -173,7 +200,9 @@ inline content, but an uploaded URL is the form that works everywhere.
 - Verify what was actually generated before treating a job as done: check
   duration, dimensions, and (for video) that the file is not silently
   truncated or corrupt, with `ffprobe` -- a completed job status is not proof
-  the asset is usable.
+  the asset is usable. This is the per-clip receipt, not the final full QA
+  suite: do not create a contact sheet or run the final quality report for a
+  normal preview.
 
 ## Cost awareness
 

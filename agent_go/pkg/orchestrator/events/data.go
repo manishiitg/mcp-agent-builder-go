@@ -195,7 +195,15 @@ func (e *BackgroundAgentTerminatedEvent) GetEventType() events.EventType {
 // two consumers, instead of a hardcoded name check on either side.
 //
 // It carries the full title and payload so a listener can render immediately
-// without a second database round trip.
+// without a second database round trip. Activity is copied from the product's
+// YAML tool binding, so the shared transcript can show a real product action
+// without maintaining a parallel kind-to-copy map.
+type PresentationActivity struct {
+	Label       string `json:"label"`
+	Destination string `json:"destination"`
+	Detail      string `json:"detail"`
+}
+
 type PresentationUpdatedEvent struct {
 	events.BaseEventData
 	PresentationID string                 `json:"presentation_id"`
@@ -203,6 +211,7 @@ type PresentationUpdatedEvent struct {
 	Title          string                 `json:"title"`
 	WorkspacePath  string                 `json:"workspace_path"`
 	Payload        map[string]interface{} `json:"payload"`
+	Activity       *PresentationActivity  `json:"activity,omitempty"`
 }
 
 func (e *PresentationUpdatedEvent) GetEventType() events.EventType {

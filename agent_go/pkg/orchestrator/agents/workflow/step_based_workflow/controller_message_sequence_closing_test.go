@@ -12,9 +12,9 @@ import (
 )
 
 // Validates sequence-unification Stage 3: a todo_task's `messages` (old
-// TodoTaskMessage JSON shape) deserializes, back-compat, into the unified
+// OrchestratorMessage JSON shape) deserializes, back-compat, into the unified
 // []MessageSequenceItem — no plan migration needed.
-func TestTodoTaskMessagesDeserializeToUnifiedItem(t *testing.T) {
+func TestOrchestratorMessagesDeserializeToUnifiedItem(t *testing.T) {
 	planJSON := `{"steps":[{
 		"type":"todo_task","id":"orch","title":"o","description":"d",
 		"predefined_routes":[{"route_id":"w","route_name":"W","condition":"c",
@@ -29,9 +29,9 @@ func TestTodoTaskMessagesDeserializeToUnifiedItem(t *testing.T) {
 	if err := json.Unmarshal([]byte(planJSON), &pr); err != nil {
 		t.Fatalf("unmarshal plan: %v", err)
 	}
-	var todo *TodoTaskPlanStep
+	var todo *OrchestratorPlanStep
 	for _, s := range pr.Steps {
-		if tt, ok := s.(*TodoTaskPlanStep); ok {
+		if tt, ok := s.(*OrchestratorPlanStep); ok {
 			todo = tt
 		}
 	}

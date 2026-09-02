@@ -137,6 +137,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		// accepts caller-supplied SQL, so it stays safe to expose to report JS.
 		api.POST("/report-field", handlers.UpdateReportField)
 		api.POST("/db/initialize", requireWorkspaceAPIToken(), handlers.InitializeWorkflowDB)
+		api.POST("/db/backup-snapshot", requireWorkspaceAPIToken(), handlers.CreateWorkflowDatabaseBackupSnapshot)
 
 		// CDP connectivity check (used by frontend to verify Chrome is reachable from container)
 		api.GET("/cdp-check", handlers.CheckCdpConnection)

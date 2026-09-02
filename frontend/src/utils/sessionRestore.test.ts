@@ -116,6 +116,33 @@ describe('hydrateTabEvents restored chat fallback', () => {
     expect(mocks.setTabLastEventIndex).toHaveBeenLastCalledWith('active-codex-session', 7)
   })
 
+  it('does not append a live completion that durable history already restored', async () => {
+    const answer = 'The project has seven planned shots and no generated clips yet.'
+    mocks.getRecentSessionEvents.mockResolvedValue({
+      events: [{
+        id: 'live-completion',
+        type: 'unified_completion',
+        data: { data: { final_result: answer, result: answer } },
+      }],
+      session_status: 'completed',
+      last_processed_index: 8,
+      has_more: false,
+    })
+    mocks.getChatHistoryResumeConversation.mockResolvedValue({
+      session_id: 'duplicate-response-session',
+      conversation_history: [
+        { Role: 'human', Parts: [{ Text: 'What did you create?' }] },
+        { Role: 'ai', Parts: [{ Text: answer }] },
+      ],
+    })
+
+    await hydrateTabEvents('duplicate-response-session', { workspacePath: '/workspace/video' })
+
+    expect(mocks.setTabEvents).toHaveBeenCalledWith('duplicate-response-session', expect.any(Array))
+    expect(mocks.addTabEvents).not.toHaveBeenCalled()
+    expect(mocks.setTabLastEventIndex).toHaveBeenLastCalledWith('duplicate-response-session', 8)
+  })
+
   it('keeps every meaningful assistant update from one tool-heavy turn', () => {
     const events = conversationToRestoredEvents({
       session_id: 'tool-heavy-session',

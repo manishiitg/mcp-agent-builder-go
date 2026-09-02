@@ -43,7 +43,7 @@ const (
 	TodoPlannerLearningDetectionAgentType   AgentType = "todo_planner_learning_detection"   // Detects if new learnings were generated after learning phase
 	ConditionalAgentType                    AgentType = "conditional"                       // Conditional decision agent for evaluating step conditions
 	EvaluationScoringAgentType              AgentType = "evaluation_scoring"                // Calculates scores for evaluation steps based on success criteria
-	TodoTaskOrchestratorAgentType           AgentType = "todo_task_orchestrator"            // TodoTask orchestrator agent that manages todo lists and delegates to sub-agents
+	OrchestratorAgentType           AgentType = "todo_task_orchestrator"            // Orchestrator orchestrator agent that manages todo lists and delegates to sub-agents
 	GenericExecutionAgentType               AgentType = "generic_execution"                 // Generic execution agent for todo task steps (no learning, no prevalidation)
 	TodoPlannerInteractiveWorkshopAgentType AgentType = "todo_planner_interactive_workshop" // Interactive workshop: execute steps, edit plan, update step config in one session
 )

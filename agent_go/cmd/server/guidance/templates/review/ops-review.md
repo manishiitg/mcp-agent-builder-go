@@ -92,7 +92,7 @@ Use `{{.RunFolder}}` as the primary run folder.{{end}}
      evidence, never the description alone. Judgment, synthesis, adaptive
      discovery, and browser/UI work stay agentic; do not propose scripting them
      to save cost.
-   - **Container necessity.** For every cost- or time-material `todo_task`,
+   - **Container necessity.** For every cost- or time-material `orchestrator`,
      `routing`, or `message_sequence` container, inspect the parent and its
      owned children as one execution unit. Read the targeted plan definition and
      representative parent/child traces, then state the actual runtime decision

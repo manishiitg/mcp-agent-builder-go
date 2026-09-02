@@ -71,12 +71,9 @@ asked for.
   and for any recurring character or subject that is already a hard rule
   decided upstream, not an option at edit time (see "Keep the whole
   character arc on one model and provider" in `video-cinematography`). At
-  this stage the remaining lever is a light, consistent color-grade pass
-  across every clip in the assembly (matched black level, white balance,
-  and saturation) rather than trusting raw generation output to match on
-  its own -- that narrows a residual mismatch, but it does not rescue a
-  character generated on two different models, which needs regeneration
-  upstream.
+  for a Video Studio H3 continuity chain, do not color-grade the clips to
+  conceal a mismatch. Correct that mismatch upstream through the H3
+  Reference-to-Video successor prompt and its approved references.
 - **Concatenate with ffmpeg's concat demuxer** once every segment is
   normalized to identical specs -- it is lossless and reliable for clips
   that already match:
@@ -88,17 +85,13 @@ asked for.
   ffmpeg -f concat -safe 0 -i segments.txt -c copy final.mp4
   ```
 
-  Use the concat *filter* (`-filter_complex concat=n=N:v=1:a=1`) instead
-  when segments still need a per-clip filter (scale, fps conversion, a
-  crossfade) applied as part of the same command, since the demuxer above
-  assumes segments are already stream-compatible and only concatenates.
-- **Transitions between independently-generated shots** are chosen by the
-  rules in "Choosing a transition at each cut" below, which account for
-  these clips having no natural continuity to preserve.
-- Record which model/provider produced each segment and the exact trim
-  points used in `production.json` (see `video-model-selection`), so a
-  revision to one shot re-cuts only that segment instead of re-deriving the
-  whole assembly.
+  If sources are technically incompatible, normalize only the incompatible
+  media specifications first. For the normal H3 continuity path, do not use
+  per-clip filters, crossfades, trims, reframes, speed changes, grading, or
+  audio edits as a visual-continuity repair.
+- Record which model/provider produced each segment and its source path in
+  `production.json` (see `video-model-selection`), so a revision regenerates
+  only the affected H3 successor instead of re-deriving the whole assembly.
 - **Chain adjoining generated clips with an overlapping prompt, not just a
   shared reference image.** When two independently-generated clips are
   meant to flow together, write clip N's prompt so its last described

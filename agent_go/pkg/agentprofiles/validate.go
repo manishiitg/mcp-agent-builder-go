@@ -69,8 +69,14 @@ func Validate(profile Profile) error {
 		if len(binding.Config) > 0 && !json.Valid(binding.Config) {
 			return fmt.Errorf("tool %q has invalid JSON config", toolID)
 		}
-		if binding.Presentation != nil && !presentationKindPattern.MatchString(strings.TrimSpace(binding.Presentation.Kind)) {
-			return fmt.Errorf("tool %q has invalid presentation kind %q (want dotted lowercase, e.g. media.video)", toolID, binding.Presentation.Kind)
+		if binding.Presentation != nil {
+			if !presentationKindPattern.MatchString(strings.TrimSpace(binding.Presentation.Kind)) {
+				return fmt.Errorf("tool %q has invalid presentation kind %q (want dotted lowercase, e.g. media.video)", toolID, binding.Presentation.Kind)
+			}
+			activity := binding.Presentation.Activity
+			if activity == nil || strings.TrimSpace(activity.Label) == "" || strings.TrimSpace(activity.Destination) == "" || strings.TrimSpace(activity.Detail) == "" {
+				return fmt.Errorf("tool %q presentation requires activity.label, activity.destination, and activity.detail", toolID)
+			}
 		}
 	}
 	for _, name := range profile.ToolPolicy.Disabled {

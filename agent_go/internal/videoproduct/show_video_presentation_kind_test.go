@@ -42,7 +42,7 @@ func TestShowVideoUsesTheDeclaredKindNotAHardcodedDefault(t *testing.T) {
 	factory := showVideoFactory("http://unused")
 	spec, err := factory(agentprofiles.ToolRuntimeContext{
 		UserID: "u1", SessionID: "s1", WorkspacePath: "Chats/Video Studio/projects/demo",
-		Presentation: &agentprofiles.PresentationBinding{Kind: "media.image"},
+		Presentation: &agentprofiles.PresentationBinding{Kind: "media.image", Activity: &agentprofiles.PresentationActivityBinding{Label: "Image ready", Destination: "Images panel", Detail: "Ready to review"}},
 	}, nil)
 	if err != nil {
 		t.Fatalf("building the tool spec: %v", err)
@@ -66,7 +66,7 @@ func TestShowVideoUsesTheDeclaredKindNotAHardcodedDefault(t *testing.T) {
 func TestShowVideoAllowsAnMP4PreviewWithoutAQualityReport(t *testing.T) {
 	spec, err := showVideoFactory("http://unused")(agentprofiles.ToolRuntimeContext{
 		UserID: "u1", SessionID: "s1", WorkspacePath: "Chats/Video Studio/projects/demo",
-		Presentation: &agentprofiles.PresentationBinding{Kind: "media.video"},
+		Presentation: &agentprofiles.PresentationBinding{Kind: "media.video", Activity: &agentprofiles.PresentationActivityBinding{Label: "Video ready", Destination: "Videos panel", Detail: "Ready to review"}},
 	}, nil)
 	if err != nil {
 		t.Fatalf("building show_video: %v", err)

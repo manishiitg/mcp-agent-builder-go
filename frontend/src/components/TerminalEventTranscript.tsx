@@ -71,6 +71,55 @@ function transcriptEventPayload(event: PollingEvent): Record<string, unknown> {
     : outer as Record<string, unknown>
 }
 
+function assistantResponseText(event: PollingEvent): string {
+  if (!AGENT_RESPONSE_EVENT_TYPES.has(event.type || '')) return ''
+  const payload = transcriptEventPayload(event)
+  const content = typeof payload.content === 'string' ? payload.content.trim() : ''
+  const finalResult = typeof payload.final_result === 'string' ? payload.final_result.trim() : ''
+  const result = typeof payload.result === 'string' ? payload.result.trim() : ''
+  return content || finalResult || result
+}
+
+function presentationActivity(event: PollingEvent): { label: string; title: string; destination: string; detail: string } | null {
+	if (event.type !== 'presentation_updated') return null
+	const payload = transcriptEventPayload(event)
+	const title = typeof payload.title === 'string' && payload.title.trim()
+		? payload.title.trim()
+		: 'Production item'
+	const activity = payload.activity && typeof payload.activity === 'object'
+		? payload.activity as Record<string, unknown>
+		: {}
+	// New events always provide these values from product.yaml. The neutral
+	// fallback keeps old persisted events readable without recreating a
+	// kind-to-panel map in the frontend.
+	const label = typeof activity.label === 'string' && activity.label.trim() ? activity.label.trim() : 'Production update'
+	const destination = typeof activity.destination === 'string' && activity.destination.trim() ? activity.destination.trim() : 'Production panel'
+	const detail = typeof activity.detail === 'string' && activity.detail.trim() ? activity.detail.trim() : 'Updated'
+	return { label, title, destination, detail }
+}
+
+// A final response can be represented by two different protocol events during
+// a restore (for example `llm_generation_end` plus `unified_completion`). The
+// event selector normally removes that pair, but a mixed live/history tail can
+// still carry both. The conversation should never make the reader see the
+// identical reply twice, so retain just the first adjacent response card.
+function removeAdjacentDuplicateAssistantResponses(items: TranscriptItem[]): TranscriptItem[] {
+  let previousAnswer = ''
+  return items.filter((item) => {
+    if (item.kind !== 'event') return true
+    if (item.event.type === 'user_message') {
+      previousAnswer = ''
+      return true
+    }
+    const answer = assistantResponseText(item.event)
+    if (!answer) return true
+    const comparable = answer.replace(/\s+/g, ' ').trim().toLowerCase()
+    if (comparable && comparable === previousAnswer) return false
+    previousAnswer = comparable
+    return true
+  })
+}
+
 const TranscriptEvent: React.FC<{
   event: PollingEvent
   onSendMessage?: (msg: string) => void
@@ -82,6 +131,11 @@ const TranscriptEvent: React.FC<{
   const timestamp = rawTimestamp && Number.isFinite(Date.parse(rawTimestamp))
     ? new Date(rawTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : ''
+
+  const presentation = presentationActivity(event)
+  if (presentation) {
+    return <PresentationActivityEvent {...presentation} timestamp={timestamp} />
+  }
 
   if (isInternalTranscriptMessage(event)) {
     return <InternalActivityEvent title={internalTranscriptMessageTitle(event)} content={content} timestamp={timestamp} />
@@ -149,15 +203,16 @@ const AssistantTranscriptMessage: React.FC<{ event: PollingEvent; content: strin
     ? formatDurationCompact(fields.duration)
     : ''
   const turn = typeof fields.turn === 'number' ? fields.turn : undefined
+  const metadata = [turn != null ? `Turn ${turn}` : '', duration, timestamp].filter(Boolean).join(' · ')
 
   return (
     <article data-testid="terminal-clear-assistant-message" className="my-4 border-l border-emerald-400/55 pl-4 pr-2">
       <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-300/75">
         <span>{label}</span>
-        <span className="h-1 w-1 rounded-full bg-neutral-600" />
-        <span className="normal-case font-medium tracking-normal text-neutral-500">
-          {turn != null ? `Turn ${turn}` : 'Response'}{duration ? ` · ${duration}` : ''}{timestamp ? ` · ${timestamp}` : ''}
-        </span>
+        {metadata && <>
+          <span className="h-1 w-1 rounded-full bg-neutral-600" />
+          <span className="normal-case font-medium tracking-normal text-neutral-500">{metadata}</span>
+        </>}
       </div>
       <div className="[&_li]:!text-[14px] [&_p]:!text-[14px]">
         <ConversationMarkdownRenderer content={content} framed={false} maxHeight="none" />
@@ -185,6 +240,17 @@ const InternalActivityEvent: React.FC<{ title: string; content: string; timestam
     </div>
   )
 }
+
+const PresentationActivityEvent: React.FC<{ label: string; title: string; destination: string; detail: string; timestamp: string }> = ({ label, title, destination, detail, timestamp }) => (
+  <div data-testid="terminal-clear-presentation-activity" className="my-3 border-y border-violet-900/35 bg-violet-950/15 py-2">
+    <div className="flex items-center gap-2 px-1 text-[11px] text-violet-200/80">
+      <CircleDashed className="h-3.5 w-3.5 shrink-0 text-violet-300/75" />
+      <span className="truncate"><span className="font-medium text-violet-100">{label}</span> · {title}</span>
+      <span className="hidden shrink-0 text-violet-300/55 sm:inline">{detail} in {destination}</span>
+      {timestamp && <span className="ml-auto shrink-0 tabular-nums text-violet-300/50">{timestamp}</span>}
+    </div>
+  </div>
+)
 
 function wheelDeltaPixels(deltaY: number, deltaMode: number, pageHeight: number): number {
   if (deltaMode === 1) return deltaY * 16
@@ -363,6 +429,12 @@ interface TerminalEventTranscriptProps {
    * individual protocol events, but belongs in the readable live transcript. */
   streamingText?: string
   streamingStatus?: string
+  /** Optional product skin for the transcript backdrop. AgentWorks keeps its
+   * existing default; product surfaces can use their own visual identity. */
+  surfaceClassName?: string
+  /** Whether a product should follow an entire turn, or reveal only the first
+   * assistant text and then leave the reader in control of the scroll position. */
+  autoScrollMode?: 'follow-turn' | 'reveal-first-response'
 }
 
 const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
@@ -378,6 +450,8 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   onRetry,
   streamingText = '',
   streamingStatus = '',
+  surfaceClassName,
+  autoScrollMode = 'follow-turn',
 }) => {
   const scrollerRef = useRef<HTMLElement | Window | null>(null)
   const virtuosoRef = useRef<VirtuosoHandle | null>(null)
@@ -385,7 +459,10 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     () => selectTerminalEvents(events, terminal, siblingTerminals),
     [events, terminal, siblingTerminals],
   )
-  const items = useMemo<TranscriptRenderItem[]>(() => buildTranscriptItems(scoped), [scoped])
+  const items = useMemo<TranscriptRenderItem[]>(
+    () => removeAdjacentDuplicateAssistantResponses(buildTranscriptItems(scoped)),
+    [scoped],
+  )
   const latestUserMessageKey = useMemo(() => {
     for (let index = items.length - 1; index >= 0; index -= 1) {
       const item = items[index]
@@ -409,6 +486,28 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   }, [items, streamingStatus, streamingText.length])
   const followedUserMessageKeyRef = useRef(latestUserMessageKey)
   const followCurrentTurnRef = useRef(true)
+  // Keep this unset until the first effect runs. Initialising it to the latest
+  // user row made an in-progress turn restored after refresh look historical:
+  // the first streaming response then never armed Video Studio's one-time
+  // reveal and arrived below the composer.
+  const firstResponseUserMessageKeyRef = useRef<string | null>(null)
+  const initializedFirstResponseRevealRef = useRef(false)
+  const revealFirstResponseRef = useRef(false)
+  const suppressFirstResponseRevealRef = useRef(false)
+  const assistantResponseAfterLatestUser = useMemo(() => {
+    let latestUserIndex = -1
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index]
+      if (item.kind === 'event' && item.event.type === 'user_message') {
+        latestUserIndex = index
+        break
+      }
+    }
+    if (latestUserIndex < 0) return false
+    return items.slice(latestUserIndex + 1).some(item =>
+      item.kind === 'event' && Boolean(assistantResponseText(item.event)),
+    )
+  }, [items])
   // Do not reserve a permanent header for history. The user reaches this
   // control at the oldest currently-loaded item; it only exists when another
   // page can actually be fetched from the backend. A short restored transcript
@@ -433,6 +532,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   // the whole current turn through its final answer, and stop only when the
   // reader deliberately scrolls upward.
   useEffect(() => {
+    if (autoScrollMode !== 'follow-turn') return
     const isNewUserMessage = Boolean(
       latestUserMessageKey && followedUserMessageKeyRef.current !== latestUserMessageKey,
     )
@@ -455,7 +555,102 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
       window.cancelAnimationFrame(frame)
       window.clearTimeout(settledLayoutTimer)
     }
-  }, [items.length, latestUserMessageKey, transcriptTailRevision])
+  }, [autoScrollMode, items.length, latestUserMessageKey, transcriptTailRevision])
+
+  // Video Studio presents long-form creative work where a reader often starts
+  // examining the first lines while the agent is still writing. Reveal that
+  // first assistant text, then stop: continuously following every streamed
+  // chunk steals the reader's scroll position and makes the response hard to
+  // inspect. AgentWorks keeps the existing full-turn follow behaviour above.
+  useEffect(() => {
+    if (autoScrollMode !== 'reveal-first-response') return
+    let userMessageFrame: number | undefined
+    let userMessageSettledLayoutTimer: number | undefined
+    const isInitialTranscript = !initializedFirstResponseRevealRef.current
+    let shouldRevealUserMessage = false
+    const isNewUserMessage = Boolean(
+      !isInitialTranscript &&
+      latestUserMessageKey &&
+      firstResponseUserMessageKeyRef.current !== latestUserMessageKey,
+    )
+    if (isInitialTranscript) {
+      initializedFirstResponseRevealRef.current = true
+      firstResponseUserMessageKeyRef.current = latestUserMessageKey
+      // A page reload can reconnect while the agent is already thinking. Arm
+      // that live turn without treating a completed, restored conversation as
+      // a new response that should steal the reader's position.
+      // A brand-new conversation mounts only after its optimistic first user
+      // row exists. That row is not history: it needs the same one-time
+      // reveal as any later sent message once the response begins.
+      const isOnlyPendingInitialUserMessage = Boolean(
+        latestUserMessageKey && items.length === 1 && !assistantResponseAfterLatestUser,
+      )
+      revealFirstResponseRef.current = Boolean(
+        latestUserMessageKey && !assistantResponseAfterLatestUser && (
+          streamingText.trim() || streamingStatus.trim() || isOnlyPendingInitialUserMessage
+        ),
+      )
+      shouldRevealUserMessage = isOnlyPendingInitialUserMessage
+      suppressFirstResponseRevealRef.current = false
+    } else if (isNewUserMessage) {
+      firstResponseUserMessageKeyRef.current = latestUserMessageKey
+      revealFirstResponseRef.current = true
+      suppressFirstResponseRevealRef.current = false
+      shouldRevealUserMessage = true
+    }
+    if (shouldRevealUserMessage) {
+      // Video Studio deliberately does not follow every streamed token, but a
+      // sent message must still move into view. ChatArea's legacy scroller is
+      // outside this Virtuoso instance, so it cannot do this for product
+      // transcripts. Reveal the new user row once; the existing branch below
+      // will reveal the first assistant text once it arrives.
+      const revealUserMessage = () => {
+        virtuosoRef.current?.scrollToIndex({
+          index: Math.max(0, items.length - 1),
+          align: 'end',
+          behavior: 'auto',
+        })
+      }
+      // This must happen synchronously in the committed render. Streaming
+      // status can update before the next animation frame; if scrolling lives
+      // only in rAF, effect cleanup cancels it and the newly sent message stays
+      // hidden above the fixed composer.
+      revealUserMessage()
+      userMessageFrame = window.requestAnimationFrame(revealUserMessage)
+      userMessageSettledLayoutTimer = window.setTimeout(revealUserMessage, 160)
+    }
+
+    const assistantHasBegun = Boolean(streamingText.trim()) || assistantResponseAfterLatestUser
+    if (!revealFirstResponseRef.current || suppressFirstResponseRevealRef.current || !assistantHasBegun) {
+      return () => {
+        if (userMessageFrame !== undefined) window.cancelAnimationFrame(userMessageFrame)
+        if (userMessageSettledLayoutTimer !== undefined) window.clearTimeout(userMessageSettledLayoutTimer)
+      }
+    }
+
+    revealFirstResponseRef.current = false
+    const targetIndex = Math.max(0, (streamingText || streamingStatus) ? items.length : items.length - 1)
+    // Reveal the opening of the assistant response once. Aligning its end
+    // could leave the first readable line hidden below the fixed composer for
+    // a long response; a second layout pass covers Virtuoso measuring the live
+    // row just after the first streaming chunk lands.
+    const reveal = () => {
+      virtuosoRef.current?.scrollToIndex({ index: targetIndex, align: 'start', behavior: 'auto' })
+    }
+    // Reveal now as well as after layout settles. The first SSE status/text
+    // update can otherwise clean up the scheduled rAF before it has a chance
+    // to run, which is exactly why the first response appeared below the
+    // composer after sending a message.
+    reveal()
+    const frame = window.requestAnimationFrame(reveal)
+    const settledLayoutTimer = window.setTimeout(reveal, 160)
+    return () => {
+      if (userMessageFrame !== undefined) window.cancelAnimationFrame(userMessageFrame)
+      if (userMessageSettledLayoutTimer !== undefined) window.clearTimeout(userMessageSettledLayoutTimer)
+      window.cancelAnimationFrame(frame)
+      window.clearTimeout(settledLayoutTimer)
+    }
+  }, [assistantResponseAfterLatestUser, autoScrollMode, items.length, latestUserMessageKey, streamingStatus, streamingText])
 
   // Electron occasionally fails to route a physical wheel/trackpad gesture to
   // Virtuoso's internal scroller even though accessibility scroll actions work.
@@ -466,6 +661,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     if (!(scroller instanceof HTMLElement) || event.deltaY === 0) return
     if (event.deltaY < 0) {
       followCurrentTurnRef.current = false
+      suppressFirstResponseRevealRef.current = true
     }
 
     let target = event.target instanceof HTMLElement ? event.target : null
@@ -503,7 +699,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     return (
       <div
         data-testid="terminal-clear-view-empty"
-        className="flex min-w-0 flex-1 items-center justify-center overflow-y-auto bg-[#0b0d0c] px-5 py-8"
+        className={`flex min-w-0 flex-1 items-center justify-center overflow-y-auto px-5 py-8 ${surfaceClassName ?? 'bg-[#0b0d0c]'}`}
       >
         <div className="flex max-w-md items-start gap-3 text-left">
           <Icon
@@ -538,7 +734,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   return (
     <div
       data-testid="terminal-clear-view"
-      className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#0d100f]"
+      className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${surfaceClassName ?? 'bg-[#0d100f]'}`}
       onWheelCapture={handleWheelCapture}
     >
       {showEarlierMessagesControl && (
@@ -580,7 +776,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
         rangeChanged={({ startIndex }) => {
           setIsAtTranscriptStart(startIndex === 0)
         }}
-        followOutput="smooth"
+        followOutput={autoScrollMode === 'follow-turn' ? 'smooth' : false}
         initialTopMostItemIndex={Math.max(0, items.length - 1)}
         computeItemKey={(_, item) => item.key}
         itemContent={(index, item) =>

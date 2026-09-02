@@ -49,6 +49,67 @@ func TestAuthMiddlewareAcceptsJWTInSingleUserMode(t *testing.T) {
 	}
 }
 
+func TestSingleUserProductWorkspaceMapsGatewayIdentityToDefaultOwner(t *testing.T) {
+	t.Setenv("MULTI_USER_MODE", "false")
+	t.Setenv("DEFAULT_USER_ID", "default")
+	t.Setenv("AUTH_SECRET", "test-auth-secret-with-enough-entropy")
+
+	// The rootless gateway uses a product identity for its signed loopback
+	// token. Single-user project data is intentionally stored under the
+	// deployment's default user, so the request must resolve to that owner.
+	token, err := GenerateJWT("video-studio", "video-studio", "")
+	if err != nil {
+		t.Fatalf("GenerateJWT failed: %v", err)
+	}
+
+	handler := AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := GetUserIDFromContext(r.Context()); got != "video-studio" {
+			t.Fatalf("request identity = %q, want gateway identity", got)
+		}
+		if got := productWorkspaceUserID(r.Context()); got != "default" {
+			t.Fatalf("product workspace owner = %q, want default", got)
+		}
+		if got := GetUserIDFromContext(productWorkspaceContext(r.Context())); got != "default" {
+			t.Fatalf("forwarded workspace owner = %q, want default", got)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agent-profiles/video-studio/query", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusNoContent)
+	}
+}
+
+func TestSingleUserPublicWorkspaceMapsGatewayIdentityToDefaultOwner(t *testing.T) {
+	t.Setenv("MULTI_USER_MODE", "false")
+	t.Setenv("DEFAULT_USER_ID", "default")
+	t.Setenv("AUTH_SECRET", "test-auth-secret-with-enough-entropy")
+
+	token, err := GenerateJWT("video-studio", "video-studio", "")
+	if err != nil {
+		t.Fatalf("GenerateJWT failed: %v", err)
+	}
+
+	handler := AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := publicWorkspaceUserID(r); got != "default" {
+			t.Fatalf("public workspace owner = %q, want default", got)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/public/file?uid=another-user", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusNoContent)
+	}
+}
+
 func TestAuthSecretMustBeExplicitAndNonDefault(t *testing.T) {
 	if err := ValidateAuthSecretValue(""); err == nil {
 		t.Fatal("ValidateAuthSecretValue accepted an empty secret")

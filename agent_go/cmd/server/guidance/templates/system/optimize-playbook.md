@@ -169,7 +169,7 @@ The step **description** in plan.json is the primary instruction the execution a
 - **Incorporate patterns from learnings**: If learnings consistently capture the same pattern (e.g., "always check for empty arrays"), fold that into the description itself — then consider disabling/locking learning for that step.
 - **Keep the boundary coherent**: The description may include many tool calls or sub-actions, but it should still serve one durable output contract. If it starts mixing unrelated outputs, validation gates, retry domains, stores, or approval/routing decisions, split at those boundaries.
 
-**How to update**: Use the plan modification tools (`update_scripted_step`, `update_message_sequence_step`, `update_todo_task_step`, `update_todo_task_route`, `update_routing_step`, `update_human_input_step`, or `update_validation_schema`) to update step descriptions and validation. Do not patch `planning/plan.json` directly; it is system-managed and guarded. The change takes effect on the next execution.
+**How to update**: Use the plan modification tools (`update_scripted_step`, `update_message_sequence_step`, `update_orchestrator_step`, `update_orchestrator_route`, `update_routing_step`, `update_human_input_step`, or `update_validation_schema`) to update step descriptions and validation. Do not patch `planning/plan.json` directly; it is system-managed and guarded. The change takes effect on the next execution.
 
 **Description review bookkeeping is required**: After you change or approve a description, immediately call `update_step_config` to record:
 - `description_reviewed` + `review_notes`
@@ -195,7 +195,7 @@ After running a step, review it for optimization — but follow this priority or
   - **Simple steps** (single tool call, straightforward output): leave `learning_objective` empty (the default). Learning is opt-in; simple steps don't earn their keep with the learning-agent overhead.
   - **Medium steps** (2-5 tool calls, clear pattern): Run with write access for **2-3 successful runs**, review learnings, then change to `learnings_access="read"` when new contributions become redundant.
   - **Complex steps** (many tool calls, branching logic, API interactions, error handling): Run with write access for **3-5 successful runs**. Review and curate learnings after each run — edit out noise and keep actionable patterns. Retain write access only while the step is still producing useful reusable HOW.
-  - **Sub-agent steps** (todo_task routes): Each sub-agent has its own learning access and objective; review them independently.
+  - **Sub-agent steps** (orchestrator routes): Each sub-agent has its own learning access and objective; review them independently.
 - **When to stop writes**: Change to `learnings_access="read"` when the same patterns repeat across successful runs. The execution agent still consumes the curated shared learnings without paying for a contribution turn.
 - **When to resume writes**: Restore `read-write` with a concrete objective if the description/tools change materially or failures reveal new reusable HOW.
 
@@ -271,11 +271,11 @@ When the user asks to enable scripted execution for a step, use: update_step_con
 - Boundary: if you can describe the instruction as one concrete file/topic transformation, use `targeted`. If the justification depends on comparing multiple steps, runs, or topic files, use `cross_step`.
 
 ### 9. Orchestrator (Sub-Workflow / Pipeline) — For Dynamic Delegation
-The `plan-design` reference owns step-type eligibility. Use `todo_task` only
+The `plan-design` reference owns step-type eligibility. Use `orchestrator` only
 when the parent makes a real runtime orchestration decision the static plan
 cannot directly express. Several routine actions do not justify an orchestrator.
 
-**When to use todo_task:**
+**When to use orchestrator:**
 - Runtime evidence determines which or how many specialist tasks are needed
 - The parent conditionally selects or fans out workers
 - The parent coordinates material runtime parallelism or adaptive retry/recovery
@@ -283,10 +283,9 @@ cannot directly express. Several routine actions do not justify an orchestrator.
 
 Different tools/skills/servers, separate learnings, progress visibility, and
 granular debugging can help choose boundaries **after** eligibility is proven;
-none is sufficient by itself. **A fixed child set and order does not justify
-`todo_task`.**
+none is sufficient by itself. **A fixed child set and order does not justify an `orchestrator` step.**
 
-**When NOT to use todo_task:**
+**When NOT to use orchestrator:**
 - Fixed API/SDK/CLI/data acquisition and stable transforms — use coherent scripted regular fetchers
 - One substantial reasoning outcome with same-context verification and repair — use one large message_sequence
 - A known linear checklist whose items share one output/retry boundary — keep it inside the owning step rather than delegating micro-tasks
@@ -298,71 +297,17 @@ none is sufficient by itself. **A fixed child set and order does not justify
 - Each sub-agent has its own **learning files**, **server/tool scoping**, **skills (via enabled_skills in step_config)**, and **validation schemas**
 - Sub-agents can be **individually debugged, re-run, and hardened** via the workshop tools
 - The orchestrator stays lean — it manages task flow, while sub-agents handle execution details
-- If one route still needs **multiple independently delegated sub-tasks with isolated contexts**, its **sub_agent_step** may be another **todo_task** — but stop at one nested layer. A known checklist or several same-context actions stay inside one large route `message_sequence`.
+- If one route still needs **multiple independently delegated sub-tasks with isolated contexts**, its **sub_agent_step** may be another **orchestrator** — but stop at one nested layer. A known checklist or several same-context actions stay inside one large route `message_sequence`.
 
-**Design principle:** Split by durable control boundary, not action count. A scripted fetcher may perform many related calls/transforms under one source/auth/retry/output contract, and a message sequence may perform a large reasoning job plus verification/repair. Use todo_task only when independent delegation itself adds value.
+**Design principle:** Split by durable control boundary, not action count. A scripted fetcher may perform many related calls/transforms under one source/auth/retry/output contract, and a message sequence may perform a large reasoning job plus verification/repair. Use orchestrator only when independent delegation itself adds value.
 
-**Rule of thumb:** For data workflows start with scripted fetcher(s) → durable DB/file evidence → one large agentic message sequence. Add routing, human gates, or todo_task only for real control boundaries.
+**Rule of thumb:** For data workflows start with scripted fetcher(s) → durable DB/file evidence → one large agentic message sequence. Add routing, human gates, or orchestrator only for real control boundaries.
 
-### 9a. Orchestrator scripted mode (deterministic delegation, 0 LLM tokens)
+### 9a. Deterministic delegation belongs in a scripted step, not an orchestrator
 
-When a todo_task orchestrator's flow is **stable and deterministic** — the set of sub-agent calls is known in advance and branches only on success/failure — you may author a `main.py` and mark the step `declared_execution_mode=scripted` when the user explicitly asks for this fast path (never auto-promote on your own). 10+ successful runs across the relevant scenarios/groups proving the route behavior is stable are the bar for freezing it with `lock_code`, not for creating the user-requested scripted route. At runtime the script runs first; any failure falls back to the normal LLM orchestrator with a fresh start.
-
-This scripted mode optimizes an already-justified orchestrator after its
-delegation stabilizes; it does not make a fixed child sequence eligible for a
-new `todo_task`.
-
-**Unlike regular-step scripted, the orchestrator path is read-only at runtime**: Workshop writes `learnings/{step-id}/main.py` once, and the runtime never repairs or rewrites it. There is no fix loop, no save-back. Script failures are surfaced so Workshop can regenerate `main.py` manually if needed.
-
-**Eligibility (hard constraints, enforced at runtime):**
-- `declared_execution_mode="scripted"` on the todo_task step (set via `update_step_config(step_id, declared_execution_mode="scripted")`)
-- `len(predefined_routes) >= 1` — route IDs the script may reference
-
-Either missing → the script is never attempted, even if `main.py` exists.
-
-**When to pick it:**
-- The user described the flow as a stable sequence ("for each X call route A then route B")
-- Sub-agent inputs can be built deterministically from the step's context dependencies + prior route outputs
-- Branching is limited to retry-on-failure / success-path-only — not adaptive reasoning about sub-agent results
-
-**When NOT to pick it:**
-- The orchestrator must decide per item whether to delegate or skip based on semantic inspection of prior results
-- The flow needs ad-hoc generic-agent calls — keep the step on the normal LLM path
-- Only one predefined route exists *and* the flow is a single call — make it a regular scripted step instead; the orchestrator shell adds no value
-
-**Authoring `main.py`:**
-
-Write the script to `learnings/{step-id}/main.py` using the same bridge conventions as regular scripted steps, with one addition — sub-agent delegation goes through the workflow's custom tool endpoint:
-
-```python
-import os, json, requests
-
-def call_sub_agent(route_id: str, todo_id: str, instructions: str) -> dict:
-    url = os.environ['MCP_API_URL'] + '/tools/custom/call_sub_agent'
-    headers = {
-        'Authorization': f'Bearer {os.environ["MCP_API_TOKEN"]}',
-        'Content-Type': 'application/json',
-    }
-    body = {'route_id': route_id, 'todo_id': todo_id, 'instructions': instructions}
-    resp = requests.post(url, json=body, headers=headers, timeout=600)
-    resp.raise_for_status()
-    payload = resp.json()
-    if not payload.get('success'):
-        raise RuntimeError(f'sub-agent {route_id} failed: {payload.get("error", "unknown")}')
-    return json.loads(payload['result'])
-```
-
-Rules:
-- Only `call_sub_agent` is allowed — never launch `run_in_background`, never run arbitrary shell or MCP tools directly. If you need a different tool, add it as a new predefined route.
-- `route_id` values must match one of the step's `predefined_routes` — unknown route IDs will fail at runtime.
-- Let unhandled exceptions bubble up. A non-zero exit is the fallback signal — the runtime drops to the LLM orchestrator with no script state carried over. Do not wrap everything in `try/except` that swallows failures; that makes fallback undetectable.
-- Read context dependencies from `sys.argv` (same convention as regular scripted). Write final outputs to `os.environ['STEP_OUTPUT_DIR']` if the step has a validation_schema.
-- Set a `validation_schema` on the orchestrator step so fast-path success is deterministically verifiable (artifact presence). Without one, any exit-zero script is treated as success.
-
-**Fallback behavior (what happens when the script fails):**
-- Script exits non-zero OR pre-validation fails → normal LLM orchestrator runs, starting fresh. It has no memory of what the script did — it will re-plan from the step description and predefined routes.
-- This means every sub-agent the script already called will likely be called again by the LLM. Design scripts so partial-work reruns are safe (idempotent route calls, or output files the LLM can pick up via `previous_steps_summary`).
-
-**Not supported (yet):**
-- Mid-run state handoff to the LLM (seeded fallback) — always a fresh start
-- Auto-regeneration of `main.py` after repeated fallbacks — regenerate manually via workshop tools
+There is no scripted mode for `orchestrator`. If an orchestrator's delegation turns out to be
+a fixed set of route calls that only branches on success/failure, the orchestrator is not
+making a runtime decision and should not exist: express the fixed calls as plan steps, or
+as one regular scripted step whose `main.py` calls the routes through the workflow's
+custom-tool endpoint. That keeps the regular scripted repair loop and save-back, which the
+old orchestrator fast path never had.

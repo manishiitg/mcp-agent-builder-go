@@ -19,7 +19,7 @@ export const SubAgentToolCallDisplay: React.FC<SubAgentToolCallDisplayProps> = (
   } catch { /* ignore */ }
 
   const routeId = parsedArgs.route_id as string | undefined
-  const todoId = parsedArgs.todo_id as string | undefined
+  const todoId = parsedArgs.task_id as string | undefined
   const instructions = parsedArgs.instructions as string | undefined
   const successCriteria = parsedArgs.success_criteria as string | undefined
   const preferredTier = parsedArgs.preferred_tier as number | undefined

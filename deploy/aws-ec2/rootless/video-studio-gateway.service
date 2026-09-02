@@ -5,9 +5,12 @@ After=video-studio-agent.service video-studio-workspace.service
 [Service]
 EnvironmentFile=%h/video-studio/.env
 Environment=HOME=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=FRONTEND_DIR=%h/video-studio/current/frontend
 WorkingDirectory=%h/video-studio/current
 ExecStart=%h/video-studio/current/bin/video-studio-gateway
+StandardOutput=append:%h/video-studio/logs/gateway.log
+StandardError=append:%h/video-studio/logs/gateway.log
 Restart=always
 RestartSec=3
 

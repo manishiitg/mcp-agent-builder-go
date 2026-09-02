@@ -266,7 +266,7 @@ func TestArtifactReviewNotices(t *testing.T) {
 		t.Fatalf("delete notice missing loud drift-review-flag-failed warning:\n%s", failedDeleteNotice)
 	}
 
-	routeNotice := buildTodoTaskRouteArtifactReviewNotice("parent", "route-a", "deleted", true, true, false)
+	routeNotice := buildOrchestratorRouteArtifactReviewNotice("parent", "route-a", "deleted", true, true, false)
 	for _, want := range []string{"Todo route artifact review required", "description_reviewed", "drift_review", "learnings/route-a"} {
 		if !strings.Contains(routeNotice, want) {
 			t.Fatalf("route notice missing %q:\n%s", want, routeNotice)
@@ -286,7 +286,7 @@ func TestArtifactReviewNoticesSurfaceDriftReviewFlagFailure(t *testing.T) {
 		t.Fatalf("update notice does not surface the drift_review flag failure:\n%s", updateNotice)
 	}
 
-	routeNotice := buildTodoTaskRouteArtifactReviewNotice("parent", "route-a", "deleted", false, false, true)
+	routeNotice := buildOrchestratorRouteArtifactReviewNotice("parent", "route-a", "deleted", false, false, true)
 	if !strings.Contains(routeNotice, "FAILED to flag") {
 		t.Fatalf("route notice does not surface the drift_review flag failure:\n%s", routeNotice)
 	}

@@ -71,7 +71,7 @@ func TestValidateStepTypeDriftChecksRequiresReferenceBackedBestPractices(t *test
 	for stepType, requiredCheckID := range map[string]string{
 		"regular":          scriptedBestPracticesDriftCheckID,
 		"message_sequence": messageSequenceBestPracticesDriftCheckID,
-		"todo_task":        todoTaskBestPracticesDriftCheckID,
+		"todo_task":        orchestratorBestPracticesDriftCheckID,
 		"routing":          routingBestPracticesDriftCheckID,
 		"branch":           branchBestPracticesDriftCheckID,
 	} {

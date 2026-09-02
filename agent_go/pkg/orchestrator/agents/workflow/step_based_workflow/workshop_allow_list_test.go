@@ -27,6 +27,7 @@ func TestWorkshopModeGrantsToolsThePromptsInstructAgentsToCall(t *testing.T) {
 		"list_llm_capabilities",
 		"get_api_spec",
 		"query_workflow_db",
+		"create_workflow_database_snapshot",
 	} {
 		if !allowed[tool] {
 			t.Errorf("%q is registered and named by the prompts but missing from the workshop allow-list; "+

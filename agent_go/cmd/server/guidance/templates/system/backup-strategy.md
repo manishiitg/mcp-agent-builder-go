@@ -187,6 +187,34 @@ write access and cannot write the workflow's `.git/` directory; attempting Git
 there produces misleading `FETCH_HEAD` / `index.lock: Operation not permitted`
 errors. This is a sandbox boundary, not a macOS ownership or mount problem.
 
+### Managed SQLite backup (mandatory when `covers` includes `db-sqlite`)
+
+The live `db/db.sqlite` database and its WAL/SHM sidecars are protected runtime
+state. Shell and generic file tools must not read, copy, stage, or unlock them.
+Before backup, use `create_workflow_database_snapshot` unless the scheduler has
+already supplied a current managed-snapshot receipt in the finalizer message.
+The workspace service reads SQLite through the database engine, includes all
+committed WAL rows, runs `PRAGMA integrity_check`, and atomically publishes the
+result at `backup/database/db.sqlite` with a stable checksum sidecar at
+`backup/database/db.sqlite.sha256`.
+
+Stage both managed files for a destination that covers `db-sqlite`.
+Do not stage `db/db.sqlite`, `db/db.sqlite-wal`, or `db/db.sqlite-shm`. Treat the
+managed snapshot as the database restore image and document that restore copies
+it back to `db/db.sqlite` while the workflow is stopped. If snapshot creation
+fails, record the database destination as partial/failed, then continue to
+Publish and Notify; backup failure never suppresses those independent actions.
+
+For a legacy repository that already tracks the live DB, migrate the Git index
+once without deleting the runtime file: add `db/db.sqlite`, `db/db.sqlite-wal`,
+and `db/db.sqlite-shm` to `.gitignore`, then use
+`git update-index --force-remove -- db/db.sqlite db/db.sqlite-wal db/db.sqlite-shm`.
+Stage `.gitignore`, the managed snapshot, and its checksum explicitly. Confirm with
+`git ls-files -- db/db.sqlite db/db.sqlite-wal db/db.sqlite-shm` (it must be
+empty) and `git ls-files -- backup/database/db.sqlite backup/database/db.sqlite.sha256`
+(it must name both managed files). Never use `rm`, `git rm` without `--cached`, or another command that
+could delete the live database.
+
 Assume the workflow folder is itself a git working tree with a single
 remote pointing at the per-workflow repo. Common operations:
 

@@ -153,6 +153,7 @@ Resources:
           test -x "$(runuser -u video-studio -- env HOME=/var/lib/video-studio npx --yes hyperframes@0.8.6 browser path | tail -n 1)"
           command -v agent-browser
           mkdir -p /opt/video-studio/releases /data/video-studio/{docs,workspace-db,agent-db,logs}
+          install -d -o video-studio -g video-studio -m 0755 /var/lib/video-studio/Downloads /var/lib/video-studio/video-studio/{releases,logs} /data/video-studio/docs/Downloads
           chmod 0755 /opt/video-studio /data/video-studio
 
   ElasticIpAssociation:

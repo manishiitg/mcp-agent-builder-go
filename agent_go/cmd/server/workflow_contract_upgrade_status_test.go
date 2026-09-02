@@ -39,7 +39,7 @@ func TestContractUpgradeStatusShowsWhatIsOwedAndTheActualInstruction(t *testing.
 
 	for _, want := range []string{
 		"Current: `1.0.20`",
-		"Pending migrations (11)",
+		"Pending migrations (12)",
 		"upgrade-current-artifact-contract",
 		"upgrade-direct-html-reports",
 		"upgrade-schedule-execution-model",
@@ -50,6 +50,7 @@ func TestContractUpgradeStatusShowsWhatIsOwedAndTheActualInstruction(t *testing.
 		"upgrade-report-activity-tab",
 		"upgrade-pulse-lifecycle-reconciliation",
 		"upgrade-pulse-actionable-backlog",
+		"upgrade-orchestrator-step-type",
 		// The full instruction text, not a summary of it — an owner judging
 		// whether a stalled migration is safe needs the actual words.
 		"NOTHING IS DELETED IN THIS MIGRATION",

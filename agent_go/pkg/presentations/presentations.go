@@ -50,6 +50,10 @@ type Presentation struct {
 	Title         string
 	WorkspacePath string
 	SessionID     string
+	// Activity is copied from the tool's product.yaml declaration into the
+	// transient event. It is intentionally not persisted with the presentation
+	// row: it describes the announcement, not the durable media/document data.
+	Activity *orchestratorevents.PresentationActivity
 	// Payload, Resources, Actions are product-owned shapes specific to Kind.
 	// This package does not interpret them; it stores and forwards them
 	// verbatim, the same way the frontend's kind-keyed renderer registry
@@ -107,6 +111,13 @@ func workspaceDatabasePath(workspacePath string) string {
 		clean = strings.Join(parts[2:], "/")
 	}
 	return filepath.ToSlash(filepath.Join(clean, "db/db.sqlite"))
+}
+
+// DatabasePath returns the user-relative database path used by the workspace
+// API for a presentation workspace. Product HTTP handlers use this to inspect
+// a presentation before deleting its product-owned source files.
+func DatabasePath(workspacePath string) string {
+	return workspaceDatabasePath(workspacePath)
 }
 
 // Upsert writes one presentation row to <WorkspacePath>/db/db.sqlite and
@@ -198,5 +209,37 @@ func Upsert(ctx context.Context, client *workspace.Client, p Presentation) (Even
 		Title:          title,
 		WorkspacePath:  workspacePath,
 		Payload:        payload,
+		Activity:       p.Activity,
 	}, nil
+}
+
+// Delete removes one durable presentation row. The source media is intentionally
+// not handled here: a presentation can represent several product-owned files,
+// and only that product knows which files form one user-visible asset. Keeping
+// this operation limited to the database row lets the product delete those
+// files first and only then remove the UI record.
+func Delete(ctx context.Context, client *workspace.Client, workspacePath, presentationID, kind string) error {
+	workspacePath = strings.TrimSpace(workspacePath)
+	presentationID = strings.TrimSpace(presentationID)
+	kind = strings.TrimSpace(kind)
+	if workspacePath == "" {
+		return fmt.Errorf("presentation workspace path is required")
+	}
+	if presentationID == "" {
+		return fmt.Errorf("presentation id is required")
+	}
+	if kind == "" {
+		return fmt.Errorf("presentation kind is required")
+	}
+	_, err := client.MutateAuthorizedWorkflowDB(ctx, workspace.MutateWorkflowDBParams{
+		DBPath: workspaceDatabasePath(workspacePath),
+		Statements: []workspace.WorkflowDBMutationStatement{{
+			SQL:    "DELETE FROM ui_presentations WHERE id = ? AND kind = ?",
+			Params: []interface{}{presentationID, kind},
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("remove presentation: %w", err)
+	}
+	return nil
 }

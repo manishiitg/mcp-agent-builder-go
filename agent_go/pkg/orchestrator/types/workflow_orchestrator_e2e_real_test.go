@@ -127,7 +127,7 @@ func TestWorkflowE2ESingleRegularStepPiCLI(t *testing.T) {
 				// delegates real (small) work to. Each sub-agent
 				// produces a distinct deterministic token in its
 				// execution_result so we can verify both were actually
-				// invoked. validateTodoTaskStepFieldsTyped requires
+				// invoked. validateOrchestratorStepFieldsTyped requires
 				// route_id == sub_agent_step.id.
 				"predefined_routes": []map[string]interface{}{
 					{
@@ -790,7 +790,7 @@ func assertAllStepsExecutedAndDecisionsMatch(t *testing.T, walkRoot string, step
 		// todo_task: prompts.json is the cheapest proof the step
 		// reached its agent factory. The richer assertion (todos
 		// created+completed) requires reading runtime fields that
-		// the engine does not persist to disk (TodoTaskResponse is
+		// the engine does not persist to disk (OrchestratorDecision is
 		// runtime-only per planning_agent.go:646).
 		"step-double-check": {globs: []string{filepath.Join(walkRoot, "runs", "*", "*", "logs", "step-double-check", "execution", "todo-task-prompts.json")}},
 		// message_sequence persists session.json in the step's normal

@@ -26,14 +26,16 @@ describe('parsePresentationUpdatedEvent', () => {
       kind: 'media.video',
       title: 'Launch video',
       workspace_path: 'Chats/Video Studio/projects/demo',
-      payload: { path: 'outputs/final.mp4' },
+		payload: { path: 'outputs/final.mp4' },
+		activity: { label: 'Video ready', destination: 'Videos panel', detail: 'Ready to review' },
     })
     expect(parsePresentationUpdatedEvent(event)).toEqual({
       presentationId: 'presentation-abc',
       kind: 'media.video',
       title: 'Launch video',
       workspacePath: 'Chats/Video Studio/projects/demo',
-      payload: { path: 'outputs/final.mp4' },
+		payload: { path: 'outputs/final.mp4' },
+		activity: { label: 'Video ready', destination: 'Videos panel', detail: 'Ready to review' },
     })
   })
 
@@ -53,7 +55,10 @@ describe('parsePresentationUpdatedEvent', () => {
 
   it('defaults title, workspace path, and payload rather than throwing when absent', () => {
     const parsed = parsePresentationUpdatedEvent(typedEvent({ presentation_id: 'x', kind: 'media.video' }))
-    expect(parsed).toEqual({ presentationId: 'x', kind: 'media.video', title: '', workspacePath: '', payload: {} })
+		expect(parsed).toEqual({
+			presentationId: 'x', kind: 'media.video', title: '', workspacePath: '', payload: {},
+			activity: { label: '', destination: '', detail: '' },
+		})
   })
 
   // The real wire shape, captured from a live show_video call's persisted

@@ -30,7 +30,8 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 	// 385c95158 without a matching entry here, which left this invariant red.
 	add("LLM capability discovery tools", "list_llm_capabilities")
 	add("workshop plan tools",
-		"create_plan", "validate_plan_change", "migrate_message_sequence_code_items",
+		"create_plan", "validate_plan_change", "migrate_message_sequence_code_items", "migrate_orchestrator_step_type",
+		"add_orchestrator_step", "add_orchestrator_route", "update_orchestrator_step", "update_orchestrator_route", "delete_orchestrator_route",
 		"add_scripted_step", "add_message_sequence_step", "add_routing_step", "add_branch_step",
 		"add_human_input_step", "add_todo_task_step", "add_todo_task_route",
 		"update_scripted_step", "update_message_sequence_step", "update_routing_step", "update_branch_step",
@@ -195,7 +196,7 @@ func TestToolSetInvariants(t *testing.T) {
 		workshop[n] = true
 	}
 	for _, n := range []string{
-		"create_plan", "migrate_message_sequence_code_items", "add_scripted_step", "add_routing_step", "add_human_input_step",
+		"create_plan", "migrate_message_sequence_code_items", "migrate_orchestrator_step_type", "add_orchestrator_step", "add_orchestrator_route", "update_orchestrator_step", "update_orchestrator_route", "delete_orchestrator_route", "add_scripted_step", "add_routing_step", "add_human_input_step",
 		"update_scripted_step", "delete_plan_steps",
 		"execute_step", "get_human_input_request", "create_human_input_request", "answer_human_input_request",
 		"update_workflow_config", "update_step_config", "validate_report_html",

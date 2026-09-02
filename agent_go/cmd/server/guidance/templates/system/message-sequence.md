@@ -34,7 +34,7 @@ Use it when:
 - Turns read the same upstream context.
 - Critique and correction should happen in the same specialist conversation.
 - The unit has one tightly coupled outcome and should fail/retry together.
-- A todo_task route needs a specialist that can be re-entered during the same workflow run.
+- An orchestrator route needs a specialist that can be re-entered during the same workflow run.
 
 Do not use it when:
 
@@ -43,12 +43,12 @@ Do not use it when:
 - Work is a fixed API/SDK call, CLI command, data fetch, stable parse/normalize operation, or mechanical write; use a scripted regular step and consume its durable result here.
 - The workflow needs deterministic branching; use `branch` (small in-flow
   decision) or `routing` (major sub-workflow fork).
-- Work should be delegated independently; use `todo_task` routes.
+- Work should be delegated independently; use `orchestrator` routes.
 
 ## MEMORY
 
 - A top-level message_sequence runs its fixed item queue once.
-- A message_sequence inside a todo_task route can be re-entered during the same workflow run.
+- A message_sequence inside an orchestrator route can be re-entered during the same workflow run.
 - Route memory is in-memory only. It does not survive process restart or a later workflow run.
 - `message_sequence_restart=true` starts a clean route conversation when prior context is stale or contaminated.
 - `session.json` is an observability record, not resume state.
@@ -134,16 +134,16 @@ Use `foreach` when every selected database row must get one conversational turn:
 
 ## ROUTE PATTERNS
 
-Conversational route sub-agents use `message_sequence`, including stateless one-turn work. Use `regular` only for an explicitly scripted deterministic route. Use these patterns when designing or repairing todo_task predefined routes.
+Conversational route sub-agents use `message_sequence`, including stateless one-turn work. Use `regular` only for an explicitly scripted deterministic route. Use these patterns when designing or repairing orchestrator predefined routes.
 
-For a todo_task route, use `message_sequence` when the orchestrator should preserve specialist memory. As a todo_task predefined route, a message_sequence behaves like a reusable specialist sub-agent: Normal repeated calls reuse the route conversation and each call is delivered as a re-entry user message. Set `message_sequence_restart=true` to restart only when the prior conversation is stale, wrong, or contaminated.
+For an orchestrator route, use `message_sequence` when the orchestrator should preserve specialist memory. As an orchestrator predefined route, a message_sequence behaves like a reusable specialist sub-agent: Normal repeated calls reuse the route conversation and each call is delivered as a re-entry user message. Set `message_sequence_restart=true` to restart only when the prior conversation is stale, wrong, or contaminated.
 
 ## MESSAGE SEQUENCE ROUTE PATTERNS
 
 - Stateful specialist: re-enter one route for follow-up work.
 - Test/fix loop: validate externally, then re-enter the specialist with concrete failures.
 - Maker/reviewer: keep creation and independent review in separate routes.
-- Panel: separate domain specialists coordinated by a todo_task orchestrator.
+- Panel: separate domain specialists coordinated by an orchestrator.
 - Clean-room retry: restart a contaminated specialist route.
 - Human feedback: send approved operator feedback into the same route conversation.
 

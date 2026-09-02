@@ -286,11 +286,7 @@ export type EventTypeString =
   | 'batch_execution_canceled'
   // Todo Task Events
   | 'todo_task_route_selected'
-  | 'todo_task_item_created'
-  | 'todo_task_item_updated'
-  | 'todo_task_item_completed'
   | 'todo_task_step_completed'
-  | 'todo_task_status_update'
   // Delegation Events
   | 'delegation_start'
   | 'delegation_end'
@@ -413,11 +409,7 @@ export interface EventTypeToDataMap {
   'batch_execution_canceled': BatchExecutionCanceledEvent;
   // Todo Task Events
   'todo_task_route_selected': TodoTaskRouteSelectedEvent;
-  'todo_task_item_created': TodoTaskItemCreatedEvent;
-  'todo_task_item_updated': TodoTaskItemUpdatedEvent;
-  'todo_task_item_completed': TodoTaskItemCompletedEvent;
   'todo_task_step_completed': TodoTaskStepCompletedEvent;
-  'todo_task_status_update': TodoTaskStatusUpdateEvent;
   // Delegation Events
   'delegation_start': DelegationStartEvent;
   'delegation_end': DelegationEndEvent;
@@ -469,78 +461,6 @@ export interface TodoTaskRouteSelectedEvent {
   preferred_tier_label?: string; // "High", "Medium", "Low"
 }
 
-export interface TodoTaskItemCreatedEvent {
-  timestamp?: string;
-  trace_id?: string;
-  span_id?: string;
-  event_id?: string;
-  parent_id?: string;
-  is_end_event?: boolean;
-  correlation_id?: string;
-  hierarchy_level?: number;
-  session_id?: string;
-  component?: string;
-  metadata?: {
-    [k: string]: unknown;
-  };
-  step_index?: number;
-  step_path?: string;
-  step_id?: string;
-  todo_id?: string;
-  title?: string;
-  description?: string;
-  priority?: string;
-  created_by?: string;
-}
-
-export interface TodoTaskItemUpdatedEvent {
-  timestamp?: string;
-  trace_id?: string;
-  span_id?: string;
-  event_id?: string;
-  parent_id?: string;
-  is_end_event?: boolean;
-  correlation_id?: string;
-  hierarchy_level?: number;
-  session_id?: string;
-  component?: string;
-  metadata?: {
-    [k: string]: unknown;
-  };
-  step_index?: number;
-  step_path?: string;
-  step_id?: string;
-  todo_id?: string;
-  title?: string;
-  old_status?: string;
-  new_status?: string;
-  updated_by?: string;
-  notes?: string;
-}
-
-export interface TodoTaskItemCompletedEvent {
-  timestamp?: string;
-  trace_id?: string;
-  span_id?: string;
-  event_id?: string;
-  parent_id?: string;
-  is_end_event?: boolean;
-  correlation_id?: string;
-  hierarchy_level?: number;
-  session_id?: string;
-  component?: string;
-  metadata?: {
-    [k: string]: unknown;
-  };
-  step_index?: number;
-  step_path?: string;
-  step_id?: string;
-  todo_id?: string;
-  title?: string;
-  result?: string;
-  completed_by?: string;
-}
-
 export interface TodoTaskStepCompletedEvent {
   timestamp?: string;
   trace_id?: string;
@@ -564,21 +484,6 @@ export interface TodoTaskStepCompletedEvent {
   completed_count?: number;
   completion_reason?: string;
   next_step_id?: string;
-}
-
-export interface TodoTaskStatusUpdateEvent {
-  timestamp?: string;
-  component?: string;
-  correlation_id?: string;
-  step_index?: number;
-  step_path?: string;
-  step_id?: string;
-  step_title?: string;
-  iteration?: number;
-  tasks_content?: string;
-  route_id?: string;
-  todo_id?: string;
-  status_phase?: string;
 }
 
 // Delegation event data types (not in generated schema)

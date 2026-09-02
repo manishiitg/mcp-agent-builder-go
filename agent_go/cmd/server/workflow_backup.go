@@ -169,6 +169,10 @@ var backupHashFiles = []string{
 	"planning/step_override.json",
 	"variables/variables.json",
 	"evaluation/evaluation_plan.json",
+	// The protected live db/db.sqlite is intentionally unreadable here. Its
+	// managed WAL-aware restore image is the backup-owned database source, so a
+	// DB-only change must still invalidate LastSourceHash.
+	"backup/database/db.sqlite.sha256",
 }
 
 var backupHashFolders = []string{

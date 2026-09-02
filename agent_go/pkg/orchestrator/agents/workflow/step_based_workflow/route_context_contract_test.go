@@ -44,8 +44,8 @@ func TestTodoRouteHasOneDurableContextChannel(t *testing.T) {
 
 func TestTodoRouteMutationSchemasDoNotAdvertiseDeadContextChannel(t *testing.T) {
 	for name, schema := range map[string]string{
-		"add":    getAddTodoTaskRouteSchema(),
-		"update": getUpdateTodoTaskRouteSchema(),
+		"add":    getAddOrchestratorRouteSchema(),
+		"update": getUpdateOrchestratorRouteSchema(),
 	} {
 		if strings.Contains(schema, "context_to_pass") {
 			t.Fatalf("%s route schema still advertises context_to_pass", name)
