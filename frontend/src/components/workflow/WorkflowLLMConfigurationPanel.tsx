@@ -464,23 +464,34 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     onChange({ schema_version: 2, mode: 'provider_profile', provider: selectedProfile.provider as LLMProvider })
   }
 
+  // Pinning any one role switches the workflow from the managed provider
+  // profile to per-role (explicit) mode. On that first switch every OTHER
+  // role has to be seeded too -- from the current config if it already had
+  // one (rare: switching back from a prior explicit setup), else from the
+  // provider's own defaults -- or an explicit config with only the touched
+  // role set would leave the rest with no model at all. Previously this
+  // bailed out entirely while still on a provider profile (silent no-op:
+  // the very first edit did not save) and, even past that, only wrote the
+  // single touched role.
   const updateRole = (key: RoleKey, next: AgentLLMConfig, preserveFallbacks = true) => {
-    if (!advanced) return
     const current = roleConfig(llmConfig, key)
     const withFallbacks: AgentLLMConfig = {
       ...next,
       ...(preserveFallbacks && current?.fallbacks?.length ? { fallbacks: current.fallbacks } : {}),
     }
-    const nextConfig: PresetLLMConfig = { ...llmConfig, schema_version: 2, mode: 'explicit' }
-    if (key === 'tier_1' || key === 'tier_2' || key === 'tier_3') {
-      nextConfig.tiered_config = {
-        tier_1: llmConfig?.tiered_config?.tier_1 ?? defaults?.tier1 ?? withFallbacks,
-        tier_2: llmConfig?.tiered_config?.tier_2 ?? defaults?.tier2 ?? withFallbacks,
-        tier_3: llmConfig?.tiered_config?.tier_3 ?? defaults?.tier3 ?? withFallbacks,
-        [key]: withFallbacks,
-      }
-    } else {
-      nextConfig[key] = withFallbacks
+    const seed = (roleKey: RoleKey): AgentLLMConfig | undefined =>
+      key === roleKey ? withFallbacks : (roleConfig(llmConfig, roleKey) ?? defaultForRole(roleKey))
+    const nextConfig: PresetLLMConfig = {
+      ...llmConfig,
+      schema_version: 2,
+      mode: 'explicit',
+      builder_llm: seed('builder_llm'),
+      pulse_llm: seed('pulse_llm'),
+      tiered_config: {
+        tier_1: seed('tier_1') ?? withFallbacks,
+        tier_2: seed('tier_2') ?? withFallbacks,
+        tier_3: seed('tier_3') ?? withFallbacks,
+      },
     }
     onChange(nextConfig)
   }
