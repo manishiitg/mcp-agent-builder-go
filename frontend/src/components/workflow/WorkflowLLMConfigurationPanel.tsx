@@ -346,11 +346,20 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     }
     const roles = ROLE_KEYS.map(key => roleConfig(llmConfig, key))
     if (roles.some(role => !role)) return null
-    if (!roles.every(role => role!.provider === 'pi-cli')) return null
-    const groups = new Set(roles.map(role => resolvePiModelGroup(role!.model_id)))
-    if (groups.size !== 1) return null
-    const [group] = Array.from(groups)
-    return group ? piGroupRowId(group) : null
+    const providers = new Set(roles.map(role => role!.provider))
+    if (providers.size !== 1) return null
+    const [provider] = Array.from(providers)
+    if (provider === 'pi-cli') {
+      const groups = new Set(roles.map(role => resolvePiModelGroup(role!.model_id)))
+      if (groups.size !== 1) return null
+      const [group] = Array.from(groups)
+      return group ? piGroupRowId(group) : null
+    }
+    // A per-role setup that stays on one coding-agent provider (e.g. every
+    // role on Claude Code, just different models/efforts) still "runs on"
+    // that provider: match its row so the compact status line and the
+    // Models per role section show instead of "custom per-role setup".
+    return manifestEntries.some(entry => entry.id === provider && entry.integration_kind === 'coding_agent') ? provider : null
   }, [llmConfig, manifestEntries])
 
   const visibleRows = useMemo(() => {
@@ -662,11 +671,23 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
       )
     }
     if (advanced) {
+      // Roles spread across more than one provider, so no single row is "in
+      // use". The per-role section below is where that setup is visible and
+      // editable; "Change provider" replaces all of it with one provider.
       return (
-        <div className="text-sm">
-          <span className="text-muted-foreground">This workflow uses a </span>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+          <span className="text-muted-foreground">This workflow uses a</span>
           <span className="font-medium text-foreground">custom per-role setup</span>
-          <span className="text-muted-foreground"> — see Advanced below.</span>
+          <span className="text-muted-foreground">— see Models per role below.</span>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => setChanging(open => !open)}
+              className="ml-auto rounded-md border border-border px-2 py-0.5 text-xs font-medium text-foreground hover:bg-muted"
+            >
+              {changing ? 'Cancel' : 'Change provider'}
+            </button>
+          )}
         </div>
       )
     }
@@ -932,7 +953,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
         {renderTokenLine()}
       </div>
 
-      {(!selectedRow || changing) && (
+      {((!selectedRow && !advanced) || changing) && (
       <>
       <div className="flex items-center gap-2">
         <div className="relative min-w-0 flex-1">
@@ -999,7 +1020,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
       </>
       )}
 
-      {!(!selectedRow || changing) && (
+      {!changing && (selectedRow || advanced) && (
       <div className="rounded-md border border-border">
         <button
           type="button"
