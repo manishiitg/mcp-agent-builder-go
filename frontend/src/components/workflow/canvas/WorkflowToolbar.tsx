@@ -1,7 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
-  ChevronDown,
   Cloud,
   Globe,
   LoaderCircle,
@@ -73,9 +72,8 @@ function ToolbarGroup({ label, state, dotClass, open, onToggle, title, children,
         onClick={onToggle}
         aria-expanded={open}
         title={title}
-        className="relative inline-flex h-full items-center gap-1 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        className={`relative inline-flex h-full items-center gap-1.5 rounded-l-lg px-2.5 text-[11px] font-medium transition-colors hover:text-foreground ${open ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted'}`}
       >
-        <ChevronDown className={`h-3 w-3 transition-transform ${open ? '' : '-rotate-90'}`} />
         <span>{label}</span>
         {state && <span className="max-w-[9rem] truncate text-[10px] font-semibold tracking-wide text-foreground/80">{state}</span>}
         {!open && dotClass && <span className={`absolute right-0.5 top-1 h-1.5 w-1.5 rounded-full border border-background ${dotClass}`} />}
