@@ -421,3 +421,23 @@ func profileDisablesVirtualTool(profile *resolvedAgentProfile, toolName string) 
 	}
 	return false
 }
+
+// agentProfileReadOnlyFolders is what a project-scoped profile may read but
+// not write beyond its own workspace: the platform default (skills,
+// subagents, Downloads, plus the workflow read-only set) unless the
+// profile's sandbox policy names its own list. Entries are normalized to
+// the trailing-slash form the folder guard compares with.
+func agentProfileReadOnlyFolders(sandbox agentprofiles.SandboxPolicy, workflowReadOnlyFolders []string) []string {
+	if sandbox.ReadOnly == nil {
+		return append([]string{"skills/", "subagents/", "Downloads/"}, workflowReadOnlyFolders...)
+	}
+	out := make([]string, 0, len(sandbox.ReadOnly))
+	for _, folder := range sandbox.ReadOnly {
+		clean := strings.Trim(strings.TrimSpace(folder), "/")
+		if clean == "" {
+			continue
+		}
+		out = append(out, clean+"/")
+	}
+	return out
+}

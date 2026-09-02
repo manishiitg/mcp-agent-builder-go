@@ -1,0 +1,179 @@
+package agentprofiles
+
+import (
+	"strings"
+	"testing"
+	"testing/fstest"
+)
+
+const baseManifest = `schema_version: 2
+dependencies: {}
+prompt:
+  file: prompts/parent.md
+  variables:
+    NAME: Quill
+profile:
+  id: family-parent
+  name: Parent
+  version: 1
+  runtime:
+    transport: auto
+    conversation:
+      mode: singleton
+    workspace:
+      mode: fixed
+      root: Chats
+  built_in: true
+`
+
+func manifestFS(extra string, files map[string]string) fstest.MapFS {
+	fsys := fstest.MapFS{
+		"product.yaml":      {Data: []byte(baseManifest + extra)},
+		"prompts/parent.md": {Data: []byte("You are {{NAME}} for the parent. Today is {{TIME}}.")},
+		"prompts/child.md":  {Data: []byte("You are {{NAME}} for the child.")},
+	}
+	for name, data := range files {
+		fsys[name] = &fstest.MapFile{Data: []byte(data)}
+	}
+	return fsys
+}
+
+func TestLoadProductManifestSingleProfile(t *testing.T) {
+	m, err := LoadProductManifest(manifestFS("", nil), "product.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := m.BuiltinProfiles(manifestFS("", nil), map[string]string{"TIME": "now"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 1 || profiles[0].ID != "family-parent" {
+		t.Fatalf("profiles = %+v", profiles)
+	}
+	if got := profiles[0].SystemPromptTemplate; got != "You are Quill for the parent. Today is now." {
+		t.Fatalf("prompt = %q", got)
+	}
+	if err := Validate(profiles[0]); err != nil {
+		t.Fatalf("rendered profile should validate: %v", err)
+	}
+}
+
+const childProfile = `profiles:
+  - id: family-child
+    name: Child
+    version: 1
+    prompt:
+      file: prompts/child.md
+      variables:
+        NAME: Quill
+    tool_policy:
+      mode: allowlist
+      enabled: [execute_shell_command]
+    runtime:
+      transport: auto
+      conversation:
+        mode: keyed
+        key_type: project
+      workspace:
+        mode: project
+        projects_root: Chats/SparkQuill/activities
+      capabilities:
+        secrets: disabled
+      sandbox:
+        mode: strict
+        network: disabled
+        read_only: [Downloads]
+    built_in: true
+`
+
+func TestLoadProductManifestMultipleProfiles(t *testing.T) {
+	fsys := manifestFS(childProfile, nil)
+	m, err := LoadProductManifest(fsys, "product.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := m.BuiltinProfiles(fsys, map[string]string{"TIME": "now"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 2 || profiles[1].ID != "family-child" {
+		t.Fatalf("profiles = %+v", profiles)
+	}
+	child := profiles[1]
+	if child.SystemPromptTemplate != "You are Quill for the child." {
+		t.Fatalf("child prompt = %q", child.SystemPromptTemplate)
+	}
+	if !child.Runtime.Sandbox.IsStrict() || !child.Runtime.Sandbox.NetworkDisabled() || len(child.Runtime.Sandbox.ReadOnly) != 1 {
+		t.Fatalf("child sandbox = %+v", child.Runtime.Sandbox)
+	}
+	if child.Runtime.Capabilities.Secrets != CapabilityDisabled {
+		t.Fatalf("child secrets = %q", child.Runtime.Capabilities.Secrets)
+	}
+	for _, p := range profiles {
+		if err := Validate(p); err != nil {
+			t.Fatalf("%s: %v", p.ID, err)
+		}
+	}
+	if _, ok := m.FindProfile("family-child"); !ok {
+		t.Fatal("FindProfile should see the extra profile")
+	}
+}
+
+func TestLoadProductManifestRejectsBadShapes(t *testing.T) {
+	cases := map[string]string{
+		"duplicate id": `profiles:
+  - id: family-parent
+    name: Dup
+    version: 1
+    prompt: {file: prompts/child.md}
+`,
+		"missing prompt": `profiles:
+  - id: family-child
+    name: Child
+    version: 1
+`,
+		"unknown key": `profiles:
+  - id: family-child
+    name: Child
+    version: 1
+    prompt: {file: prompts/child.md}
+    unknown_key: red
+`,
+		"missing prompt file": `profiles:
+  - id: family-child
+    name: Child
+    version: 1
+    prompt: {file: prompts/missing.md}
+`,
+	}
+	for name, extra := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := LoadProductManifest(manifestFS(extra, nil), "product.yaml"); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
+	}
+}
+
+func TestSandboxPolicyValidation(t *testing.T) {
+	base := Profile{ID: "p", Name: "P", Version: 1, SystemPromptTemplate: "hi", BuiltIn: true, Runtime: RuntimePolicy{Transport: "auto"}}
+	ok := base
+	ok.Runtime.Sandbox = SandboxPolicy{Mode: "strict", Network: "disabled", ReadOnly: []string{"Downloads"}}
+	if err := Validate(ok); err != nil {
+		t.Fatal(err)
+	}
+	bad := []SandboxPolicy{
+		{Mode: "jail"},
+		{Network: "sometimes"},
+		{Network: "disabled"}, // needs strict
+		{Mode: "strict", ReadOnly: []string{"../etc"}},
+		{Mode: "strict", ReadOnly: []string{"/abs"}},
+	}
+	for i, sb := range bad {
+		p := base
+		p.Runtime.Sandbox = sb
+		if err := Validate(p); err == nil || !strings.Contains(err.Error(), "sandbox") {
+			t.Fatalf("case %d should fail on sandbox, got %v", i, err)
+		}
+	}
+}

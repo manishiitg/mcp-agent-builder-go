@@ -224,6 +224,16 @@ not exercised against a real product turn. The decision itself stands; the
 migration plan is at step 2 with only secrets remaining (recommended:
 drop it).
 
+Step 3 landed on 2026-09-03 as well: `profiles:` in product.yaml (one shared
+loader, `agentprofiles.LoadProductManifest`, replacing the three per-product
+copies), a per-profile prompt source, and `runtime.sandbox` (`mode: strict`,
+`network: disabled`, `read_only:`) plumbed from the profile through the
+session folder guard to the workspace shell isolator, which already had the
+deny-by-default seatbelt SparkQuill's child shell used. Verified with a real
+sandbox-exec run: a socket connect is refused by the kernel under
+strict/no-network and reaches the port under strict/network. Nothing on the
+SparkQuill side moved yet; step 4 writes its product.yaml against this.
+
 Decisions taken the same day, which fix the shape of steps 3-5:
 
 - **SparkQuill stays a standalone app.** The cutover target is a

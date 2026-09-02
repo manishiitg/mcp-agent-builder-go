@@ -5015,13 +5015,20 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					// already has.
 					profileRoot := agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder)
 					profileWrite := strings.TrimSuffix(profileRoot, "/") + "/"
-					profileReadOnly := append([]string{"skills/", "subagents/", "Downloads/"}, workflowReadOnlyFolders...)
+					sandbox := resolvedProfile.Definition.Runtime.Sandbox
+					profileReadOnly := agentProfileReadOnlyFolders(sandbox, workflowReadOnlyFolders)
 					workspaceExecutors = wrapExecutorsWithPlanFolderGuard(workspaceExecutors, profileRoot, profileReadOnly, perUserChatHistory)
 					workspace.SetSessionWorkingDir(sessionID, profileRoot)
 					workspace.SetSessionFolderGuard(sessionID,
 						append([]string{profileWrite, perUserChatHistory}, profileReadOnly...),
 						[]string{profileWrite, perUserChatHistory},
 					)
+					if sandbox.IsStrict() {
+						// The profile asked for the deny-by-default shell: only the
+						// paths above, system binaries and scratch exist for the
+						// command, with network cut when the policy says so.
+						workspace.SetSessionSandbox(sessionID, true, sandbox.NetworkDisabled())
+					}
 					if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, hostDownloadsBrowserMode(req)); hostDownloads != "" {
 						log.Printf("[AGENT PROFILE FOLDER GUARD] Added read-write CDP host Downloads: %s", hostDownloads)
 					}
@@ -5181,7 +5188,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					if !isWorkflowPhase {
 						if resolvedProfile != nil && !isGlobalScopedProfile(resolvedProfile) {
 							profileRoot := agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder)
-							profileReadOnly := append([]string{"skills/", "subagents/", "Downloads/"}, workflowReadOnlyFolders...)
+							profileReadOnly := agentProfileReadOnlyFolders(resolvedProfile.Definition.Runtime.Sandbox, workflowReadOnlyFolders)
 							return wrapExecutorsWithPlanFolderGuard(execs, profileRoot, profileReadOnly)
 						}
 						additionalFolders := append([]string{}, resolvedGrants.WriteFolders...)

@@ -32,6 +32,47 @@ from `agent_go/internal/financeproduct/` or `dominionproduct/`, not Video
 Studio's — copying the wrong shape is how several of the gotchas below get
 reintroduced.
 
+## More than one profile per product: `profiles:`
+
+Since 2026-09-03 a product may declare extra profiles next to its primary
+one. `profile:` (with the top-level `prompt:`) stays the primary profile, the
+one the product surface opens; `profiles:` lists the others, each with its
+own `prompt:` block. All profiles of a product share its dependencies,
+branding and workflows and carry the same `Product` tag, so a user granted
+the product gets every one of them; what differs per profile is the prompt,
+tools, skills, commands and runtime policy.
+
+```yaml
+prompt:
+  file: prompts/parent.md
+profile:
+  id: family-parent
+  ...
+profiles:
+  - id: family-child
+    name: Child
+    version: 1
+    prompt:
+      file: prompts/child.md
+    tool_policy: { mode: allowlist, enabled: [execute_shell_command, ...] }
+    runtime:
+      conversation: { mode: keyed, key_type: project }   # one chat per activity
+      capabilities: { secrets: disabled }
+      sandbox: { mode: strict, network: disabled, read_only: [Downloads] }
+```
+
+One loader serves every product: `agentprofiles.LoadProductManifest` (unknown
+keys rejected, dependency manifest validated, command prompt files resolved,
+duplicate ids and missing prompts refused), and `ProductManifest.BuiltinProfiles`
+renders each prompt and returns the profiles ready to register. The three
+shipped products use it through a one-line `type ProductManifest =
+agentprofiles.ProductManifest` alias; do not copy the loader again.
+
+The first product with two profiles is SparkQuill (parent and child). The
+child is a PIN on the parent's account, not a user of its own, so the child
+profile lives under the same user folder and switching between the two is a
+surface concern gated by the PIN, not a permission change.
+
 ## Field-by-field, with the load-bearing gotchas
 
 ### `profile.scope: project` vs `global`
@@ -207,6 +248,33 @@ wording, don't invent your own weaker version of it.
 
 Verifying this is genuinely working (not just registered) needs a live test,
 not a static check — see the verification checklist below.
+
+### `runtime.sandbox` — a deny-by-default shell for one profile
+
+By default a project-scoped profile gets the folder guard: its conversation
+workspace is writable, `skills/`, `subagents/` and `Downloads/` are read-only,
+and the command runs in an allow-by-default kernel sandbox with network. That
+is right for a parent or an operator. It is wrong for a child, or any profile
+that must not see the rest of the machine:
+
+```yaml
+runtime:
+  sandbox:
+    mode: strict         # deny-by-default: only the workspace, the read_only
+                         # folders, system binaries and scratch space exist
+    network: disabled    # strict mode only; omit or "allowed" keeps network
+    read_only: [Downloads]   # replaces the default read-only list; [] = none
+  capabilities:
+    secrets: disabled    # the shell environment then carries no secrets
+```
+
+What enforces it: the server applies the policy in the same place it applies
+the folder guard (`workspace.SetSessionSandbox`), it travels to the workspace
+shell handler in the folder-guard config (`strict_allowlist`, `deny_network`),
+and `security.Isolator` builds the seatbelt profile from it. Fully enforced on
+macOS; on Linux the path rules apply but network is not cut (the Linux
+isolator does not implement it yet). Pair it with `tool_policy.mode: allowlist`
+so the profile cannot reach tools that bypass the shell.
 
 ### `dependencies` — only if you actually have a per-project workspace
 

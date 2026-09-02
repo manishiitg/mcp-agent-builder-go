@@ -888,3 +888,57 @@ func TestMountNamespaceCommandUsesUnprivilegedUserNamespace(t *testing.T) {
 		}
 	}
 }
+
+// TestStrictSandboxNetworkPolicy pins the two shapes an agent profile's
+// runtime.sandbox policy produces: deny-by-default with network cut, and
+// deny-by-default with network opted in. The execution half runs a real
+// socket connect under sandbox-exec: with network denied the kernel refuses
+// the socket itself ("Operation not permitted"); with network allowed the
+// connect reaches the (closed) port and is refused instead.
+func TestStrictSandboxNetworkPolicy(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Skipping macOS-specific test")
+	}
+	env := &TestEnvironment{}
+	if err := env.Setup(t); err != nil {
+		t.Fatalf("Failed to setup test environment: %v", err)
+	}
+	defer env.Cleanup()
+
+	noNetwork := &Isolator{ReadPaths: []string{env.ReadOnlyDir}, WritePaths: []string{env.ReadWriteDir}, WorkDir: env.TempDir, BaseDir: env.TempDir, StrictAllowlist: true}
+	withNetwork := &Isolator{ReadPaths: []string{env.ReadOnlyDir}, WritePaths: []string{env.ReadWriteDir}, WorkDir: env.TempDir, BaseDir: env.TempDir, StrictAllowlist: true, AllowNetwork: true}
+
+	if p := noNetwork.generateSandboxProfile(); !strings.Contains(p, "(deny default)") || strings.Contains(p, "(allow network*)") {
+		t.Fatalf("strict/no-network profile wrong:\n%s", p)
+	}
+	if p := withNetwork.generateSandboxProfile(); !strings.Contains(p, "(deny default)") || !strings.Contains(p, "(allow network*)") {
+		t.Fatalf("strict/network profile wrong:\n%s", p)
+	}
+
+	probe := filepath.Join(env.ReadWriteDir, "probe.py")
+	if err := os.WriteFile(probe, []byte("import socket\ns = socket.socket()\ns.settimeout(3)\ntry:\n    s.connect((\"127.0.0.1\", 9))\n    print(\"connected\")\nexcept OSError as e:\n    print(\"ERR:\" + str(e))\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(iso *Isolator) string {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		cmd, cleanup, err := iso.ExecuteIsolated(ctx, "python3 "+probe, nil)
+		if cleanup != nil {
+			defer cleanup()
+		}
+		if err != nil {
+			t.Fatalf("ExecuteIsolated failed: %v", err)
+		}
+		out, _ := cmd.CombinedOutput()
+		return string(out)
+	}
+	if out := run(noNetwork); !strings.Contains(out, "not permitted") {
+		t.Fatalf("network should be denied under the strict/no-network sandbox, got: %s", out)
+	}
+	if out := run(withNetwork); !strings.Contains(out, "refused") {
+		t.Fatalf("network should be allowed (and the closed port refused) under strict/network, got: %s", out)
+	}
+	if out := run(noNetwork); strings.Contains(out, "No module") || strings.Contains(out, "python3: command not found") {
+		t.Skipf("python3 unavailable inside the sandbox: %s", out)
+	}
+}
