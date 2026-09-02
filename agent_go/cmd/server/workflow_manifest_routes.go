@@ -180,6 +180,10 @@ type UpdateWorkflowManifestRequest struct {
 	// (back to the account default) while omission leaves them untouched.
 	RunNotificationRecipients   *[]string `json:"run_notification_recipients,omitempty"`
 	PulseNotificationRecipients *[]string `json:"pulse_notification_recipients,omitempty"`
+	// Per-summary Gmail senders. Pointers so an omitted field means "leave
+	// unchanged" while an explicit "" means "clear it and inherit the default".
+	RunNotificationGmailConnectionIDs   *[]string `json:"run_notification_gmail_connection_ids,omitempty"`
+	PulseNotificationGmailConnectionIDs *[]string `json:"pulse_notification_gmail_connection_ids,omitempty"`
 	// NotificationInstructions is retained for older clients that still send a
 	// single preference. New clients should use the two scoped fields above.
 	NotificationInstructions *string `json:"notification_instructions,omitempty"`
@@ -203,6 +207,9 @@ func mergeWorkflowCapabilitiesUpdate(existing WorkflowCapabilities, incoming *Wo
 		len(updated.Notifications.PulseSummaryChannels) == 0 &&
 		len(updated.Notifications.ExcludeChannels) == 0 &&
 		len(updated.Notifications.BlockRecipients) == 0 &&
+		strings.TrimSpace(updated.Notifications.GmailConnectionID) == "" &&
+		len(updated.Notifications.RunSummaryGmailConnectionIDs) == 0 &&
+		len(updated.Notifications.PulseSummaryGmailConnectionIDs) == 0 &&
 		len(updated.Notifications.RunSummaryRecipients) == 0 &&
 		len(updated.Notifications.PulseSummaryRecipients) == 0 &&
 		len(updated.Notifications.RunSummarySlackWebhookSecretNames) == 0 &&
@@ -307,7 +314,8 @@ func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *
 	}
 	if req.RunNotificationInstructions != nil || req.PulseNotificationInstructions != nil ||
 		req.RunNotificationChannels != nil || req.PulseNotificationChannels != nil ||
-		req.RunNotificationRecipients != nil || req.PulseNotificationRecipients != nil {
+		req.RunNotificationRecipients != nil || req.PulseNotificationRecipients != nil ||
+		req.RunNotificationGmailConnectionIDs != nil || req.PulseNotificationGmailConnectionIDs != nil {
 		runInstructions := ""
 		pulseInstructions := ""
 		if manifest.Capabilities.Notifications != nil {
@@ -322,7 +330,8 @@ func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *
 		}
 		if manifest.Capabilities.Notifications == nil && (runInstructions != "" || pulseInstructions != "" ||
 			req.RunNotificationChannels != nil || req.PulseNotificationChannels != nil ||
-			req.RunNotificationRecipients != nil || req.PulseNotificationRecipients != nil) {
+			req.RunNotificationRecipients != nil || req.PulseNotificationRecipients != nil ||
+			req.RunNotificationGmailConnectionIDs != nil || req.PulseNotificationGmailConnectionIDs != nil) {
 			manifest.Capabilities.Notifications = &WorkflowNotificationConfig{}
 		}
 		if manifest.Capabilities.Notifications != nil {
@@ -340,6 +349,12 @@ func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *
 			}
 			if req.PulseNotificationRecipients != nil {
 				manifest.Capabilities.Notifications.PulseSummaryRecipients = normalizeNotificationRecipients(*req.PulseNotificationRecipients)
+			}
+			if req.RunNotificationGmailConnectionIDs != nil {
+				manifest.Capabilities.Notifications.RunSummaryGmailConnectionIDs = normalizeGmailConnectionIDs(*req.RunNotificationGmailConnectionIDs)
+			}
+			if req.PulseNotificationGmailConnectionIDs != nil {
+				manifest.Capabilities.Notifications.PulseSummaryGmailConnectionIDs = normalizeGmailConnectionIDs(*req.PulseNotificationGmailConnectionIDs)
 			}
 		}
 	} else if req.NotificationInstructions != nil {
@@ -706,4 +721,20 @@ func LoadManifestForExecution(ctx context.Context, workspacePath string) (*Workf
 		return nil, false, err
 	}
 	return &manifest.Capabilities, true, nil
+}
+
+// normalizeGmailConnectionIDs trims, drops blanks, and deduplicates a sender
+// list. Naming the same account twice must not deliver twice.
+func normalizeGmailConnectionIDs(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		id := strings.TrimSpace(raw)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }

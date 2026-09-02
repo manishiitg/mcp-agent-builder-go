@@ -80,7 +80,7 @@ func getGmailConfigHandler(api *StreamingAPI) http.HandlerFunc {
 			return
 		}
 		cfg := svc.GetConfig()
-		auth := svc.AuthStatus(r.Context())
+		auth := svc.EffectiveAuthStatus(r.Context())
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(buildGmailConfigResponse(svc, cfg, auth))
 	}
@@ -96,7 +96,7 @@ func getGmailStatusHandler(api *StreamingAPI) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(svc.AuthStatus(r.Context()))
+		json.NewEncoder(w).Encode(svc.EffectiveAuthStatus(r.Context()))
 	}
 }
 
@@ -145,7 +145,7 @@ func updateGmailConfigHandler(api *StreamingAPI) http.HandlerFunc {
 		}
 
 		saved := svc.GetConfig()
-		auth := svc.AuthStatus(r.Context())
+		auth := svc.EffectiveAuthStatus(r.Context())
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(buildGmailConfigResponse(svc, saved, auth))
 	}

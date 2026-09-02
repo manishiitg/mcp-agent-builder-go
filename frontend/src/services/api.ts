@@ -47,6 +47,9 @@ import type {
   SlackTestReplyResponse,
   GmailConfigRequest,
   GmailConfigResponse,
+  GmailConnection,
+  GmailConnectionRequest,
+  GmailConnectionsResponse,
   GmailAuthStatus,
   GmailTestResponse,
   ExecutionLogsResponse,
@@ -1414,6 +1417,51 @@ export const agentApi = {
     const apiResponse = config
       ? await api.post('/api/human-feedback/gmail/test', config)
       : await api.post('/api/human-feedback/gmail/test')
+    return apiResponse.data
+  },
+
+  // --- Gmail connections (multi-account senders) ---
+
+  listGmailConnections: async (): Promise<GmailConnectionsResponse> => {
+    const apiResponse = await api.get('/api/human-feedback/gmail/connections', { timeout: 15000 })
+    return apiResponse.data
+  },
+
+  createGmailConnection: async (req: GmailConnectionRequest): Promise<GmailConnection> => {
+    const apiResponse = await api.post('/api/human-feedback/gmail/connections', req)
+    return apiResponse.data
+  },
+
+  updateGmailConnection: async (id: string, req: GmailConnectionRequest): Promise<GmailConnection> => {
+    const apiResponse = await api.patch(`/api/human-feedback/gmail/connections/${encodeURIComponent(id)}`, req)
+    return apiResponse.data
+  },
+
+  deleteGmailConnection: async (id: string): Promise<void> => {
+    await api.delete(`/api/human-feedback/gmail/connections/${encodeURIComponent(id)}`)
+  },
+
+  setDefaultGmailConnection: async (id: string): Promise<GmailConnection> => {
+    const apiResponse = await api.post(`/api/human-feedback/gmail/connections/${encodeURIComponent(id)}/default`)
+    return apiResponse.data
+  },
+
+  // Send a test through ONE specific account, so the user verifies the exact
+  // connection they selected rather than the default.
+  testGmailConnectionById: async (id: string, to?: string): Promise<GmailTestResponse> => {
+    const apiResponse = await api.post(
+      `/api/human-feedback/gmail/connections/${encodeURIComponent(id)}/test`,
+      to ? { to } : {},
+    )
+    return apiResponse.data
+  },
+
+  // Start browser sign-in for one connection. Returns the Google URL to open;
+  // the server receives the redirect and stores the credential itself.
+  startGmailConnectionAuth: async (id: string): Promise<{ auth_url: string; redirect_uri: string }> => {
+    const apiResponse = await api.post(
+      `/api/human-feedback/gmail/connections/${encodeURIComponent(id)}/auth/start`,
+    )
     return apiResponse.data
   },
 

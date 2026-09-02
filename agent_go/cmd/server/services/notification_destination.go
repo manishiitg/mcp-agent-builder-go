@@ -41,6 +41,11 @@ type NotificationDestination struct {
 	// Empty means fall through to the per-user preference and then the
 	// account-wide default recipient. Sourced from workflow.json
 	// notifications.run_summary_recipients / pulse_summary_recipients.
+	// Per-summary senders — the FROM counterpart to the recipient lists below.
+	// Several entries fan the summary out, one delivery per account.
+	RunSummaryGmailConnectionIDs   []string
+	PulseSummaryGmailConnectionIDs []string
+
 	RunSummaryRecipients   []string
 	PulseSummaryRecipients []string
 }
@@ -58,6 +63,16 @@ type SlackWebhookDest struct {
 // authenticated as.
 type GmailDest struct {
 	Email string
+
+	// ConnectionIDs selects which configured Gmail account(s) send this message.
+	// Empty means the workspace default connection. Several entries deliver the
+	// same message once per account — the recipient receives one copy from each
+	// sender, which is the point of naming more than one.
+	//
+	// An unknown or disabled ID fails that delivery rather than falling back to
+	// another account: sending from an unintended identity is worse than not
+	// sending.
+	ConnectionIDs []string
 
 	// BlockedRecipients is a per-notification denylist unioned with the
 	// account-wide GmailConfig.BlockedRecipients at send time. It lets a

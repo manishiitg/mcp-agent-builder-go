@@ -717,14 +717,17 @@ type QueryRequest struct {
 	// notifications.*. Channel and recipient rules are backend-enforced;
 	// owner-authored content preferences are visible to Workflow Builder and
 	// used by the Pulse finalizer for their matching notification sections.
-	NotificationRunSummaryInstructions   string   `json:"notification_run_summary_instructions,omitempty"`
-	NotificationPulseSummaryInstructions string   `json:"notification_pulse_summary_instructions,omitempty"`
-	NotificationRunSummaryChannels       []string `json:"notification_run_summary_channels,omitempty"`
-	NotificationPulseSummaryChannels     []string `json:"notification_pulse_summary_channels,omitempty"`
-	NotificationExcludeChannels          []string `json:"notification_exclude_channels,omitempty"`
-	NotificationBlockRecipients          []string `json:"notification_block_recipients,omitempty"`
-	NotificationRunSummaryRecipients     []string `json:"notification_run_summary_recipients,omitempty"`
-	NotificationPulseSummaryRecipients   []string `json:"notification_pulse_summary_recipients,omitempty"`
+	NotificationRunSummaryInstructions         string   `json:"notification_run_summary_instructions,omitempty"`
+	NotificationPulseSummaryInstructions       string   `json:"notification_pulse_summary_instructions,omitempty"`
+	NotificationRunSummaryChannels             []string `json:"notification_run_summary_channels,omitempty"`
+	NotificationPulseSummaryChannels           []string `json:"notification_pulse_summary_channels,omitempty"`
+	NotificationExcludeChannels                []string `json:"notification_exclude_channels,omitempty"`
+	NotificationBlockRecipients                []string `json:"notification_block_recipients,omitempty"`
+	NotificationGmailConnectionID              string   `json:"notification_gmail_connection_id,omitempty"`
+	NotificationRunSummaryGmailConnectionIDs   []string `json:"notification_run_summary_gmail_connection_ids,omitempty"`
+	NotificationPulseSummaryGmailConnectionIDs []string `json:"notification_pulse_summary_gmail_connection_ids,omitempty"`
+	NotificationRunSummaryRecipients           []string `json:"notification_run_summary_recipients,omitempty"`
+	NotificationPulseSummaryRecipients         []string `json:"notification_pulse_summary_recipients,omitempty"`
 	// Per-summary Slack channels, as encrypted-secret names holding webhook URLs.
 	NotificationRunSummarySlackWebhookSecretNames   []string `json:"notification_run_summary_slack_webhook_secret_names,omitempty"`
 	NotificationPulseSummarySlackWebhookSecretNames []string `json:"notification_pulse_summary_slack_webhook_secret_names,omitempty"`
@@ -854,6 +857,8 @@ func notificationDestinationFromQuery(req QueryRequest, userID string) *services
 	}
 	dest.RunSummaryChannels = append([]string(nil), req.NotificationRunSummaryChannels...)
 	dest.PulseSummaryChannels = append([]string(nil), req.NotificationPulseSummaryChannels...)
+	dest.RunSummaryGmailConnectionIDs = append([]string(nil), req.NotificationRunSummaryGmailConnectionIDs...)
+	dest.PulseSummaryGmailConnectionIDs = append([]string(nil), req.NotificationPulseSummaryGmailConnectionIDs...)
 	dest.RunSummaryRecipients = append([]string(nil), req.NotificationRunSummaryRecipients...)
 	dest.PulseSummaryRecipients = append([]string(nil), req.NotificationPulseSummaryRecipients...)
 	if len(req.NotificationBlockRecipients) > 0 {
@@ -862,8 +867,18 @@ func notificationDestinationFromQuery(req QueryRequest, userID string) *services
 		}
 		dest.Gmail.BlockedRecipients = append(dest.Gmail.BlockedRecipients, req.NotificationBlockRecipients...)
 	}
+	// Sender selection rides the same path as the recipient denylist, but stays
+	// a separate field: one says which account sends, the other says who must
+	// not receive. Resolution and validation happen in the Gmail service.
+	if connID := strings.TrimSpace(req.NotificationGmailConnectionID); connID != "" {
+		if dest.Gmail == nil {
+			dest.Gmail = &services.GmailDest{}
+		}
+		dest.Gmail.ConnectionIDs = []string{connID}
+	}
 	if dest.UserID == "" && dest.WorkspacePath == "" && dest.Slack == nil && dest.SlackWebhook == nil && dest.WhatsApp == nil && dest.Gmail == nil &&
 		len(dest.ExcludeChannels) == 0 && len(dest.RunSummaryRecipients) == 0 && len(dest.PulseSummaryRecipients) == 0 &&
+		len(dest.RunSummaryGmailConnectionIDs) == 0 && len(dest.PulseSummaryGmailConnectionIDs) == 0 &&
 		len(dest.RunSummaryWebhooks) == 0 && len(dest.PulseSummaryWebhooks) == 0 {
 		return nil
 	}
@@ -1114,6 +1129,9 @@ func applyMultiAgentCapabilitiesToRequest(req *QueryRequest, caps WorkflowCapabi
 		req.NotificationPulseSummaryChannels = append([]string(nil), caps.Notifications.PulseSummaryChannels...)
 		req.NotificationExcludeChannels = append([]string(nil), caps.Notifications.ExcludeChannels...)
 		req.NotificationBlockRecipients = append([]string(nil), caps.Notifications.BlockRecipients...)
+		req.NotificationGmailConnectionID = caps.Notifications.GmailConnectionID
+		req.NotificationRunSummaryGmailConnectionIDs = append([]string(nil), caps.Notifications.RunSummaryGmailConnectionIDs...)
+		req.NotificationPulseSummaryGmailConnectionIDs = append([]string(nil), caps.Notifications.PulseSummaryGmailConnectionIDs...)
 		req.NotificationRunSummaryRecipients = append([]string(nil), caps.Notifications.RunSummaryRecipients...)
 		req.NotificationPulseSummaryRecipients = append([]string(nil), caps.Notifications.PulseSummaryRecipients...)
 		req.NotificationRunSummarySlackWebhookSecretNames = append([]string(nil), caps.Notifications.RunSummarySlackWebhookSecretNames...)
@@ -2230,6 +2248,8 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Gmail (outbound-only) config/status/test API routes
 	GmailFeedbackRoutes(router, api)
+	GmailConnectionRoutes(router, api)
+	GmailOAuthRoutes(router, api)
 
 	// Per-user notification preferences (Slack channel, WhatsApp number)
 	NotificationPreferencesRoutes(router)
@@ -3677,6 +3697,9 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					req.NotificationPulseSummaryChannels = append([]string(nil), manifest.Capabilities.Notifications.PulseSummaryChannels...)
 					req.NotificationExcludeChannels = append([]string(nil), manifest.Capabilities.Notifications.ExcludeChannels...)
 					req.NotificationBlockRecipients = append([]string(nil), manifest.Capabilities.Notifications.BlockRecipients...)
+					req.NotificationGmailConnectionID = manifest.Capabilities.Notifications.GmailConnectionID
+					req.NotificationRunSummaryGmailConnectionIDs = append([]string(nil), manifest.Capabilities.Notifications.RunSummaryGmailConnectionIDs...)
+					req.NotificationPulseSummaryGmailConnectionIDs = append([]string(nil), manifest.Capabilities.Notifications.PulseSummaryGmailConnectionIDs...)
 					req.NotificationRunSummaryRecipients = append([]string(nil), manifest.Capabilities.Notifications.RunSummaryRecipients...)
 					req.NotificationPulseSummaryRecipients = append([]string(nil), manifest.Capabilities.Notifications.PulseSummaryRecipients...)
 					req.NotificationRunSummarySlackWebhookSecretNames = append([]string(nil), manifest.Capabilities.Notifications.RunSummarySlackWebhookSecretNames...)
@@ -3796,6 +3819,9 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					req.NotificationPulseSummaryChannels = append([]string(nil), caps.Notifications.PulseSummaryChannels...)
 					req.NotificationExcludeChannels = append([]string(nil), caps.Notifications.ExcludeChannels...)
 					req.NotificationBlockRecipients = append([]string(nil), caps.Notifications.BlockRecipients...)
+					req.NotificationGmailConnectionID = caps.Notifications.GmailConnectionID
+					req.NotificationRunSummaryGmailConnectionIDs = append([]string(nil), caps.Notifications.RunSummaryGmailConnectionIDs...)
+					req.NotificationPulseSummaryGmailConnectionIDs = append([]string(nil), caps.Notifications.PulseSummaryGmailConnectionIDs...)
 					req.NotificationRunSummaryRecipients = append([]string(nil), caps.Notifications.RunSummaryRecipients...)
 					req.NotificationPulseSummaryRecipients = append([]string(nil), caps.Notifications.PulseSummaryRecipients...)
 					req.NotificationRunSummarySlackWebhookSecretNames = append([]string(nil), caps.Notifications.RunSummarySlackWebhookSecretNames...)

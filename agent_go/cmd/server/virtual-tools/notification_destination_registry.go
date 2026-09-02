@@ -60,6 +60,12 @@ func RegisterSessionNotificationDestination(sessionID string, dest *services.Not
 	if len(incoming.PulseSummaryChannels) > 0 {
 		current.PulseSummaryChannels = incoming.PulseSummaryChannels
 	}
+	if len(incoming.RunSummaryGmailConnectionIDs) > 0 {
+		current.RunSummaryGmailConnectionIDs = incoming.RunSummaryGmailConnectionIDs
+	}
+	if len(incoming.PulseSummaryGmailConnectionIDs) > 0 {
+		current.PulseSummaryGmailConnectionIDs = incoming.PulseSummaryGmailConnectionIDs
+	}
 	if len(incoming.RunSummaryRecipients) > 0 {
 		current.RunSummaryRecipients = incoming.RunSummaryRecipients
 	}

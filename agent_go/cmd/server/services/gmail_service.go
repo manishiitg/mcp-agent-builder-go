@@ -65,12 +65,39 @@ type GmailConfig struct {
 	// Auth knobs (all optional). When set they are exported into the gws
 	// child process environment so the server can pin a specific account
 	// without relying on the invoking user's ~/.config/gws:
-	//   ConfigHome      -> XDG_CONFIG_HOME (gws reads <ConfigHome>/gws)
-	//   CredentialsFile -> GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE (service acct)
+	//   ConfigHome      -> GOOGLE_WORKSPACE_CLI_CONFIG_DIR. gws does NOT read
+	//                      XDG_CONFIG_HOME, and treats this as the config
+	//                      directory itself, not a parent of one. Setting it
+	//                      also pins the `file` keyring backend (see
+	//                      gmailChildEnv) so the directory is a real account
+	//                      boundary rather than a shared OS keyring.
+	//   CredentialsFile -> GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE (a user or
+	//                      service-account key; note a service account acts as
+	//                      itself, as gws exposes no impersonation subject)
 	//   Token           -> GOOGLE_WORKSPACE_CLI_TOKEN (pre-obtained token)
+	// The OAuth *application* credential (client id/secret) is deliberately not
+	// a field here: it is one registration shared by every account, and gws
+	// takes it either from <config dir>/client_secret.json or from
+	// GOOGLE_WORKSPACE_CLI_CLIENT_ID/_CLIENT_SECRET, which the child already
+	// inherits from the server's own environment.
 	ConfigHome      string `json:"config_home,omitempty"`
 	CredentialsFile string `json:"credentials_file,omitempty"`
 	Token           string `json:"token,omitempty"`
+
+	// Connections is the multi-account registry (see gmail_connections.go).
+	// The legacy auth fields above stay authoritative for delivery until the
+	// send path resolves connections, so an un-migrated file keeps working and
+	// adding connections changes nothing on its own.
+	//
+	// Recipient policy (DefaultTo, BlockedRecipients) stays account-wide and
+	// deliberately does NOT move onto a connection: this registry governs who
+	// mail is sent FROM, never who it goes TO.
+	Connections []GmailConnection `json:"connections,omitempty"`
+
+	// DefaultConnectionID names the connection used when a send selects none.
+	// Empty means "no default": callers must fail rather than pick an
+	// arbitrary account and send from the wrong identity.
+	DefaultConnectionID string `json:"default_connection_id,omitempty"`
 }
 
 // GmailService implements NotificationConnector (and UserNotificationConnector)
@@ -82,14 +109,24 @@ type GmailService struct {
 	defaultTo string
 	gwsPath   string
 
-	// Cached `gws auth status` result. That command spawns a Node CLI and takes
-	// ~5.5s, and it is on the path of every notification-settings read — so
-	// opening the Notify popup sat on a spinner for the whole call. Auth changes
-	// only on an operator running `gws auth login`/logout or a refresh token
-	// expiring, none of which are sub-minute events.
-	authCache    *GmailAuthStatus
-	authCachedAt time.Time
-	authRefresh  bool // a background refresh is already in flight
+	// Cached `gws auth status` results, keyed by connection ID. That command
+	// spawns a Node CLI and takes ~5.5s, and it is on the path of every
+	// notification-settings read — so opening the Notify popup sat on a spinner
+	// for the whole call. Auth changes only on an operator running
+	// `gws auth login`/logout or a refresh token expiring, none of which are
+	// sub-minute events.
+	//
+	// Keyed rather than scalar so one connection's expired credentials cannot
+	// invalidate or disable another's. The empty-string key is the legacy
+	// singleton config, which delivery still uses.
+	authCaches map[string]*gmailAuthCacheEntry
+}
+
+// gmailAuthCacheEntry is one connection's cached auth status.
+type gmailAuthCacheEntry struct {
+	status     *GmailAuthStatus
+	cachedAt   time.Time
+	refreshing bool // a background refresh is already in flight for this key
 }
 
 // gmailAuthCacheTTL bounds how stale a cached auth status may be. Short enough
@@ -154,6 +191,7 @@ func (g *GmailService) ReloadConfig(ctx context.Context) error {
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	previous := g.config
 	cfg = normalizeGmailConfig(cfg)
 	g.config = cfg
 
@@ -174,7 +212,10 @@ func (g *GmailService) ReloadConfig(ctx context.Context) error {
 	g.defaultTo = strings.TrimSpace(cfg.DefaultTo)
 	// Config changes can point at a different account (ConfigHome, Token,
 	// CredentialsFile), so a cached status may describe the previous one.
-	g.authCache, g.authCachedAt = nil, time.Time{}
+	// Invalidate per connection rather than wholesale: a connection whose auth
+	// knobs are unchanged keeps its cached status, so editing one account does
+	// not force every other one back to a spinner.
+	g.authCaches = retainedGmailAuthCaches(g.authCaches, previous, cfg)
 	g.enabled = cfg.Enabled && g.defaultTo != "" && binaryOK
 
 	if cfg.Enabled && !g.enabled {
@@ -195,6 +236,15 @@ func (g *GmailService) GetConfig() *GmailConfig {
 	}
 	c := *g.config
 	c.BlockedRecipients = append([]string(nil), g.config.BlockedRecipients...)
+	// Deep-copy connections too: a shallow struct copy would hand callers the
+	// same backing array, letting a registry edit mutate live service state
+	// before SaveConfig validates it.
+	if len(g.config.Connections) > 0 {
+		c.Connections = make([]GmailConnection, 0, len(g.config.Connections))
+		for _, conn := range g.config.Connections {
+			c.Connections = append(c.Connections, conn.Clone())
+		}
+	}
 	return &c
 }
 
@@ -226,6 +276,12 @@ type GmailAuthStatus struct {
 	Scopes        []string `json:"scopes,omitempty"`
 	Detail        string   `json:"detail,omitempty"`
 
+	// Email is the authenticated sending address. `gws auth status` does not
+	// report an identity — it only describes credential storage — so this comes
+	// from a separate `gmail users getProfile` call. Empty when unauthenticated
+	// or when the profile lookup failed, which is not itself an auth failure.
+	Email string `json:"email,omitempty"`
+
 	// Checking reports that no fresh result is known yet and a refresh is
 	// running in the background. Callers that must not block (the notification
 	// settings UI) render a pending state and re-read shortly after.
@@ -237,9 +293,32 @@ type GmailAuthStatus struct {
 // than an error, so the UI can render a "Connect Gmail" prompt.
 func (g *GmailService) AuthStatus(ctx context.Context) GmailAuthStatus {
 	g.mu.RLock()
-	gwsPath := g.gwsPath
 	cfg := g.config
-	cached, cachedAt := g.authCache, g.authCachedAt
+	g.mu.RUnlock()
+	return g.authStatusBlocking(ctx, "", cfg)
+}
+
+// AuthStatusForConnectionBlocking is the synchronous counterpart of
+// AuthStatusForConnection, for callers that need a definitive answer now (a
+// test send, a reconnect) rather than a cached badge.
+func (g *GmailService) AuthStatusForConnectionBlocking(ctx context.Context, id string) (GmailAuthStatus, bool) {
+	conn, ok := g.GetConnection(id)
+	if !ok {
+		return GmailAuthStatus{}, false
+	}
+	return g.authStatusBlocking(ctx, conn.ID, gmailConnectionConfig(conn)), true
+}
+
+// authStatusBlocking serves a fresh-enough cached value or computes one inline,
+// writing the result into that key's slot so the async path sees it too.
+func (g *GmailService) authStatusBlocking(ctx context.Context, key string, cfg *GmailConfig) GmailAuthStatus {
+	g.mu.RLock()
+	gwsPath := g.gwsPath
+	var cached *GmailAuthStatus
+	var cachedAt time.Time
+	if entry := g.authCaches[key]; entry != nil {
+		cached, cachedAt = entry.status, entry.cachedAt
+	}
 	g.mu.RUnlock()
 
 	if cached != nil && time.Since(cachedAt) < gmailAuthCacheTTL {
@@ -248,7 +327,15 @@ func (g *GmailService) AuthStatus(ctx context.Context) GmailAuthStatus {
 
 	st := g.computeAuthStatus(ctx, gwsPath, cfg)
 	g.mu.Lock()
-	g.authCache, g.authCachedAt = &st, time.Now()
+	if g.authCaches == nil {
+		g.authCaches = map[string]*gmailAuthCacheEntry{}
+	}
+	entry := g.authCaches[key]
+	if entry == nil {
+		entry = &gmailAuthCacheEntry{}
+		g.authCaches[key] = entry
+	}
+	entry.status, entry.cachedAt = &st, time.Now()
 	g.mu.Unlock()
 	return st
 }
@@ -266,6 +353,18 @@ func (g *GmailService) computeAuthStatus(ctx context.Context, gwsPath string, cf
 		return st
 	}
 	st.GwsInstalled = true
+
+	// A connection the server authenticated itself holds no gws credentials, so
+	// `gws auth status` would report it unauthenticated and the UI would offer a
+	// reconnect that is not needed. The presence of a working access token IS
+	// the auth state for these.
+	if cfg != nil && strings.TrimSpace(cfg.Token) != "" {
+		st.Authenticated = true
+		st.HasGmailScope = true
+		st.Scopes = append([]string(nil), gmailOAuthScopes...)
+		st.Email = fetchGmailAccountEmail(ctx, gwsPath, cfg)
+		return st
+	}
 
 	cmd := exec.CommandContext(ctx, gwsPath, "auth", "status")
 	cmd.Env = gmailChildEnv(cfg)
@@ -296,7 +395,37 @@ func (g *GmailService) computeAuthStatus(ctx context.Context, gwsPath string, cf
 	if st.Authenticated && !st.HasGmailScope {
 		st.Detail = "authenticated, but the account is missing a Gmail send scope — re-run `gws auth login -s gmail`"
 	}
+	// Only worth a second subprocess once we know a Gmail-scoped account is
+	// actually present. A failure here leaves Email empty but must not flip the
+	// connection to unauthenticated: it can still send.
+	if st.Authenticated && st.HasGmailScope {
+		st.Email = fetchGmailAccountEmail(ctx, gwsPath, cfg)
+	}
 	return st
+}
+
+// fetchGmailAccountEmail resolves which identity gws is authenticated as.
+//
+// The send path addresses the mailbox as `userId: "me"`, which Gmail resolves
+// server-side, so nothing in a send ever reveals the sender. `gws auth status`
+// describes credential storage and carries no identity either. getProfile is
+// the only way to learn the address, which is why "which account is this?" was
+// unanswerable before.
+func fetchGmailAccountEmail(ctx context.Context, gwsPath string, cfg *GmailConfig) string {
+	cmd := exec.CommandContext(ctx, gwsPath, "gmail", "users", "getProfile",
+		"--params", `{"userId":"me"}`, "--format", "json")
+	cmd.Env = gmailChildEnv(cfg)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	var profile struct {
+		EmailAddress string `json:"emailAddress"`
+	}
+	if err := json.Unmarshal(out, &profile); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(profile.EmailAddress)
 }
 
 // Name returns the connector name.
@@ -437,7 +566,7 @@ func (g *GmailService) SendNotification(ctx context.Context, uniqueID string, me
 	}
 	cc = g.filterCCRecipients(cc, destBlockedRecipients(dest)...)
 
-	return g.deliver(ctx, to, cc, subject, body, htmlBody, attachments)
+	return g.deliver(ctx, destGmailConnectionIDs(dest), destWorkflowName(dest), to, cc, subject, body, htmlBody, attachments)
 }
 
 // SendUserNotification sends a non-blocking informational email.
@@ -469,14 +598,13 @@ func (g *GmailService) SendUserNotification(ctx context.Context, message string,
 		return "", nil
 	}
 	cc = g.filterCCRecipients(cc, destBlockedRecipients(dest)...)
-	return g.deliver(ctx, to, cc, subject, body, htmlBody, attachments)
+	return g.deliver(ctx, destGmailConnectionIDs(dest), destWorkflowName(dest), to, cc, subject, body, htmlBody, attachments)
 }
 
 // send shells out to `gws gmail +send` and returns the sent message ID.
-func (g *GmailService) send(ctx context.Context, to, subject, body string) (string, error) {
+func (g *GmailService) send(ctx context.Context, cfg *GmailConfig, to, subject, body string) (string, error) {
 	g.mu.RLock()
 	gwsPath := g.gwsPath
-	cfg := g.config
 	g.mu.RUnlock()
 	if strings.TrimSpace(gwsPath) == "" {
 		gwsPath = "gws"
@@ -506,21 +634,68 @@ const maxGmailAttachmentBytes = 20 * 1024 * 1024 // 20 MB
 
 // deliver routes to the simple `+send` helper for plain text, or to the raw
 // MIME path when attachments are present (gws `+send` can't attach files).
-func (g *GmailService) deliver(ctx context.Context, to string, cc []string, subject, body, htmlBody string, attachments []string) (string, error) {
-	// The plain gws --body path can't carry HTML or attachments, so route through
-	// the raw-MIME path whenever either is present.
-	if htmlBody == "" && len(attachments) == 0 && len(cc) == 0 && !strings.Contains(to, ",") {
-		return g.send(ctx, to, subject, body)
+func (g *GmailService) deliver(ctx context.Context, connectionIDs []string, workflowName, to string, cc []string, subject, body, htmlBody string, attachments []string) (string, error) {
+	// No senders named means "the default connection" — expressed as a
+	// single-element run so the fan-out path below is the only send path and
+	// cannot drift from the single-account one.
+	if len(connectionIDs) == 0 {
+		connectionIDs = []string{""}
 	}
-	return g.sendRaw(ctx, to, cc, subject, body, htmlBody, attachments)
+
+	messageIDs := make([]string, 0, len(connectionIDs))
+	var failures []string
+
+	for _, connectionID := range connectionIDs {
+		// Resolve per account, because one disabled connection must not stop the
+		// others: a fan-out that silently became a single send would be worse
+		// than a partial failure the caller can see.
+		cfg, resolvedID, err := g.resolveSendConfig(connectionID)
+		if err != nil {
+			g.recordSend("send_refused", connectionID, workflowName, to, cc, "", err)
+			failures = append(failures, err.Error())
+			continue
+		}
+
+		var msgID string
+		// The plain gws --body path can't carry HTML or attachments, so route
+		// through the raw-MIME path whenever either is present.
+		if htmlBody == "" && len(attachments) == 0 && len(cc) == 0 && !strings.Contains(to, ",") {
+			msgID, err = g.send(ctx, cfg, to, subject, body)
+		} else {
+			msgID, err = g.sendRaw(ctx, cfg, to, cc, subject, body, htmlBody, attachments)
+		}
+		g.recordSend("send", resolvedID, workflowName, to, cc, msgID, err)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", senderLabel(resolvedID), err))
+			continue
+		}
+		messageIDs = append(messageIDs, msgID)
+	}
+
+	// Partial failure is reported as an error while still returning the IDs that
+	// did send. Reporting success because *one* account delivered would hide
+	// that a recipient never heard from the other.
+	if len(failures) > 0 {
+		return strings.Join(messageIDs, ", "), fmt.Errorf("gmail: %d of %d sends failed: %s",
+			len(failures), len(connectionIDs), strings.Join(failures, "; "))
+	}
+	return strings.Join(messageIDs, ", "), nil
+}
+
+// senderLabel names a connection in an error, falling back to a readable phrase
+// for the legacy singleton, which has no ID.
+func senderLabel(resolvedID string) string {
+	if strings.TrimSpace(resolvedID) == "" {
+		return "default account"
+	}
+	return resolvedID
 }
 
 // sendRaw builds an RFC 2822 MIME message (body + attachments) and posts it via
 // `gws gmail users messages send --json '{"raw": <base64url>}'`.
-func (g *GmailService) sendRaw(ctx context.Context, to string, cc []string, subject, body, htmlBody string, attachments []string) (string, error) {
+func (g *GmailService) sendRaw(ctx context.Context, cfg *GmailConfig, to string, cc []string, subject, body, htmlBody string, attachments []string) (string, error) {
 	g.mu.RLock()
 	gwsPath := g.gwsPath
-	cfg := g.config
 	g.mu.RUnlock()
 	if strings.TrimSpace(gwsPath) == "" {
 		gwsPath = "gws"
@@ -671,17 +846,23 @@ func writeBase64Wrapped(w io.Writer, data []byte) error {
 // "test connection" button works before the channel is saved/enabled. It still
 // requires gws to be installed and authenticated.
 func (g *GmailService) SendTest(ctx context.Context, to string) (string, error) {
-	return g.sendTest(ctx, to, nil, false)
+	return g.sendTest(ctx, "", to, nil, false)
+}
+
+// SendTestFromConnection sends a test through one specific connection, so the
+// user can verify the exact account they selected rather than the default.
+func (g *GmailService) SendTestFromConnection(ctx context.Context, connectionID, to string) (string, error) {
+	return g.sendTest(ctx, connectionID, to, nil, false)
 }
 
 // SendTestWithBlockedRecipients sends a one-off test email while validating
 // against the caller's draft denylist. The settings UI uses this before saving
 // so the test reflects what is currently typed in the form.
 func (g *GmailService) SendTestWithBlockedRecipients(ctx context.Context, to string, blockedRecipients []string) (string, error) {
-	return g.sendTest(ctx, to, blockedRecipients, true)
+	return g.sendTest(ctx, "", to, blockedRecipients, true)
 }
 
-func (g *GmailService) sendTest(ctx context.Context, to string, blockedRecipients []string, hasBlockedOverride bool) (string, error) {
+func (g *GmailService) sendTest(ctx context.Context, connectionID, to string, blockedRecipients []string, hasBlockedOverride bool) (string, error) {
 	to = strings.TrimSpace(to)
 	if to == "" {
 		to = g.GetConfig().DefaultTo
@@ -704,9 +885,21 @@ func (g *GmailService) sendTest(ctx context.Context, to string, blockedRecipient
 		return "", fmt.Errorf("no recipient: set a default address first")
 	}
 	to = strings.Join(recipients, ", ")
-	return g.send(ctx, to,
-		"[Agent] Gmail test message",
-		"This is a test from your agent's Gmail channel. If you received it, outbound Gmail is configured correctly.")
+
+	cfg, resolvedID, err := g.resolveSendConfig(connectionID)
+	if err != nil {
+		return "", err
+	}
+	body := "This is a test from your agent's Gmail channel. If you received it, outbound Gmail is configured correctly."
+	// Name the connection in the message itself. A test exists to prove which
+	// account sends, and the recipient otherwise has to infer that from the
+	// From header alone.
+	if conn, ok := g.GetConnection(connectionID); ok {
+		body += fmt.Sprintf("\n\nSent via connection %s (%s).", conn.ID, conn.DisplayName)
+	}
+	msgID, sendErr := g.send(ctx, cfg, to, "[Agent] Gmail test message", body)
+	g.recordSend("test_send", resolvedID, "", to, nil, msgID, sendErr)
+	return msgID, sendErr
 }
 
 func normalizeGmailConfig(cfg *GmailConfig) *GmailConfig {
@@ -721,6 +914,11 @@ func normalizeGmailConfig(cfg *GmailConfig) *GmailConfig {
 	// path lowercases only for denylist comparison.
 	out.DefaultTo = strings.Join(splitEmailListPreservingCase(out.DefaultTo), ", ")
 	out.BlockedRecipients = normalizeEmailList(out.BlockedRecipients)
+	// Registry upkeep runs on every read and write, so a pre-registry install
+	// migrates on first load with no separate job, and hand-edited files get
+	// their invariants repaired rather than rejected.
+	migrateGmailConnections(&out)
+	normalizeGmailConnections(&out)
 	return &out
 }
 
@@ -774,13 +972,36 @@ func (g *GmailService) blockedRecipients() []string {
 
 // gmailChildEnv builds the environment for the gws child process, layering the
 // optional auth knobs on top of the server's own environment.
+//
+// Every knob is opt-in: a config carrying none of them yields exactly
+// os.Environ(), so a host authenticated the ordinary way (`gws auth login`
+// against the default ~/.config/gws) is unaffected by anything here.
 func gmailChildEnv(cfg *GmailConfig) []string {
 	env := os.Environ()
 	if cfg == nil {
 		return env
 	}
 	if v := strings.TrimSpace(cfg.ConfigHome); v != "" {
-		env = append(env, "XDG_CONFIG_HOME="+v)
+		// gws reads GOOGLE_WORKSPACE_CLI_CONFIG_DIR. It does not read
+		// XDG_CONFIG_HOME — exporting that (as this did until now) silently
+		// left every invocation on the default ~/.config/gws, which made
+		// ConfigHome a no-op.
+		env = append(env, "GOOGLE_WORKSPACE_CLI_CONFIG_DIR="+v)
+
+		// A config dir alone is not an account boundary. At the default
+		// `keyring` backend gws keeps credentials in the shared OS keyring, so
+		// two pinned directories would still resolve to the same account; the
+		// `file` backend keeps credentials.enc inside the directory instead.
+		//
+		// Scoped to the ConfigHome branch on purpose. Forcing `file`
+		// unconditionally would repoint hosts that authenticated against the
+		// default keyring at a credentials.enc that does not exist, breaking a
+		// working install. An operator who has set the variable themselves
+		// keeps their choice — os/exec resolves duplicate keys last-wins, so
+		// appending here would otherwise silently override them.
+		if _, ok := os.LookupEnv("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND"); !ok {
+			env = append(env, "GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file")
+		}
 	}
 	if v := strings.TrimSpace(cfg.CredentialsFile); v != "" {
 		env = append(env, "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE="+v)
@@ -855,8 +1076,9 @@ func parseGwsMessageID(out []byte) string {
 	return "sent"
 }
 
-// AuthStatusCached returns the last known auth status without ever spawning a
-// subprocess. On a miss it kicks off a background refresh and reports Checking.
+// AuthStatusCached returns the last known auth status for the legacy singleton
+// config without ever spawning a subprocess. On a miss it kicks off a
+// background refresh and reports Checking.
 //
 // `gws auth status` takes ~5.5s — it is a Node CLI, not a network call — and it
 // sat on the synchronous path of every notification-settings read, so opening
@@ -865,8 +1087,34 @@ func parseGwsMessageID(out []byte) string {
 // the Gmail auth badge depends on gws, so only that badge should wait for it.
 func (g *GmailService) AuthStatusCached() GmailAuthStatus {
 	g.mu.RLock()
-	cached, cachedAt, refreshing := g.authCache, g.authCachedAt, g.authRefresh
-	gwsPath, cfg := g.gwsPath, g.config
+	cfg := g.config
+	g.mu.RUnlock()
+	return g.authStatusCachedFor("", cfg)
+}
+
+// AuthStatusForConnection reports one connection's auth state, cached
+// independently of every other connection so an expired credential on one
+// never marks another unhealthy.
+func (g *GmailService) AuthStatusForConnection(id string) (GmailAuthStatus, bool) {
+	conn, ok := g.GetConnection(id)
+	if !ok {
+		return GmailAuthStatus{}, false
+	}
+	return g.authStatusCachedFor(conn.ID, gmailConnectionConfig(conn)), true
+}
+
+// authStatusCachedFor is the shared cache-and-refresh body. key identifies the
+// cache slot ("" for the legacy singleton, otherwise a connection ID); cfg
+// supplies the auth knobs that slot's subprocess should run under.
+func (g *GmailService) authStatusCachedFor(key string, cfg *GmailConfig) GmailAuthStatus {
+	g.mu.RLock()
+	gwsPath := g.gwsPath
+	var cached *GmailAuthStatus
+	var cachedAt time.Time
+	var refreshing bool
+	if entry := g.authCaches[key]; entry != nil {
+		cached, cachedAt, refreshing = entry.status, entry.cachedAt, entry.refreshing
+	}
 	g.mu.RUnlock()
 
 	if cached != nil && time.Since(cachedAt) < gmailAuthCacheTTL {
@@ -875,15 +1123,25 @@ func (g *GmailService) AuthStatusCached() GmailAuthStatus {
 
 	if !refreshing {
 		g.mu.Lock()
-		if !g.authRefresh {
-			g.authRefresh = true
+		entry := g.authCaches[key]
+		if entry == nil {
+			entry = &gmailAuthCacheEntry{}
+			if g.authCaches == nil {
+				g.authCaches = map[string]*gmailAuthCacheEntry{}
+			}
+			g.authCaches[key] = entry
+		}
+		if !entry.refreshing {
+			entry.refreshing = true
 			go func() {
 				// Detached from the request: the caller has already returned.
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				st := g.computeAuthStatus(ctx, gwsPath, cfg)
 				g.mu.Lock()
-				g.authCache, g.authCachedAt, g.authRefresh = &st, time.Now(), false
+				if e := g.authCaches[key]; e != nil {
+					e.status, e.cachedAt, e.refreshing = &st, time.Now(), false
+				}
 				g.mu.Unlock()
 			}()
 		}

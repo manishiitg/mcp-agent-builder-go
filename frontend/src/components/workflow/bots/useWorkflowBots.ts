@@ -3,7 +3,7 @@ import { agentApi } from '../../../services/api'
 import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestStore'
 import { useCanWriteWorkflow } from '../../../hooks/useCanWriteWorkflow'
 import type {
-  ChannelRoute, GmailConfigRequest, GmailConfigResponse, GmailTestResponse,
+  ChannelRoute, GmailConfigRequest, GmailConfigResponse, GmailConnection, GmailTestResponse,
   SlackConfig, SlackConfigRequest, SlackTestResponse, WhatsAppRoute, WhatsAppStatus,
 } from '../../../services/api-types'
 import { routeId, type ChannelKind, type WorkflowRoute } from './types'
@@ -105,6 +105,16 @@ export function useWorkflowBots(workspacePath: string | null) {
   const [gmailError, setGmailError] = useState<string | null>(null)
   const [gmailSuccess, setGmailSuccess] = useState<string | null>(null)
   const [gmailTestResult, setGmailTestResult] = useState<GmailTestResponse | null>(null)
+  // Multi-account senders. Empty is the normal state for an install that has
+  // not adopted connections, and the card then simply says so.
+  const [gmailConnections, setGmailConnections] = useState<GmailConnection[]>([])
+  const [gmailConnectionsBusy, setGmailConnectionsBusy] = useState<string | null>(null)
+  const [gmailNewConnectionName, setGmailNewConnectionName] = useState('')
+  // Optional: adopt a gws config directory that is ALREADY authenticated on the
+  // host, instead of signing in through the browser.
+  const [gmailNewConnectionDir, setGmailNewConnectionDir] = useState('')
+  // Set while a Google sign-in is in flight, so the row can say it is waiting.
+  const [gmailAuthPending, setGmailAuthPending] = useState<string | null>(null)
   const [gmailTestedTo, setGmailTestedTo] = useState<string | null>(null)
   const [gmailOpen, setGmailOpen] = useState(false)
 
@@ -152,6 +162,83 @@ export function useWorkflowBots(workspacePath: string | null) {
     }
   }, [])
 
+  const loadGmailConnections = useCallback(async () => {
+    try {
+      const data = await agentApi.listGmailConnections()
+      setGmailConnections(data.connections || [])
+    } catch {
+      // A registry that cannot be read must not break the single-account view
+      // this panel has always shown.
+      setGmailConnections([])
+    }
+  }, [])
+
+  // Every mutation re-reads the list rather than patching local state, so the
+  // server stays the single source of truth for status and which is default.
+  const runGmailConnectionAction = useCallback(
+    async (id: string, action: () => Promise<unknown>) => {
+      try {
+        setGmailConnectionsBusy(id)
+        setGmailError(null)
+        await action()
+        await loadGmailConnections()
+      } catch (error) {
+        setGmailError(error instanceof Error ? error.message : 'Connection action failed')
+      } finally {
+        setGmailConnectionsBusy(null)
+      }
+    },
+    [loadGmailConnections],
+  )
+
+  // Open Google's consent screen and refresh once the account is connected.
+  //
+  // Electron blocks window.open, so prefer the desktop bridge that opens the
+  // system browser. Signing in there is also better than a popup: people can
+  // see the real accounts.google.com address bar, which is exactly what they
+  // should check before typing a password.
+  const connectGmailAccount = useCallback(async (id: string) => {
+    try {
+      setGmailError(null)
+      setGmailAuthPending(id)
+      const { auth_url } = await agentApi.startGmailConnectionAuth(id)
+
+      const electronAPI = (window as unknown as {
+        electronAPI?: { openExternal?: (url: string) => void }
+      }).electronAPI
+      const popup = electronAPI?.openExternal
+        ? (electronAPI.openExternal(auth_url), null)
+        : window.open(auth_url, 'gmail-oauth', 'width=520,height=680')
+
+      if (!electronAPI?.openExternal && !popup) {
+        setGmailError('Allow pop-ups for this app, then try connecting again.')
+        setGmailAuthPending(null)
+        return
+      }
+
+      // The callback lands on the server, not in this document, so there is no
+      // event here to listen for — and with an external browser there is no
+      // window to watch closing either. Poll until the server reports ready.
+      const startedAt = Date.now()
+      const timer = window.setInterval(async () => {
+        const timedOut = Date.now() - startedAt > 3 * 60 * 1000
+        if (popup && !popup.closed && !timedOut) return
+
+        const data = await agentApi.listGmailConnections().catch(() => null)
+        const connected = data?.connections?.find(entry => entry.id === id)?.ready
+        if (!connected && !timedOut) return
+
+        window.clearInterval(timer)
+        setGmailAuthPending(null)
+        if (!connected) setGmailError('Sign-in did not complete. Try connecting again.')
+        await loadGmailConnections()
+      }, 1500)
+    } catch (error) {
+      setGmailAuthPending(null)
+      setGmailError(error instanceof Error ? error.message : 'Could not start Google sign-in')
+    }
+  }, [loadGmailConnections])
+
   const loadGmail = useCallback(async (background = false) => {
     try {
       if (background) setGmailChecking(true)
@@ -172,7 +259,8 @@ export function useWorkflowBots(workspacePath: string | null) {
       setGmailLoading(false)
       setGmailChecking(false)
     }
-  }, [])
+    void loadGmailConnections()
+  }, [loadGmailConnections])
 
   useEffect(() => {
     void loadEmails()
@@ -581,6 +669,11 @@ export function useWorkflowBots(workspacePath: string | null) {
     gmailOpen, setGmailOpen, gmailConfig, setGmailConfig, gmailBlockedText, setGmailBlockedText,
     gmailLoading, gmailChecking, gmailSaving, gmailTesting, gmailError, gmailSuccess, gmailTestResult,
     gmailBlockedDefaults, gmailDefaultIsBlocked, gmailTestPassed, gmailHasChanges, loadGmail, saveGmail, testGmail,
+    // gmail senders (multi-account)
+    gmailConnections, gmailConnectionsBusy, gmailAuthPending,
+    gmailNewConnectionName, setGmailNewConnectionName,
+    gmailNewConnectionDir, setGmailNewConnectionDir,
+    loadGmailConnections, runGmailConnectionAction, connectGmailAccount,
   }
 }
 

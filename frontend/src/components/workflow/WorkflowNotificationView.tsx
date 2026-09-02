@@ -199,6 +199,10 @@ export default function WorkflowNotificationView({
   const [pulseChannels, setPulseChannels] = useState<string[]>([])
   const [runRecipients, setRunRecipients] = useState<string[]>([])
   const [pulseRecipients, setPulseRecipients] = useState<string[]>([])
+  // Which account(s) each summary sends FROM. Empty = inherit the account
+  // default; several = deliver the summary once per account.
+  const [runSenders, setRunSenders] = useState<string[]>([])
+  const [pulseSenders, setPulseSenders] = useState<string[]>([])
   const [savingInstructions, setSavingInstructions] = useState(false)
 
   const load = useCallback(async () => {
@@ -214,6 +218,8 @@ export default function WorkflowNotificationView({
       setPulseChannels(next.pulseSummaryChannels)
       setRunRecipients(next.runSummaryRecipients)
       setPulseRecipients(next.pulseSummaryRecipients)
+      setRunSenders(next.runSummaryGmailConnectionIds)
+      setPulseSenders(next.pulseSummaryGmailConnectionIds)
       onStateLoaded?.(next.effectiveState)
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load notification status')
@@ -244,12 +250,22 @@ export default function WorkflowNotificationView({
   // either way, which is the part worth stating outright.
   const gmailDefault = info?.gmail?.default_recipient?.trim() || ''
   const gmailBlocked = info?.gmail?.blocked_recipients || []
+  const gmailSender = info?.gmail?.default_sender?.trim() || ''
+  const gmailSenderChoices = info?.gmail?.sender_choices || []
+  // Only worth naming the connection when more than one account exists —
+  // otherwise "Sends from" already says everything there is to say.
+  const gmailSenderLabel =
+    gmailSenderChoices.length > 1
+      ? gmailSenderChoices.find((c) => c.is_default)?.display_name || ''
+      : ''
   const scopeName = info?.scopeLabel || workspacePath?.split('/').filter(Boolean).pop() || 'Workflow'
   const scopeLabel = 'workflow'
   const instructionsDirty = runInstructions.trim() !== (info?.runSummaryInstructions || '').trim()
     || pulseInstructions.trim() !== (info?.pulseSummaryInstructions || '').trim()
     || JSON.stringify(runChannels) !== JSON.stringify(info?.runSummaryChannels || [])
     || JSON.stringify(pulseChannels) !== JSON.stringify(info?.pulseSummaryChannels || [])
+    || JSON.stringify(runSenders) !== JSON.stringify(info?.runSummaryGmailConnectionIds || [])
+    || JSON.stringify(pulseSenders) !== JSON.stringify(info?.pulseSummaryGmailConnectionIds || [])
     || JSON.stringify(runRecipients) !== JSON.stringify(info?.runSummaryRecipients || [])
     || JSON.stringify(pulseRecipients) !== JSON.stringify(info?.pulseSummaryRecipients || [])
 
@@ -262,6 +278,63 @@ export default function WorkflowNotificationView({
     const current = channels.length === 0 ? channelOptions.map(option => option.id) : channels
     const next = current.includes(channel) ? current.filter(value => value !== channel) : [...current, channel]
     if (next.length > 0) setChannels(next)
+  }
+
+  // Sender picker. Hidden entirely when there is nothing to choose between:
+  // with one account the "Sends from" line above already says everything, and
+  // an inert control would only imply a choice that does not exist.
+  //
+  // Checkboxes rather than a dropdown because selecting several is meaningful:
+  // the summary is delivered once per account, so the recipient gets a copy
+  // from each sender. Selecting none inherits the account default.
+  const SenderPicker = ({
+    idPrefix,
+    value,
+    onChange,
+  }: {
+    idPrefix: string
+    value: string[]
+    onChange: (next: string[]) => void
+  }) => {
+    if (gmailSenderChoices.length < 2) return null
+    const defaultChoice = gmailSenderChoices.find(choice => choice.is_default)
+    const toggle = (id: string) => {
+      onChange(value.includes(id) ? value.filter(entry => entry !== id) : [...value, id])
+    }
+    return (
+      <div className="block space-y-1.5">
+        <span className="block text-xs font-medium text-foreground">Email from</span>
+        <div className="flex flex-wrap gap-2">
+          {gmailSenderChoices.map(choice => (
+            <label
+              key={`${idPrefix}-${choice.id}`}
+              className={`inline-flex items-center gap-2 rounded-md border border-border px-2.5 py-1.5 text-xs text-foreground ${choice.ready ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
+              title={choice.ready ? choice.email || choice.display_name : 'This account needs to be reconnected before it can send.'}
+            >
+              <input
+                type="checkbox"
+                checked={value.includes(choice.id)}
+                disabled={!choice.ready}
+                onChange={() => toggle(choice.id)}
+                className="accent-primary"
+              />
+              <span>
+                {choice.display_name}
+                {choice.email ? ` — ${choice.email}` : ''}
+                {choice.ready ? '' : ' (needs reconnect)'}
+              </span>
+            </label>
+          ))}
+        </div>
+        <span className="block text-xs text-muted-foreground">
+          {value.length === 0
+            ? `No account selected — inherits the account default${defaultChoice ? ` (${defaultChoice.display_name})` : ''}.`
+            : value.length === 1
+              ? 'Sent once, from this account.'
+              : `Sent ${value.length} times — one copy from each selected account.`}
+        </span>
+      </div>
+    )
   }
 
   const saveInstructions = async () => {
@@ -277,6 +350,8 @@ export default function WorkflowNotificationView({
         pulse_notification_channels: pulseChannels,
         run_notification_recipients: runRecipients,
         pulse_notification_recipients: pulseRecipients,
+        run_notification_gmail_connection_ids: runSenders,
+        pulse_notification_gmail_connection_ids: pulseSenders,
       })
       const persistedRun = saved?.manifest?.capabilities?.notifications?.run_summary_instructions || ''
       const persistedPulse = saved?.manifest?.capabilities?.notifications?.pulse_summary_instructions || ''
@@ -284,12 +359,16 @@ export default function WorkflowNotificationView({
       const persistedPulseChannels = saved?.manifest?.capabilities?.notifications?.pulse_summary_channels || []
       const persistedRunRecipients = saved?.manifest?.capabilities?.notifications?.run_summary_recipients || []
       const persistedPulseRecipients = saved?.manifest?.capabilities?.notifications?.pulse_summary_recipients || []
+      const persistedRunSenders = saved?.manifest?.capabilities?.notifications?.run_summary_gmail_connection_ids || []
+      const persistedPulseSenders = saved?.manifest?.capabilities?.notifications?.pulse_summary_gmail_connection_ids || []
       if (persistedRun.trim() !== runInstructions.trim()
         || persistedPulse.trim() !== pulseInstructions.trim()
         || JSON.stringify(persistedRunChannels) !== JSON.stringify(runChannels)
         || JSON.stringify(persistedPulseChannels) !== JSON.stringify(pulseChannels)
         || JSON.stringify(persistedRunRecipients) !== JSON.stringify(runRecipients)
-        || JSON.stringify(persistedPulseRecipients) !== JSON.stringify(pulseRecipients)) {
+        || JSON.stringify(persistedPulseRecipients) !== JSON.stringify(pulseRecipients)
+        || JSON.stringify(persistedRunSenders) !== JSON.stringify(runSenders)
+        || JSON.stringify(persistedPulseSenders) !== JSON.stringify(pulseSenders)) {
         throw new Error('The backend did not save these notification preferences. Restart AgentWorks to load the latest backend, then try again.')
       }
       await load()
@@ -397,8 +476,17 @@ export default function WorkflowNotificationView({
                             ? 'Available to this workflow. The agent may supply specific recipients when explicitly configured.'
                             : info.gmail?.summary || 'Not ready at account level. Configure and test Gmail from Notification channels.'}
                         </p>
-                        {(gmailDefault || gmailBlocked.length > 0) && (
+                        {(gmailSender || gmailDefault || gmailBlocked.length > 0) && (
                           <dl className="mt-2 space-y-1 text-xs">
+                            {gmailSender && (
+                              <div className="flex flex-wrap items-baseline gap-x-1.5">
+                                <dt className="text-muted-foreground">Sends from</dt>
+                                <dd className="font-mono text-foreground">{gmailSender}</dd>
+                                {gmailSenderLabel && (
+                                  <dd className="text-muted-foreground">({gmailSenderLabel}, inherited default)</dd>
+                                )}
+                              </div>
+                            )}
                             {gmailDefault && (
                               <div className="flex flex-wrap items-baseline gap-x-1.5">
                                 <dt className="text-muted-foreground">Sends to</dt>
@@ -493,6 +581,7 @@ export default function WorkflowNotificationView({
                             </label>
                           ))}
                         </div>
+                        <SenderPicker idPrefix="run-summary-sender" value={runSenders} onChange={setRunSenders} />
                         <RecipientEditor
                           inputId="run-summary-recipients"
                           label="Email to"
@@ -523,6 +612,7 @@ export default function WorkflowNotificationView({
                             </label>
                           ))}
                         </div>
+                        <SenderPicker idPrefix="pulse-summary-sender" value={pulseSenders} onChange={setPulseSenders} />
                         <RecipientEditor
                           inputId="pulse-summary-recipients"
                           label="Email to"

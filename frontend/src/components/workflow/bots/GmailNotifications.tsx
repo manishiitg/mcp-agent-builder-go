@@ -1,9 +1,11 @@
 import { AlertTriangle, ChevronRight, Loader2, Mail, RotateCcw } from 'lucide-react'
+import { agentApi } from '../../../services/api'
 import { Button } from '../../ui/Button'
 import { Card } from '../../ui/Card'
 import { READ_ONLY_TITLE } from '../../../hooks/useCanWriteWorkflow'
 import type { WorkflowBots } from './useWorkflowBots'
 import { StatusBanner } from './StatusBanner'
+import { GmailSetupGuide } from './GmailSetupGuide'
 
 // ── Email notifications (account-wide, shared by every workflow) ──────────
 
@@ -12,6 +14,10 @@ type GmailNotificationsBots = Pick<WorkflowBots,
   | 'gmailOpen' | 'setGmailOpen' | 'gmailConfig' | 'setGmailConfig' | 'gmailBlockedText' | 'setGmailBlockedText'
   | 'gmailLoading' | 'gmailChecking' | 'gmailSaving' | 'gmailTesting' | 'gmailError' | 'gmailSuccess' | 'gmailTestResult'
   | 'gmailBlockedDefaults' | 'gmailDefaultIsBlocked' | 'gmailTestPassed' | 'gmailHasChanges' | 'loadGmail' | 'saveGmail' | 'testGmail'
+  | 'gmailConnections' | 'gmailConnectionsBusy' | 'gmailAuthPending'
+  | 'gmailNewConnectionName' | 'setGmailNewConnectionName'
+  | 'gmailNewConnectionDir' | 'setGmailNewConnectionDir'
+  | 'runGmailConnectionAction' | 'connectGmailAccount'
 >
 
 export function GmailNotifications({ bots }: { bots: GmailNotificationsBots }) {
@@ -20,6 +26,10 @@ export function GmailNotifications({ bots }: { bots: GmailNotificationsBots }) {
     gmailOpen, setGmailOpen, gmailConfig, setGmailConfig, gmailBlockedText, setGmailBlockedText,
     gmailLoading, gmailChecking, gmailSaving, gmailTesting, gmailError, gmailSuccess, gmailTestResult,
     gmailBlockedDefaults, gmailDefaultIsBlocked, gmailTestPassed, gmailHasChanges, loadGmail, saveGmail, testGmail,
+    gmailConnections, gmailConnectionsBusy, gmailAuthPending,
+    gmailNewConnectionName, setGmailNewConnectionName,
+    gmailNewConnectionDir, setGmailNewConnectionDir,
+    runGmailConnectionAction, connectGmailAccount,
   } = bots
 
   return (
@@ -75,11 +85,128 @@ export function GmailNotifications({ bots }: { bots: GmailNotificationsBots }) {
                   </div>
                 </div>
               </Card>
-              {!(gmailConfig.auth.authenticated && gmailConfig.auth.has_gmail_scope) && (
+              {!(gmailConfig.auth.authenticated && gmailConfig.auth.has_gmail_scope) && gmailConnections.length === 0 && (
                 <Card className="border-amber-300 bg-amber-50 p-4 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-100">
-                  <div className="flex gap-2"><AlertTriangle className="h-4 w-4 flex-shrink-0" /><div><strong>Setup on the server host:</strong> install <code>@googleworkspace/cli</code>, then run <code>gws auth login -s gmail</code> and refresh this status.</div></div>
+                  <div className="flex gap-2"><AlertTriangle className="h-4 w-4 flex-shrink-0" /><div><strong>No account connected yet.</strong> Add a sending account below and sign in with Google. <code>@googleworkspace/cli</code> must be installed on the server host.</div></div>
                 </Card>
               )}
+
+              <GmailSetupGuide />
+
+              <Card className="space-y-3 p-4">
+                <div>
+                  <h4 className="text-sm font-medium">Sending accounts</h4>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Which mailbox notifications are sent from. A workflow may pick one; otherwise the default is used.
+                  </p>
+                </div>
+
+                {gmailConnections.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No sending accounts yet — mail goes out from whichever account <code>gws</code> is authenticated as on the host.
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {gmailConnections.map(conn => (
+                      <li key={conn.id} className="rounded-md border border-border p-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`h-2 w-2 flex-shrink-0 rounded-full ${conn.ready ? 'bg-green-500' : conn.auth?.checking ? 'bg-muted-foreground' : 'bg-amber-500'}`} />
+                          <span className="text-sm font-medium">{conn.display_name}</span>
+                          {conn.is_default && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">Default</span>}
+                          {!conn.enabled && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">Disabled</span>}
+                          <span className="ml-auto text-xs text-muted-foreground">
+                            {conn.auth?.checking ? 'Checking…' : conn.ready ? 'Connected' : 'Not connected'}
+                          </span>
+                        </div>
+                        <p className="mt-1 font-mono text-xs text-muted-foreground">{conn.email || 'Address not known yet'}</p>
+
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <button
+                            onClick={() => connectGmailAccount(conn.id)}
+                            disabled={readOnly || gmailAuthPending !== null}
+                            title={readOnly ? READ_ONLY_TITLE : undefined}
+                            className="rounded border border-primary px-2 py-1 text-xs text-primary hover:bg-primary/10 disabled:opacity-40"
+                          >
+                            {gmailAuthPending === conn.id ? 'Waiting for Google…' : conn.ready ? 'Reconnect' : 'Sign in with Google'}
+                          </button>
+                          <button
+                            onClick={() => runGmailConnectionAction(conn.id, () => agentApi.setDefaultGmailConnection(conn.id))}
+                            disabled={readOnly || conn.is_default || !conn.enabled || gmailConnectionsBusy === conn.id}
+                            title={readOnly ? READ_ONLY_TITLE : undefined}
+                            className="rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40"
+                          >
+                            Make default
+                          </button>
+                          <button
+                            onClick={() => runGmailConnectionAction(conn.id, () => agentApi.testGmailConnectionById(conn.id, gmailConfig.default_to || undefined))}
+                            disabled={readOnly || gmailConnectionsBusy === conn.id}
+                            title={readOnly ? READ_ONLY_TITLE : undefined}
+                            className="rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40"
+                          >
+                            Send test
+                          </button>
+                          <button
+                            onClick={() => runGmailConnectionAction(conn.id, () => agentApi.updateGmailConnection(conn.id, { enabled: !conn.enabled }))}
+                            disabled={readOnly || gmailConnectionsBusy === conn.id}
+                            title={readOnly ? READ_ONLY_TITLE : undefined}
+                            className="rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40"
+                          >
+                            {conn.enabled ? 'Disable' : 'Enable'}
+                          </button>
+                          <button
+                            onClick={() => runGmailConnectionAction(conn.id, () => agentApi.deleteGmailConnection(conn.id))}
+                            disabled={readOnly || gmailConnectionsBusy === conn.id}
+                            title={readOnly ? READ_ONLY_TITLE : undefined}
+                            className="ml-auto rounded border border-border px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-40 dark:text-red-400 dark:hover:bg-red-900/20"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <div className="space-y-2 border-t border-border pt-3">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={gmailNewConnectionName}
+                      onChange={event => setGmailNewConnectionName(event.target.value)}
+                      disabled={readOnly}
+                      placeholder="Account name (e.g. Work)"
+                      className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                    <Button
+                      variant="outline"
+                      disabled={readOnly || !gmailNewConnectionName.trim() || gmailConnectionsBusy !== null}
+                      title={readOnly ? READ_ONLY_TITLE : undefined}
+                      onClick={() => runGmailConnectionAction('new', async () => {
+                        await agentApi.createGmailConnection({
+                          display_name: gmailNewConnectionName.trim(),
+                          config_home: gmailNewConnectionDir.trim() || undefined,
+                        })
+                        setGmailNewConnectionName('')
+                        setGmailNewConnectionDir('')
+                      })}
+                    >
+                      Add account
+                    </Button>
+                  </div>
+                  <input
+                    type="text"
+                    value={gmailNewConnectionDir}
+                    onChange={event => setGmailNewConnectionDir(event.target.value)}
+                    disabled={readOnly}
+                    placeholder="Existing gws config directory (optional)"
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Add the account, then click <strong>Sign in with Google</strong> on its row to authorize it in your browser.
+                    The directory field is only needed to adopt a <code>gws</code> profile already authenticated on the host.
+                  </p>
+                </div>
+              </Card>
               <Card className="space-y-3 p-4">
                 <div>
                   <label className="mb-2 block text-sm font-medium">Default recipients</label>

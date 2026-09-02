@@ -5514,6 +5514,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			var pulseNotificationChannels []string
 			var notificationExcludeChannels []string
 			var notificationBlockRecipients []string
+			var notificationGmailConnectionID string
 			var runNotificationRecipients []string
 			var pulseNotificationRecipients []string
 			var runNotificationWebhooks []string
@@ -5530,6 +5531,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 							Instructions             string   `json:"instructions"`
 							ExcludeChannels          []string `json:"exclude_channels"`
 							BlockRecipients          []string `json:"block_recipients"`
+							GmailConnectionID        string   `json:"gmail_connection_id"`
 							RunSummaryRecipients     []string `json:"run_summary_recipients"`
 							PulseSummaryRecipients   []string `json:"pulse_summary_recipients"`
 
@@ -5551,6 +5553,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					}
 					notificationExcludeChannels = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.ExcludeChannels)
 					notificationBlockRecipients = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.BlockRecipients)
+					notificationGmailConnectionID = strings.TrimSpace(manifest.Capabilities.Notifications.GmailConnectionID)
 					runNotificationRecipients = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.RunSummaryRecipients)
 					pulseNotificationRecipients = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.PulseSummaryRecipients)
 					runNotificationWebhooks = uniqueStringsPreserveOrder(manifest.Capabilities.Notifications.RunSummarySlackWebhookSecretNames)
@@ -5585,6 +5588,45 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 			if len(notificationBlockRecipients) > 0 {
 				sb.WriteString(fmt.Sprintf("- Blocked recipients: %s\n", strings.Join(notificationBlockRecipients, ", ")))
+			}
+			// WHICH account sends, and what it could be changed to. Stating the
+			// available connections matters: the agent can edit workflow.json but
+			// has no tool to enumerate them, so without this it can only report
+			// that a sender exists and ask the user to look it up themselves.
+			if gmailSvc := services.GetGmailService(); gmailSvc != nil {
+				connections := gmailSvc.ListConnections()
+				if notificationGmailConnectionID == "" {
+					sb.WriteString("- Gmail sender: not set — inherits the account default connection\n")
+				} else {
+					label := notificationGmailConnectionID
+					for _, conn := range connections {
+						if conn.ID == notificationGmailConnectionID {
+							label = fmt.Sprintf("%s (%s)", conn.ID, conn.DisplayName)
+							break
+						}
+					}
+					sb.WriteString(fmt.Sprintf("- Gmail sender: %s\n", label))
+				}
+				if len(connections) > 1 {
+					available := make([]string, 0, len(connections))
+					for _, conn := range connections {
+						if !conn.Enabled {
+							continue
+						}
+						entry := conn.ID
+						if conn.DisplayName != "" {
+							entry += " — " + conn.DisplayName
+						}
+						if st, ok := gmailSvc.AuthStatusForConnection(conn.ID); ok && st.Email != "" {
+							entry += " <" + st.Email + ">"
+						}
+						available = append(available, entry)
+					}
+					if len(available) > 0 {
+						sb.WriteString(fmt.Sprintf("- Available Gmail senders (set `gmail_connection_id` in workflow.json notifications to choose): %s\n",
+							strings.Join(available, "; ")))
+					}
+				}
 			}
 			// State both recipient lists unconditionally. "Not configured" is a real
 			// answer here — it means mail goes to the account default — and leaving

@@ -238,7 +238,13 @@ func shouldSkipAuth(path string) bool {
 		"/api/capabilities",
 		"/api/shared/",        // Shared session links are public
 		"/api/oauth/callback", // OAuth callback comes from external provider without our JWT
-		"/api/downloads/",     // Chrome CDP launcher zip (macOS)
+		// Google redirects the user's browser here after they consent. It is a
+		// plain navigation, so it cannot carry our JWT. Safe to expose because
+		// the request is worthless without the OAuth state parameter, which is
+		// random, server-held, single-use, and expires in 15 minutes — a
+		// callback with no valid state does nothing at all.
+		"/api/human-feedback/gmail/auth/callback",
+		"/api/downloads/", // Chrome CDP launcher zip (macOS)
 	}
 
 	for _, p := range publicPaths {

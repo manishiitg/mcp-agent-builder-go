@@ -323,8 +323,12 @@ func TestAuthStatusCachedNeverBlocksOnAColdRead(t *testing.T) {
 // popup twice must not pay for two subprocesses.
 func TestAuthStatusCachedServesFreshCache(t *testing.T) {
 	g := &GmailService{
-		authCache:    &GmailAuthStatus{Authenticated: true, HasGmailScope: true, GwsInstalled: true},
-		authCachedAt: time.Now(),
+		authCaches: map[string]*gmailAuthCacheEntry{
+			"": {
+				status:   &GmailAuthStatus{Authenticated: true, HasGmailScope: true, GwsInstalled: true},
+				cachedAt: time.Now(),
+			},
+		},
 	}
 	st := g.AuthStatusCached()
 	if !st.Authenticated || !st.HasGmailScope || st.Checking {
@@ -336,9 +340,13 @@ func TestAuthStatusCachedServesFreshCache(t *testing.T) {
 // the refresh runs, rather than flipping the UI back to "checking".
 func TestAuthStatusCachedPrefersStaleOverPending(t *testing.T) {
 	g := &GmailService{
-		gwsPath:      "definitely-not-a-real-binary-xyz",
-		authCache:    &GmailAuthStatus{Authenticated: true, HasGmailScope: true},
-		authCachedAt: time.Now().Add(-2 * gmailAuthCacheTTL),
+		gwsPath: "definitely-not-a-real-binary-xyz",
+		authCaches: map[string]*gmailAuthCacheEntry{
+			"": {
+				status:   &GmailAuthStatus{Authenticated: true, HasGmailScope: true},
+				cachedAt: time.Now().Add(-2 * gmailAuthCacheTTL),
+			},
+		},
 	}
 	st := g.AuthStatusCached()
 	if st.Checking {

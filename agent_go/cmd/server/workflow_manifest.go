@@ -314,6 +314,26 @@ type WorkflowNotificationConfig struct {
 	// for THIS workflow only, without changing the account-wide configuration.
 	ExcludeChannels []string `json:"exclude_channels,omitempty"`
 
+	// GmailConnectionID selects WHICH configured Gmail account sends this
+	// workflow's email — the sender, orthogonal to every recipient field here.
+	// Empty means "inherit the account-level default connection", so existing
+	// workflows are unaffected. An unknown or disabled connection is a
+	// configuration error that fails the send: it never falls back to another
+	// account, because delivering from an unintended identity is worse than not
+	// delivering. An identifier, never a secret.
+	GmailConnectionID string `json:"gmail_connection_id,omitempty"`
+
+	// Per-summary senders. These say which account(s) each summary is sent
+	// FROM, the counterpart to RunSummaryRecipients / PulseSummaryRecipients
+	// saying where it goes TO.
+	//
+	// A LIST, following the RunSummarySlackWebhookSecretNames precedent: naming
+	// several senders fans that summary out, delivering it once per account, so
+	// the same run summary can go out from both a work and a personal mailbox.
+	// Empty falls back to GmailConnectionID, then to the account default.
+	RunSummaryGmailConnectionIDs   []string `json:"run_summary_gmail_connection_ids,omitempty"`
+	PulseSummaryGmailConnectionIDs []string `json:"pulse_summary_gmail_connection_ids,omitempty"`
+
 	// BlockRecipients is a per-workflow email denylist, unioned with the
 	// account-wide GmailConfig.BlockedRecipients at send time. It can only block
 	// MORE addresses for this workflow, never unblock a globally-blocked one.

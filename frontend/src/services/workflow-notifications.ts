@@ -15,6 +15,9 @@ export interface WorkflowNotificationInfo {
   pulseSummaryChannels: string[]
   // Who each summary is emailed to. Empty means the account default recipient.
   runSummaryRecipients: string[]
+  /** Which Gmail account(s) each summary sends FROM; empty means inherit. */
+  runSummaryGmailConnectionIds: string[]
+  pulseSummaryGmailConnectionIds: string[]
   pulseSummaryRecipients: string[]
   // Slack channels per summary, as webhook secret names (one webhook = one channel).
   runSummarySlackWebhooks: string[]
@@ -41,6 +44,8 @@ export async function loadWorkflowNotificationInfo(workspacePath: string): Promi
     runSummaryChannels: response.run_summary_channels || [],
     pulseSummaryChannels: response.pulse_summary_channels || [],
     runSummaryRecipients: response.run_summary_recipients || [],
+    runSummaryGmailConnectionIds: response.run_summary_gmail_connection_ids || [],
+    pulseSummaryGmailConnectionIds: response.pulse_summary_gmail_connection_ids || [],
     pulseSummaryRecipients: response.pulse_summary_recipients || [],
     runSummarySlackWebhooks: response.run_summary_slack_webhooks || [],
     pulseSummarySlackWebhooks: response.pulse_summary_slack_webhooks || [],

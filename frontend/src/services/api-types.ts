@@ -922,6 +922,17 @@ export interface GmailAuthStatus {
   has_gmail_scope: boolean
   scopes?: string[]
   detail?: string
+  /**
+   * The authenticated sending address. `gws auth status` reports no identity,
+   * so this comes from a separate profile lookup; empty when unauthenticated
+   * or not yet resolved.
+   */
+  email?: string
+  /**
+   * No fresh result yet — a refresh is running in the background. Render a
+   * pending state rather than a failure; unknown is not the same as broken.
+   */
+  checking?: boolean
 }
 
 export interface GmailConfigRequest {
@@ -2734,6 +2745,36 @@ export interface WorkflowNotificationDestinationInfo {
   summary?: string
 }
 
+/** One configured Gmail sending account. Identifiers and labels only —
+ *  the API never returns tokens, secrets, or credential file contents. */
+export interface GmailConnection {
+  id: string
+  display_name: string
+  email?: string
+  config_home?: string
+  has_credentials_file?: boolean
+  status?: string
+  enabled: boolean
+  is_default: boolean
+  auth: GmailAuthStatus
+  ready: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+export interface GmailConnectionsResponse {
+  connections: GmailConnection[]
+  /** Empty means no default is set — sends that name no connection will fail. */
+  default_connection_id?: string
+}
+
+export interface GmailConnectionRequest {
+  display_name?: string
+  config_home?: string
+  credentials_file?: string
+  enabled?: boolean
+}
+
 export interface WorkflowNotificationAccountChannelInfo {
   id: string
   label: string
@@ -2743,6 +2784,27 @@ export interface WorkflowNotificationAccountChannelInfo {
   blocked_recipients?: string[]
   /** Gmail authorization is still resolving in the background. */
   checking?: boolean
+  /**
+   * The address mail goes OUT from — the counterpart to default_recipient,
+   * which is where it goes TO. Empty while auth is still resolving.
+   */
+  default_sender?: string
+  /** Which configured connection default_sender belongs to. */
+  default_sender_connection_id?: string
+  /**
+   * Connections a workflow may send from. Fewer than two entries means there
+   * is nothing to choose and the picker stays hidden.
+   */
+  sender_choices?: WorkflowNotificationSenderChoice[]
+}
+
+/** One selectable Gmail sending account. Identifiers and labels only. */
+export interface WorkflowNotificationSenderChoice {
+  id: string
+  display_name: string
+  email?: string
+  ready: boolean
+  is_default?: boolean
 }
 
 export interface WorkflowNotificationInfoResponse {
@@ -2760,6 +2822,10 @@ export interface WorkflowNotificationInfoResponse {
   pulse_summary_channels?: string[]
   // Who each summary is emailed to. Empty means the account default recipient.
   run_summary_recipients?: string[]
+  /** Which Gmail account(s) each summary sends FROM. Several entries deliver
+   *  the summary once per account; absent means inherit the default. */
+  run_summary_gmail_connection_ids?: string[]
+  pulse_summary_gmail_connection_ids?: string[]
   pulse_summary_recipients?: string[]
   // Slack channels per summary, as webhook secret names (one webhook = one channel).
   run_summary_slack_webhooks?: string[]
@@ -3080,6 +3146,11 @@ export interface UpdateWorkflowManifestRequest {
   // omit the field to leave it unchanged.
   run_notification_recipients?: string[]
   pulse_notification_recipients?: string[]
+  // Which Gmail account(s) each summary is sent FROM. Several entries fan the
+  // summary out, one delivery per account. Send an empty array to clear back to
+  // the account default; omit the field to leave it unchanged.
+  run_notification_gmail_connection_ids?: string[]
+  pulse_notification_gmail_connection_ids?: string[]
   notification_instructions?: string
   folder_access?: WorkflowFolderGrant[]
   folder_access_requests?: WorkflowFolderAccessRequest[]

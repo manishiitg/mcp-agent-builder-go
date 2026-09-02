@@ -538,6 +538,12 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 			dest.Gmail.Email = strings.Join(routedTo, ", ")
 		}
 	}
+	if senders := summarySendersForKind(dest, notificationKind); len(senders) > 0 {
+		if dest.Gmail == nil {
+			dest.Gmail = &services.GmailDest{}
+		}
+		dest.Gmail.ConnectionIDs = senders
+	}
 	routedChannels := summaryChannelsForKind(dest, notificationKind)
 	if len(routedChannels) > 0 {
 		excludeChannels = append(excludeChannels, excludedNotificationChannels(routedChannels)...)
@@ -694,6 +700,34 @@ func summaryRecipientsForKind(dest *services.NotificationDestination, kind strin
 	default:
 		return nil
 	}
+}
+
+// summarySenderForKind picks which Gmail account sends this notification kind.
+//
+// The FROM counterpart to summaryRecipientsForKind, and deliberately a separate
+// function: one decides which mailbox sends, the other who receives, and a
+// change to either must not be able to silently move the other.
+//
+// Precedence: the per-summary sender, then the workflow-wide one, then "" which
+// means inherit the account default connection.
+func summarySendersForKind(dest *services.NotificationDestination, kind string) []string {
+	if dest == nil {
+		return nil
+	}
+	var perSummary []string
+	switch kind {
+	case "run_summary":
+		perSummary = dest.RunSummaryGmailConnectionIDs
+	case "pulse_summary":
+		perSummary = dest.PulseSummaryGmailConnectionIDs
+	}
+	if len(perSummary) > 0 {
+		return append([]string(nil), perSummary...)
+	}
+	if dest.Gmail != nil && len(dest.Gmail.ConnectionIDs) > 0 {
+		return append([]string(nil), dest.Gmail.ConnectionIDs...)
+	}
+	return nil
 }
 
 func excludedNotificationChannels(allowed []string) []string {
@@ -991,17 +1025,19 @@ func cloneNotificationDestination(dest *services.NotificationDestination) *servi
 		return nil
 	}
 	clone := &services.NotificationDestination{
-		UserID:                 dest.UserID,
-		WorkflowName:           dest.WorkflowName,
-		WorkspacePath:          dest.WorkspacePath,
-		RouteSelections:        maps.Clone(dest.RouteSelections),
-		ExcludeChannels:        append([]string(nil), dest.ExcludeChannels...),
-		RunSummaryChannels:     append([]string(nil), dest.RunSummaryChannels...),
-		PulseSummaryChannels:   append([]string(nil), dest.PulseSummaryChannels...),
-		RunSummaryRecipients:   append([]string(nil), dest.RunSummaryRecipients...),
-		PulseSummaryRecipients: append([]string(nil), dest.PulseSummaryRecipients...),
-		RunSummaryWebhooks:     append([]services.SlackWebhookDest(nil), dest.RunSummaryWebhooks...),
-		PulseSummaryWebhooks:   append([]services.SlackWebhookDest(nil), dest.PulseSummaryWebhooks...),
+		UserID:                         dest.UserID,
+		WorkflowName:                   dest.WorkflowName,
+		WorkspacePath:                  dest.WorkspacePath,
+		RouteSelections:                maps.Clone(dest.RouteSelections),
+		ExcludeChannels:                append([]string(nil), dest.ExcludeChannels...),
+		RunSummaryChannels:             append([]string(nil), dest.RunSummaryChannels...),
+		PulseSummaryChannels:           append([]string(nil), dest.PulseSummaryChannels...),
+		RunSummaryGmailConnectionIDs:   append([]string(nil), dest.RunSummaryGmailConnectionIDs...),
+		PulseSummaryGmailConnectionIDs: append([]string(nil), dest.PulseSummaryGmailConnectionIDs...),
+		RunSummaryRecipients:           append([]string(nil), dest.RunSummaryRecipients...),
+		PulseSummaryRecipients:         append([]string(nil), dest.PulseSummaryRecipients...),
+		RunSummaryWebhooks:             append([]services.SlackWebhookDest(nil), dest.RunSummaryWebhooks...),
+		PulseSummaryWebhooks:           append([]services.SlackWebhookDest(nil), dest.PulseSummaryWebhooks...),
 	}
 	if dest.Slack != nil {
 		clone.Slack = &services.SlackDest{
@@ -1024,6 +1060,7 @@ func cloneNotificationDestination(dest *services.NotificationDestination) *servi
 	if dest.Gmail != nil {
 		clone.Gmail = &services.GmailDest{
 			Email:             dest.Gmail.Email,
+			ConnectionIDs:     append([]string(nil), dest.Gmail.ConnectionIDs...),
 			BlockedRecipients: append([]string(nil), dest.Gmail.BlockedRecipients...),
 		}
 	}
@@ -1072,6 +1109,8 @@ func notificationDestinationEmpty(dest *services.NotificationDestination) bool {
 			len(dest.ExcludeChannels) == 0 &&
 			len(dest.RunSummaryChannels) == 0 &&
 			len(dest.PulseSummaryChannels) == 0 &&
+			len(dest.RunSummaryGmailConnectionIDs) == 0 &&
+			len(dest.PulseSummaryGmailConnectionIDs) == 0 &&
 			len(dest.RunSummaryRecipients) == 0 &&
 			len(dest.PulseSummaryRecipients) == 0 &&
 			len(dest.RunSummaryWebhooks) == 0 &&
