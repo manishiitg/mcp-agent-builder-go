@@ -412,6 +412,13 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   }, [query, rows, selectedRowId])
 
   const selectedRow = useMemo(() => rows.find(row => row.id === selectedRowId) ?? null, [rows, selectedRowId])
+
+  // A custom per-role setup has no provider row to read; the per-role list is
+  // the only place that shows what the workflow runs on, so it opens itself.
+  const customPerRole = advanced && Boolean(llmConfig) && !selectedRow
+  useEffect(() => {
+    if (customPerRole) setRolesOpen(true)
+  }, [customPerRole])
   const selectedBaseProvider = selectedRow ? (selectedRow.groupFilter ? 'pi-cli' : selectedRow.id) : null
 
   const selectedProfile = useMemo(() => {
