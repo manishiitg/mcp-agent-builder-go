@@ -16,16 +16,12 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/agentsession"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/enginedetect"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/whatsapptransport"
 	"github.com/skip2/go-qrcode"
-	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
-	waLog "go.mau.fi/whatsmeow/util/log"
-
-	_ "modernc.org/sqlite" // pure-Go sqlite driver, registered as "sqlite"
 )
 
 // whatsappPairingTimeout bounds how long one pairing attempt (QR generation +
@@ -34,148 +30,77 @@ import (
 const whatsappPairingTimeout = 30 * time.Second
 
 // waAccount is ONE linked WhatsApp account — one parent's own phone, linked
-// via its own QR scan. Immutable after construction (client is set once and
-// never reassigned in place — unpairing removes the *waAccount from the
-// manager's map entirely rather than mutating it), so its methods need no
-// locking of their own.
+// via its own QR scan — on top of the shared transport
+// (pkg/whatsapptransport). Everything WhatsApp-protocol lives there; what
+// stays here is this product's policy: self-chat only, plain-text replies,
+// attachments into the inbox or the child's activity. Immutable after
+// construction (unpairing removes the *waAccount from the manager's map
+// rather than mutating it), so its methods need no locking of their own.
 type waAccount struct {
-	client *whatsmeow.Client
+	*whatsapptransport.Account
 }
 
-func (a *waAccount) OwnJID() types.JID {
-	if a == nil || a.client == nil || a.client.Store == nil || a.client.Store.ID == nil {
-		return types.JID{}
-	}
-	return *a.client.Store.ID
-}
-
-// OwnLID returns this account's own LID identity (the "@lid" JID modern
-// WhatsApp uses alongside the phone-number JID). Self-chat messages arrive on
-// the LID identity, so isSelfChat must match it too — see the LID handling
-// AgentWorks' whatsapp_service.go also does.
-func (a *waAccount) OwnLID() types.JID {
-	if a == nil || a.client == nil || a.client.Store == nil {
-		return types.JID{}
-	}
-	return a.client.Store.LID
-}
+// ready reports whether this account can talk to WhatsApp at all.
+func (a *waAccount) ready() bool { return a != nil && a.Account != nil }
 
 // isSelfChat is the safety boundary described on waBot: true only for THIS
-// account's own "Message Yourself" chat. Modern WhatsApp routes the self-chat
-// through the account's LID identity (chat server "lid"), so match BOTH the
-// classic phone-number JID and the LID — otherwise self-chat messages arrive
-// as "@lid" and get silently rejected.
+// account's own "Message Yourself" chat (phone-number JID or LID).
 func (a *waAccount) isSelfChat(chat types.JID) bool {
-	if chat.User == "" {
-		return false
-	}
-	if own := a.OwnJID(); !own.IsEmpty() && chat.Server == types.DefaultUserServer && chat.User == own.User {
-		return true
-	}
-	if lid := a.OwnLID(); !lid.IsEmpty() && chat.Server == types.HiddenUserServer && chat.User == lid.User {
-		return true
-	}
-	return false
+	return a.ready() && a.IsSelfChat(chat)
 }
 
-// react adds (or, with emoji "", clears) a whatsmeow emoji reaction on an
-// incoming message — the "got it / working on it" acknowledgement, since an
-// agent turn can take a minute or two and there'd otherwise be no sign the
-// message was received. Mirrors AgentWorks' WhatsApp reaction ack. Best-effort.
+// react adds (or, with emoji "", clears) an emoji reaction on an incoming
+// message — the "got it / working on it" acknowledgement, since an agent turn
+// can take a minute or two and there'd otherwise be no sign the message was
+// received. Best-effort.
 func (a *waAccount) react(chat, sender types.JID, msgID types.MessageID, emoji string) {
-	if a == nil || a.client == nil {
+	if !a.ready() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	reaction := a.client.BuildReaction(chat, sender, msgID, emoji)
-	if _, err := a.client.SendMessage(ctx, chat, reaction); err != nil {
+	if err := a.React(ctx, chat, sender, msgID, emoji); err != nil {
 		log.Printf("[whatsapp] reaction failed: %v", err)
 	}
 }
 
-// sendTextWithRetry sends msg to chat, retrying transient failures a few
-// times before giving up. Observed live: a fully-generated reply's send
-// failed with "cipher encryption failed ... context deadline exceeded" — a
-// Signal-protocol identity-check timeout, the kind of hiccup that often
-// clears within seconds (e.g. right after whatsmeow reconnects) rather than a
-// permanent failure. attemptTimeout bounds each individual attempt.
+// sendTextWithRetry sends a plain-text reply (HTML stripped: this channel is
+// a phone), retrying transient failures. logPrefix labels the log lines.
 func (a *waAccount) sendTextWithRetry(chat types.JID, text string, attempts int, attemptTimeout time.Duration, logPrefix string) error {
-	text = stripHTMLForWhatsApp(text)
-	msg := &waProto.Message{Conversation: &text}
-	var err error
-	for attempt := 1; attempt <= attempts; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
-		_, err = a.client.SendMessage(ctx, chat, msg)
-		cancel()
-		if err == nil {
-			return nil
-		}
-		log.Printf("[whatsapp] %s send attempt %d/%d failed: %v", logPrefix, attempt, attempts, err)
-		if attempt < attempts {
-			time.Sleep(time.Duration(attempt) * 3 * time.Second)
-		}
+	if !a.ready() {
+		return fmt.Errorf("whatsapp not paired")
 	}
-	return err
+	if err := a.SendTextWithRetry(chat, stripHTMLForWhatsApp(text), attempts, attemptTimeout); err != nil {
+		log.Printf("[whatsapp] %s: send failed after %d attempts: %v", logPrefix, attempts, err)
+		return err
+	}
+	return nil
 }
 
 // SendToSelf pushes a message into this account's own "Message Yourself"
 // chat proactively — used by notify_user/Pulse.
 func (a *waAccount) SendToSelf(ctx context.Context, text string) error {
-	if a == nil || a.client == nil {
+	if !a.ready() {
 		return fmt.Errorf("whatsapp not paired")
 	}
-	own := a.OwnJID()
-	if own.IsEmpty() {
-		return fmt.Errorf("whatsapp own JID unknown")
+	self, err := a.SelfChat()
+	if err != nil {
+		return err
 	}
-	// OwnJID is this device's own JID (has a ":<device>" part, e.g.
-	// "919717071555:24@s.whatsapp.net") — whatsmeow rejects that as a
-	// message recipient ("message recipient must be a user JID with no
-	// device part"). ToNonAD strips it down to the plain addressable user
-	// JID, which is what SendMessage actually wants.
-	own = own.ToNonAD()
-	text = stripHTMLForWhatsApp(text)
-	msg := &waProto.Message{Conversation: &text}
-	_, err := a.client.SendMessage(ctx, own, msg)
-	return err
+	return a.SendText(ctx, self, stripHTMLForWhatsApp(text))
 }
 
-// SendDocumentToSelf uploads a file and sends it as a WhatsApp document
-// attachment to this account's own "message yourself" chat — the same
-// self-chat-only pattern as SendToSelf. Used for handing over a test/study
-// material as a real PDF instead of only describing it in text.
+// SendDocumentToSelf sends a file as a document attachment to this account's
+// own chat — how a test or study material reaches the parent as a real PDF.
 func (a *waAccount) SendDocumentToSelf(ctx context.Context, data []byte, filename, mimetype, caption string) error {
-	if a == nil || a.client == nil {
+	if !a.ready() {
 		return fmt.Errorf("whatsapp not paired")
 	}
-	own := a.OwnJID()
-	if own.IsEmpty() {
-		return fmt.Errorf("whatsapp own JID unknown")
-	}
-	own = own.ToNonAD() // strip the ":<device>" part — see SendToSelf's comment
-	uploaded, err := a.client.Upload(ctx, data, whatsmeow.MediaDocument)
+	self, err := a.SelfChat()
 	if err != nil {
-		return fmt.Errorf("upload document: %w", err)
+		return err
 	}
-	fileLength := uint64(len(data))
-	doc := &waProto.DocumentMessage{
-		URL:           &uploaded.URL,
-		DirectPath:    &uploaded.DirectPath,
-		MediaKey:      uploaded.MediaKey,
-		Mimetype:      &mimetype,
-		FileName:      &filename,
-		FileSHA256:    uploaded.FileSHA256,
-		FileEncSHA256: uploaded.FileEncSHA256,
-		FileLength:    &fileLength,
-	}
-	if strings.TrimSpace(caption) != "" {
-		caption = stripHTMLForWhatsApp(caption)
-		doc.Caption = &caption
-	}
-	msg := &waProto.Message{DocumentMessage: doc}
-	_, err = a.client.SendMessage(ctx, own, msg)
-	return err
+	return a.SendDocument(ctx, self, data, filename, mimetype, stripHTMLForWhatsApp(caption))
 }
 
 // ingestWhatsAppMedia downloads an image/document/voice-note attachment from
@@ -204,43 +129,31 @@ func (a *waAccount) SendDocumentToSelf(ctx context.Context, data []byte, filenam
 // reads from.
 func (a *waAccount) ingestWhatsAppMedia(evt *events.Message, destDir string) (saved bool, voiceText string, savedPath string) {
 	m := evt.Message
-	if m == nil {
-		return false, "", ""
-	}
-	var dl whatsmeow.DownloadableMessage
-	var name string
-	isVoice := false
-	switch {
-	case m.ImageMessage != nil:
-		dl = m.ImageMessage
-		name = "wa-" + evt.Info.ID + extForMime(m.ImageMessage.GetMimetype(), ".jpg")
-	case m.DocumentMessage != nil:
-		dl = m.DocumentMessage
-		name = strings.TrimSpace(m.DocumentMessage.GetFileName())
-		if name == "" {
-			name = "wa-" + evt.Info.ID + extForMime(m.DocumentMessage.GetMimetype(), ".bin")
-		}
-	case m.AudioMessage != nil:
-		dl = m.AudioMessage
-		isVoice = true
-		name = "wa-voice-" + evt.Info.ID + extForMime(m.AudioMessage.GetMimetype(), ".ogg")
-	case m.VideoMessage != nil:
-		dl = m.VideoMessage
-		name = "wa-" + evt.Info.ID + extForMime(m.VideoMessage.GetMimetype(), ".mp4")
-	default:
-		return false, "", ""
-	}
-	if a.client == nil {
+	if m == nil || !whatsapptransport.HasMedia(m) || !a.ready() {
 		return false, "", ""
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	data, err := a.client.Download(ctx, dl)
+	media, err := a.Download(ctx, m, 0)
 	if err != nil {
 		log.Printf("[whatsapp] media download failed: %v", err)
 		return false, "", ""
 	}
-
+	data := media.Data
+	isVoice := whatsapptransport.IsVoiceNote(m)
+	// Inbox naming policy: a document keeps the sender's file name; anything
+	// else is named after the message id so two photos never collide.
+	var name string
+	switch {
+	case media.Kind == "document" && media.FileName != "":
+		name = media.FileName
+	case isVoice:
+		name = "wa-voice-" + evt.Info.ID + media.Ext
+	case media.Kind == "document":
+		name = "wa-" + evt.Info.ID + whatsapptransport.ExtensionForMime(media.MimeType, ".bin")
+	default:
+		name = "wa-" + evt.Info.ID + media.Ext
+	}
 	name = sanitizeInboxName(name)
 	relDir := strings.TrimSpace(destDir)
 	if relDir == "" {
@@ -310,9 +223,9 @@ func (a *waAccount) ingestWhatsAppMedia(evt *events.Message, destDir string) (sa
 // family app. This mirrors AgentWorks' whatsapp_service.go pattern, stripped
 // of its multi-tenant/routing-table machinery this app doesn't need.
 type waBot struct {
-	mu        sync.RWMutex
-	container *sqlstore.Container
-	accounts  map[string]*waAccount // keyed by phone number (JID.User) once paired
+	mu       sync.RWMutex
+	store    *whatsapptransport.Store
+	accounts map[string]*waAccount // keyed by phone number (JID.User) once paired
 	// bgCtx is a long-lived context for the connection/pairing goroutines —
 	// deliberately NOT derived from any HTTP request's context. A request's
 	// context is canceled the instant that response is written, which would
@@ -330,8 +243,8 @@ type waBot struct {
 	// seenMsgs dedupes WhatsApp's own redelivery of the same event — a real,
 	// documented whatsmeow/multi-device behavior (reconnect, retry, multi-device
 	// resync can all redeliver an already-handled message). See alreadyHandled.
-	seenMu   sync.Mutex
-	seenMsgs map[string]time.Time
+	seenMu sync.Mutex
+	seen   *whatsapptransport.Dedupe
 
 	// pendingUploads names bare (no-caption) attachments saved to inbox/ since
 	// the last real turn — batched, not fired per-upload: a parent can send
@@ -360,30 +273,15 @@ type waBot struct {
 // opportunistically on each call rather than via a separate goroutine, since
 // traffic here is low-volume.
 func (w *waBot) alreadyHandled(msgID string) bool {
-	if msgID == "" {
-		return false
-	}
-	const window = 10 * time.Minute
-	now := time.Now()
 	w.seenMu.Lock()
-	defer w.seenMu.Unlock()
-	if w.seenMsgs == nil {
-		w.seenMsgs = map[string]time.Time{}
+	if w.seen == nil {
+		w.seen = whatsapptransport.NewDedupe(10 * time.Minute)
 	}
-	for id, t := range w.seenMsgs {
-		if now.Sub(t) > window {
-			delete(w.seenMsgs, id)
-		}
-	}
-	if _, ok := w.seenMsgs[msgID]; ok {
-		return true
-	}
-	w.seenMsgs[msgID] = now
-	return false
+	d := w.seen
+	w.seenMu.Unlock()
+	return d.Seen(msgID)
 }
 
-// noteUpload records a bare (no-caption) attachment for the next real turn to
-// be told about explicitly — see pendingUploads' own doc comment.
 func (w *waBot) noteUpload(relPath string) {
 	w.pendingUploadsMu.Lock()
 	w.pendingUploads = append(w.pendingUploads, relPath)
@@ -416,28 +314,19 @@ func whatsAppSessionPath() string {
 // phone never delays server startup or the others. Called once at server
 // startup so status reflects real state immediately.
 func initWhatsAppBot(ctx context.Context) error {
-	dbPath := whatsAppSessionPath()
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
-		return fmt.Errorf("whatsapp: mkdir session dir: %w", err)
-	}
-
-	store.SetOSInfo("SparkQuill", [3]uint32{1, 0, 0})
-	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)", dbPath)
-	container, err := sqlstore.New(ctx, "sqlite", dsn, waLog.Noop)
+	st, err := whatsapptransport.OpenStore(ctx, whatsAppSessionPath(), "SparkQuill", [3]uint32{1, 0, 0}, os.Getenv("WHATSAPP_DEBUG") == "true")
 	if err != nil {
-		return fmt.Errorf("whatsapp: open session store: %w", err)
+		return err
 	}
-	devices, err := container.GetAllDevices(ctx)
+	devices, err := st.Devices(ctx)
 	if err != nil {
 		return fmt.Errorf("whatsapp: load devices: %w", err)
 	}
-
 	whatsAppBot.mu.Lock()
-	whatsAppBot.container = container
+	whatsAppBot.store = st
 	whatsAppBot.accounts = map[string]*waAccount{}
 	whatsAppBot.bgCtx = context.Background()
 	whatsAppBot.mu.Unlock()
-
 	for _, device := range devices {
 		acct := whatsAppBot.buildAccount(device)
 		if id := acct.OwnJID(); !id.IsEmpty() {
@@ -446,7 +335,7 @@ func initWhatsAppBot(ctx context.Context) error {
 			whatsAppBot.mu.Unlock()
 		}
 		go func(a *waAccount) {
-			if err := a.client.Connect(); err != nil {
+			if err := a.Connect(); err != nil {
 				log.Printf("[whatsapp] connect failed for %s: %v", a.OwnJID().User, err)
 			} else {
 				log.Printf("[whatsapp] connected as %s", a.OwnJID().String())
@@ -456,21 +345,12 @@ func initWhatsAppBot(ctx context.Context) error {
 	return nil
 }
 
-// buildAccount wraps a device in a client and registers its event handler,
-// bound to THIS account so incoming events are always checked against the
-// right JID/LID — never returns an already-registered account.
 func (w *waBot) buildAccount(device *store.Device) *waAccount {
-	client := whatsmeow.NewClient(device, waLog.Noop)
-	acct := &waAccount{client: client}
-	client.AddEventHandler(func(rawEvt interface{}) { w.handleEvent(acct, rawEvt) })
+	acct := &waAccount{}
+	acct.Account = w.store.NewAccount(device, func(rawEvt interface{}) { w.handleEvent(acct, rawEvt) })
 	return acct
 }
 
-// EnsureConnecting reconnects any disconnected paired accounts and, if no
-// pairing attempt is currently in flight, starts one for a possible NEW
-// phone — so opening/polling the Connectors WhatsApp panel both keeps
-// existing links alive and offers a fresh QR to add one more parent.
-// Idempotent and safe to call on every status/pair poll.
 func (w *waBot) EnsureConnecting(_ context.Context) {
 	w.mu.RLock()
 	accounts := make([]*waAccount, 0, len(w.accounts))
@@ -481,8 +361,8 @@ func (w *waBot) EnsureConnecting(_ context.Context) {
 	w.mu.RUnlock()
 
 	for _, a := range accounts {
-		if a.client != nil && !a.client.IsConnected() {
-			go func(a *waAccount) { _ = a.client.Connect() }(a)
+		if a.ready() && !a.IsConnected() {
+			go func(a *waAccount) { _ = a.Connect() }(a)
 		}
 	}
 
@@ -502,14 +382,12 @@ func (w *waBot) EnsureConnecting(_ context.Context) {
 // changes and the next EnsureConnecting call starts a fresh attempt.
 func (w *waBot) startPairingAttempt(ctx context.Context) {
 	w.mu.RLock()
-	container := w.container
+	st := w.store
 	w.mu.RUnlock()
-	if container == nil {
+	if st == nil {
 		return
 	}
-	device := container.NewDevice()
-	acct := w.buildAccount(device)
-
+	acct := w.buildAccount(st.NewDevice())
 	w.mu.Lock()
 	w.pending = acct
 	w.mu.Unlock()
@@ -518,74 +396,31 @@ func (w *waBot) startPairingAttempt(ctx context.Context) {
 		w.pending = nil
 		w.mu.Unlock()
 	}()
-
-	client := acct.client
 	log.Printf("[whatsapp] starting a new pairing attempt")
-	qrChan, err := client.GetQRChannel(ctx)
+	paired, err := acct.Pair(ctx, whatsappPairingTimeout, func(u whatsapptransport.QRUpdate) {
+		w.qrMu.Lock()
+		w.lastQR, w.qrExpires = u.Code, u.Expires
+		w.qrMu.Unlock()
+		if u.Code != "" {
+			log.Printf("[whatsapp] QR ready (expires %s)", u.Expires.Format(time.Kitchen))
+		}
+	})
 	if err != nil {
-		log.Printf("[whatsapp] GetQRChannel failed: %v", err)
+		log.Printf("[whatsapp] pairing attempt failed: %v", err)
 		return
 	}
-	connectDone := make(chan error, 1)
-	go func() { connectDone <- client.Connect() }()
-	select {
-	case err := <-connectDone:
-		if err != nil {
-			log.Printf("[whatsapp] connect (pre-pair) failed: %v", err)
-			return
-		}
-	case <-time.After(whatsappPairingTimeout):
-		client.Disconnect()
-		return
-	case <-ctx.Done():
+	if !paired {
 		return
 	}
-
-	timeout := time.NewTimer(whatsappPairingTimeout)
-	defer timeout.Stop()
-	for {
-		select {
-		case evt, ok := <-qrChan:
-			if !ok {
-				return
-			}
-			switch evt.Event {
-			case "code":
-				w.qrMu.Lock()
-				w.lastQR = evt.Code
-				w.qrExpires = time.Now().Add(evt.Timeout)
-				w.qrMu.Unlock()
-				log.Printf("[whatsapp] QR ready (expires in %s)", evt.Timeout)
-			case "success":
-				own := acct.OwnJID()
-				log.Printf("[whatsapp] paired successfully as %s", own.String())
-				w.qrMu.Lock()
-				w.lastQR = ""
-				w.qrExpires = time.Time{}
-				w.qrMu.Unlock()
-				if !own.IsEmpty() {
-					w.mu.Lock()
-					w.accounts[own.User] = acct
-					w.mu.Unlock()
-				}
-				return
-			case "timeout":
-				w.qrMu.Lock()
-				w.lastQR = ""
-				w.qrExpires = time.Time{}
-				w.qrMu.Unlock()
-				return
-			}
-		case <-timeout.C:
-			client.Disconnect()
-			return
-		case <-ctx.Done():
-			return
-		}
+	own := acct.OwnJID()
+	log.Printf("[whatsapp] paired successfully as %s", own.String())
+	if !own.IsEmpty() {
+		w.mu.Lock()
+		w.accounts[own.User] = acct
+		w.mu.Unlock()
 	}
 }
 
-// IsPaired reports whether at least one phone is linked.
 func (w *waBot) IsPaired() bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -598,7 +433,7 @@ func (w *waBot) IsConnected() bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	for _, a := range w.accounts {
-		if a.client != nil && a.client.IsConnected() {
+		if a.IsConnected() {
 			return true
 		}
 	}
@@ -633,29 +468,24 @@ func (w *waBot) GetQRImagePNG(size int) ([]byte, error) {
 func (w *waBot) Unpair(ctx context.Context, phone string) error {
 	w.mu.Lock()
 	acct, ok := w.accounts[phone]
-	container := w.container
+	st := w.store
 	if ok {
 		delete(w.accounts, phone)
 	}
 	w.mu.Unlock()
-	if !ok || acct == nil || acct.client == nil {
+	if !ok || !acct.ready() {
 		return fmt.Errorf("no linked account for %q", phone)
 	}
-
-	_ = acct.client.Logout(ctx)
-	acct.client.Disconnect()
-	if container != nil && acct.client.Store != nil {
-		if err := container.DeleteDevice(ctx, acct.client.Store); err != nil {
+	_ = acct.Logout(ctx)
+	acct.Disconnect()
+	if st != nil && acct.Device() != nil {
+		if err := st.DeleteDevice(ctx, acct.Device()); err != nil {
 			return fmt.Errorf("whatsapp: delete device: %w", err)
 		}
 	}
 	return nil
 }
 
-// SendToAllSelf broadcasts a text notification to every currently-connected
-// linked account (every linked parent) — used by notify_user/Pulse. Returns
-// how many succeeded and the last error seen (if any), for an honest
-// per-channel delivery status.
 func (w *waBot) SendToAllSelf(ctx context.Context, text string) (sent int, lastErr error) {
 	for _, a := range w.connectedAccounts() {
 		if err := a.SendToSelf(ctx, text); err != nil {
@@ -688,7 +518,7 @@ func (w *waBot) connectedAccounts() []*waAccount {
 	defer w.mu.RUnlock()
 	out := make([]*waAccount, 0, len(w.accounts))
 	for _, a := range w.accounts {
-		if a.client != nil && a.client.IsConnected() {
+		if a.IsConnected() {
 			out = append(out, a)
 		}
 	}
@@ -775,32 +605,15 @@ func (w *waBot) handleEvent(acct *waAccount, rawEvt interface{}) {
 	switch evt := rawEvt.(type) {
 	case *events.Message:
 		w.handleIncomingMessage(acct, evt)
-	case *events.LoggedOut:
-		log.Printf("[whatsapp] %s logged out (reason=%v) — session invalid, re-pair required", acct.OwnJID().User, evt.Reason)
+	default:
+		if desc := whatsapptransport.DescribeEvent(rawEvt); desc != "" {
+			log.Printf("[whatsapp] %s: %s", acct.OwnJID().User, desc)
+		}
 	}
 }
 
 // extForMime maps a media mimetype to a file extension, falling back to def.
-func extForMime(mime, def string) string {
-	switch {
-	case strings.Contains(mime, "jpeg"), strings.Contains(mime, "jpg"):
-		return ".jpg"
-	case strings.Contains(mime, "png"):
-		return ".png"
-	case strings.Contains(mime, "webp"):
-		return ".webp"
-	case strings.Contains(mime, "gif"):
-		return ".gif"
-	case strings.Contains(mime, "pdf"):
-		return ".pdf"
-	case strings.Contains(mime, "ogg"):
-		return ".ogg"
-	case strings.Contains(mime, "mp4"):
-		return ".mp4"
-	default:
-		return def
-	}
-}
+func extForMime(mime, def string) string { return whatsapptransport.ExtensionForMime(mime, def) }
 
 // sanitizeInboxName strips path separators and dodgy characters from an
 // attachment filename so it can't escape the inbox.
@@ -838,49 +651,8 @@ func extractModeSwitch(text string) (rest string, mode string) {
 	}
 }
 
-func extractWhatsAppMessageText(m *waProto.Message) string {
-	if m == nil {
-		return ""
-	}
-	// Sent from a linked companion device (WhatsApp Web/Desktop) rather than
-	// the primary phone — whatsmeow unwraps Ephemeral/ViewOnce automatically
-	// but leaves this one wrapped, so a message typed from Web/Desktop landed
-	// here with every field empty and silently fell into the "no text" bucket
-	// below. EditedMessage (the user corrected a typo after sending) wraps the
-	// same way and was missing for the same reason.
-	if inner := m.GetDeviceSentMessage().GetMessage(); inner != nil {
-		return extractWhatsAppMessageText(inner)
-	}
-	if inner := m.GetEditedMessage().GetMessage(); inner != nil {
-		return extractWhatsAppMessageText(inner)
-	}
-	if m.Conversation != nil {
-		return strings.TrimSpace(*m.Conversation)
-	}
-	if m.ExtendedTextMessage != nil && m.ExtendedTextMessage.Text != nil {
-		return strings.TrimSpace(*m.ExtendedTextMessage.Text)
-	}
-	// A CAPTION is the message text too. Attaching several photos and typing
-	// underneath is the normal way to send "here are her answers, what do you
-	// think?" — WhatsApp delivers that as an ImageMessage carrying Caption, not
-	// as a separate text message. Reading only Conversation/ExtendedTextMessage
-	// silently dropped it: the handler saw empty text, filed the photos, and
-	// returned without running a turn. Observed live on 2026-08-04 — fourteen
-	// photos landed in inbox/ and the question written with them was never
-	// answered, with nothing logged to say why.
-	if m.ImageMessage != nil {
-		return strings.TrimSpace(m.ImageMessage.GetCaption())
-	}
-	if m.VideoMessage != nil {
-		return strings.TrimSpace(m.VideoMessage.GetCaption())
-	}
-	if m.DocumentMessage != nil {
-		return strings.TrimSpace(m.DocumentMessage.GetCaption())
-	}
-	return ""
-}
+func extractWhatsAppMessageText(m *waProto.Message) string { return whatsapptransport.ExtractText(m) }
 
-// htmlTagRe strips markup for stripHTMLForWhatsApp below.
 var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
 
 // stripHTMLForWhatsApp removes HTML tags (keeping their text content) from a
@@ -939,7 +711,7 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 			confirmation = "Back to our conversation — photos come to me again."
 		}
 		acct.react(info.Chat, info.Sender, info.ID, "🔀")
-		if acct.client != nil {
+		if acct.ready() {
 			_ = acct.sendTextWithRetry(info.Chat, confirmation, 2, 15*time.Second, "whatsapp mode switch")
 		}
 		text = rest // whatever text (if any) is left after stripping the keyword, e.g. "@child she got Q5 wrong"
@@ -1014,7 +786,7 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 			// destDir was left "" above, so the attachment already fell back
 			// to the shared inbox — not lost, just not where it needs to be.
 			acct.react(info.Chat, info.Sender, info.ID, "⚠️")
-			if acct.client != nil {
+			if acct.ready() {
 				_ = acct.sendTextWithRetry(info.Chat, "You're in child mode, but there's no activity open right now, so I couldn't send this to her — open one on her side, or @parent to switch back.", 2, 15*time.Second, "child mode no-activity")
 			}
 			return
@@ -1028,7 +800,7 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 			title = act.Title
 		}
 		acct.react(info.Chat, info.Sender, info.ID, "✅")
-		if acct.client != nil {
+		if acct.ready() {
 			_ = acct.sendTextWithRetry(info.Chat, fmt.Sprintf("Added to %q — I'll look at it as soon as %s is back in that activity.", title, label), 2, 15*time.Second, "child photo confirmation")
 		}
 		return
@@ -1047,7 +819,7 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 		stateMu.Unlock()
 		if s.Engine == "" || s.Child == nil {
 			acct.react(info.Chat, info.Sender, info.ID, "⚠️")
-			if acct.client != nil {
+			if acct.ready() {
 				_ = acct.sendTextWithRetry(info.Chat, "Setup isn't complete yet, so I can't run this in child mode.", 2, 15*time.Second, "child mode setup incomplete")
 			}
 			return
@@ -1055,7 +827,7 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 		dir := currentActivityDir()
 		if dir == "" {
 			acct.react(info.Chat, info.Sender, info.ID, "⚠️")
-			if acct.client != nil {
+			if acct.ready() {
 				_ = acct.sendTextWithRetry(info.Chat, "There's no activity open right now, so I can't send this to her — open one on her side, or @parent to switch back.", 2, 15*time.Second, "child mode no-activity text")
 			}
 			return
@@ -1090,7 +862,7 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 			return
 		}
 		acct.react(info.Chat, info.Sender, info.ID, "") // clear the ack — the reply is the completion signal
-		if acct.client != nil {
+		if acct.ready() {
 			if err := acct.sendTextWithRetry(info.Chat, resp.Reply, 3, 30*time.Second, "child mode reply"); err != nil {
 				acct.react(info.Chat, info.Sender, info.ID, "⚠️")
 			}
@@ -1104,7 +876,7 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 		// turn below — a turn can take minutes, and speech-to-text isn't
 		// perfect, so the parent should see (and can correct/retype) what
 		// Quill transcribed without waiting for the full reply.
-		if acct.client != nil {
+		if acct.ready() {
 			heard := fmt.Sprintf("🎙️ I heard: “%s”", voiceText)
 			// Lower stakes than the real reply below (the actual answer still
 			// arrives separately even if this is lost), so a couple of quick
@@ -1174,7 +946,7 @@ func (w *waBot) handleIncomingMessage(acct *waAccount, evt *events.Message) {
 	}
 	acct.react(info.Chat, info.Sender, info.ID, "") // clear the ack — the reply is the completion signal
 
-	if acct.client == nil {
+	if !acct.ready() {
 		return
 	}
 	// A fully-generated reply is the highest-stakes send here — retry before
@@ -1314,7 +1086,7 @@ func handleWhatsAppStatus(w http.ResponseWriter, r *http.Request) {
 	for jid, acct := range whatsAppBot.accounts {
 		resp.Accounts = append(resp.Accounts, whatsAppAccountStatus{
 			JID:       jid,
-			Connected: acct.client != nil && acct.client.IsConnected(),
+			Connected: acct.ready() && acct.IsConnected(),
 		})
 	}
 	whatsAppBot.mu.RUnlock()

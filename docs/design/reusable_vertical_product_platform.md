@@ -178,8 +178,20 @@ driven through a session seam (`turn_session.go`) with no model. Remedy 3
 (folder-guard docs vs code) is still open. One finding worth knowing: the
 strict macOS profile leaves `/var` readable, so a workspace placed under
 `/var` (as `t.TempDir()` is) is not confined; real installs under `$HOME`
-are. The decision itself stands; the migration plan agreed the same day is
-at step 2 (platform connectors, Pulse, secrets).
+are. Step 2's first slice landed the same night: `pkg/whatsapptransport` is the
+one WhatsApp transport (session store, per-phone Account: connect, pair by
+QR, send text/documents, react, download media; text extraction; dedupe).
+family-server is its first consumer — its bot keeps only routing and media
+policy (self-chat rule, inbox naming, `@child`/`@parent`) and no longer
+imports whatsmeow's client. whatsmeow was upgraded at the same time (April →
+August 2026 revision, which raised agent_go to Go 1.26): the old revision was
+refused by WhatsApp as "client outdated", so pairing had been impossible for
+both bots; verified live — a pairing attempt now yields a QR. The AgentWorks
+connector (`cmd/server/services/whatsapp_service.go`) still carries its own
+copy of the same ten whatsmeow calls and is the next thing to move onto the
+transport; it compiles and its tests pass on the new whatsmeow unchanged.
+The decision itself stands; the migration plan is at step 2 (Pulse and
+secrets remain).
 
 ### Revisit trigger
 

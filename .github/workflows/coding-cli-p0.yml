@@ -54,7 +54,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.25.12"
+          go-version: "1.26.x"
           cache-dependency-path: |
             coding-agent-loop/agent_go/go.sum
             multi-llm-provider-go/go.sum
@@ -142,7 +142,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.25.12"
+          go-version: "1.26.x"
           cache-dependency-path: |
             coding-agent-loop/agent_go/go.sum
             multi-llm-provider-go/go.sum
