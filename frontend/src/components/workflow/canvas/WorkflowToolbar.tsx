@@ -59,11 +59,14 @@ const SHORT_VIEW_LABELS: Partial<Record<WorkspaceViewId, string>> = {
 }
 const shortViewLabel = (view: { id: WorkspaceViewId; label: string } | undefined) =>
   view ? SHORT_VIEW_LABELS[view.id] ?? view.label : undefined
+// Any number of groups can be open, but never none: the toolbar always shows
+// at least one set of icons. Views is the default.
 const readOpenGroups = (): Record<ToolbarGroupId, boolean> => {
-  const fallback = { views: false, pulse: false, setup: false }
+  const fallback: Record<ToolbarGroupId, boolean> = { views: true, pulse: false, setup: false }
   try {
     const raw = localStorage.getItem(TOOLBAR_OPEN_GROUPS_KEY)
-    return raw ? { ...fallback, ...JSON.parse(raw) as Partial<Record<ToolbarGroupId, boolean>> } : fallback
+    const stored = raw ? { ...fallback, ...JSON.parse(raw) as Partial<Record<ToolbarGroupId, boolean>> } : fallback
+    return Object.values(stored).some(Boolean) ? stored : fallback
   } catch {
     return fallback
   }
@@ -375,10 +378,11 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [workflowScheduleStats, setWorkflowScheduleStats] = useState<WorkflowScheduleStats>(EMPTY_WORKFLOW_SCHEDULE_STATS)
   const [manualPulseStarting, setManualPulseStarting] = useState(false)
   const [openGroups, setOpenGroups] = useState<Record<ToolbarGroupId, boolean>>(() => readOpenGroups())
-  // One group open at a time: opening one folds the others.
   const toggleGroup = useCallback((group: ToolbarGroupId) => {
     setOpenGroups(current => {
-      const next: Record<ToolbarGroupId, boolean> = { views: false, pulse: false, setup: false, [group]: !current[group] }
+      const next = { ...current, [group]: !current[group] }
+      // Closing the last open group is a no-op.
+      if (!Object.values(next).some(Boolean)) return current
       try { localStorage.setItem(TOOLBAR_OPEN_GROUPS_KEY, JSON.stringify(next)) } catch { /* preference only */ }
       return next
     })
