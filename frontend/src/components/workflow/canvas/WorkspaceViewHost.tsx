@@ -11,6 +11,8 @@ import React, {
 } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 import Workspace from '../../Workspace'
+import { FileContentViewerBody } from '../../FileContentViewer'
+import { useWorkspaceStore } from '../../../stores/useWorkspaceStore'
 import { WorkflowToolbar } from './WorkflowToolbar'
 import { ReportView } from '../ReportViewer'
 import { usePlanData } from '../hooks/usePlanData'
@@ -78,19 +80,28 @@ function ReportBody({ workspacePath }: { workspacePath: string | null }) {
 
 function FilesBody() {
   const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
+  // While a file is open the pane shows the viewer instead of the tree. The
+  // tree stays mounted (hidden) so its scroll position and any in-progress
+  // search survive a round trip into a file and back.
+  const showFileContent = useWorkspaceStore(state => state.showFileContent)
   const handleCloseFiles = useCallback(() => {
     useAppStore.getState().setWorkspaceMinimized(true)
     useWorkflowStore.getState().setWorkflowWorkspaceView(canvasViewMode)
   }, [canvasViewMode])
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-background">
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1" hidden={showFileContent}>
         <Workspace
           minimized={false}
           onToggleMinimize={handleCloseFiles}
           hideMinimizeControl
         />
       </div>
+      {showFileContent && (
+        <div className="min-h-0 flex-1">
+          <FileContentViewerBody variant="pane" />
+        </div>
+      )}
     </div>
   )
 }

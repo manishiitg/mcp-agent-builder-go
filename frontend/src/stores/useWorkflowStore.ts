@@ -27,6 +27,7 @@ import { resolveGroupFolderPath } from '../utils/workflowUtils'
 import { normalizeRunFolder } from '../utils/workflowStateNormalization'
 import { getRawActiveWorkspaceId, getWorkspaceScopedStorageKey } from './useWorkspaceConnectionStore'
 import { normalizeWorkspaceViewId, type WorkspaceViewId } from '../components/workflow/workspaceViews'
+import { useAppStore } from './useAppStore'
 
 // The set of views lives in one place: components/workflow/workspaceViews.ts.
 export type WorkflowWorkspaceView = WorkspaceViewId | null
@@ -395,6 +396,10 @@ interface WorkflowStore {
   setChatAreaExpanded: (expanded: boolean) => void
   setFocusedPane: (pane: FocusedPane) => void
   setWorkflowWorkspaceView: (view: WorkflowWorkspaceView) => void
+  /** Show the workspace pane on `view` -- the one way to navigate the pane
+   * (toolbar buttons, chat file links). Keeps canvasViewMode in step for the
+   * canvas views and un-minimizes the workspace for Files. */
+  openWorkspaceView: (view: WorkspaceViewId) => void
   setLayoutDirection: (direction: LayoutDirection) => void
   setCanvasViewMode: (mode: CanvasViewMode) => void
 
@@ -1218,6 +1223,13 @@ export const useWorkflowStore = create<WorkflowStore>()(
         // Persist per-preset so the user returns to the same view across reloads.
         // _presetStates handles in-session preset switches but lives in memory only.
         persistWorkspaceViewForPreset(presetId ?? null, normalizedView)
+      },
+
+      openWorkspaceView: (view: WorkspaceViewId) => {
+        if (view === 'flow' || view === 'report') get().setCanvasViewMode(view)
+        get().setWorkflowWorkspaceView(view)
+        get().setShowWorkspacePane(true)
+        useAppStore.getState().setWorkspaceMinimized(view !== 'files')
       },
 
       setLayoutDirection: (direction: LayoutDirection) => {

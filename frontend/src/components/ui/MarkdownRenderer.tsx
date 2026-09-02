@@ -4,6 +4,8 @@ import remarkGfm from 'remark-gfm'
 import { useWorkspaceStore } from '../../stores/useWorkspaceStore'
 import { useAppStore } from '../../stores/useAppStore'
 import { useModeStore } from '../../stores/useModeStore'
+import { useWorkflowStore } from '../../stores/useWorkflowStore'
+import { useProductSurfaceStore } from '../../stores/useProductSurfaceStore'
 import { useGlobalPresetStore } from '../../stores/useGlobalPresetStore'
 import { workspaceApi, agentApi, getApiBaseUrl } from '../../services/api'
 
@@ -706,8 +708,18 @@ const MarkdownRendererImpl: React.FC<MarkdownRendererProps> = ({
 
       // Check if binary viewable file
       const isViewableBinary = ['xls', 'xlsx', 'docx', 'pdf', 'webm', 'mp4', 'mov'].includes(ext)
-      // 1. Ensure workspace is visible
+      // 1. Ensure workspace is visible. On the main surface the viewer lives
+      //    in the workspace pane's Files view, so bring that view up (this
+      //    also un-minimizes the workspace). Other surfaces (Video Studio)
+      //    mount the full-viewport overlay and only need the workspace open.
       setWorkspaceMinimized(false)
+      if (useProductSurfaceStore.getState().productSurface === 'agentworks') {
+        // The pane host is hidden behind the Workflows overview; the old
+        // full-screen overlay covered the overview, so close it here or the
+        // file opens where the user can't see it.
+        useAppStore.getState().setShowWorkflowsOverview(false)
+        useWorkflowStore.getState().openWorkspaceView('files')
+      }
 
       // 2. Expand folders and highlight in explorer (use display path for tree navigation)
       expandFoldersForFile(displayPath)

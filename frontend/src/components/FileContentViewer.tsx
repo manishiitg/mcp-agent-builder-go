@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Download, Edit, Github, Link, Loader2, Save, X } from 'lucide-react'
+import { Download, Edit, Github, Link, Loader2, MoreHorizontal, Save, X } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 import { MarkdownRenderer, MermaidDiagram } from './ui/MarkdownRenderer'
 import { CsvRenderer } from './ui/CsvRenderer'
@@ -34,29 +34,121 @@ const FileSurfaceFallback = () => (
   </div>
 )
 
+const ICON_BUTTON_CLASS =
+  'flex items-center p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors'
+
+const CopyIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" strokeWidth={2} />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+  </svg>
+)
+
+const SlackIcon = () => (
+  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zm-1.27 0a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.163 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.163 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.163 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zm0-1.27a2.527 2.527 0 0 1-2.52-2.523 2.527 2.527 0 0 1 2.52-2.52h6.315A2.528 2.528 0 0 1 24 15.163a2.528 2.528 0 0 1-2.522 2.523h-6.315z"/>
+  </svg>
+)
+
+const HistoryIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+  </svg>
+)
+
+const PdfIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9l-5-5H7a2 2 0 00-2 2v13a2 2 0 002 2z" />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 4v5h5" />
+    <text x="7" y="18" fontSize="6" fontWeight="bold" fill="currentColor" stroke="none">PDF</text>
+  </svg>
+)
+
+type PaneAction = {
+  key: string
+  label: string
+  icon: React.ReactNode
+  onSelect: () => void
+  disabled?: boolean
+}
+
+/** The secondary header actions collapsed into one menu, so the header fits a
+ * 240px pane without wrapping. Closes on select, outside click, and Escape. */
+function PaneActionsMenu({ actions }: { actions: PaneAction[] }) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onMouseDown = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) setOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(prev => !prev)}
+        aria-label="More actions"
+        aria-expanded={open}
+        title="More actions"
+        className={`${ICON_BUTTON_CLASS} ${open ? 'bg-gray-100 text-gray-900 dark:bg-gray-700 dark:text-gray-100' : ''}`}
+      >
+        <MoreHorizontal className="w-4 h-4" />
+      </button>
+      {open && (
+        <div role="menu" className="absolute right-0 top-full z-50 mt-1 w-52 rounded-lg border border-gray-200 bg-white p-1 shadow-xl dark:border-gray-700 dark:bg-gray-800">
+          {actions.map(action => (
+            <button
+              key={action.key}
+              type="button"
+              role="menuitem"
+              disabled={action.disabled}
+              onClick={() => {
+                setOpen(false)
+                action.onSelect()
+              }}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-200 dark:hover:bg-gray-700"
+            >
+              {action.icon}
+              <span>{action.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /**
- * Full-screen file viewer/editor: images, video, audio, PDF/XLSX/DOCX, CSV,
- * HTML, Mermaid, conversation logs, JSON, diffs, and markdown (with inline
- * editing, save+commit, revision history, PDF export, and Gist push).
+ * File viewer/editor body: images, video, audio, PDF/XLSX/DOCX, CSV, HTML,
+ * Mermaid, conversation logs, JSON, diffs, and markdown (with inline editing,
+ * save+commit, revision history, PDF export, and Gist push). Reads everything
+ * from `useWorkspaceStore` (selectedFile, fileContent, showFileContent, ...).
  *
- * Extracted from App.tsx, which only ever rendered inside its own main-layout
- * branch -- `productSurface === 'video-studio' ? <VideoStudioSurface /> : (
- * ...main layout with this viewer inside it... )`. Clicking a file inside
- * Video Studio's own file browser (Workspace.tsx) already wrote the correct
- * state into the shared `useWorkspaceStore` (selectedFile, fileContent,
- * showFileContent, ...) -- the data path was never broken. What was missing
- * is that nothing in Video Studio's render tree ever read that state to show
- * anything, because the one component that did lived in the branch that
- * never mounts there. This component is self-contained precisely so it can
- * be mounted from both places, reading the same store either way.
- *
- * `fixed inset-0` (not `absolute inset-0`, which the original relied on)
- * removes the dependency on a specific positioned ancestor -- the same
- * pattern this file's own nested dialogs (Push to Gist, restore overlay)
- * already use -- so this covers the viewport correctly regardless of which
- * tree it renders from.
+ * It fills whatever box it's given. Two shells mount it:
+ *   - `pane`: the workspace pane's Files view swaps the file tree for this
+ *     body while a file is open. The header collapses its secondary actions
+ *     into a menu so it fits a narrow pane, tall surfaces (PDF, video, HTML)
+ *     size to the pane instead of the viewport, and keyboard shortcuts only
+ *     fire while focus is inside the viewer so Ctrl+E / Ctrl+S / Esc typed in
+ *     the chat next to it are left alone.
+ *   - `overlay`: `FileContentViewerOverlay` below, a full-viewport shell for
+ *     surfaces with no workspace pane (Video Studio). Behaves as the original
+ *     full-screen viewer did, shortcuts included.
  */
-export function FileContentViewer() {
+export function FileContentViewerBody({ variant }: { variant: 'pane' | 'overlay' }) {
+  const rootRef = useRef<HTMLDivElement>(null)
   const {
     selectedFile,
     fileContent,
@@ -421,6 +513,13 @@ export function FileContentViewer() {
     if (!showFileContent) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      // In the pane the viewer sits next to the chat; only act on shortcuts
+      // typed while focus is inside the viewer. The overlay covers the
+      // viewport, so there it keeps the original global behavior.
+      if (variant === 'pane') {
+        const active = document.activeElement
+        if (!(active instanceof Node) || !rootRef.current?.contains(active)) return
+      }
       // Ctrl+S or Cmd+S: Save
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault()
@@ -447,7 +546,55 @@ export function FileContentViewer() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [showFileContent, isEditMode, getHasUnsavedChanges, handleSave, handleEdit, handleCancelEdit])
+  }, [showFileContent, variant, isEditMode, getHasUnsavedChanges, handleSave, handleEdit, handleCancelEdit])
+
+  const copyContent = useCallback(async () => {
+    if (!fileContent) return
+    await navigator.clipboard.writeText(fileContent)
+    setContentCopied(true)
+    setTimeout(() => setContentCopied(false), 2000)
+  }, [fileContent])
+
+  const copyAsSlack = useCallback(async () => {
+    if (!fileContent) return
+    const slack = convertToSlackMarkdown(fileContent)
+    await navigator.clipboard.writeText(slack)
+    setSlackCopied(true)
+    setTimeout(() => setSlackCopied(false), 2000)
+  }, [fileContent])
+
+  const copyShareLink = useCallback(() => {
+    if (!selectedFile?.path) return
+    const encoded = btoa(unescape(encodeURIComponent(selectedFile.path)))
+    const uid = useAuthStore.getState().user?.id || ''
+    const shareUrl = `${window.location.origin}/file?path=${encoded}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`
+    copyToClipboard(shareUrl).then((ok) => {
+      if (ok) {
+        setShareCopied(true)
+        setTimeout(() => setShareCopied(false), 2000)
+      }
+    })
+  }, [selectedFile?.path])
+
+  const isOfficeOrPdf = ['.xls', '.xlsx', '.docx', '.pdf'].some(ext => selectedFilePathLower.endsWith(ext))
+  // Edit is hidden for binary documents and for code files (code is written by the agent).
+  const canEdit = !isOfficeOrPdf && !isCodeFile(selectedFile?.path || '')
+  const canShowRevisions = !isOfficeOrPdf
+  const isMarkdownFile = selectedFilePathLower.endsWith('.md') || selectedFilePathLower.endsWith('.markdown')
+  // PDF, video, and HTML surfaces fill the viewport in the overlay and the
+  // pane in the pane.
+  const tallSurfaceClass = variant === 'pane' ? 'h-full min-h-[320px]' : 'h-[calc(100vh-120px)]'
+
+  const paneActions: PaneAction[] = [
+    { key: 'copy', label: contentCopied ? 'Copied!' : 'Copy content', icon: <CopyIcon />, onSelect: () => { void copyContent() } },
+    { key: 'slack', label: slackCopied ? 'Copied!' : 'Copy as Slack format', icon: <SlackIcon />, onSelect: () => { void copyAsSlack() } },
+    { key: 'share', label: shareCopied ? 'Copied!' : 'Copy share link', icon: <Link className="w-4 h-4" />, onSelect: copyShareLink },
+    ...(canShowRevisions ? [{ key: 'revisions', label: 'File revisions', icon: <HistoryIcon />, onSelect: () => setShowRevisionsModal(true) }] : []),
+    ...(isMarkdownFile ? [
+      { key: 'pdf', label: isExportingPdf ? (exportProgress || 'Exporting…') : 'Export as PDF', icon: isExportingPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <PdfIcon />, onSelect: () => { void handleExportPdf() }, disabled: isExportingPdf },
+      { key: 'gist', label: 'Push to GitHub Gist', icon: <Github className="w-4 h-4" />, onSelect: () => setShowPushToGistDialog(true) },
+    ] : []),
+  ]
 
   // Prevent navigation with unsaved changes
   useEffect(() => {
@@ -464,10 +611,9 @@ export function FileContentViewer() {
 
   return (
     <>
-      {showFileContent && (
-        <div className="fixed inset-0 bg-white dark:bg-gray-900 z-40 flex flex-col">
+      <div ref={rootRef} className="flex h-full min-h-0 flex-col bg-white dark:bg-gray-900">
         {/* Fixed Header */}
-        <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+        <div className={`flex items-center justify-between ${variant === 'pane' ? 'px-3' : 'px-4'} py-2 border-b border-gray-200 dark:border-gray-700 flex-shrink-0`}>
           <div className="flex items-center gap-3 min-w-0 flex-1">
             <button
               onClick={() => {
@@ -499,7 +645,7 @@ export function FileContentViewer() {
                             <span className="text-[10px] text-orange-500">●</span>
                           )}
                         </div>
-                        <p className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
+                        <p className="text-[10px] text-gray-500 dark:text-gray-400 truncate" title={selectedFile.path}>
                           {selectedFile.path}
                         </p>
                       </>
@@ -516,140 +662,70 @@ export function FileContentViewer() {
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             {!isEditMode ? (
-              <>
-                <div className="flex items-center gap-0.5">
-                  {/* Hide edit for binary files and code files (code is written by the agent) */}
-                  {!selectedFile?.path?.toLowerCase().endsWith('.xls') &&
-                   !selectedFile?.path?.toLowerCase().endsWith('.xlsx') &&
-                   !selectedFile?.path?.toLowerCase().endsWith('.docx') &&
-                   !selectedFile?.path?.toLowerCase().endsWith('.pdf') &&
-                   !isCodeFile(selectedFile?.path || '') && (
-                    <>
-                      <button
-                        onClick={handleEdit}
-                        className="flex items-center p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
-                        title="Edit file (Ctrl+E)"
-                      >
-                        <Edit className="w-4 h-4" />
+              <div className="flex items-center gap-0.5">
+                {canEdit && (
+                  <button onClick={handleEdit} className={ICON_BUTTON_CLASS} title="Edit file (Ctrl+E)">
+                    <Edit className="w-4 h-4" />
+                  </button>
+                )}
+                <button onClick={handleDownload} className={ICON_BUTTON_CLASS} title="Download file">
+                  <Download className="w-4 h-4" />
+                </button>
+                {isRenderedMarkdownSearchAvailable && (
+                  <RenderedContentSearchButton search={renderedContentSearch} className={ICON_BUTTON_CLASS} />
+                )}
+                {variant === 'pane' ? (
+                  <PaneActionsMenu actions={paneActions} />
+                ) : (
+                  <>
+                    <button onClick={() => { void copyContent() }} className={`${ICON_BUTTON_CLASS} gap-1`} title="Copy formatted content">
+                      <CopyIcon />
+                      {contentCopied && <span className="text-xs text-green-600 dark:text-green-400">Copied!</span>}
+                    </button>
+                    <button onClick={() => { void copyAsSlack() }} className={`${ICON_BUTTON_CLASS} gap-1`} title="Copy as Slack format">
+                      <SlackIcon />
+                      {slackCopied && <span className="text-xs text-green-600 dark:text-green-400">Copied!</span>}
+                    </button>
+                    <button onClick={copyShareLink} className={`${ICON_BUTTON_CLASS} gap-1`} title="Copy public share link">
+                      <Link className="w-4 h-4" />
+                      {shareCopied && <span className="text-xs text-green-600 dark:text-green-400">Copied!</span>}
+                    </button>
+                    {canShowRevisions && (
+                      <button onClick={() => setShowRevisionsModal(true)} className={ICON_BUTTON_CLASS} title="View file revisions">
+                        <HistoryIcon />
                       </button>
-                    </>
-                  )}
-                  <button
-                    onClick={handleDownload}
-                    className="flex items-center p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
-                    title="Download file"
-                  >
-                    <Download className="w-4 h-4" />
-                  </button>
-                  {isRenderedMarkdownSearchAvailable && (
-                    <RenderedContentSearchButton
-                      search={renderedContentSearch}
-                      className="flex items-center p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
-                    />
-                  )}
-                  <button
-                    onClick={async () => {
-                      if (!fileContent) return
-                      await navigator.clipboard.writeText(fileContent)
-                      setContentCopied(true)
-                      setTimeout(() => setContentCopied(false), 2000)
-                    }}
-                    className="flex items-center gap-1 p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
-                    title="Copy formatted content"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" strokeWidth={2} />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-                    </svg>
-                    {contentCopied && <span className="text-xs text-green-600 dark:text-green-400">Copied!</span>}
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (!fileContent) return
-                      const slack = convertToSlackMarkdown(fileContent)
-                      await navigator.clipboard.writeText(slack)
-                      setSlackCopied(true)
-                      setTimeout(() => setSlackCopied(false), 2000)
-                    }}
-                    className="flex items-center gap-1 p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
-                    title="Copy as Slack format"
-                  >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zm-1.27 0a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.163 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.163 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.163 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zm0-1.27a2.527 2.527 0 0 1-2.52-2.523 2.527 2.527 0 0 1 2.52-2.52h6.315A2.528 2.528 0 0 1 24 15.163a2.528 2.528 0 0 1-2.522 2.523h-6.315z"/>
-                    </svg>
-                    {slackCopied && <span className="text-xs text-green-600 dark:text-green-400">Copied!</span>}
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (!selectedFile?.path) return
-                      const encoded = btoa(unescape(encodeURIComponent(selectedFile.path)))
-                      const uid = useAuthStore.getState().user?.id || ''
-                      const shareUrl = `${window.location.origin}/file?path=${encoded}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`
-                      copyToClipboard(shareUrl).then((ok) => {
-                        if (ok) {
-                          setShareCopied(true)
-                          setTimeout(() => setShareCopied(false), 2000)
-                        }
-                      })
-                    }}
-                    className="flex items-center gap-1 p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
-                    title="Copy public share link"
-                  >
-                    <Link className="w-4 h-4" />
-                    {shareCopied && <span className="text-xs text-green-600 dark:text-green-400">Copied!</span>}
-                  </button>
-                  {!selectedFile?.path?.toLowerCase().endsWith('.xls') &&
-                   !selectedFile?.path?.toLowerCase().endsWith('.xlsx') &&
-                   !selectedFile?.path?.toLowerCase().endsWith('.docx') &&
-                   !selectedFile?.path?.toLowerCase().endsWith('.pdf') && (
-                    <button
-                      onClick={() => setShowRevisionsModal(true)}
-                      className="flex items-center p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
-                      title="View file revisions"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                    </button>
-                  )}
-                  {selectedFile?.path && (
-                   selectedFile.path.toLowerCase().endsWith('.md') ||
-                   selectedFile.path.toLowerCase().endsWith('.markdown')) && (
-                    <button
-                      onClick={handleExportPdf}
-                      disabled={isExportingPdf}
-                      className="flex items-center p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      title="Export as PDF"
-                    >
-                      {isExportingPdf ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          {exportProgress && (
-                            <span className="ml-1 text-xs text-gray-500 dark:text-gray-400">{exportProgress}</span>
-                          )}
-                        </>
-                      ) : (
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9l-5-5H7a2 2 0 00-2 2v13a2 2 0 002 2z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 4v5h5" />
-                          <text x="7" y="18" fontSize="6" fontWeight="bold" fill="currentColor" stroke="none">PDF</text>
-                        </svg>
-                      )}
-                    </button>
-                  )}
-                  {selectedFile?.path && (
-                   selectedFile.path.toLowerCase().endsWith('.md') ||
-                   selectedFile.path.toLowerCase().endsWith('.markdown')) && (
-                    <button
-                      onClick={() => setShowPushToGistDialog(true)}
-                      className="flex items-center p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      title="Push to GitHub Gist"
-                    >
-                      <Github className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              </>
+                    )}
+                    {isMarkdownFile && (
+                      <button
+                        onClick={handleExportPdf}
+                        disabled={isExportingPdf}
+                        className={`${ICON_BUTTON_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
+                        title="Export as PDF"
+                      >
+                        {isExportingPdf ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            {exportProgress && (
+                              <span className="ml-1 text-xs text-gray-500 dark:text-gray-400">{exportProgress}</span>
+                            )}
+                          </>
+                        ) : (
+                          <PdfIcon />
+                        )}
+                      </button>
+                    )}
+                    {isMarkdownFile && (
+                      <button
+                        onClick={() => setShowPushToGistDialog(true)}
+                        className={`${ICON_BUTTON_CLASS} disabled:opacity-50 disabled:cursor-not-allowed`}
+                        title="Push to GitHub Gist"
+                      >
+                        <Github className="w-4 h-4" />
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
             ) : (
               <>
                 <button
@@ -818,7 +894,7 @@ export function FileContentViewer() {
                     // PDF files (binary)
                     if (filePath.endsWith('.pdf') && binaryFileData) {
                       return (
-                        <div className="h-[calc(100vh-120px)] w-full">
+                        <div className={`${tallSurfaceClass} w-full`}>
                           <Suspense fallback={<FileSurfaceFallback />}>
                             <PdfRenderer data={binaryFileData} />
                           </Suspense>
@@ -829,7 +905,7 @@ export function FileContentViewer() {
                     // Video files
                     if ((filePath.endsWith('.webm') || filePath.endsWith('.mp4') || filePath.endsWith('.mov')) && videoObjectUrl) {
                       return (
-                        <div className="h-[calc(100vh-120px)] w-full flex items-center justify-center bg-black rounded-lg">
+                        <div className={`${tallSurfaceClass} w-full flex items-center justify-center bg-black rounded-lg`}>
                           <video
                             controls
                             autoPlay
@@ -857,7 +933,7 @@ export function FileContentViewer() {
                     // HTML files
                     if (filePath.endsWith('.html') || filePath.endsWith('.htm')) {
                       return (
-                        <div className="h-[calc(100vh-120px)] w-full">
+                        <div className={`${tallSurfaceClass} w-full`}>
                           <HtmlRenderer content={fileContent} />
                         </div>
                       )
@@ -935,8 +1011,7 @@ export function FileContentViewer() {
             </>
           )}
         </div>
-        </div>
-      )}
+      </div>
 
       {/* Push to Gist Dialog */}
       {showPushToGistDialog && (
@@ -991,5 +1066,20 @@ export function FileContentViewer() {
         </div>
       )}
     </>
+  )
+}
+
+/**
+ * Full-viewport shell for surfaces that have no workspace pane to host the
+ * viewer in (Video Studio). `fixed inset-0` rather than `absolute` so it
+ * needs no positioned ancestor, same as the body's own nested dialogs.
+ */
+export function FileContentViewerOverlay() {
+  const showFileContent = useWorkspaceStore(state => state.showFileContent)
+  if (!showFileContent) return null
+  return (
+    <div className="fixed inset-0 bg-white dark:bg-gray-900 z-40 flex flex-col">
+      <FileContentViewerBody variant="overlay" />
+    </div>
   )
 }

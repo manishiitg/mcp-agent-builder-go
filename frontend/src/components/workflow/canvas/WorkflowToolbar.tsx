@@ -45,7 +45,6 @@ import WorkflowAccessPopup from '../WorkflowAccessPopup'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip'
 import { WORKFLOW_SOUL_REFRESH_EVENT } from '../SoulViewer'
 import { hasWorkflowWriteAccess, hasWorkflowOwnerAccess } from '../../../utils/workflowPermissions'
-import { useAppStore } from '../../../stores/useAppStore'
 import {
   PULSE_FIXED_COMMANDS,
   PULSE_MODULE_COMMANDS,
@@ -319,16 +318,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
   const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
   const showWorkspacePane = useWorkflowStore(state => state.showWorkspacePane)
-  const setWorkflowWorkspaceView = useWorkflowStore(state => state.setWorkflowWorkspaceView)
-  const setCanvasViewMode = useWorkflowStore(state => state.setCanvasViewMode)
-  const setShowWorkspacePane = useWorkflowStore(state => state.setShowWorkspacePane)
-
-  const openWorkspaceView = useCallback((view: WorkspaceViewId) => {
-    if (view === 'flow' || view === 'report') setCanvasViewMode(view)
-    setWorkflowWorkspaceView(view)
-    setShowWorkspacePane(true)
-    useAppStore.getState().setWorkspaceMinimized(view !== 'files')
-  }, [setCanvasViewMode, setShowWorkspacePane, setWorkflowWorkspaceView])
+  const openWorkspaceView = useWorkflowStore(state => state.openWorkspaceView)
 
   const activeWorkspaceView: WorkspaceViewId = workflowWorkspaceView === 'files' || isInspectorView(workflowWorkspaceView)
     ? workflowWorkspaceView

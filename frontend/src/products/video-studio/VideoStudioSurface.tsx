@@ -26,7 +26,7 @@ import {
 } from 'lucide-react'
 import ChatArea, { type ChatContentRendererProps } from '../../components/ChatArea'
 import { CleanConversationSurface } from '../../components/CleanConversationSurface'
-import { FileContentViewer } from '../../components/FileContentViewer'
+import { FileContentViewerOverlay } from '../../components/FileContentViewer'
 import { ConversationMarkdownRenderer } from '../../components/ui/MarkdownRenderer'
 import { clampPanelWidth, loadStoredPanelWidth, saveStoredPanelWidth } from './panelWidth'
 import { videoStamp } from './videoStamp'
@@ -852,7 +852,9 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
           </div>
         </div>
       ) : null}
-      <FileContentViewer />
+      {/* Video Studio has no workspace pane to host the viewer, so it keeps
+          the full-viewport shell. */}
+      <FileContentViewerOverlay />
     </div>
   )
 }
