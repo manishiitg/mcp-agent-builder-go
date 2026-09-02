@@ -69,7 +69,7 @@ function ToolbarGroup({ label, open, onToggle, title, children, ...rest }: {
         onClick={onToggle}
         aria-expanded={open}
         title={title}
-        className={`inline-flex h-6 items-center gap-1.5 rounded px-2 text-[11px] font-medium outline-none transition-colors ${open ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
+        className={`inline-flex h-6 items-center rounded px-2 text-[11px] font-medium outline-none transition-colors hover:bg-background/70 ${open ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
       >
         <span>{label}</span>
       </button>
