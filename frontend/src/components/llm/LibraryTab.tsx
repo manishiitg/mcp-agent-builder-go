@@ -1,9 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import {
-  AlertTriangle,
   AudioLines,
   Box,
-  CheckCircle2,
   ChevronRight,
   DollarSign,
   KeyRound,
@@ -16,6 +14,7 @@ import { Button } from '../ui/Button'
 import { useLLMStore } from '../../stores'
 import { llmConfigService, type ModelMetadata, type ProviderManifestEntry } from '../../services/llm-config-api'
 import { nonDeprecatedProviders } from '../../utils/providerCatalogFilter'
+import { providerStatus } from './providerStatus'
 import type { SavedLLM } from '../../services/api-types'
 import {
   getProviderDisplayInfo,
@@ -56,32 +55,10 @@ type LibraryTabProps = {
   providers: ProviderManifestEntry[]
   onSelectProvider: (provider: ProviderManifestEntry) => void
   isProviderLocked: (provider: string) => boolean
-  /** Hide the "Saved configurations" list -- for a host (the workflow
-   * capabilities panel) where this tab's only job is connecting a new
-   * provider; the workflow's own role pickers already surface saved
-   * configs via dropdown, so repeating the full account-wide list here
-   * (often 30+ entries, many auto-saved near-duplicates from CLI runs) is
-   * noise rather than a second way to use them. */
-  hideSavedConfigurations?: boolean
 }
 
 const providerSectionOrder: LLMIntegrationKind[] = ['coding_agent', 'api_model', 'audio_provider']
 
-const providerStatus = (provider: ProviderManifestEntry, locked: boolean) => {
-  if (locked) {
-    return { label: 'Managed', tone: 'text-blue-600 dark:text-blue-400', icon: CheckCircle2 }
-  }
-  if (provider.usable) {
-    return { label: 'Ready', tone: 'text-emerald-600 dark:text-emerald-400', icon: CheckCircle2 }
-  }
-  if (provider.runtime_available === false) {
-    return { label: 'Not installed', tone: 'text-amber-600 dark:text-amber-400', icon: AlertTriangle }
-  }
-  if (provider.requires_api_key && !provider.auth_configured) {
-    return { label: 'Needs key', tone: 'text-amber-600 dark:text-amber-400', icon: AlertTriangle }
-  }
-  return { label: 'Setup needed', tone: 'text-amber-600 dark:text-amber-400', icon: AlertTriangle }
-}
 
 const providerTierSummary = (provider: ProviderManifestEntry): string => {
   const tiers = provider.default_tier_models
@@ -137,7 +114,7 @@ const groupSavedLLMsByProvider = (
     }))
 }
 
-export function LibraryTab({ providers, onSelectProvider, isProviderLocked, hideSavedConfigurations = false }: LibraryTabProps) {
+export function LibraryTab({ providers, onSelectProvider, isProviderLocked }: LibraryTabProps) {
   const { savedLLMs, deleteSavedLLM, defaultPublishedLLMsLocked, loadDefaultsFromBackend } = useLLMStore()
   const [metadataMap, setMetadataMap] = useState<Record<string, ModelMetadata>>({})
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -210,9 +187,7 @@ export function LibraryTab({ providers, onSelectProvider, isProviderLocked, hide
         <div>
           <h3 className="text-lg font-semibold text-foreground">Model Library</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {hideSavedConfigurations
-              ? 'Connect a provider or change its models.'
-              : 'Installed providers, available defaults, and reusable configurations in one place.'}
+            Installed providers, available defaults, and reusable configurations in one place.
           </p>
         </div>
         <Button
@@ -275,7 +250,6 @@ export function LibraryTab({ providers, onSelectProvider, isProviderLocked, hide
         })}
       </div>
 
-      {!hideSavedConfigurations && (
       <section className="space-y-2">
         <div className="flex items-center justify-between">
           <div>
@@ -414,7 +388,6 @@ export function LibraryTab({ providers, onSelectProvider, isProviderLocked, hide
         </div>
       )}
       </section>
-      )}
     </div>
   )
 }
