@@ -641,12 +641,13 @@ func runParentTurn(ctx context.Context, s familyState, convID string, messages [
 	defer markAgentTurnStart("parent")()
 	trace.locked()
 
-	sess, err := agentsession.New(ctx, agentsession.Config{
+	sess, err := newAgentSession(ctx, agentsession.Config{
 		Provider:        provider,
 		ModelID:         selectedModelID(s, provider),
 		ReasoningEffort: selectedReasoningEffort(s.FastMode, provider),
 		WorkingDir:      workDir,
 		SystemPrompt:    parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule),
+		Skills:          embeddedSkills(),
 		// Stable SessionID = the conversation id, so the SAME warm tmux session
 		// is reused across turns within this process. SessionHandle restores the
 		// coding agent's own `--resume` state across process restarts (loaded from

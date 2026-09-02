@@ -222,7 +222,7 @@ func runChildTurn(ctx context.Context, s familyState, activityDir string, messag
 	ctx, cancel := context.WithTimeout(ctx, turnTimeout)
 	defer cancel()
 
-	sess, err := agentsession.New(ctx, agentsession.Config{
+	sess, err := newAgentSession(ctx, agentsession.Config{
 		Provider: provider,
 		// Child Mode runs the same MODEL as Parent Mode, but defaults to lower
 		// reasoning effort (see familyState.ChildFastMode) because a child

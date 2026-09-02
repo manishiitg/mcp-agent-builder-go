@@ -165,9 +165,21 @@ agent as explicit `mcpagent` configuration (`MCPRuntimeConfig.APIBaseURL`,
 mcpagent now prefers explicit values over the `MCP_*` variables, so a second
 executor in the same process cannot clobber it. Remedy 5 (voice) is also
 done: one engine (`pkg/voicestt`) serves both apps, including WhatsApp voice
-notes. Remedies 1–4 remain open, and the decision itself is unchanged until
-characterization tests exist; see the migration plan agreed the same day
-(step 0 done, steps 1–5 pending).
+notes. Remedies 1, 2 and 4 landed the same evening: the parent session now
+carries the embedded skills through `agentsession.Config.Skills` (a live
+codex-cli turn lists all thirteen; `seedSkills` still writes the files for
+`cat` and for `skills/_shared`), `reservedTopLevel` now covers `_users`,
+`Workflow`, `pulse`, `memories`, `config`, `chat_history`, `Chats` and
+`Downloads`, and `cmd/family-server/characterization_test.go` pins parent
+and child turns (prompt, tools, working dir, persistence), handoff,
+the child shell's activity confinement through the real sandbox, PIN
+handling, streaming, WhatsApp mode routing, and the reserved folders — all
+driven through a session seam (`turn_session.go`) with no model. Remedy 3
+(folder-guard docs vs code) is still open. One finding worth knowing: the
+strict macOS profile leaves `/var` readable, so a workspace placed under
+`/var` (as `t.TempDir()` is) is not confined; real installs under `$HOME`
+are. The decision itself stands; the migration plan agreed the same day is
+at step 2 (platform connectors, Pulse, secrets).
 
 ### Revisit trigger
 

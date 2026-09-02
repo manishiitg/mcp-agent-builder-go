@@ -70,6 +70,20 @@ var reservedTopLevel = map[string]bool{
 	"publish":                 true,
 	"workspace.pre-v2-backup": true,
 	archiveDir:                true, // see archive.go — retired activities, excluded from routine scans
+	// Platform folders that exist when this workspace is (or is shared with)
+	// an AgentWorks workspace root. None is a Subject, and archiveStaleActivities
+	// os.Rename()s any non-reserved top-level folder idle for a week — a
+	// misconfigured FAMILY_DATA_DIR would otherwise silently relocate the
+	// main server's Workflow/ or pulse/ trees into archive/.
+	"_users":                true,
+	"Workflow":              true,
+	"pulse":                 true,
+	"memories":              true,
+	"config":                true,
+	"chat_history":          true,
+	"Chats":                 true,
+	"Downloads":             true,
+	"current-activity.json": true,
 }
 
 // isSubjectDir reports whether a top-level entry name is a Subject folder

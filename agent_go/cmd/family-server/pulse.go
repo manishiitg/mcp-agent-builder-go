@@ -473,7 +473,7 @@ func runPulseCheckTurn(ctx context.Context, provider llm.Provider, s familyState
 
 	trace := newTurnTrace("pulse", s.Engine)
 
-	sess, err := agentsession.New(ctx, agentsession.Config{
+	sess, err := newAgentSession(ctx, agentsession.Config{
 		Provider:                  provider,
 		ModelID:                   selectedModelID(s, provider),
 		ReasoningEffort:           selectedReasoningEffort(s.FastMode, provider),
