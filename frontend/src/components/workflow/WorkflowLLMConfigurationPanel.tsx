@@ -53,10 +53,13 @@ const codingAgentProviderRank = (provider: string) => {
 // shows one row per backend under a synthetic id; nothing here is a real
 // manifest entry, and a selection has to be written as explicit per-role
 // config because a provider profile can't say "pi-cli, but only Gemini".
+// One row per model under each backend: the curated catalog models plus any
+// published Pi entries, so "Gemini 3.7 Flash" and "Gemini 3.1 Pro" are both
+// pickable without opening the drill-in.
 const PI_GROUP_PREFIX = 'pi-cli::'
-const piGroupRowId = (group: string) => `${PI_GROUP_PREFIX}${group}`
+const piRowId = (group: string, modelId: string) => `${PI_GROUP_PREFIX}${group}::${modelId}`
 const piGroupFromRowId = (rowId: string): string | null =>
-  rowId.startsWith(PI_GROUP_PREFIX) ? rowId.slice(PI_GROUP_PREFIX.length) : null
+  rowId.startsWith(PI_GROUP_PREFIX) ? rowId.slice(PI_GROUP_PREFIX.length).split('::')[0] || null : null
 
 type ProviderRow = {
   id: string
@@ -65,6 +68,8 @@ type ProviderRow = {
   modelId: string | null
   selectable: boolean
   groupFilter?: string
+  /** Row comes from a published LLM entry rather than Pi's curated catalog. */
+  published?: boolean
 }
 
 // "Models per role" starts collapsed; once the user opens it, it stays open on
@@ -236,8 +241,8 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   // X" line; the provider list only appears on "Change provider".
   const [changing, setChanging] = useState(false)
   const [rolesOpen, setRolesOpen] = useState<boolean>(() => readRolesOpen())
-  // The list leads with the sign-in CLIs only; Pi model families and direct
-  // API providers stay reachable behind "More providers".
+  // Direct API providers are not selectable for a workflow, so they stay
+  // behind a toggle; the sign-in CLIs and Pi backends are always listed.
   const [moreProviders, setMoreProviders] = useState(false)
   const toggleRolesOpen = () => setRolesOpen(open => { writeRolesOpen(!open); return !open })
 
@@ -301,9 +306,26 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     const result: ProviderRow[] = []
     codingAgents.forEach(entry => {
       if (entry.id === 'pi-cli') {
+        const publishedPi = availableLLMs.filter(option => option.provider === 'pi-cli')
         piCliGroups.forEach(group => {
-          const modelId = piGroupDefaultModel(group)
-          result.push({ id: piGroupRowId(group), entry, name: group, modelId, selectable: modelId !== null, groupFilter: group })
+          const seenModels = new Set<string>()
+          const defaultModelId = piGroupDefaultModel(group)
+          // Default first, then the rest of the curated catalog for this backend.
+          const catalog = piCliModels
+            .filter(model => model.group === group)
+            .sort((a, b) => Number(b.model_id === defaultModelId) - Number(a.model_id === defaultModelId))
+          catalog.forEach(model => {
+            if (seenModels.has(model.model_id)) return
+            seenModels.add(model.model_id)
+            result.push({ id: piRowId(group, model.model_id), entry, name: group, modelId: model.model_id, selectable: true, groupFilter: group })
+          })
+          // Published entries for this backend that the catalog does not list.
+          publishedPi
+            .filter(option => resolvePiModelGroup(option.model) === group && !seenModels.has(option.model))
+            .forEach(option => {
+              seenModels.add(option.model)
+              result.push({ id: piRowId(group, option.model), entry, name: group, modelId: option.model, selectable: true, groupFilter: group, published: true })
+            })
         })
         return
       }
@@ -320,7 +342,16 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
       result.push({ id: entry.id, entry, name: entry.display_name, modelId: null, selectable: false })
     })
     return result
-  }, [manifestEntries, piCliGroups, piGroupDefaultModel, providerOptions])
+  }, [availableLLMs, manifestEntries, piCliGroups, piCliModels, piGroupDefaultModel, providerOptions])
+
+  // The row for a Pi backend, at a specific model when one is given and
+  // listed, else the backend's first (default) row.
+  const piRowFor = useCallback((group: string | null, modelId?: string | null): string | null => {
+    if (!group) return null
+    const inGroup = rows.filter(row => row.groupFilter === group)
+    if (inGroup.length === 0) return null
+    return (inGroup.find(row => row.modelId === modelId) ?? inGroup[0]).id
+  }, [rows])
 
   // Which row the current config corresponds to, if any.
   const selectedRowId = useMemo<string | null>(() => {
@@ -339,8 +370,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
         // (High tier) model back to its display group instead.
         const piEntry = manifestEntries.find(entry => entry.id === 'pi-cli')
         const defaultModelId = piEntry?.default_tier_models?.high.model_id
-        const group = defaultModelId ? resolvePiModelGroup(defaultModelId) : null
-        return group ? piGroupRowId(group) : null
+        return piRowFor(defaultModelId ? resolvePiModelGroup(defaultModelId) : null, defaultModelId)
       }
       return llmConfig.provider ?? null
     }
@@ -353,14 +383,17 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
       const groups = new Set(roles.map(role => resolvePiModelGroup(role!.model_id)))
       if (groups.size !== 1) return null
       const [group] = Array.from(groups)
-      return group ? piGroupRowId(group) : null
+      // Every role on the same model highlights that model's row; a mixed
+      // per-role setup within one backend falls back to the backend default row.
+      const models = new Set(roles.map(role => role!.model_id))
+      return piRowFor(group, models.size === 1 ? Array.from(models)[0] : null)
     }
     // A per-role setup that stays on one coding-agent provider (e.g. every
     // role on Claude Code, just different models/efforts) still "runs on"
     // that provider: match its row so the compact status line and the
     // Models per role section show instead of "custom per-role setup".
     return manifestEntries.some(entry => entry.id === provider && entry.integration_kind === 'coding_agent') ? provider : null
-  }, [llmConfig, manifestEntries])
+  }, [llmConfig, manifestEntries, piRowFor])
 
   const visibleRows = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -648,6 +681,9 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
             <span className={`h-2 w-2 rounded-full ${tone.dot}`} />
             {selectedRow.name}
           </span>
+          {selectedRow.groupFilter && selectedRow.modelId && (
+            <span className="truncate font-mono text-[11px] text-muted-foreground">{selectedRow.modelId}</span>
+          )}
           {!usable && (
             <>
               <span className={`text-xs font-medium ${tone.text}`} title={statusTitle(status.label)}>
@@ -845,6 +881,11 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
             </span>
           )}
           <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">{row.modelId ?? ''}</span>
+          {row.published && (
+            <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground" title="From your published LLMs">
+              Published
+            </span>
+          )}
           <span
             className={`inline-flex shrink-0 items-center gap-1 text-[11px] font-medium ${tone.text}`}
             title={statusTitle(status.label)}
@@ -997,6 +1038,11 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
               'Sign in once on this machine. Test the connection, then use it in this workflow.',
               visibleRows.filter(row => row.entry.integration_kind === 'coding_agent' && !row.groupFilter),
             )}
+            {renderGroup(
+              'Models via Pi',
+              'Each provider needs its own API key saved. Add the key, test, then pick a model to use it in this workflow.',
+              visibleRows.filter(row => Boolean(row.groupFilter)),
+            )}
             <div className="bg-muted/20 px-3 py-1.5">
               <button
                 type="button"
@@ -1005,14 +1051,9 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
                 className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
               >
                 <ChevronRight className={`h-3 w-3 transition-transform ${moreProviders ? 'rotate-90' : ''}`} />
-                {moreProviders ? 'Fewer providers' : 'More providers (Pi model families, API keys)'}
+                {moreProviders ? 'Hide direct API providers' : 'Direct API providers (chat only)'}
               </button>
             </div>
-            {(moreProviders || query.trim()) && renderGroup(
-              'Models via Pi',
-              'Each provider needs its own API key saved. Add the key, test, then use it in this workflow.',
-              visibleRows.filter(row => Boolean(row.groupFilter)),
-            )}
             {(moreProviders || query.trim()) && renderGroup(
               'Direct API providers',
               'Chat and library use only; not selectable for a workflow.',

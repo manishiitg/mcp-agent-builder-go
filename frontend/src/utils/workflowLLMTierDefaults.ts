@@ -184,6 +184,13 @@ function providerModelOptions(entry: ProviderManifestEntry): LLMOption[] {
   return options
 }
 
+// Providers whose catalog is not a usable pick list. Pi routes to many
+// upstream providers (Gemini, Z.AI, Kimi, DeepSeek, ...) and only the ones the
+// user has keyed and published actually work, so the workflow model picker
+// offers Pi's published entries only; the full catalog stays in the Pi
+// drill-in where entries get published.
+const PUBLISHED_ONLY_PROVIDERS = new Set<string>(['pi-cli'])
+
 export function getWorkflowLLMOptions(
   availableLLMs: LLMOption[],
   providerManifest: ProviderManifestEntry[] = [],
@@ -195,6 +202,7 @@ export function getWorkflowLLMOptions(
   providerManifest.forEach(entry => {
     if (entry.deprecated || entry.integration_kind === 'audio_provider') return
     catalogModelIds.set(entry.id, new Set(entry.models.map(model => model.model_id)))
+    if (PUBLISHED_ONLY_PROVIDERS.has(entry.id)) return
     providerModelOptions(entry).forEach(option => {
       const key = `${option.provider}/${option.model}/${JSON.stringify(option.options ?? {})}`
       if (seen.has(key)) return
