@@ -182,14 +182,6 @@ func (p PulseConfig) Sites() []string {
 	return out
 }
 
-func (p PulseConfig) cadence() time.Duration {
-	hours := p.CadenceHours
-	if hours <= 0 {
-		hours = 24
-	}
-	return time.Duration(hours) * time.Hour
-}
-
 var stateMu sync.Mutex
 
 func loadState() familyState {

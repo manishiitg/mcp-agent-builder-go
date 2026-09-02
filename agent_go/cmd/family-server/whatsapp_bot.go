@@ -126,7 +126,7 @@ func (w *waBot) GetQRImagePNG(size int) ([]byte, error) {
 func (w *waBot) Unpair(ctx context.Context, phone string) error {
 	c := w.connector()
 	if c == nil {
-		return fmt.Errorf("whatsapp is not initialised")
+		return fmt.Errorf("whatsapp is not initialized")
 	}
 	return c.Unpair(ctx, phone)
 }
@@ -134,7 +134,7 @@ func (w *waBot) Unpair(ctx context.Context, phone string) error {
 func (w *waBot) SendToAllSelf(ctx context.Context, text string) (sent int, lastErr error) {
 	c := w.connector()
 	if c == nil {
-		return 0, fmt.Errorf("whatsapp is not initialised")
+		return 0, fmt.Errorf("whatsapp is not initialized")
 	}
 	return c.SendToAllSelf(ctx, text)
 }
@@ -142,7 +142,7 @@ func (w *waBot) SendToAllSelf(ctx context.Context, text string) (sent int, lastE
 func (w *waBot) SendDocumentToAllSelf(ctx context.Context, data []byte, filename, mimetype, caption string) (sent int, lastErr error) {
 	c := w.connector()
 	if c == nil {
-		return 0, fmt.Errorf("whatsapp is not initialised")
+		return 0, fmt.Errorf("whatsapp is not initialized")
 	}
 	return c.SendDocumentToAllSelf(ctx, data, filename, mimetype, caption)
 }
@@ -205,7 +205,7 @@ func sendWhatsAppFileTool(onSent func(path string)) agentsession.Tool {
 
 // ---- routes: "@child" / "@parent" -----------------------------------------
 
-// waModeRouter is SparkQuill's route table: two fixed routes, recognised
+// waModeRouter is SparkQuill's route table: two fixed routes, recognized
 // anywhere in the text ("@child she got stuck on Q5"), not only as a prefix.
 type waModeRouter struct{}
 

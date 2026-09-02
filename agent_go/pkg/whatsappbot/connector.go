@@ -311,7 +311,7 @@ func (c *Connector) EnsureConnecting(_ context.Context) {
 	defer c.pairingMu.Unlock()
 	if c.pairingActive {
 		// A live QR is fine; a stalled attempt (no code within the timeout)
-		// gets cancelled so the next poll starts fresh.
+		// gets canceled so the next poll starts fresh.
 		if code, _ := c.GetQR(); code != "" || time.Since(c.pairingStarted) <= c.cfg.PairingTimeout {
 			return
 		}

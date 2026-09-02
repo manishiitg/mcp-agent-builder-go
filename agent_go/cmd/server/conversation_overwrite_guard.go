@@ -12,7 +12,7 @@ import (
 // conversationUserTurnCount counts the human turns in a persisted record.
 //
 // User turns are the one part of a conversation that only ever grows. Assistant
-// and tool entries get rewritten, summarised and trimmed by normal persistence
+// and tool entries get rewritten, summarized and trimmed by normal persistence
 // (cleanChatHistoryForPersistence exists to do exactly that), so their count
 // shrinking proves nothing. A session cannot un-ask a question.
 func conversationUserTurnCount(history []map[string]interface{}) int {

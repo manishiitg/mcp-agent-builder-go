@@ -111,7 +111,7 @@ func TestClearingAnOpsDecisionClearsItsReason(t *testing.T) {
 		sc := &StepConfig{AgentConfigs: &AgentConfigs{}}
 		tc.seed(sc.AgentConfigs)
 		if !clearStepConfigField(sc, tc.field) {
-			t.Fatalf("clearStepConfigField did not recognise %q", tc.field)
+			t.Fatalf("clearStepConfigField did not recognize %q", tc.field)
 		}
 		if tc.stillSet(sc.AgentConfigs) {
 			t.Errorf("clearing %q left the decision or its reason behind", tc.field)

@@ -14,7 +14,7 @@ import (
 // message_sequence item posted anyway.
 //
 // The loop already returned on any item error, so the assumption was that a
-// cancelled context would surface as an error and halt the queue. That makes
+// canceled context would surface as an error and halt the queue. That makes
 // halting conditional on some layer underneath converting cancellation into an
 // error, and session teardown races that conversion: a coding-CLI turn whose
 // pane is being killed can return a truncated-but-plausible result instead of
@@ -26,14 +26,14 @@ func TestMessageSequenceHaltsBeforeStartingAnItemOnceCancelled(t *testing.T) {
 
 	err := messageSequenceHaltedBeforeItem(ctx, "morning-sequence", "second-post")
 	if err == nil {
-		t.Fatal("a cancelled run was allowed to start another queued item")
+		t.Fatal("a canceled run was allowed to start another queued item")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("halt error does not carry the cancellation cause: %v", err)
 	}
 	// The message lands in the run's session record and in the error the step
 	// returns, so it has to name which item was refused, not merely that
-	// something was cancelled.
+	// something was canceled.
 	for _, want := range []string{"morning-sequence", "second-post"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("halt error %q does not identify %q", err, want)
@@ -48,9 +48,9 @@ func TestMessageSequenceProceedsWhileTheRunIsLive(t *testing.T) {
 		t.Errorf("a live run was halted: %v", err)
 	}
 	// A nil context is not evidence of cancellation. Several internal callers
-	// pass one, and treating it as cancelled would silently stop real queues.
+	// pass one, and treating it as canceled would silently stop real queues.
 	if err := messageSequenceHaltedBeforeItem(nil, "s", "i"); err != nil { //nolint:staticcheck // deliberate nil-ctx case
-		t.Errorf("a nil context was treated as cancelled: %v", err)
+		t.Errorf("a nil context was treated as canceled: %v", err)
 	}
 }
 
@@ -74,6 +74,6 @@ func TestMessageSequenceHaltIsCheckedBeforeEveryItem(t *testing.T) {
 	}
 
 	if len(started) != 1 || started[0] != "first-post" {
-		t.Errorf("items started = %v, want only [first-post]; the queue advanced past a cancelled run", started)
+		t.Errorf("items started = %v, want only [first-post]; the queue advanced past a canceled run", started)
 	}
 }

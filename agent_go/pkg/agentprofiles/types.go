@@ -173,7 +173,7 @@ type ToolBinding struct {
 // PresentationBinding names the presentation kind a tool produces and the
 // compact activity row that accompanies its update in the transcript. Keeping
 // both facts beside the tool declaration means a future presentation cannot
-// accidentally fall through to an unrecognised raw event card in the UI.
+// accidentally fall through to an unrecognized raw event card in the UI.
 type PresentationBinding struct {
 	Kind     string                       `json:"kind" yaml:"kind"`
 	Activity *PresentationActivityBinding `json:"activity" yaml:"activity"`

@@ -475,11 +475,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 	}
 
 	for _, item := range plannedItems {
-		// Stop means stop. Every layer below is expected to surface a cancelled
+		// Stop means stop. Every layer below is expected to surface a canceled
 		// context as an item error, and the queue halts on any error — but that
 		// makes halting depend on a lower layer noticing, and a coding-CLI turn
 		// whose pane is torn down can return a plausible-looking result instead
-		// of an error. A cancelled run must never START another item, whatever
+		// of an error. A canceled run must never START another item, whatever
 		// the previous one reported (PLAT-130).
 		if haltErr := messageSequenceHaltedBeforeItem(ctx, sequenceStep.GetID(), item.ID); haltErr != nil {
 			// The line a live reverify greps for: it names the item that was NOT
@@ -1769,9 +1769,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) summarizeMessageSequenceSession(sessi
 // messageSequenceHaltedBeforeItem reports why a message_sequence queue must not
 // start another item, or nil to proceed.
 //
-// PLAT-130. Clicking Stop on a schedule cancelled the run's context correctly,
+// PLAT-130. Clicking Stop on a schedule canceled the run's context correctly,
 // and the item loop already returned on any item error — yet a queued item
-// still fired, because "the context was cancelled" only becomes an error if
+// still fired, because "the context was canceled" only becomes an error if
 // some layer underneath converts it into one. Session teardown races that
 // conversion: a coding-CLI turn whose pane is being killed can return a
 // truncated-but-plausible result rather than a failure, and the queue reads
@@ -1782,7 +1782,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) summarizeMessageSequenceSession(sessi
 // Checking the context directly removes the dependency on that conversion. It
 // is deliberately a pre-item gate rather than a mid-item abort: an item already
 // in flight is left to unwind through its own error path, but no new work
-// begins once the run is cancelled.
+// begins once the run is canceled.
 func messageSequenceHaltedBeforeItem(ctx context.Context, stepID, itemID string) error {
 	if ctx == nil {
 		return nil

@@ -15,7 +15,7 @@ import (
 // legacyOrchestratorTypePattern matches the plan-type discriminator of a step
 // still written with the legacy name. Only the `"type"` key is rewritten, so a
 // description that happens to mention todo_task is left alone. Working on the
-// raw text (rather than re-marshalling a typed plan) keeps every other byte of
+// raw text (rather than re-marshaling a typed plan) keeps every other byte of
 // plan.json — key order, unknown fields — exactly as the builder wrote it.
 var legacyOrchestratorTypePattern = regexp.MustCompile(`("type"\s*:\s*)"todo_task"`)
 

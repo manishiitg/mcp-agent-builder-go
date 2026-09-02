@@ -355,7 +355,7 @@ type BackgroundAgentSnapshot struct {
 // nothing. The per-step progress records in question declare "orchestrator", so
 // the override never fires for them and their Kind is NOT workflow_step — while
 // their ids (workflow-full-<parent>-step-<n>-<token>) are exactly what
-// isWorkflowStepTrackingExecution recognises.
+// isWorkflowStepTrackingExecution recognizes.
 //
 // An earlier version of this predicate matched Kind=="workflow_step" only. It
 // therefore did not match the very records that caused this bug, and its test
@@ -505,7 +505,7 @@ func (r *BackgroundAgentRegistry) GetAll(sessionID string) []*BackgroundAgent {
 // Each is registered on OrchestratorAgentStart and settled on the matching end
 // event — but several real paths never deliver that end. A superseded or
 // abandoned evaluation stops emitting entirely, and a todo_task_orchestrator's
-// successful turn end is deliberately ignored in favour of a later
+// successful turn end is deliberately ignored in favor of a later
 // OrchestratorStepCompleted event that an abandoned run never sends.
 //
 // That matters because HasRunningAgents treats BGAgentRunning as live
@@ -588,7 +588,7 @@ func (r *BackgroundAgentRegistry) CancelAgent(sessionID, agentID string) error {
 
 // CancelAll cancels all running background agents in a session
 // CancelAll cancels every running agent for a session and reports how many it
-// cancelled, how many carried no cancel func, and how many were already done.
+// canceled, how many carried no cancel func, and how many were already done.
 //
 // The counts exist because PLAT-130 was diagnosed twice from the same silent
 // teardown. "Stop was clicked and nothing visibly happened" is consistent with
@@ -970,7 +970,7 @@ func (api *StreamingAPI) isSessionBusyForAutoNotification(sessionID string) bool
 	// registering as a running child of the very turn that was blocking it.
 	//
 	// This is additive: it can only cause more queueing, never less, so the chat
-	// path keeps its existing behaviour exactly.
+	// path keeps its existing behavior exactly.
 	if api.sessionTurnInProgress(sessionID) {
 		return true
 	}
@@ -2375,7 +2375,7 @@ func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string, pa
 			syntheticStatus = trackedExecutionStatusCanceled
 			switch {
 			case streamStalled:
-				// We cancelled this turn ourselves because it went silent, so
+				// We canceled this turn ourselves because it went silent, so
 				// the context error below would describe our own reaction
 				// rather than the cause. A stall is a failure, not a user stop.
 				syntheticStatus = trackedExecutionStatusFailed

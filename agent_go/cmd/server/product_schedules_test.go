@@ -63,7 +63,7 @@ func newProductScheduleTestService(t *testing.T, users []string) (*ProductSchedu
 			Workspace:    agentprofiles.WorkspacePolicy{Mode: agentprofiles.WorkspaceModeFixed, Root: "Chats"},
 		},
 		Schedules: []productschedule.Schedule{
-			{ID: "checkin", Name: "Check-in", Enabled: true, CronExpression: "0 8 * * *", Timezone: "UTC", Messages: []string{"review", "summarise"}},
+			{ID: "checkin", Name: "Check-in", Enabled: true, CronExpression: "0 8 * * *", Timezone: "UTC", Messages: []string{"review", "summarize"}},
 			{ID: "weekly", Name: "Weekly", Enabled: false, CronExpression: "0 9 * * 1", Timezone: "UTC", Messages: []string{"weekly"}},
 		},
 	}

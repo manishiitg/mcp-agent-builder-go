@@ -112,7 +112,7 @@ var mcpBridgeVirtualToolCategories = map[string]bool{}
 
 // productEnabled reports whether a product's profiles and skills should be
 // loaded by this server. An unset AGENT_PRODUCTS preserves the shared-server
-// behaviour of loading every product. Dedicated deployments can set a
+// behavior of loading every product. Dedicated deployments can set a
 // comma-separated allowlist (for example, "video-studio") so unrelated
 // product startup failures cannot take down their agent API.
 func productEnabled(product string) bool {
@@ -5670,7 +5670,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				// eval, output, ask, debugger, runner — anything that is not
 				// "run" collapses to "workshop". An old client or persisted
 				// session cannot introduce a value this misses, which is what
-				// enumeration risked: an unrecognised mode reaches
+				// enumeration risked: an unrecognized mode reaches
 				// MaterializeReferenceSkill and yields NO reference surface
 				// at all.
 				if req.ExecutionOptions != nil && req.ExecutionOptions.WorkshopMode != "" {

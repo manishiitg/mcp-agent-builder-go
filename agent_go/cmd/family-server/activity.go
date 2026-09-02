@@ -38,9 +38,9 @@ type activityManifest struct {
 	// Both were decided before anyone knew how the session would actually go,
 	// and then could not bend when it went differently: a child who is
 	// genuinely stuck, out of time, or facing a question that turned out to be
-	// wrong needs a tutor that adapts, not one honouring a setting made
+	// wrong needs a tutor that adapts, not one honoring a setting made
 	// yesterday. The teaching judgment those encoded now lives in
-	// childSystemPrompt as default behaviour the tutor applies with sense, and
+	// childSystemPrompt as default behavior the tutor applies with sense, and
 	// Goal steers it where the parent actually wants something specific.
 	Goal      string `json:"goal,omitempty"`
 	Persona   string `json:"persona,omitempty"`

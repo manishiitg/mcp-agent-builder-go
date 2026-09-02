@@ -80,6 +80,13 @@ linters:
     # Exclude generated files
     generated: strict
 
+    rules:
+      # Video Studio's prompts are product copy that must match the wording of
+      # its (unlinted) skill markdown, which is written with "dialogue",
+      # "authorised" and friends; tests compare the two verbatim.
+      - path: internal/videoproduct/
+        linters: [misspell]
+
     # Exclude certain paths
     paths:
       - vendor

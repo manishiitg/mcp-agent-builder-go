@@ -3655,7 +3655,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 			hcpo.GetLogger().Info(fmt.Sprintf("[STEP-PATH] Using default step path %q for step index %d (override=%q, singleStep=%v, target=%d)",
 				stepPath, i, execCtx.StepPathOverride, execCtx.RunSingleStepOnly, execCtx.SingleStepTarget))
 		}
-		// Same contract as the message_sequence queue: a cancelled run must not
+		// Same contract as the message_sequence queue: a canceled run must not
 		// START another step, regardless of what the previous one reported
 		// (PLAT-130). A step failing for its own reasons already aborts the loop;
 		// this covers the case where cancellation never became an error.

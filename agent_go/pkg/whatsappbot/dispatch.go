@@ -48,7 +48,7 @@ func (f RouterFunc) Resolve(ctx context.Context, chat string, token string) *Rou
 	return f(ctx, chat, token)
 }
 
-// MentionMatcher lets a product recognise mentions its own way (for example
+// MentionMatcher lets a product recognize mentions its own way (for example
 // "@child" anywhere in the text). Without it the connector only looks at a
 // leading "@token". Implement it on the Router.
 type MentionMatcher interface {

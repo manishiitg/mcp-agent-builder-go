@@ -319,7 +319,7 @@ func TestPinGate(t *testing.T) {
 	if rec, out := postJSON(t, handleSetPin, `{"pin":"123"}`); rec.Code != http.StatusBadRequest || out["error"] == nil {
 		t.Fatal("a 3-digit PIN must be rejected")
 	}
-	// No PIN set: the gate is open (documented behaviour of a fresh install).
+	// No PIN set: the gate is open (documented behavior of a fresh install).
 	if _, out := postJSON(t, handleVerifyPin, `{"pin":"0000"}`); out["ok"] != true {
 		t.Fatal("without a PIN the gate should be open")
 	}

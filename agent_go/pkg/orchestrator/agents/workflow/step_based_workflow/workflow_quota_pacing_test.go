@@ -107,7 +107,7 @@ func TestPacingWaitStopsWhenTheRunIsCancelled(t *testing.T) {
 	select {
 	case err := <-done:
 		if err == nil {
-			t.Error("a cancelled pacing wait reported success")
+			t.Error("a canceled pacing wait reported success")
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("pacing wait ignored cancellation — Stop would not take during a pause")

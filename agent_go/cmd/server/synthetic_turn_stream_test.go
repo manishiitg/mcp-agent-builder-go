@@ -43,7 +43,7 @@ func TestDrainSyntheticTurnStreamReturnsWhenTheProducerGoesSilent(t *testing.T) 
 }
 
 // TestDrainSyntheticTurnStreamStopsOnCancellation covers the other bound.
-// Cancelling a turn must actually end the consume loop: cancellation reaches
+// Canceling a turn must actually end the consume loop: cancellation reaches
 // the producer, but the old loop was waiting on the channel, not the context,
 // so a stop request could leave the consumer parked anyway.
 func TestDrainSyntheticTurnStreamStopsOnCancellation(t *testing.T) {
@@ -64,7 +64,7 @@ func TestDrainSyntheticTurnStreamStopsOnCancellation(t *testing.T) {
 		t.Fatal("drain ignored context cancellation")
 	}
 	if stalled {
-		t.Error("a cancelled turn must not be reported as stalled — that files a user stop as a defect")
+		t.Error("a canceled turn must not be reported as stalled — that files a user stop as a defect")
 	}
 }
 

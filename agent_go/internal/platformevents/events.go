@@ -25,7 +25,7 @@ const (
 	RunStarted         Type = "run_started"
 	RunCompleted       Type = "run_completed"
 	RunFailed          Type = "run_failed"
-	RunCancelled       Type = "run_cancelled"
+	RunCancelled       Type = "run_cancelled" //nolint:misspell // wire value
 )
 
 //go:embed contract.json

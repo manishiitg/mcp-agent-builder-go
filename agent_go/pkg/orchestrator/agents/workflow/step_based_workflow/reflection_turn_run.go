@@ -167,7 +167,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runStepReflectionTurn(
 			// every step. Pushing here gives it `reflection:<step>` alongside the
 			// step's own bucket, so "what did reflection cost" becomes answerable
 			// without changing what is billed. The bridge already supports
-			// arbitrary phases, so this is a labelling change, not new plumbing.
+			// arbitrary phases, so this is a labeling change, not new plumbing.
 			cab.PushContext(reflectionCostPhase, stepIndex, step.GetID(), reflectionAgentName)
 			// Deferred rather than popped inline so an early return or panic in the
 			// turn can never leave the bridge's context stack unbalanced, which

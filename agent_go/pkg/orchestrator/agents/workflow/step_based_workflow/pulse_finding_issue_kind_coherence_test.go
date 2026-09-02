@@ -16,7 +16,7 @@ import (
 //
 // Scope note: only this one pairing is contradictory. Of 48 harness findings
 // across all workflows, 38 are correctly external_action_required and the
-// remainder are resolved (behaviour stopped or disproven), acknowledged
+// remainder are resolved (behavior stopped or disproven), acknowledged
 // (recovered by retry), or awaiting_verification (workflow-side workaround
 // applied) — all legitimate, all deliberately still allowed.
 

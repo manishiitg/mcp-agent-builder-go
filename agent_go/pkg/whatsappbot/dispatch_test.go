@@ -78,9 +78,9 @@ func TestDispatchPrefixMentionRouting(t *testing.T) {
 		t.Fatalf("remembered route should apply to plain text: %+v", h.messages)
 	}
 
-	c.dispatch(context.Background(), inbound("@invoices summarise this", false))
+	c.dispatch(context.Background(), inbound("@invoices summarize this", false))
 	last := h.messages[len(h.messages)-1]
-	if last.Text != "summarise this" || !last.Switched || h.activated[len(h.activated)-1] != "invoices+" {
+	if last.Text != "summarize this" || !last.Switched || h.activated[len(h.activated)-1] != "invoices+" {
 		t.Fatalf("mention with text should strip the token and continue: text=%q switched=%v activated=%v", last.Text, last.Switched, h.activated)
 	}
 

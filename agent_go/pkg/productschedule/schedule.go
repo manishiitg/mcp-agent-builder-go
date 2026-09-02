@@ -146,7 +146,7 @@ type Decision struct {
 	// Deferred is true when the run was due but held back by the quiet rule.
 	Deferred bool
 	Reason   string
-	// ScheduledFor is the occurrence being honoured (cron form only).
+	// ScheduledFor is the occurrence being honored (cron form only).
 	ScheduledFor time.Time
 }
 
