@@ -279,7 +279,15 @@ function MediaVideoPresentation({ presentation, workspacePath, autoPlay = false 
   const [loading, setLoading] = useState(true)
   const [playbackError, setPlaybackError] = useState('')
   const relativePath = typeof presentation.payload.path === 'string' ? presentation.payload.path.replace(/^\/+/, '') : ''
-  const mediaURL = relativePath ? workspaceMediaURL(`${workspacePath}/${relativePath}`) : ''
+  const localMediaURL = relativePath ? workspaceMediaURL(`${workspacePath}/${relativePath}`) : ''
+  const sourceURL = falCDNMediaURL(presentation.payload.source_url)
+  const [usingLocalFallback, setUsingLocalFallback] = useState(false)
+  const mediaURL = !usingLocalFallback && sourceURL ? sourceURL : localMediaURL
+  useEffect(() => {
+    setUsingLocalFallback(false)
+    setLoading(true)
+    setPlaybackError('')
+  }, [presentation.id, presentation.revision, sourceURL])
   useEffect(() => {
     if (!autoPlay) return
     void videoRef.current?.play().catch(() => {
@@ -297,7 +305,7 @@ function MediaVideoPresentation({ presentation, workspacePath, autoPlay = false 
     <div className="relative aspect-video w-full bg-black">
       <video
         ref={videoRef}
-        key={`${presentation.id}:${presentation.revision}`}
+        key={`${presentation.id}:${presentation.revision}:${mediaURL}`}
         data-testid="video-studio-presentation-player"
         data-presentation-id={presentation.id}
         data-presentation-revision={presentation.revision}
@@ -317,6 +325,10 @@ function MediaVideoPresentation({ presentation, workspacePath, autoPlay = false 
           })
         }}
         onError={() => {
+          if (sourceURL && !usingLocalFallback) {
+            setUsingLocalFallback(true)
+            return
+          }
           setLoading(false)
           setPlaybackError('This video could not be loaded. Refresh it to reconnect to the project file.')
         }}
@@ -327,6 +339,16 @@ function MediaVideoPresentation({ presentation, workspacePath, autoPlay = false 
       {playbackError ? <div className="absolute inset-0 grid place-items-center bg-slate-950/95 p-6 text-center"><div><AlertCircle className="mx-auto h-6 w-6 text-amber-400" /><p className="mt-2 max-w-xs text-xs leading-5 text-slate-300">{playbackError}</p><button type="button" onClick={retryPlayback} className="mt-3 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 hover:bg-slate-100">Reload video</button></div></div> : null}
     </div>
   )
+}
+
+function falCDNMediaURL(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && (url.hostname === 'fal.media' || url.hostname.endsWith('.fal.media')) ? url.toString() : ''
+  } catch {
+    return ''
+  }
 }
 
 registerPresentationRenderer('media.video', MediaVideoPresentation)

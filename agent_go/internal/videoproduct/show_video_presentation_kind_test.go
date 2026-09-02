@@ -8,6 +8,18 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 )
 
+func TestFalCDNVideoURLAcceptsOnlyHTTPSFalMedia(t *testing.T) {
+	valid, err := falCDNVideoURL("https://v3.fal.media/files/example/clip.mp4")
+	if err != nil || valid != "https://v3.fal.media/files/example/clip.mp4" {
+		t.Fatalf("Fal CDN URL should be accepted, got %q, %v", valid, err)
+	}
+	for _, raw := range []string{"http://v3.fal.media/files/clip.mp4", "https://example.com/clip.mp4", "https://fal.media.evil.example/clip.mp4"} {
+		if _, err := falCDNVideoURL(raw); err == nil {
+			t.Fatalf("expected %q to be rejected", raw)
+		}
+	}
+}
+
 // show_video must read its presentation kind from the profile's declared
 // ToolBinding.Presentation rather than hardcoding "media.video". Requiring
 // it here — refusing before any QA check or network call — is what makes the

@@ -36,7 +36,10 @@ present in the environment. Never put a secret in the job or state JSON. If a lo
 again with the existing state file; never submit a replacement. Read the
 runner's `request.json` and `request.json.log.jsonl` for the exact endpoint,
 resolved input, request ID, queue states, provider logs, result timings, and
-download path. After its `completed` event, run the normal file receipt
+download path. When `request.json` has `result.video_url`, pass that value as
+`source_url` to `show_video` along with the downloaded project-relative `path`:
+the Production panel prefers Fal's CDN for fast preview playback and falls back
+to the retained local file. After its `completed` event, run the normal file receipt
 (`ffprobe`, stable-frame inspection, then `show_video`) before accepting it.
 
 Use H3 Max only. Do not substitute standard H3, another H3 Max route, or

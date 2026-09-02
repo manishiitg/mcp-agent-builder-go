@@ -17,6 +17,7 @@ export interface GlobalSecret {
 
 export interface WorkflowSecret {
   name: string
+  encrypted_value?: string
 }
 
 export interface StoredUserSecret {
@@ -208,7 +209,7 @@ export const useSecretsStore = create<SecretsState>()(
           const existing = state.workflowSecretsByPath[trimmed] || []
           const next = existing.some((s) => s.name === name)
             ? existing
-            : [...existing, { name }].sort((a, b) => a.name.localeCompare(b.name))
+            : [...existing, { name, encrypted_value: encryptedValue }].sort((a, b) => a.name.localeCompare(b.name))
           return {
             workflowSecretsByPath: {
               ...state.workflowSecretsByPath,
