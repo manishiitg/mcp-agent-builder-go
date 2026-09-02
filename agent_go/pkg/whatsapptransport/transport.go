@@ -76,6 +76,14 @@ func (s *Store) FirstDevice(ctx context.Context) (*store.Device, error) {
 // NewDevice is an unpaired device for a pairing attempt.
 func (s *Store) NewDevice() *store.Device { return s.container.NewDevice() }
 
+// Close releases the underlying session database.
+func (s *Store) Close() error {
+	if s == nil || s.container == nil {
+		return nil
+	}
+	return s.container.Close()
+}
+
 // DeleteDevice forgets a device's session (after Logout).
 func (s *Store) DeleteDevice(ctx context.Context, device *store.Device) error {
 	return s.container.DeleteDevice(ctx, device)
@@ -341,8 +349,12 @@ func (a *Account) Pair(ctx context.Context, timeout time.Duration, onQR func(QRU
 	case <-ctx.Done():
 		return false, ctx.Err()
 	}
+	// The deadline only covers the wait for the first QR code: once WhatsApp
+	// starts issuing codes the channel itself paces the attempt (it rotates
+	// codes and closes with "timeout" when the user never scans).
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
+	deadlineC := deadline.C
 	for {
 		select {
 		case evt, ok := <-qrChan:
@@ -351,6 +363,7 @@ func (a *Account) Pair(ctx context.Context, timeout time.Duration, onQR func(QRU
 			}
 			switch evt.Event {
 			case "code":
+				deadlineC = nil
 				if onQR != nil {
 					onQR(QRUpdate{Code: evt.Code, Expires: time.Now().Add(evt.Timeout)})
 				}
@@ -365,7 +378,7 @@ func (a *Account) Pair(ctx context.Context, timeout time.Duration, onQR func(QRU
 				}
 				return false, nil
 			}
-		case <-deadline.C:
+		case <-deadlineC:
 			a.client.Disconnect()
 			return false, nil
 		case <-ctx.Done():
@@ -485,6 +498,57 @@ func DescribeEvent(rawEvt interface{}) string {
 		return fmt.Sprintf("pair success: id=%s platform=%s", evt.ID, evt.Platform)
 	case *events.PairError:
 		return fmt.Sprintf("pair error: id=%s error=%v", evt.ID, evt.Error)
+	}
+	return ""
+}
+
+// ExtractCaption returns the caption attached to an image, video or document.
+func ExtractCaption(m *waProto.Message) string {
+	if m == nil {
+		return ""
+	}
+	switch {
+	case m.ImageMessage != nil:
+		return strings.TrimSpace(m.ImageMessage.GetCaption())
+	case m.DocumentMessage != nil:
+		return strings.TrimSpace(m.DocumentMessage.GetCaption())
+	case m.VideoMessage != nil:
+		return strings.TrimSpace(m.VideoMessage.GetCaption())
+	}
+	return ""
+}
+
+// SendTextID sends a text message and returns the ID WhatsApp assigned to it.
+func (a *Account) SendTextID(ctx context.Context, chat types.JID, text string) (types.MessageID, error) {
+	if a == nil || a.client == nil {
+		return "", fmt.Errorf("whatsapp: no client")
+	}
+	resp, err := a.client.SendMessage(ctx, chat, &waProto.Message{Conversation: &text})
+	if err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
+// ChatName returns a display name for a chat: the group subject, or the
+// contact's push/full name; "" when unknown.
+func (a *Account) ChatName(ctx context.Context, chat types.JID) string {
+	if a == nil || a.client == nil || chat.IsEmpty() {
+		return ""
+	}
+	if chat.Server == types.GroupServer {
+		if info, err := a.client.GetGroupInfo(ctx, chat); err == nil && info != nil {
+			return info.GroupName.Name
+		}
+		return ""
+	}
+	if a.client.Store != nil && a.client.Store.Contacts != nil {
+		if info, err := a.client.Store.Contacts.GetContact(ctx, chat); err == nil {
+			if info.PushName != "" {
+				return info.PushName
+			}
+			return info.FullName
+		}
 	}
 	return ""
 }

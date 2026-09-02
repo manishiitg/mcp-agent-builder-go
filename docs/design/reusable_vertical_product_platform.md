@@ -186,12 +186,27 @@ policy (self-chat rule, inbox naming, `@child`/`@parent`) and no longer
 imports whatsmeow's client. whatsmeow was upgraded at the same time (April →
 August 2026 revision, which raised agent_go to Go 1.26): the old revision was
 refused by WhatsApp as "client outdated", so pairing had been impossible for
-both bots; verified live — a pairing attempt now yields a QR. The AgentWorks
-connector (`cmd/server/services/whatsapp_service.go`) still carries its own
-copy of the same ten whatsmeow calls and is the next thing to move onto the
-transport; it compiles and its tests pass on the new whatsmeow unchanged.
-The decision itself stands; the migration plan is at step 2 (Pulse and
-secrets remain).
+both bots; verified live — a pairing attempt now yields a QR. Slice 2 (2026-09-03) then
+made it one connector, not two: `pkg/whatsappbot` sits on the transport and
+owns everything both bots did alike — session store, pairing and QR state,
+reconnects, dedupe, the universal drop rules, `@mention` routing with a
+per-chat memory of the active route, acknowledgement reactions, replies
+with retry, self-chat sends — and calls the product through small
+interfaces (`Handler`, `AccessPolicy`, `Router` + `MentionMatcher`,
+`RouteStore`, `CommandHandler`, `RouteObserver`). SparkQuill is now a
+two-row route table (`@child`/`@parent`, matched anywhere in the text,
+persisted as the routing-mode file) plus its media and turn policy;
+AgentWorks' `WhatsAppService` keeps the `BotConnector` adapter, the owner
+and link-code policy, the workflow commands and the `@slug` route table, and
+nothing of the protocol. Together the two files lost about 1,400 lines
+(`git diff --stat`: 541 added, 1,368 removed). Behaviour differences worth
+knowing: AgentWorks now de-duplicates redelivered messages like SparkQuill
+did, and a pairing attempt's timeout now only covers the wait for the first
+QR code (WhatsApp then paces the attempt itself), so the QR no longer dies
+after 30 s while the settings page polls. Verified live for SparkQuill
+(start, pairing QR, status); the AgentWorks side is covered by its service
+tests and compiles, but was not exercised against a phone. The decision
+itself stands; the migration plan is at step 2 (Pulse and secrets remain).
 
 ### Revisit trigger
 
