@@ -196,12 +196,11 @@ type Session struct {
 
 // WarmSharedBridge starts the process-global executor/MCP bridge (see
 // ensureSharedBridge) if it has not started already, without creating a
-// coding-agent session. Call this once at process startup, before any HTTP
-// request is served, so MCP_API_URL/MCP_API_TOKEN are already set in the
-// process environment before other code paths — e.g. a workflow's tool
-// registry — read them via os.Getenv. Without this, whichever one runs first
-// wins the race: if a tool registry snapshots the env before the bridge sets
-// the token, that snapshot is typically cached and never re-reads the token.
+// coding-agent session. Call this once at process startup so the first real
+// turn does not pay for the bridge binary lookup and executor start. The
+// bridge's address and token reach agents through explicit configuration,
+// never the process environment, so there is no startup-order race to
+// protect against any more.
 func WarmSharedBridge(logger loggerv2.Logger) error {
 	if logger == nil {
 		logger = loggerv2.NewNoop()
@@ -282,8 +281,8 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 		Model: model, MCPConfigPath: b.mcpConfigPath, ResumeHandle: cfg.SessionHandle,
 		Generation: generation,
 		Tools:      mcpagent.ToolRuntimeConfig{CodeExecution: true},
-		Coding:     mcpagent.CodingRuntimeConfig{Transport: cfg.Transport, BridgeRoutingInstructionsOverride: cfg.BridgeRoutingInstructions},
-		MCP:        mcpagent.MCPRuntimeConfig{SessionID: sessionID},
+		Coding:     mcpagent.CodingRuntimeConfig{Transport: cfg.Transport, BridgeRoutingInstructionsOverride: cfg.BridgeRoutingInstructions, BridgeBinary: b.bridgePath},
+		MCP:        b.runtimeMCPConfig(sessionID),
 		Workspace:  mcpagent.WorkspaceRuntimeConfig{CodingAgentWorkingDir: cfg.WorkingDir},
 		Observability: mcpagent.ObservabilityRuntimeConfig{
 			Logger:                    logger,
@@ -408,9 +407,32 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 // provider. We keep only a set of owner ids so reset can close their tmux.
 
 // sharedBridge is the process-global executor/MCP bridge, created once.
+//
+// Its address, token and binary are handed to every agent EXPLICITLY (see
+// runtimeMCPConfig) rather than exported into the process environment. The
+// environment is shared by everything in the process — including, if this
+// package is ever hosted inside the main AgentWorks server, that server's own
+// executor — so publishing credentials there was a single-tenancy trap
+// (docs/design/reusable_vertical_product_platform.md, "The root cause worth
+// naming"). mcpagent prefers explicit configuration over MCP_* variables.
 type sharedBridge struct {
 	mcpConfigPath string
+	bridgePath    string // mcpbridge executable
+	hostURL       string // executor server, host-reachable
+	apiToken      string // bearer for the executor
 	shutdown      func() // executor + config cleanup; only run at process exit
+}
+
+// runtimeMCPConfig is what an agent needs to reach this bridge, expressed
+// as explicit mcpagent configuration. Both URLs point at the one executor:
+// custom tools run on the host, so there is no separate in-container URL.
+func (b *sharedBridge) runtimeMCPConfig(sessionID string) mcpagent.MCPRuntimeConfig {
+	return mcpagent.MCPRuntimeConfig{
+		SessionID:        sessionID,
+		APIBaseURL:       b.hostURL,
+		APIToken:         b.apiToken,
+		BridgeAPIBaseURL: b.hostURL,
+	}
 }
 
 var (
@@ -439,8 +461,8 @@ const warmOwnerFreshness = 30 * time.Minute
 // ensureSharedBridge starts the process-global executor / MCP bridge exactly
 // once and returns it on every later call. Following AgentWorks — whose bridge
 // is the main server's own route set, wired once at startup — the bridge binary,
-// MCP config, executor HTTP server, and the MCP_* env the CLIs read are set up a
-// single time and shared by every conversation and skill run. The persistent
+// MCP config and executor HTTP server are set up a single time and shared by
+// every conversation and skill run; each agent is told where they are. The persistent
 // coding-agent CLIs call back into this always-alive endpoint, so a resumed turn
 // never hits a dead bridge. It is deliberately never torn down per turn.
 func ensureSharedBridge(logger loggerv2.Logger) (*sharedBridge, error) {
@@ -450,7 +472,6 @@ func ensureSharedBridge(logger loggerv2.Logger) (*sharedBridge, error) {
 			bridgeErr = err
 			return
 		}
-		os.Setenv("MCP_BRIDGE_BINARY", bridgePath)
 
 		// No upstream MCP servers — all tools are custom and resolved in-process.
 		mcpConfigPath, cleanupConfig, err := writeMinimalMCPConfig()
@@ -469,11 +490,9 @@ func ensureSharedBridge(logger loggerv2.Logger) (*sharedBridge, error) {
 		hostURL := "http://127.0.0.1:" + port
 
 		// Custom tools run on the host, so the in-Docker URL and the bridge (host)
-		// URL both point at this one executor server.
+		// URL both point at this one executor server. Nothing is exported to
+		// the process environment: see sharedBridge.
 		apiToken := executor.GenerateAPIToken()
-		os.Setenv("MCP_API_URL", hostURL)
-		os.Setenv("MCP_API_TOKEN", apiToken)
-		os.Setenv("MCP_BRIDGE_API_URL", hostURL)
 
 		execShutdown, err := startExecutorServer(logger, mcpConfigPath, listener, apiToken)
 		if err != nil {
@@ -486,6 +505,9 @@ func ensureSharedBridge(logger loggerv2.Logger) (*sharedBridge, error) {
 
 		bridge = &sharedBridge{
 			mcpConfigPath: mcpConfigPath,
+			bridgePath:    bridgePath,
+			hostURL:       hostURL,
+			apiToken:      apiToken,
 			shutdown: func() {
 				execShutdown()
 				cleanupConfig()

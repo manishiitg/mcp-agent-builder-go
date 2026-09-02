@@ -155,6 +155,20 @@ adapter") — acknowledged there, still not done.
    explicit port *from* learning-app, so two dictation implementations (356
    vs 958 lines) are now diverging.
 
+### Revisit trigger — status 2026-09-02
+
+Trigger (a) below is now met: `internal/agentsession` no longer writes
+`MCP_API_URL` / `MCP_API_TOKEN` / `MCP_BRIDGE_API_URL` / `MCP_BRIDGE_BINARY`
+into the process environment. Its one shared executor is handed to every
+agent as explicit `mcpagent` configuration (`MCPRuntimeConfig.APIBaseURL`,
+`APIToken`, `BridgeAPIBaseURL`, `CodingRuntimeConfig.BridgeBinary`), and
+mcpagent now prefers explicit values over the `MCP_*` variables, so a second
+executor in the same process cannot clobber it. Remedy 5 (voice) is also
+done: one engine (`pkg/voicestt`) serves both apps, including WhatsApp voice
+notes. Remedies 1–4 remain open, and the decision itself is unchanged until
+characterization tests exist; see the migration plan agreed the same day
+(step 0 done, steps 1–5 pending).
+
 ### Revisit trigger
 
 Reopen this decision when **either**: (a) `internal/agentsession` no longer
