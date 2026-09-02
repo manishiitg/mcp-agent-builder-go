@@ -74,6 +74,10 @@ func (api *StreamingAPI) handleGetWorkflowManifest(w http.ResponseWriter, r *htt
 		http.Error(w, "No workflow.json found at this workspace", http.StatusNotFound)
 		return
 	}
+	if workflowAccessForManifest(GetUserFromContext(r.Context()), manifest) == WorkflowAccessNone {
+		writeWorkflowPermissionDenied(w, "read")
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":        true,
@@ -128,6 +132,9 @@ func (api *StreamingAPI) handleCreateWorkflowManifest(w http.ResponseWriter, r *
 	// Build manifest
 	manifest := NewWorkflowManifest(req.Label)
 	manifest.CreatedBy = GetUserIDFromContext(r.Context())
+	if manifest.CreatedBy != "" {
+		manifest.Access = &WorkflowAccess{Owners: []string{manifest.CreatedBy}, Readers: []string{}}
+	}
 	if req.Capabilities != nil {
 		manifest.Capabilities = *req.Capabilities
 	}
@@ -257,6 +264,10 @@ func (api *StreamingAPI) handleUpdateWorkflowManifest(w http.ResponseWriter, r *
 	}
 	if !exists {
 		http.Error(w, "No workflow.json found at this workspace path", http.StatusNotFound)
+		return
+	}
+	if level := workflowAccessForManifest(GetUserFromContext(r.Context()), manifest); level != WorkflowAccessOwner && level != WorkflowAccessWrite {
+		writeWorkflowPermissionDenied(w, "owner")
 		return
 	}
 	previousFolderAccess := append([]workflowtypes.WorkflowFolderGrant(nil), manifest.FolderAccess...)
@@ -472,6 +483,10 @@ func (api *StreamingAPI) handleDeleteWorkflowManifest(w http.ResponseWriter, r *
 		http.Error(w, "No workflow.json found at this workspace path", http.StatusNotFound)
 		return
 	}
+	if level := workflowAccessForManifest(GetUserFromContext(r.Context()), manifest); level != WorkflowAccessOwner && level != WorkflowAccessWrite {
+		writeWorkflowPermissionDenied(w, "owner")
+		return
+	}
 
 	// Delete workflow.json
 	if err := deleteWorkspaceFile(r.Context(), manifestPath(workspacePath)); err != nil {
@@ -603,8 +618,17 @@ func (api *StreamingAPI) handleDuplicateWorkflowManifest(w http.ResponseWriter, 
 	}
 
 	// Deep-copy and assign new identity
+	if workflowAccessForManifest(GetUserFromContext(r.Context()), srcManifest) == WorkflowAccessNone {
+		writeWorkflowPermissionDenied(w, "read")
+		return
+	}
 	newManifest := *srcManifest
 	newManifest.ID = "wf_" + uuid.New().String()[:8]
+	newManifest.CreatedBy = GetUserIDFromContext(r.Context())
+	newManifest.Access = nil
+	if newManifest.CreatedBy != "" {
+		newManifest.Access = &WorkflowAccess{Owners: []string{newManifest.CreatedBy}, Readers: []string{}}
+	}
 	if req.NewLabel != "" {
 		newManifest.Label = req.NewLabel
 	} else {

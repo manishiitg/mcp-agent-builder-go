@@ -63,28 +63,44 @@ The system supports multiple authentication providers that can be enabled simult
 
 ### Simple Provider
 
-Basic username/password authentication using environment variables.
+Username/password authentication against the **user directory**,
+`config/users.json` in the shared workspace (argon2id hashes, never plain
+text). See `docs/design/user_accounts_and_workflow_sharing.md` for the model.
 
-**Configuration:**
+**Bootstrap** — the directory is seeded from the environment on the first
+start and the env vars can then be removed:
 ```bash
-AUTH_PROVIDERS=simple
-AUTH_USERS=admin:password123,user1:secret456
+AUTH_USERS=admin:password123,user1:secret456   # imported (hashed) into config/users.json once
+ADMIN_USERS=admin                              # usernames or emails that are admins
 ```
 
-**Features:**
-- No external service dependencies
-- Users defined directly in environment
-- Good for development and simple deployments
+After that, accounts are managed in the app: an admin opens **Users & access**
+(the shield button in the workflow toolbar, multi-user mode) or calls the admin
+API below. `AUTH_USERS` keeps working as a login fallback for any name not yet
+in the directory, so nothing breaks mid-migration.
+
+**Account record** (`config/users.json`):
+```json
+{ "users": [ { "id": "…", "username": "carol", "email": "", "password_hash": "$argon2id$…",
+               "admin": false, "can_create": false, "products": ["video-studio"], "disabled": false } ] }
+```
+- `admin`: manages users and product access; can open any workflow.
+- `can_create`: `false` is the **read-only user** — cannot create anything, sees only what is shared.
+- `products`: which product surfaces the account may open. Admins ignore it; a member with an empty
+  list may open all; a read-only account with an empty list may open none.
+- SSO users (Cognito/Supabase) are created on first login with nothing enabled unless `ADMIN_USERS`
+  names them; an admin switches them on.
+- A disabled account is refused immediately, even with a still-valid token.
 
 ### Workflow Permissions
 
-Workflows stay in the shared `Workflow/` folder. Per-user access controls only decide which workflow modes a user can use:
-
-- `read`: run mode only
-- `write`: run, builder, and optimizer modes
-- `owner`: write access plus workflow access administration endpoints
-
-If no workflow permission variables are configured, all authenticated users keep full owner-level workflow access for backward compatibility.
+Workflows stay in the shared `Workflow/` folder. The access tier the runtime
+enforces (`read` / `write` / `owner`, see PLAT-262 for what `read` may do) is
+derived from the user directory first: an admin is `owner`, an account with
+`can_create` is `write`, a read-only account is `read`. The env/file tiers
+below apply only to identities the directory does not know, and an
+unconfigured deployment keeps full owner-level access for everyone, as before.
+Per-workflow ownership and sharing is phase 3 of the design doc and not built yet.
 
 **Configuration:**
 ```bash
@@ -410,6 +426,31 @@ GET /api/auth/callback?provider=cognito&code=xxx&state=xxx
 
 **Response:** Exchanges code for app JWT and redirects to frontend
 
+### Account management endpoints (admins only)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/admin/users` | List accounts (never hashes) plus the product ids this server can host |
+| POST | `/api/admin/users` | Create: `username`, optional `email`, `password` (≥8, blank = SSO only), `admin`, `can_create`, `products` |
+| PUT | `/api/admin/users/{id}` | Update any of the above, `password` resets it, `disabled` switches the account off. Admins cannot demote or disable themselves |
+| DELETE | `/api/admin/users/{id}` | Remove the record; the user's `_users/<id>` files are kept |
+| POST | `/api/auth/password` | Any user: `current_password`, `new_password` |
+
+`GET /api/auth/me` now also returns `is_admin` and `can_create`; `allowed_products` is `null` for
+unrestricted accounts, an array otherwise (an empty array means no products).
+
+### Workflow sharing endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/workflow/access?workspace_path=Workflow/<folder>` | Owners, readers, and the caller's own level (`my_access`); `legacy` when nothing is recorded yet |
+| PUT | `/api/workflow/access` | `{workspace_path, owners:[…], readers:[…]}` — ids, usernames or emails; owners/admins only; at least one owner must remain |
+| GET | `/api/users/directory` | id, username, email of every enabled account, for the share picker |
+
+Each entry in `GET /api/workflows/manifests` carries `my_access`; workflows the caller may not see
+are omitted. Owners may edit, share and delete; readers get exactly the PLAT-262 read-only session
+(chat, run, watch, inspect) and may trigger or stop schedules but not change them.
+
 ### Workspace API Headers
 
 The workspace API uses the `X-User-ID` header for per-user folder routing:
@@ -491,9 +532,10 @@ This header is automatically set by the agent API based on the authenticated use
 
 ### Password Storage
 
-- Simple provider stores passwords in environment variables
-- Not suitable for production with many users
-- Use OAuth providers for production deployments
+- Passwords are stored as argon2id hashes in `config/users.json` (64MB, 3 passes, 2 lanes)
+- `AUTH_USERS` is plain text in the environment and is only a bootstrap: its users are imported
+  (hashed) on first start, after which the variable should be removed
+- Users change their own password via `POST /api/auth/password`; admins reset via the admin API
 
 ### User ID Validation
 

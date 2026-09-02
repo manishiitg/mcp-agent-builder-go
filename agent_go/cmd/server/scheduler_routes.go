@@ -471,6 +471,9 @@ func createScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if req.WorkspacePath != "" && !requireWorkflowOwner(w, r, req.WorkspacePath) {
+			return
+		}
 		messagesForValidation := append([]string(nil), req.Messages...)
 		for _, item := range req.CalendarItems {
 			messagesForValidation = append(messagesForValidation, item.Messages...)
@@ -575,6 +578,9 @@ func getScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		if !requireWorkflowVisible(w, r, result.WorkspacePath) {
+			return
+		}
 
 		state := runtimeStateForScheduleResult(svc, result, id)
 		missedResolver := newWorkflowMissedStatusResolver(r.Context())
@@ -611,6 +617,9 @@ func updateScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if !requireWorkflowOwner(w, r, result.WorkspacePath) {
 			return
 		}
 
@@ -758,6 +767,9 @@ func deleteScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		if !requireWorkflowOwner(w, r, result.WorkspacePath) {
+			return
+		}
 
 		_ = svc.RemoveWorkflowJob(result.WorkspacePath, id)
 		manifest := result.Manifest
@@ -784,6 +796,9 @@ func enableScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if !requireWorkflowOwner(w, r, result.WorkspacePath) {
 			return
 		}
 
@@ -820,6 +835,9 @@ func disableScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		if !requireWorkflowOwner(w, r, result.WorkspacePath) {
+			return
+		}
 
 		state := runtimeStateForScheduleResult(svc, result, id)
 		_ = svc.RemoveWorkflowJob(result.WorkspacePath, id)
@@ -852,6 +870,9 @@ func triggerScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		if !requireWorkflowVisible(w, r, result.WorkspacePath) {
+			return
+		}
 		trigResult, err := svc.TriggerNow(result.WorkspacePath, id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -874,6 +895,9 @@ func stopScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if !requireWorkflowVisible(w, r, result.WorkspacePath) {
 			return
 		}
 

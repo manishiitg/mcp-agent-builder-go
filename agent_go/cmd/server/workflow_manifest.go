@@ -81,7 +81,11 @@ type WorkflowManifest struct {
 	// creating user's account the whole time; scheduled runs simply never
 	// looked there. Empty for any workflow created before this field
 	// existed -- those keep today's "default" fallback until backfilled.
-	CreatedBy            string                                      `json:"created_by,omitempty"`
+	CreatedBy string `json:"created_by,omitempty"`
+	// Access is who owns and who may read this workflow (workflow_access.go).
+	// Absent on legacy manifests, where CreatedBy alone names the owner, or
+	// nobody does and the account tier applies.
+	Access               *WorkflowAccess                             `json:"access,omitempty"`
 	CreatedAt            string                                      `json:"created_at,omitempty"`
 	UpdatedAt            string                                      `json:"updated_at,omitempty"`
 	RunRetentionCount    *int                                        `json:"run_retention_count,omitempty"`
@@ -1206,6 +1210,10 @@ func DiscoverWorkflowManifests(ctx context.Context) ([]DiscoveredWorkflow, error
 type DiscoveredWorkflow struct {
 	WorkspacePath string            `json:"workspace_path"`
 	Manifest      *WorkflowManifest `json:"manifest"`
+	// MyAccess is the requesting user's level on this workflow (owner, write,
+	// read); filled by filterWorkflowManifestsForUser so the UI can gate
+	// editing per workflow instead of per account.
+	MyAccess WorkflowAccessLevel `json:"my_access,omitempty"`
 }
 
 // listWorkspaceFolders returns all top-level folders under the "Workflow" namespace.

@@ -225,7 +225,11 @@ func TestDisabledPasswordGateRoutesWithoutAnySessionCookie(t *testing.T) {
 	}
 }
 
-func TestDisabledPasswordGateStillProxiesAPIRequestsWithGatewayToken(t *testing.T) {
+// With the password gate off the gateway must NOT lend its service identity
+// to anonymous callers (the pre-2026-09-02 behaviour, which let anyone act
+// as the fixed product user). Public app routes pass through untouched;
+// everything else needs the caller's own app JWT.
+func TestDisabledPasswordGateNeverMintsAFallbackToken(t *testing.T) {
 	var gotAuthorization string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuthorization = r.Header.Get("Authorization")
@@ -243,15 +247,66 @@ func TestDisabledPasswordGateStillProxiesAPIRequestsWithGatewayToken(t *testing.
 		disablePasswordGate: true,
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	response := httptest.NewRecorder()
-
-	gw.ServeHTTP(response, req)
-
+	gw.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/health", nil))
 	if response.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusNoContent)
+		t.Fatalf("public route status = %d, want %d", response.Code, http.StatusNoContent)
 	}
-	if !strings.HasPrefix(gotAuthorization, "Bearer ") {
-		t.Fatalf("authorization = %q, want a gateway-minted bearer token as fallback", gotAuthorization)
+	if gotAuthorization != "" {
+		t.Fatalf("authorization = %q, want none: the gateway must not mint a token for anonymous callers", gotAuthorization)
+	}
+
+	response = httptest.NewRecorder()
+	gw.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/sessions", nil))
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("protected route without a token: status = %d, want 401", response.Code)
+	}
+}
+
+// With the password gate off, the gateway must never lend its service
+// identity: an unauthenticated API request is refused, a valid app JWT is
+// forwarded with X-User-ID stamped from the token (never from the client),
+// and the login/mode routes the app needs beforehand still pass.
+func TestDisabledGateRequiresUserTokenAndStampsUser(t *testing.T) {
+	var seenAuth, seenUser string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuth, seenUser = r.Header.Get("Authorization"), r.Header.Get("X-User-ID")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	g := &gateway{secret: []byte("0123456789abcdef0123456789abcdef"), userID: "video-studio", disablePasswordGate: true}
+	g.agent = proxyFor(upstream.URL)
+	g.workspace = proxyFor(upstream.URL)
+
+	for _, path := range []string{"/api/agent-profiles/video-studio/query", "/api/wp/api/documents/x"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("X-User-ID", "spoofed")
+		g.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s without a token: got %d, want 401", path, rec.Code)
+		}
+	}
+
+	token, err := g.agentToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/agent-profiles/video-studio/query?token="+token, nil)
+	req.Header.Set("X-User-ID", "spoofed")
+	g.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || seenAuth != "Bearer "+token || seenUser != "video-studio" {
+		t.Fatalf("valid token: code=%d auth=%q user=%q", rec.Code, seenAuth, seenUser)
+	}
+
+	rec = httptest.NewRecorder()
+	g.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/auth/mode", nil))
+	if rec.Code != http.StatusOK || seenAuth != "" {
+		t.Fatalf("public auth route: code=%d auth=%q (must reach the app without a minted token)", rec.Code, seenAuth)
+	}
+
+	if _, ok := g.verifyAgentToken(token[:len(token)-2] + "xx"); ok {
+		t.Fatal("tampered signature accepted")
 	}
 }

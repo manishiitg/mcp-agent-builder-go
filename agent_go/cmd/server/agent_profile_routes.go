@@ -367,7 +367,7 @@ func (api *StreamingAPI) resolveAgentProfileConversation(r *http.Request, profil
 	if binding.AuthoritativeSessionID == "" {
 		candidate := strings.TrimSpace(r.Header.Get("X-Session-ID"))
 		if candidate != "" && api.canUseSessionIDForQuery(r, candidate) {
-			if active, ok := api.getActiveSession(candidate); ok && (active.UserID == "" || active.UserID == userID) {
+			if active, ok := api.getActiveSession(candidate); ok && sessionVisibleTo(active.UserID, GetUserFromContext(r.Context())) {
 				preferredSessionID = candidate
 			} else if _, found, findErr := FindChatHistoryConversationPathForSession(userID, candidate, ""); findErr != nil {
 				return ProductConversationRecord{}, fmt.Errorf("find existing product conversation: %w", findErr)

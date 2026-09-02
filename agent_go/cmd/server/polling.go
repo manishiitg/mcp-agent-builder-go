@@ -327,7 +327,7 @@ func (api *StreamingAPI) collectActiveSessions(ctx context.Context) []*ActiveSes
 	seenSessionIDs := make(map[string]struct{}, len(allActiveSessions))
 	for _, session := range allActiveSessions {
 		// Include session if it belongs to this user (or if UserID is empty for backwards compat)
-		if session.UserID == "" || session.UserID == currentUserID {
+		if sessionVisibleTo(session.UserID, GetUserFromContext(ctx)) {
 			activeSessions = append(activeSessions, api.buildActiveSessionInfoSummary(session))
 			seenSessionIDs[session.SessionID] = struct{}{}
 		}

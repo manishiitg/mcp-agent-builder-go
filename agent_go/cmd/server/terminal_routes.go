@@ -1608,7 +1608,7 @@ func (api *StreamingAPI) canAccessTerminalSession(r *http.Request, sessionID str
 	currentUserID := GetUserIDFromContext(r.Context())
 	activeSession, exists := api.getActiveSession(sessionID)
 	if exists {
-		return activeSession.UserID == "" || activeSession.UserID == currentUserID
+		return sessionVisibleTo(activeSession.UserID, GetUserFromContext(r.Context()))
 	}
 	if api.eventStore == nil {
 		return currentUserID == GetDefaultUserID()
@@ -1629,7 +1629,7 @@ func (api *StreamingAPI) canUseSessionIDForQuery(r *http.Request, sessionID stri
 	currentUserID := GetUserIDFromContext(r.Context())
 	activeSession, exists := api.getActiveSession(sessionID)
 	if exists {
-		return activeSession.UserID == "" || activeSession.UserID == currentUserID
+		return sessionVisibleTo(activeSession.UserID, GetUserFromContext(r.Context()))
 	}
 	if api.eventStore != nil {
 		if owner := api.eventStore.GetSessionOwner(sessionID); owner != "" {
