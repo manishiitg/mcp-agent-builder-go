@@ -44,23 +44,6 @@ const WORKFLOW_SCHEDULE_TOOLBAR_LIMIT = 10_000
 // preference shared by all workflows.
 const TOOLBAR_OPEN_GROUPS_KEY = 'workflow-toolbar-open-groups'
 type ToolbarGroupId = 'views' | 'pulse' | 'setup'
-// One-word state text for the collapsed chips; the registry labels are the
-// long form used by panes and tooltips.
-const SHORT_VIEW_LABELS: Partial<Record<WorkspaceViewId, string>> = {
-  'execution-logs': 'Logs',
-  knowledgebase: 'Knowledge',
-  skills: 'Skills',
-  secrets: 'Secrets',
-  mcp: 'MCP',
-  browser: 'Browser',
-  llm: 'LLM',
-  bots: 'Bots',
-  folders: 'Folders',
-}
-const shortViewLabel = (view: { id: WorkspaceViewId; label: string } | undefined) =>
-  view ? SHORT_VIEW_LABELS[view.id] ?? view.label : undefined
-// Any number of groups can be open, but never none: the toolbar always shows
-// at least one set of icons. Views is the default.
 const readOpenGroups = (): Record<ToolbarGroupId, boolean> => {
   const fallback: Record<ToolbarGroupId, boolean> = { views: true, pulse: false, setup: false }
   try {
@@ -72,12 +55,8 @@ const readOpenGroups = (): Record<ToolbarGroupId, boolean> => {
   }
 }
 
-function ToolbarGroup({ label, state, dotClass, open, onToggle, title, children, ...rest }: {
+function ToolbarGroup({ label, open, onToggle, title, children, ...rest }: {
   label: string
-  /** Short current-state text shown next to the label (active view, ON/OFF, provider). */
-  state?: string
-  /** Attention dot shown on the collapsed label, so a problem inside stays visible. */
-  dotClass?: string | null
   open: boolean
   onToggle: () => void
   title: string
@@ -93,8 +72,6 @@ function ToolbarGroup({ label, state, dotClass, open, onToggle, title, children,
         className={`inline-flex h-6 items-center gap-1.5 rounded px-2 text-[11px] font-medium outline-none transition-colors ${open ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
       >
         <span>{label}</span>
-        {state && <span className={`max-w-[9rem] truncate text-[10px] font-semibold tracking-wide ${open ? 'text-muted-foreground' : 'text-foreground/70'}`}>{state}</span>}
-        {!open && dotClass && <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />}
       </button>
       {open && children}
     </div>
@@ -643,16 +620,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     }
     return `Schedules · ${workflowScheduleStats.total === 1 ? 'Paused' : `All ${workflowScheduleStats.total} paused`}`
   }, [workflowScheduleStats])
-  const pulseAttentionDotClass = useMemo(() => {
-    const dots = [
-      workflowScheduleStats.issues > 0 ? 'bg-red-500' : workflowScheduleStats.missed > 0 ? 'bg-amber-500' : '',
-      getBackupDotClass(backupState),
-      getPublishDotClass(publishState),
-      getNotificationDotClass(notificationState),
-    ]
-    return dots.find(dot => dot.includes('bg-red')) ?? dots.find(dot => dot.includes('bg-amber')) ?? null
-  }, [backupState, notificationState, publishState, workflowScheduleStats.issues, workflowScheduleStats.missed])
-
   const scheduleStatusDotClass = workflowScheduleStats.issues > 0
     ? 'bg-red-500'
     : workflowScheduleStats.missed > 0
@@ -702,7 +669,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
           {workspacePath && (
             <ToolbarGroup
               label="Views"
-              state={shortViewLabel(workspaceViewDefinitions.find(view => view.id === activeWorkspaceView))}
               open={openGroups.views}
               onToggle={() => toggleGroup('views')}
               title={openGroups.views ? 'Hide views' : 'Show views: report, plan, costs, logs, learnings, knowledgebase, database, files'}
@@ -748,8 +714,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
           {workspacePath && (
             <ToolbarGroup
               label="Pulse"
-              state={monitorOn ? 'ON' : 'OFF'}
-              dotClass={pulseAttentionDotClass}
               open={openGroups.pulse}
               onToggle={() => toggleGroup('pulse')}
               title={openGroups.pulse ? 'Hide Pulse tools' : 'Show Pulse tools: status, evaluation, schedules, run now, backup, publish, notify'}
@@ -861,7 +825,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
         {canWriteWorkflow && (
           <ToolbarGroup
             label="Setup"
-            state={shortViewLabel(capabilityViewDefinitions.find(view => view.id === workflowWorkspaceView))}
             open={openGroups.setup}
             onToggle={() => toggleGroup('setup')}
             title={openGroups.setup ? 'Hide setup' : 'Show setup: skills, secrets, MCP servers, browser, LLM, bots, folders'}
