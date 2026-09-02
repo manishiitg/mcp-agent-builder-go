@@ -1,35 +1,21 @@
 import React, { useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
-  Bot,
-  BrainCircuit,
-  BookOpen,
-  FileText,
-  DollarSign,
-  Files,
-  FolderOpen,
-  LayoutDashboard,
-  KeyRound,
-  Monitor,
-  Route,
   Cloud,
   Globe,
   LoaderCircle,
   Play,
-  Database,
-  Table2,
   ShieldCheck,
   Activity,
   BellRing,
   CalendarClock,
   ClipboardCheck,
   RefreshCw,
-  Puzzle,
-  Server,
   X,
 } from 'lucide-react'
 import ModalPortal from '../../ui/ModalPortal'
 import { useWorkflowStore, type RunFolder } from '../../../stores/useWorkflowStore'
+import { WORKSPACE_VIEWS, isInspectorView, type WorkspaceViewId } from '../workspaceViews'
 import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestStore'
 import { useChatStore } from '../../../stores/useChatStore'
 import { useAuthStore } from '../../../stores/useAuthStore'
@@ -70,7 +56,12 @@ import { sendWorkflowMessageToChat } from '../../../utils/reportHumanInputChat'
 const EXECUTION_PHASE_ID = 'execution'
 const WORKFLOW_SCHEDULE_TOOLBAR_LIMIT = 10_000
 
-type WorkspaceView = 'flow' | 'report' | 'files' | 'costs' | 'execution-logs' | 'learnings' | 'knowledgebase' | 'database' | 'evaluation' | 'schedules' | 'skills' | 'mcp' | 'secrets' | 'folders' | 'browser' | 'llm' | 'bots'
+// Product-tour / test hooks on specific toolbar buttons. Kept here rather
+// than in the view registry because they describe this toolbar's buttons,
+// not the views themselves.
+const CAPABILITY_BUTTON_ATTRS: Partial<Record<WorkspaceViewId, { 'data-tour': string; 'data-testid': string }>> = {
+  bots: { 'data-tour': 'bot-connector', 'data-testid': 'tour-bot-connector' },
+}
 
 type WorkflowScheduleStats = {
   total: number
@@ -332,41 +323,27 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const setCanvasViewMode = useWorkflowStore(state => state.setCanvasViewMode)
   const setShowWorkspacePane = useWorkflowStore(state => state.setShowWorkspacePane)
 
-  const openWorkspaceView = useCallback((view: WorkspaceView) => {
+  const openWorkspaceView = useCallback((view: WorkspaceViewId) => {
     if (view === 'flow' || view === 'report') setCanvasViewMode(view)
     setWorkflowWorkspaceView(view)
     setShowWorkspacePane(true)
     useAppStore.getState().setWorkspaceMinimized(view !== 'files')
   }, [setCanvasViewMode, setShowWorkspacePane, setWorkflowWorkspaceView])
 
-  const isInspectorView = workflowWorkspaceView === 'costs'
-    || workflowWorkspaceView === 'execution-logs'
-    || workflowWorkspaceView === 'learnings'
-    || workflowWorkspaceView === 'knowledgebase'
-    || workflowWorkspaceView === 'database'
-    || workflowWorkspaceView === 'evaluation'
-    || workflowWorkspaceView === 'schedules'
-    || workflowWorkspaceView === 'skills'
-    || workflowWorkspaceView === 'mcp'
-    || workflowWorkspaceView === 'secrets'
-    || workflowWorkspaceView === 'folders'
-    || workflowWorkspaceView === 'browser'
-    || workflowWorkspaceView === 'llm'
-    || workflowWorkspaceView === 'bots'
-  const activeWorkspaceView: WorkspaceView = workflowWorkspaceView === 'files' || isInspectorView
+  const activeWorkspaceView: WorkspaceViewId = workflowWorkspaceView === 'files' || isInspectorView(workflowWorkspaceView)
     ? workflowWorkspaceView
     : canvasViewMode === 'flow' ? 'flow' : 'report'
 
-  const workspaceViewDefinitions = useMemo(() => ([
-    ['report', LayoutDashboard, 'Report', true],
-    ['flow', Route, 'Plan', hasPlan],
-    ['costs', DollarSign, 'Costs', true],
-    ['execution-logs', FileText, 'Execution logs', true],
-    ['learnings', BookOpen, 'Learnings', true],
-    ['knowledgebase', Database, 'Knowledgebase', true],
-    ['database', Table2, 'Database', true],
-    ['files', Files, 'Files', true],
-  ] as const).filter(([, , , visible]) => visible), [hasPlan])
+  // Button clusters come from the view registry, in registry order. The
+  // Plan button is the one view that hides itself until a plan exists.
+  const workspaceViewDefinitions = useMemo(
+    () => WORKSPACE_VIEWS.filter(view => view.toolbarGroup === 'views' && (view.id !== 'flow' || hasPlan)),
+    [hasPlan],
+  )
+  const capabilityViewDefinitions = useMemo(
+    () => WORKSPACE_VIEWS.filter(view => view.toolbarGroup === 'capabilities'),
+    [],
+  )
 
   const pulseConfig = useWorkflowManifestStore(useShallow((s) => {
     const wf = s.workflows.find((w) => w.workspace_path === workspacePath)
@@ -800,7 +777,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
           {workspacePath && (
             <>
               <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
-                {workspaceViewDefinitions.map(([view, Icon, label]) => {
+                {workspaceViewDefinitions.map(({ id: view, icon: Icon, label }) => {
                   const active = view === activeWorkspaceView
                   const viewButton = (
                     <button
@@ -919,62 +896,19 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
         {/* Workflow capabilities — write-only (read users don't see this) */}
         {canWriteWorkflow && (
           <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={() => openWorkspaceView('skills')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'skills' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow skills" aria-pressed={workflowWorkspaceView === 'skills'}>
-                  <Puzzle className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom"><p>Workflow skills</p></TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={() => openWorkspaceView('secrets')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'secrets' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow secrets" aria-pressed={workflowWorkspaceView === 'secrets'}>
-                  <KeyRound className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom"><p>Workflow secrets</p></TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={() => openWorkspaceView('mcp')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'mcp' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow MCP servers" aria-pressed={workflowWorkspaceView === 'mcp'}>
-                  <Server className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom"><p>Workflow MCP servers</p></TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={() => openWorkspaceView('browser')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'browser' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Browser automation" aria-pressed={workflowWorkspaceView === 'browser'}>
-                  <Monitor className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom"><p>Browser automation</p></TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={() => openWorkspaceView('llm')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'llm' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow LLM configuration" aria-pressed={workflowWorkspaceView === 'llm'}>
-                  <BrainCircuit className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom"><p>Workflow LLM configuration</p></TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={() => openWorkspaceView('bots')} data-tour="bot-connector" data-testid="tour-bot-connector" className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'bots' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow bots" aria-pressed={workflowWorkspaceView === 'bots'}>
-                  <Bot className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom"><p>Workflow bots</p></TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={() => openWorkspaceView('folders')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'folders' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Attached folders" aria-pressed={workflowWorkspaceView === 'folders'}>
-                  <FolderOpen className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom"><p>Attached folders</p></TooltipContent>
-            </Tooltip>
+            {capabilityViewDefinitions.map(({ id, icon: Icon, label }) => {
+              const active = workflowWorkspaceView === id
+              return (
+                <Tooltip key={id}>
+                  <TooltipTrigger asChild>
+                    <button onClick={() => openWorkspaceView(id)} {...CAPABILITY_BUTTON_ATTRS[id]} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label={label} aria-pressed={active}>
+                      <Icon className="w-3.5 h-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom"><p>{label}</p></TooltipContent>
+                </Tooltip>
+              )
+            })}
           </div>
         )}
 

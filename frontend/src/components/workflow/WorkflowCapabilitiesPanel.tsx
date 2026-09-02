@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Bot, BrainCircuit, KeyRound, LoaderCircle, Monitor, Puzzle, Save, Server } from 'lucide-react'
+import { LoaderCircle, Save } from 'lucide-react'
 import { ToolSelectionSection } from '../ToolSelectionSection'
 import SkillsManagerPanel from '../skills/SkillsManagerPanel'
 import { SecretSelectionSection } from '../secrets/SecretSelectionSection'
@@ -15,8 +15,11 @@ import { useWorkflowManifestStore } from '../../stores/useWorkflowManifestStore'
 import { useAuthStore } from '../../stores/useAuthStore'
 import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
 import { toggleServerSelection } from '../../utils/mcpServerAlias'
+import { getWorkspaceView, type CapabilityViewId } from './workspaceViews'
 
-export type WorkflowCapabilitySection = 'skills' | 'mcp' | 'secrets' | 'browser' | 'llm' | 'bots'
+// Which sections exist is decided by the registry in workspaceViews.ts; this
+// panel only carries the per-section copy.
+export type WorkflowCapabilitySection = CapabilityViewId
 
 interface WorkflowCapabilitiesPanelProps {
   section: WorkflowCapabilitySection
@@ -33,36 +36,30 @@ const EMPTY_CAPABILITIES: WorkflowCapabilities = {
   use_code_execution_mode: false,
 }
 
-const SECTION_COPY: Record<WorkflowCapabilitySection, { title: string; description: string; Icon: typeof Puzzle }> = {
+const SECTION_COPY: Record<WorkflowCapabilitySection, { title: string; description: string }> = {
   skills: {
     title: 'Workflow skills',
     description: 'Select reusable skills for this workflow’s builder context.',
-    Icon: Puzzle,
   },
   mcp: {
     title: 'Workflow MCP',
     description: 'Select the MCP servers and tools this workflow may use.',
-    Icon: Server,
   },
   secrets: {
     title: 'Workflow secrets',
     description: 'Choose which workflow and global secrets this workflow may access.',
-    Icon: KeyRound,
   },
   browser: {
     title: 'Browser automation',
     description: 'Control whether this workflow uses visible Chrome or managed headless browsing.',
-    Icon: Monitor,
   },
   llm: {
     title: 'Workflow LLM configuration',
     description: 'Review the provider profile and any role-specific model overrides.',
-    Icon: BrainCircuit,
   },
   bots: {
     title: 'Workflow bots',
     description: 'Slack channels and WhatsApp slugs this workflow answers on. Connections are shared by all workflows.',
-    Icon: Bot,
   },
 }
 
@@ -100,6 +97,8 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
     })
   }, [])
   const copy = SECTION_COPY[section]
+  const view = getWorkspaceView(section)
+  const SectionIcon = view.icon
 
   const load = useCallback(async () => {
     if (!workspacePath) {
@@ -161,7 +160,7 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
     <section className="flex h-full min-h-0 w-full max-w-none flex-col bg-background">
       <header className="flex shrink-0 items-start gap-3 border-b px-4 py-3">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-          <copy.Icon className="h-4 w-4" />
+          <SectionIcon className="h-4 w-4" />
         </div>
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold text-foreground">{copy.title}</h2>
@@ -169,7 +168,7 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
         </div>
       </header>
 
-      <div className={`min-h-0 flex-1 p-4 ${section === 'skills' || section === 'secrets' || section === 'mcp' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}>
+      <div className={`min-h-0 flex-1 p-4 ${view.managesOwnScroll ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}>
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
             <LoaderCircle className="h-4 w-4 animate-spin" /> Loading workflow settings…

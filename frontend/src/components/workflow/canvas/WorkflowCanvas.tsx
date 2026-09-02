@@ -64,6 +64,7 @@ import DatabasePopup from '../DatabasePopup'
 import { PulseEvalSummary } from '../PulseEvalSummary'
 import WorkflowScheduleRunsPanel from '../../scheduler/WorkflowScheduleRunsPanel'
 import WorkflowCapabilitiesPanel from '../WorkflowCapabilitiesPanel'
+import { assertNeverView, isInspectorView, type InspectorViewId } from '../workspaceViews'
 import WorkflowFolderAccessPopup from '../WorkflowFolderAccessPopup'
 
 // Duration to show highlights before clearing (in ms)
@@ -415,23 +416,6 @@ const WorkflowFilesCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasPro
 
 WorkflowFilesCanvasInner.displayName = 'WorkflowFilesCanvasInner'
 
-const INSPECTOR_WORKSPACE_VIEWS = new Set([
-  'costs',
-  'execution-logs',
-  'learnings',
-  'knowledgebase',
-  'database',
-  'evaluation',
-  'schedules',
-  'skills',
-  'mcp',
-  'secrets',
-  'folders',
-  'browser',
-  'llm',
-  'bots',
-])
-
 const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>(({
   workspacePath,
   presetQueryId,
@@ -486,52 +470,76 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
     useWorkflowStore.getState().setShowWorkspacePane(false)
   }, [])
 
-  const inspector = workflowWorkspaceView === 'costs' ? (
-    <CostsPopup
-      isOpen
-      embedded
-      onClose={closeInspector}
-      workspacePath={workspacePath}
-      runFolders={runFolderNames}
-      selectedRunFolder={selectedRunFolder}
-    />
-  ) : workflowWorkspaceView === 'execution-logs' ? (
-    <ExecutionLogsPopup
-      isOpen
-      embedded
-      onClose={closeInspector}
-      workspacePath={workspacePath}
-      runFolder={selectedRunFolder}
-      runFolders={runFolderNames}
-      onRefreshRunFolders={refreshWorkspaceState}
-    />
-  ) : workflowWorkspaceView === 'learnings' ? (
-    <LearningsPopup
-      isOpen
-      embedded
-      onClose={closeInspector}
-      workspacePath={workspacePath}
-      plan={plan}
-    />
-  ) : workflowWorkspaceView === 'knowledgebase' ? (
-    <KBPopup isOpen embedded onClose={closeInspector} workspacePath={workspacePath} />
-  ) : workflowWorkspaceView === 'evaluation' ? (
-    <div className="h-full overflow-y-auto">
-      <PulseEvalSummary workspacePath={workspacePath || ''} className="min-h-full rounded-none border-0" />
-    </div>
-  ) : workflowWorkspaceView === 'schedules' ? (
-    <WorkflowScheduleRunsPanel
-      embedded
-      workflowScope={{ presetQueryId: presetQueryId || undefined, workspacePath: workspacePath || undefined }}
-      onClose={closeInspector}
-    />
-  ) : workflowWorkspaceView === 'skills' || workflowWorkspaceView === 'mcp' || workflowWorkspaceView === 'secrets' || workflowWorkspaceView === 'browser' || workflowWorkspaceView === 'llm' || workflowWorkspaceView === 'bots' ? (
-    <WorkflowCapabilitiesPanel section={workflowWorkspaceView} workspacePath={workspacePath} />
-  ) : workflowWorkspaceView === 'folders' ? (
-    <WorkflowFolderAccessPopup isOpen embedded workspacePath={workspacePath} onClose={closeInspector} />
-  ) : (
-    <DatabasePopup isOpen embedded onClose={closeInspector} workspacePath={workspacePath} />
-  )
+  // One explicit branch per inspector view. The `default` is a compile-time
+  // exhaustiveness check: a view added to the registry without a branch here
+  // is a type error, not a silent fallthrough into some other view.
+  const renderInspector = (view: InspectorViewId) => {
+    switch (view) {
+      case 'costs':
+        return (
+          <CostsPopup
+            isOpen
+            embedded
+            onClose={closeInspector}
+            workspacePath={workspacePath}
+            runFolders={runFolderNames}
+            selectedRunFolder={selectedRunFolder}
+          />
+        )
+      case 'execution-logs':
+        return (
+          <ExecutionLogsPopup
+            isOpen
+            embedded
+            onClose={closeInspector}
+            workspacePath={workspacePath}
+            runFolder={selectedRunFolder}
+            runFolders={runFolderNames}
+            onRefreshRunFolders={refreshWorkspaceState}
+          />
+        )
+      case 'learnings':
+        return (
+          <LearningsPopup
+            isOpen
+            embedded
+            onClose={closeInspector}
+            workspacePath={workspacePath}
+            plan={plan}
+          />
+        )
+      case 'knowledgebase':
+        return <KBPopup isOpen embedded onClose={closeInspector} workspacePath={workspacePath} />
+      case 'database':
+        return <DatabasePopup isOpen embedded onClose={closeInspector} workspacePath={workspacePath} />
+      case 'evaluation':
+        return (
+          <div className="h-full overflow-y-auto">
+            <PulseEvalSummary workspacePath={workspacePath || ''} className="min-h-full rounded-none border-0" />
+          </div>
+        )
+      case 'schedules':
+        return (
+          <WorkflowScheduleRunsPanel
+            embedded
+            workflowScope={{ presetQueryId: presetQueryId || undefined, workspacePath: workspacePath || undefined }}
+            onClose={closeInspector}
+          />
+        )
+      case 'folders':
+        return <WorkflowFolderAccessPopup isOpen embedded workspacePath={workspacePath} onClose={closeInspector} />
+      case 'skills':
+      case 'mcp':
+      case 'secrets':
+      case 'browser':
+      case 'llm':
+      case 'bots':
+        return <WorkflowCapabilitiesPanel section={view} workspacePath={workspacePath} />
+      default:
+        return assertNeverView(view)
+    }
+  }
+  const inspector = isInspectorView(workflowWorkspaceView) ? renderInspector(workflowWorkspaceView) : null
 
   return (
     <div className={`flex h-full flex-col ${className} ${sharedToolbar && showChatArea ? 'contents' : ''}`}>
@@ -3157,7 +3165,7 @@ export const WorkflowCanvasWithProvider = React.memo(forwardRef<WorkflowCanvasRe
     return <WorkflowFilesCanvasInner {...props} ref={ref} />
   }
 
-  if (workflowWorkspaceView && INSPECTOR_WORKSPACE_VIEWS.has(workflowWorkspaceView)) {
+  if (isInspectorView(workflowWorkspaceView)) {
     return <WorkflowInspectorCanvasInner {...props} ref={ref} />
   }
 

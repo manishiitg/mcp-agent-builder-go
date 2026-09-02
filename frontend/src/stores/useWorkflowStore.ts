@@ -26,29 +26,10 @@ import { useGlobalPresetStore } from './useGlobalPresetStore'
 import { resolveGroupFolderPath } from '../utils/workflowUtils'
 import { normalizeRunFolder } from '../utils/workflowStateNormalization'
 import { getRawActiveWorkspaceId, getWorkspaceScopedStorageKey } from './useWorkspaceConnectionStore'
+import { normalizeWorkspaceViewId, type WorkspaceViewId } from '../components/workflow/workspaceViews'
 
-export type WorkflowWorkspaceView =
-  | 'builder'
-  | 'report'
-  | 'flow'
-  | 'log'
-  | 'soul'
-  | 'files'
-  | 'costs'
-  | 'execution-logs'
-  | 'learnings'
-  | 'knowledgebase'
-  | 'database'
-  | 'evaluation'
-  | 'schedules'
-  | 'skills'
-  | 'mcp'
-  | 'secrets'
-  | 'folders'
-  | 'browser'
-  | 'llm'
-  | 'bots'
-  | null
+// The set of views lives in one place: components/workflow/workspaceViews.ts.
+export type WorkflowWorkspaceView = WorkspaceViewId | null
 
 // Layout direction for workflow canvas
 export type LayoutDirection = 'LR' | 'TB'
@@ -99,35 +80,7 @@ type PersistedWorkflowUIState = {
 }
 
 function normalizeWorkflowWorkspaceView(view: unknown): WorkflowWorkspaceView {
-  switch (view) {
-    case 'builder':
-    case 'report':
-    case 'flow':
-    case 'log':
-    case 'files':
-    case 'costs':
-    case 'execution-logs':
-    case 'learnings':
-    case 'knowledgebase':
-    case 'database':
-    case 'evaluation':
-    case 'schedules':
-    case 'skills':
-    case 'mcp':
-    case 'secrets':
-    case 'folders':
-    case 'browser':
-    case 'llm':
-    case 'bots':
-    case null:
-      return view
-    case 'soul':
-      return 'log'
-    case 'plan':
-      return 'flow'
-    default:
-      return null
-  }
+  return normalizeWorkspaceViewId(view)
 }
 
 function loadWorkspaceViewByPreset(): Record<string, WorkflowWorkspaceView> {

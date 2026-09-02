@@ -21,7 +21,10 @@ describe('bot and notification settings separation', () => {
     expect(header).not.toContain('notification-settings-button')
     expect(header).not.toContain('bot-connector')
     expect(workflowToolbar).toContain('data-testid="workflow-notification-settings-button"')
-    expect(workflowToolbar).toContain('data-tour="bot-connector"')
+    // The bots button gets its tour hook from CAPABILITY_BUTTON_ATTRS, so the
+    // attribute is no longer a JSX literal; the hook itself must still be in
+    // the toolbar and nowhere near the global header.
+    expect(workflowToolbar).toContain("'data-tour': 'bot-connector'")
     expect(workflowToolbar).toContain('<WorkflowNotificationPopup')
     expect(workflowToolbar).toContain('<BellRing')
     expect(notifications).toContain('Agentic notification delivery')

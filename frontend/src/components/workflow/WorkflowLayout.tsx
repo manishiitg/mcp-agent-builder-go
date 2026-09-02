@@ -99,6 +99,7 @@ import {
 import { findOrCreateWorkflowTab, isChatCompatiblePhase } from '../../utils/chatSubmitHelpers'
 import { reusableBlankWorkflowChatTabId, hasWorkflowChatContent, workflowTabAlreadyHasContent } from './workflowChatTabConversion'
 import { hydrateTabEvents } from '../../utils/sessionRestore'
+import { isPreviewView, isWorkspacePaneView } from './workspaceViews'
 // Inactive workflow tabs hydrate lazily and fall back to workflow-scoped chat history.
 
 const WORKFLOW_RESTORE_TIMEOUT_MS = 8000
@@ -1218,25 +1219,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   // Backward-compat alias kept for downstream readers — mobile pane behaviour
   // is unchanged.
   const shouldUseMobileReportPane = previewPaneTier === 'mobile'
-  const isWorkspaceViewActive =
-    workflowWorkspaceView === 'flow' ||
-    workflowWorkspaceView === 'report' ||
-    workflowWorkspaceView === 'log' ||
-    workflowWorkspaceView === 'soul' ||
-    workflowWorkspaceView === 'costs' ||
-    workflowWorkspaceView === 'execution-logs' ||
-    workflowWorkspaceView === 'learnings' ||
-    workflowWorkspaceView === 'knowledgebase' ||
-    workflowWorkspaceView === 'database' ||
-    workflowWorkspaceView === 'evaluation' ||
-    workflowWorkspaceView === 'schedules' ||
-    workflowWorkspaceView === 'skills' ||
-    workflowWorkspaceView === 'mcp' ||
-    workflowWorkspaceView === 'secrets' ||
-    workflowWorkspaceView === 'folders' ||
-    workflowWorkspaceView === 'browser' ||
-    workflowWorkspaceView === 'llm' ||
-    workflowWorkspaceView === 'bots'
+  const isWorkspaceViewActive = isWorkspacePaneView(workflowWorkspaceView)
   const chatPaneVisibilityClass =
     workspacePaneVisible && isWorkspaceViewActive
       ? 'hidden md:flex'
@@ -1441,9 +1424,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   // open no longer auto-switches to Files — click Files to get there.
   useEffect(() => {
     if (selectedModeCategory !== 'workflow') return
-    const onPreviewView = workflowWorkspaceView === 'report'
-      || workflowWorkspaceView === 'log'
-      || workflowWorkspaceView === 'soul'
+    const onPreviewView = isPreviewView(workflowWorkspaceView)
     if (!workspaceMinimized && !onPreviewView && (workflowWorkspaceView !== 'files' || !showWorkspacePane)) {
       setShowWorkspacePane(true)
       setWorkflowWorkspaceView('files')
