@@ -1050,6 +1050,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
       </>
       )}
 
+      {!(!selectedRow || changing) && (
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -1121,6 +1122,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
           </div>
         ))}
       </div>
+      )}
     </div>
   )
 }
