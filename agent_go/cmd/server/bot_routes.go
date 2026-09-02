@@ -24,6 +24,10 @@ func BotRoutes(router *mux.Router, api *StreamingAPI) {
 	botRouter.HandleFunc("/connectors/{platform}", getBotConnectorHandler(api)).Methods("GET")
 	botRouter.HandleFunc("/connectors/{platform}", saveBotConnectorHandler(api)).Methods("POST", "OPTIONS")
 	botRouter.HandleFunc("/connectors/{platform}/test", testBotConnectorHandler(api)).Methods("POST", "OPTIONS")
+
+	// Shared "_global" config (allowed_emails and friends) -- see bot_config_routes.go
+	botRouter.HandleFunc("/config", botConfigGetHandler(api.chatStore)).Methods("GET")
+	botRouter.HandleFunc("/config", botConfigSaveHandler(api.chatStore)).Methods("POST", "OPTIONS")
 }
 
 // --- Connector config handlers ---

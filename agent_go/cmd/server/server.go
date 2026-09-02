@@ -589,8 +589,6 @@ type StreamingAPI struct {
 	// Bot conversation manager for Slack/Discord/Telegram bot sessions
 	botManager *services.BotConversationManager
 
-	// Web simulator connector for testing bot flow without Slack
-	webSimulator    *services.WebSimulatorConnector
 	whatsappManager *services.WhatsAppServiceManager
 
 	// API token for bearer auth on per-tool endpoints (code execution mode)
@@ -2264,12 +2262,6 @@ func runServer(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// Register web simulator connector (always available, no config needed)
-	webSimulator := services.NewWebSimulatorConnector()
-	botManager.RegisterConnector(webSimulator)
-	api.webSimulator = webSimulator
-	log.Printf("✅ Web bot simulator enabled")
-
 	// Register WhatsApp connector unless explicitly disabled. Each workspace
 	// user gets a separate WhatsApp Web client and session DB under the
 	// session directory, so users can pair their own bot accounts independently.
@@ -2305,7 +2297,6 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Register bot routes
 	BotRoutes(router, api)
-	BotSimulatorRoutes(router, api)
 	if api.whatsappManager != nil {
 		WhatsAppRoutes(router, api.whatsappManager)
 	}
