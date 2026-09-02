@@ -12,7 +12,7 @@ import type { CustomPreset } from '../types/preset';
 import type { PlannerFile, PresetLLMConfig, AgentLLMConfig, AgentLLMFallback, LLMProvider } from '../services/api-types';
 import { useLLMStore } from '../stores/useLLMStore';
 import { useModeStore } from '../stores/useModeStore';
-import { agentApi } from '../services/api';
+
 import LLMSelectionDropdown from './LLMSelectionDropdown';
 import LLMRoleSelector from './LLMRoleSelector';
 import WorkflowLLMTierPreview from './WorkflowLLMTierPreview';
@@ -85,17 +85,12 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
   const [showFolderDialog, setShowFolderDialog] = useState(false);
   const [folderDialogPosition, setFolderDialogPosition] = useState({ top: 0, left: 0 });
   const [llmConfig, setLlmConfig] = useState<PresetLLMConfig | null>(null);
+  // Browser mode and CDP port are edited in the workflow panel now; this
+  // dialog only carries the saved values through.
   const [browserMode, setBrowserModeState] = useState<'none' | 'auto' | 'headless' | 'cdp'>('auto');
-  const enableBrowserAccess = browserMode === 'auto' || browserMode === 'headless' || browserMode === 'cdp';
   const [cdpPort, setCdpPort] = useState(9222);
-  const [cdpConnected, setCdpConnected] = useState<boolean | null>(null);
-  const [cdpError, setCdpError] = useState<string | null>(null);
-  const [cdpChecking, setCdpChecking] = useState(false);
   const [showDeleteWorkflowConfirm, setShowDeleteWorkflowConfirm] = useState(false);
   const [deletingWorkflow, setDeletingWorkflow] = useState(false);
-  const setBrowserMode = useCallback((mode: 'none' | 'auto' | 'headless' | 'cdp') => {
-    setBrowserModeState(mode)
-  }, [])
 
   const [builderLLM, setBuilderLLM] = useState<AgentLLMConfig | null>(null);
   const [maintenanceLLM, setMaintenanceLLM] = useState<AgentLLMConfig | null>(null);
@@ -159,34 +154,8 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
   }), []);
 
   // CDP connection check
-  const checkCdpConnection = useCallback(async (port: number) => {
-    setCdpChecking(true);
-    setCdpConnected(null);
-    setCdpError(null);
-    try {
-      const result = await agentApi.checkCdpPort(port);
-      setCdpConnected(result.connected);
-      setCdpError(result.connected ? null : result.error || null);
-    } catch {
-      setCdpConnected(false);
-      setCdpError('Unable to check the CDP port.');
-    } finally {
-      setCdpChecking(false);
-    }
-  }, []);
 
   // Auto-check CDP for both automatic and required-CDP modes.
-  useEffect(() => {
-    if ((browserMode !== 'auto' && browserMode !== 'cdp') || !enableBrowserAccess) {
-      setCdpConnected(null);
-      setCdpError(null);
-      return;
-    }
-    const timer = setTimeout(() => {
-      checkCdpConnection(cdpPort);
-    }, 500); // debounce
-    return () => clearTimeout(timer);
-  }, [browserMode, cdpPort, enableBrowserAccess, checkCdpConnection]);
 
   const hasLLMOptions = (options?: Record<string, unknown>) => Boolean(options && Object.keys(options).length > 0);
   const toAgentLLMConfig = useCallback((llm: LLMOption): AgentLLMConfig => ({
@@ -281,8 +250,6 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
     return `${config.provider}/${config.model_id}`;
   }, []);
 
-  // Draft create paths can collide with existing workflows, so only load scoped secrets for persisted workflows.
-  const workflowSecretPath = editingPreset ? selectedFolder?.filepath : undefined;
   const workflowCredentialPath = editingPreset ? selectedFolder?.filepath : undefined;
   // Clears any half-typed credential when the modal opens or switches
   // automations, so one workflow's entry can never be submitted against another.
