@@ -26,7 +26,7 @@ import {
 } from 'lucide-react'
 import ChatArea, { type ChatContentRendererProps } from '../../components/ChatArea'
 import { CleanConversationSurface } from '../../components/CleanConversationSurface'
-import { FileContentViewerOverlay } from '../../components/FileContentViewer'
+import { FileWorkspacePane } from '../../components/FileWorkspacePane'
 import { TerminalEventTranscript } from '../../components/TerminalEventTranscript'
 import { ConversationMarkdownRenderer } from '../../components/ui/MarkdownRenderer'
 import { clampPanelWidth, loadStoredPanelWidth, saveStoredPanelWidth } from './panelWidth'
@@ -35,7 +35,6 @@ import { ProductSurfaceSwitcher } from '../../components/ProductSurfaceSwitcher'
 import AccountControl from '../../components/topbar/AccountControl'
 import SecretsManagerModal from '../../components/secrets/SecretsManagerModal'
 import SecretSelectionDropdown from '../../components/secrets/SecretSelectionDropdown'
-import Workspace from '../../components/Workspace'
 import { WorkflowCanvas } from '../../components/workflow/canvas'
 import { PresentationRenderer, type PresentationRendererProps } from '../../platform/presentations/PresentationRenderer'
 import { registerPresentationRenderer } from '../../platform/presentations/presentationRegistry'
@@ -660,9 +659,13 @@ function DocumentsSection({ documents }: { documents: DocumentPresentation[] }) 
 
 function FilesPanel({ project }: { project: VideoProject }) {
   return (
-    <div className="h-full min-h-0 overflow-hidden" data-testid="video-studio-files-panel">
-      <Workspace minimized={false} onToggleMinimize={() => {}} hideMinimizeControl scopedWorkspacePath={project.workspacePath} hiddenRootFolders={['.git', 'node_modules']} title="Project files" />
-    </div>
+    <FileWorkspacePane
+      workspacePath={project.workspacePath}
+      hiddenRootFolders={['.git', 'node_modules']}
+      title="Project files"
+      onClose={() => {}}
+      testId="video-studio-files-panel"
+    />
   )
 }
 
@@ -980,9 +983,6 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
         </div>
       ) : null}
       {pendingDelete ? <DeletePresentationDialog presentation={pendingDelete} deleting={deletingPresentation} error={deleteError} onClose={() => { if (!deletingPresentation) { setPendingDelete(null); setDeleteError('') } }} onConfirm={() => void deletePresentation()} /> : null}
-      {/* Video Studio has no workspace pane to host the viewer, so it keeps
-          the full-viewport shell. */}
-      <FileContentViewerOverlay />
     </div>
   )
 }
