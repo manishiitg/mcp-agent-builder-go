@@ -429,6 +429,7 @@ const INSPECTOR_WORKSPACE_VIEWS = new Set([
   'folders',
   'browser',
   'llm',
+  'bots',
 ])
 
 const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>(({
@@ -524,7 +525,7 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
       workflowScope={{ presetQueryId: presetQueryId || undefined, workspacePath: workspacePath || undefined }}
       onClose={closeInspector}
     />
-  ) : workflowWorkspaceView === 'skills' || workflowWorkspaceView === 'mcp' || workflowWorkspaceView === 'secrets' || workflowWorkspaceView === 'browser' || workflowWorkspaceView === 'llm' ? (
+  ) : workflowWorkspaceView === 'skills' || workflowWorkspaceView === 'mcp' || workflowWorkspaceView === 'secrets' || workflowWorkspaceView === 'browser' || workflowWorkspaceView === 'llm' || workflowWorkspaceView === 'bots' ? (
     <WorkflowCapabilitiesPanel section={workflowWorkspaceView} workspacePath={workspacePath} />
   ) : workflowWorkspaceView === 'folders' ? (
     <WorkflowFolderAccessPopup isOpen embedded workspacePath={workspacePath} onClose={closeInspector} />

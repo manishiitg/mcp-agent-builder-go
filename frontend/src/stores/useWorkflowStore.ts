@@ -47,6 +47,7 @@ export type WorkflowWorkspaceView =
   | 'folders'
   | 'browser'
   | 'llm'
+  | 'bots'
   | null
 
 // Layout direction for workflow canvas
@@ -117,6 +118,7 @@ function normalizeWorkflowWorkspaceView(view: unknown): WorkflowWorkspaceView {
     case 'folders':
     case 'browser':
     case 'llm':
+    case 'bots':
     case null:
       return view
     case 'soul':

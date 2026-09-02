@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Workflow, Settings, Copy, Keyboard, Bot, Building2, HelpCircle, Eye } from 'lucide-react'
+import { Workflow, Settings, Copy, Keyboard, Building2, HelpCircle, Eye } from 'lucide-react'
 import { useAuthStore } from '../stores/useAuthStore'
 import { isWorkflowReadOnly } from '../utils/workflowPermissions'
 import { useModeStore } from '../stores/useModeStore'
@@ -9,7 +9,6 @@ import type { CustomPreset, PredefinedPreset } from '../types/preset'
 import type { PlannerFile, PresetLLMConfig, WorkflowManifest } from '../services/api-types'
 import PresetModal from './PresetModal'
 import WorkflowScheduleRunsPanel from './scheduler/WorkflowScheduleRunsPanel'
-import BotConnectorModal from './settings/BotConnectorModal'
 import { agentApi, workflowManifestApi } from '../services/api'
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from './ui/tooltip'
 import ModalPortal from './ui/ModalPortal'
@@ -88,9 +87,8 @@ export const ModePresetBar: React.FC = () => {
   const presetModeCategory = selectedModeCategory === 'workflow' || selectedModeCategory === 'multi-agent'
     ? selectedModeCategory
     : null
-  const { setWorkspaceMinimized, workspaceMinimized, agentMode } = useAppStore(useShallow(state => ({
+  const { setWorkspaceMinimized, agentMode } = useAppStore(useShallow(state => ({
     setWorkspaceMinimized: state.setWorkspaceMinimized,
-    workspaceMinimized: state.workspaceMinimized,
     agentMode: state.agentMode,
   })))
   const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
@@ -133,8 +131,6 @@ export const ModePresetBar: React.FC = () => {
   const [editingPreset, setEditingPreset] = useState<CustomPreset | null>(null)
   const [showShortcuts, setShowShortcuts] = useState(false)
   const [showRunsPanel, setShowRunsPanel] = useState(false)
-  const [showBotConnector, setShowBotConnector] = useState(false)
-  const [restoreWorkspaceAfterBotConnector, setRestoreWorkspaceAfterBotConnector] = useState(false)
   const [showWorkflowsPopup, setShowWorkflowsPopup] = useState(false)
   const [showWorkflowWalkthrough, setShowWorkflowWalkthrough] = useState(false)
   const [workflowWalkthroughOpenToken, setWorkflowWalkthroughOpenToken] = useState(0)
@@ -167,7 +163,6 @@ export const ModePresetBar: React.FC = () => {
   )
   const currentSessionStatusLabel = currentSession ? headerStatusLabel(currentSession) : null
   const shouldShowScheduleHeader = selectedModeCategory === 'workflow' || isOrganizationView
-  const shouldShowBotConnector = selectedModeCategory === 'multi-agent' || selectedModeCategory === 'workflow' || isOrganizationView
 
   const openWorkflowWalkthrough = useCallback(() => {
     setWorkflowWalkthroughOpenToken(token => token + 1)
@@ -251,19 +246,6 @@ export const ModePresetBar: React.FC = () => {
   const workflowScheduleTooltip = runningWorkflows > 0
     ? `${runningWorkflows} of ${scheduledWorkflows} scheduled automations running now; ${runningSchedules} of ${totalSchedules} schedules running`
     : `${workflowCountLabel} scheduled; ${scheduleCountLabel} total`
-
-  const openBotConnector = useCallback(() => {
-    const shouldRestore = !workspaceMinimized
-    setRestoreWorkspaceAfterBotConnector(shouldRestore)
-    if (shouldRestore) setWorkspaceMinimized(true)
-    setShowBotConnector(true)
-  }, [workspaceMinimized, setWorkspaceMinimized])
-
-  const closeBotConnector = useCallback(() => {
-    setShowBotConnector(false)
-    if (restoreWorkspaceAfterBotConnector) setWorkspaceMinimized(false)
-    setRestoreWorkspaceAfterBotConnector(false)
-  }, [restoreWorkspaceAfterBotConnector, setWorkspaceMinimized])
 
   const handleEditWorkflowPreset = useCallback(async (preset: CustomPreset) => {
     const workspacePath = preset.selectedFolder?.filepath
@@ -803,24 +785,6 @@ export const ModePresetBar: React.FC = () => {
                 <TooltipContent side="bottom">Keyboard shortcuts</TooltipContent>
               </Tooltip>
 
-              {shouldShowBotConnector && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={openBotConnector}
-                      data-tour="bot-connector"
-                      data-testid="tour-bot-connector"
-                      aria-label="Bots"
-                      title="Bots"
-                      className="p-1 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
-                    >
-                      <Bot className="w-4 h-4" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Bots</TooltipContent>
-                </Tooltip>
-              )}
-
               {shouldShowScheduleHeader && (
                 <>
                   <Tooltip>
@@ -975,13 +939,6 @@ export const ModePresetBar: React.FC = () => {
         agentMode={agentMode}
         onDeleteWorkflow={handleDeleteWorkflow}
       />
-
-      {showBotConnector && (
-        <BotConnectorModal
-          isOpen={showBotConnector}
-          onClose={closeBotConnector}
-        />
-      )}
 
       {/* Scheduled Workflow Runs Panel */}
       {showRunsPanel && (

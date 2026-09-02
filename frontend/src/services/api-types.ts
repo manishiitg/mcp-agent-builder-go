@@ -2658,56 +2658,6 @@ export interface AllDelegationLogsResponse {
   by_model: Record<string, ChatModelUsage>;
 }
 
-// ============================================================================
-// Bot Simulator Types
-// ============================================================================
-
-export interface SimulatorMessageBlock {
-  type: string;
-  text?: string;
-  buttons?: SimulatorMessageButton[];
-}
-
-export interface SimulatorMessageButton {
-  text: string;
-  value: string;
-  style?: string;
-  action_id: string;
-}
-
-export interface SimulatorMessage {
-  id: string;
-  text: string;
-  blocks?: SimulatorMessageBlock[];
-  is_bot: boolean;
-  timestamp: string;
-}
-
-export interface SimulatorThreadInfo {
-  thread_id: string
-  preview: string
-  created_at: string
-  message_count: number
-}
-
-export interface SimulatorSendResponse {
-  type: 'conversation' | 'follow_up';
-  response?: string;          // text reply for conversation
-  thread_id: string;
-  session_id?: string;        // internal chat session ID (for follow_up)
-  bot_session_id?: string;    // set when awaiting user confirmation
-  thread_offset?: number;     // current thread message count (for polling init)
-}
-
-export interface SimulatorMessagesResponse {
-  messages: SimulatorMessage[];
-  total: number;
-}
-
-export interface SimulatorInteractResponse {
-  success: boolean;
-}
-
 // Workflow plan changelog (History view "Plan edits" feed)
 export interface PlanChangelogFieldChange {
   step_id: string

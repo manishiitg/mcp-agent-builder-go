@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
+  Bot,
   BrainCircuit,
   BookOpen,
   FileText,
@@ -69,7 +70,7 @@ import { sendWorkflowMessageToChat } from '../../../utils/reportHumanInputChat'
 const EXECUTION_PHASE_ID = 'execution'
 const WORKFLOW_SCHEDULE_TOOLBAR_LIMIT = 10_000
 
-type WorkspaceView = 'flow' | 'report' | 'files' | 'costs' | 'execution-logs' | 'learnings' | 'knowledgebase' | 'database' | 'evaluation' | 'schedules' | 'skills' | 'mcp' | 'secrets' | 'folders' | 'browser' | 'llm'
+type WorkspaceView = 'flow' | 'report' | 'files' | 'costs' | 'execution-logs' | 'learnings' | 'knowledgebase' | 'database' | 'evaluation' | 'schedules' | 'skills' | 'mcp' | 'secrets' | 'folders' | 'browser' | 'llm' | 'bots'
 
 type WorkflowScheduleStats = {
   total: number
@@ -351,6 +352,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     || workflowWorkspaceView === 'folders'
     || workflowWorkspaceView === 'browser'
     || workflowWorkspaceView === 'llm'
+    || workflowWorkspaceView === 'bots'
   const activeWorkspaceView: WorkspaceView = workflowWorkspaceView === 'files' || isInspectorView
     ? workflowWorkspaceView
     : canvasViewMode === 'flow' ? 'flow' : 'report'
@@ -956,6 +958,14 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom"><p>Workflow LLM configuration</p></TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button onClick={() => openWorkspaceView('bots')} data-tour="bot-connector" data-testid="tour-bot-connector" className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'bots' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow bots" aria-pressed={workflowWorkspaceView === 'bots'}>
+                  <Bot className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom"><p>Workflow bots</p></TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>

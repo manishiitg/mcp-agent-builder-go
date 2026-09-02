@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { BrainCircuit, KeyRound, LoaderCircle, Monitor, Puzzle, Save, Server } from 'lucide-react'
+import { Bot, BrainCircuit, KeyRound, LoaderCircle, Monitor, Puzzle, Save, Server } from 'lucide-react'
 import { ToolSelectionSection } from '../ToolSelectionSection'
 import SkillsManagerPanel from '../skills/SkillsManagerPanel'
 import { SecretSelectionSection } from '../secrets/SecretSelectionSection'
 import SecretsManagerPanel from '../secrets/SecretsManagerPanel'
 import BrowserAutomationSettings, { type BrowserAutomationMode } from '../BrowserAutomationSettings'
 import WorkflowLLMConfigurationPanel from './WorkflowLLMConfigurationPanel'
+import WorkflowBotsPanel from './WorkflowBotsPanel'
 import ConnectorsBrowser from '../connectors/ConnectorsBrowser'
 import { agentApi, workflowManifestApi } from '../../services/api'
 import type { WorkflowCapabilities } from '../../services/api-types'
@@ -15,7 +16,7 @@ import { useAuthStore } from '../../stores/useAuthStore'
 import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
 import { toggleServerSelection } from '../../utils/mcpServerAlias'
 
-export type WorkflowCapabilitySection = 'skills' | 'mcp' | 'secrets' | 'browser' | 'llm'
+export type WorkflowCapabilitySection = 'skills' | 'mcp' | 'secrets' | 'browser' | 'llm' | 'bots'
 
 interface WorkflowCapabilitiesPanelProps {
   section: WorkflowCapabilitySection
@@ -57,6 +58,11 @@ const SECTION_COPY: Record<WorkflowCapabilitySection, { title: string; descripti
     title: 'Workflow LLM configuration',
     description: 'Review the provider profile and any role-specific model overrides.',
     Icon: BrainCircuit,
+  },
+  bots: {
+    title: 'Workflow bots',
+    description: 'Slack channels and WhatsApp slugs this workflow answers on. Connections are shared by all workflows.',
+    Icon: Bot,
   },
 }
 
@@ -256,6 +262,10 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
                 onChange={(llm_config) => setCapabilities(current => ({ ...current, llm_config }))}
               />
             )}
+            {/* Bots write straight to the shared connector config (routes
+                already carry workflow_id), so nothing here goes through the
+                manifest Save below. */}
+            {section === 'bots' && <WorkflowBotsPanel workspacePath={workspacePath} />}
           </>
         )}
       </div>

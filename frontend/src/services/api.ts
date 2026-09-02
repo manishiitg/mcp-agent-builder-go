@@ -55,9 +55,6 @@ import type {
   WorkflowCostsResponse,
   WorkspaceStateResponse,
   CapabilitiesResponse,
-  SimulatorMessage,
-  SimulatorSendResponse,
-  SimulatorThreadInfo,
   ListWorkflowManifestsResponse,
   GetWorkflowManifestResponse,
   CreateWorkflowManifestRequest,
@@ -1410,44 +1407,17 @@ export const agentApi = {
     return apiResponse.data
   },
 
-  // --- Bot Simulator API ---
+  // --- Shared bot connector config ("_global": allowed_emails etc.) ---
 
-  // Send a message to the bot simulator (synchronous — returns analysis result or conversational reply)
-  // Pass thread_id to route follow-up messages into an existing thread/session
-  simulateBotMessage: async (message: string, threadId?: string): Promise<SimulatorSendResponse> => {
-    const response = await api.post('/api/bot/simulate/send', { message, thread_id: threadId })
+  getBotConfig: async (): Promise<{ delegation_tier_config?: Record<string, unknown>; default_servers?: string[]; default_skills?: string[]; allowed_emails?: string[] }> => {
+    const response = await api.get('/api/bot/config')
     return response.data
   },
 
-  // Get messages from a simulator thread
-  getSimulatorMessages: async (threadId: string, since: number = 0): Promise<{ messages: SimulatorMessage[]; total: number }> => {
-    const response = await api.get(`/api/bot/simulate/${threadId}/messages`, { params: { since } })
-    return response.data
-  },
-
-  // Send a button interaction to the simulator
-  simulateBotInteract: async (threadId: string, actionId: string, value: string): Promise<{ success: boolean }> => {
-    const response = await api.post(`/api/bot/simulate/${threadId}/interact`, { action_id: actionId, value })
-    return response.data
-  },
-
-  // Cleanup a simulator thread
-  clearSimulatorThread: async (threadId: string): Promise<{ success: boolean }> => {
-    const response = await api.delete(`/api/bot/simulate/${threadId}`)
-    return response.data
-  },
-
-  // Get bot simulator config
-  getSimulatorConfig: async (): Promise<{ delegation_tier_config?: Record<string, unknown>; default_servers?: string[]; default_skills?: string[] }> => {
-    const response = await api.get('/api/bot/simulate/config')
-    return response.data
-  },
-
-  // Save bot simulator config (delegation tier config + default servers/skills)
   saveBotConfig: async (config: {
     allowed_emails?: string[];
   }): Promise<{ success: boolean }> => {
-    const response = await api.post('/api/bot/simulate/config', config)
+    const response = await api.post('/api/bot/config', config)
     return response.data
   },
 
@@ -1532,30 +1502,6 @@ export const agentApi = {
   // Load delegation tier config from workspace filesystem
   getDelegationTierConfig: async (): Promise<Record<string, unknown>> => {
     const response = await api.get('/api/delegation-tier-config')
-    return response.data
-  },
-
-  // Get available MCP servers and skills for bot config
-  getAvailableCapabilities: async (): Promise<{ servers: string[]; skills: { name: string; description?: string }[] }> => {
-    const response = await api.get('/api/bot/simulate/available-capabilities')
-    return response.data
-  },
-
-  // List all simulator threads
-  listSimulatorThreads: async (): Promise<{ threads: SimulatorThreadInfo[] }> => {
-    const response = await api.get('/api/bot/simulate/threads')
-    return response.data
-  },
-
-  // Get current simulator mode (threaded / non-threaded)
-  getSimulatorMode: async (): Promise<{ threaded: boolean }> => {
-    const response = await api.get('/api/bot/simulate/mode')
-    return response.data
-  },
-
-  // Set simulator mode (threaded / non-threaded)
-  setSimulatorMode: async (threaded: boolean): Promise<{ success: boolean; threaded: boolean }> => {
-    const response = await api.post('/api/bot/simulate/mode', { threaded })
     return response.data
   },
 

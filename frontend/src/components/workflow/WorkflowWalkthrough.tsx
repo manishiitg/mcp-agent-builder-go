@@ -26,8 +26,8 @@ const STEPS: WalkthroughStep[] = [
   },
   {
     selector: '[data-tour="bot-connector"]',
-    title: 'Bot connector',
-    body: 'Use this to connect an automation to bot channels like WhatsApp or Slack, and to test bot-driven runs.',
+    title: 'Bots',
+    body: 'Choose the Slack channels and WhatsApp slugs this automation answers on, and connect those channels if they are not set up yet.',
   },
   {
     selector: '[data-tour="workspace-open"]',
