@@ -14,9 +14,9 @@ export interface ValidationFeedback {
   description: string
 }
 
-export const ITERATION_ZERO_DEFAULT_FOLDER = 'iteration-0/default'
+const ITERATION_ZERO_DEFAULT_FOLDER = 'iteration-0/default'
 
-export const isIterationZeroRunFolder = (folder: string) => (
+const isIterationZeroRunFolder = (folder: string) => (
   folder === 'iteration-0' || folder.startsWith('iteration-0/')
 )
 
@@ -42,7 +42,7 @@ export const formatLogFileContent = (content: unknown): string => {
   }
 }
 
-export const parseJsonLike = (content: unknown): unknown => {
+const parseJsonLike = (content: unknown): unknown => {
   if (typeof content !== 'string') return content
   const trimmed = content.trim()
   if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) return content
@@ -78,7 +78,7 @@ export const getStepResultPreview = (stepLogs: unknown): string => {
   return ''
 }
 
-export type ExecutionOrigin = {
+type ExecutionOrigin = {
   label: string
   detail: string
   className: string
@@ -166,7 +166,7 @@ export const getExecutionOrigin = (execution: unknown, validations: unknown[], p
   }
 }
 
-export type SentAgentMessage = {
+type SentAgentMessage = {
   label: string
   message: string
 }
@@ -225,7 +225,7 @@ export const getStepIcon = (type: string) => {
 // step-1 → [1]
 // step-8-sub-agent-2 → [8, 'sub-agent', 2]
 // step-8-sub-agent-2-sub-agent-1 → [8, 'sub-agent', 2, 'sub-agent', 1]
-export const parseStepId = (stepId: string): (string | number)[] => {
+const parseStepId = (stepId: string): (string | number)[] => {
   const segments: (string | number)[] = []
 
   // Remove 'step-' prefix and split by patterns
@@ -247,7 +247,7 @@ export const parseStepId = (stepId: string): (string | number)[] => {
 }
 
 // Sort step IDs so nested items appear after their parent
-export const sortStepIds = (a: string, b: string): number => {
+const sortStepIds = (a: string, b: string): number => {
   const segA = parseStepId(a)
   const segB = parseStepId(b)
 
@@ -281,20 +281,20 @@ export const sortStepIds = (a: string, b: string): number => {
   return segA.length - segB.length
 }
 
-export const timestampToMs = (value: unknown): number => {
+const timestampToMs = (value: unknown): number => {
   if (typeof value !== 'string' || value.trim() === '') return 0
   const parsed = Date.parse(value)
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-export const firstPositive = (...values: number[]) => values.find(value => value > 0) || 0
+const firstPositive = (...values: number[]) => values.find(value => value > 0) || 0
 
-export const minPositive = (values: number[]) => {
+const minPositive = (values: number[]) => {
   const positives = values.filter(value => value > 0)
   return positives.length > 0 ? Math.min(...positives) : 0
 }
 
-export const getExecutionStartedAtMs = (exec: unknown): number => {
+const getExecutionStartedAtMs = (exec: unknown): number => {
   const execRecord = asRecord(exec)
   const content = asRecord(execRecord?.content)
   const timing = asRecord(execRecord?.timing) || asRecord(content?.timing)
@@ -370,7 +370,7 @@ export const getStepNestingLevel = (stepId: string): number => {
 }
 
 // Determine the nesting context (what type of parent this is nested under)
-export const getStepNestingContext = (stepId: string): 'none' | 'sub-agent' => {
+const getStepNestingContext = (stepId: string): 'none' | 'sub-agent' => {
   const lastSubIndex = Math.max(stepId.lastIndexOf('-sub-'), stepId.lastIndexOf('-generic-'))
   const lastSubAgentIndex = Math.max(stepId.lastIndexOf('-sub-agent-'), lastSubIndex)
 
@@ -395,9 +395,9 @@ export const getStepNestingClass = (stepId: string): string => {
   }
 }
 
-export type LogRecord = Record<string, unknown>
+type LogRecord = Record<string, unknown>
 
-export type StepMetrics = {
+type StepMetrics = {
   inputTokens: number
   outputTokens: number
   totalTokens: number
@@ -420,7 +420,7 @@ export const asNumber = (value: unknown): number => {
   return 0
 }
 
-export const durationFromTimestamps = (start: unknown, end: unknown): number => {
+const durationFromTimestamps = (start: unknown, end: unknown): number => {
   if (typeof start !== 'string' || typeof end !== 'string') return 0
   const startMs = Date.parse(start)
   const endMs = Date.parse(end)
@@ -447,14 +447,17 @@ export const formatDuration = (durationMs: number): string => {
   return `${seconds}s`
 }
 
-export const formatStepStartedAt = (timestampMs: number): string => new Intl.DateTimeFormat(undefined, {
+// Built once: this is called per step card on every 2.5 s poll render.
+const stepStartedAtFormatter = new Intl.DateTimeFormat(undefined, {
   month: 'short',
   day: 'numeric',
   hour: 'numeric',
   minute: '2-digit',
-}).format(new Date(timestampMs))
+})
 
-export const addCallTokens = (metrics: StepMetrics, call: LogRecord) => {
+export const formatStepStartedAt = (timestampMs: number): string => stepStartedAtFormatter.format(new Date(timestampMs))
+
+const addCallTokens = (metrics: StepMetrics, call: LogRecord) => {
   metrics.inputTokens += asNumber(call.prompt_tokens)
   metrics.outputTokens += asNumber(call.completion_tokens)
   metrics.cacheTokens += asNumber(call.cache_tokens)

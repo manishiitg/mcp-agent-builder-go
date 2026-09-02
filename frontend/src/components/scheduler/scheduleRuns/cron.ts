@@ -1,7 +1,7 @@
 import cronstrue from 'cronstrue'
 import type { ScheduledJob } from '../../../services/api-types'
 
-export function parseCronField(field: string, min: number, max: number, normalize?: (n: number) => number): number[] | null {
+function parseCronField(field: string, min: number, max: number, normalize?: (n: number) => number): number[] | null {
   const values = new Set<number>()
   const addValue = (n: number) => {
     const value = normalize ? normalize(n) : n
@@ -39,7 +39,7 @@ export function parseCronField(field: string, min: number, max: number, normaliz
   return [...values].sort((a, b) => a - b)
 }
 
-export function isWildcardCronField(field: string): boolean {
+function isWildcardCronField(field: string): boolean {
   return field.trim() === '*'
 }
 
@@ -105,9 +105,13 @@ export function formatLocalDayLabel(dateKey: string): string {
   })
 }
 
-export function timeZoneOffsetMs(date: Date, timeZone: string): number {
-  try {
-    const parts = new Intl.DateTimeFormat('en-US', {
+// One formatter per timezone: the calendar calls this twice per cron
+// occurrence across three months of every job.
+const zoneFormatters = new Map<string, Intl.DateTimeFormat>()
+function zoneFormatter(timeZone: string): Intl.DateTimeFormat {
+  let formatter = zoneFormatters.get(timeZone)
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-US', {
       timeZone,
       hourCycle: 'h23',
       year: 'numeric',
@@ -116,7 +120,15 @@ export function timeZoneOffsetMs(date: Date, timeZone: string): number {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
-    }).formatToParts(date)
+    })
+    zoneFormatters.set(timeZone, formatter)
+  }
+  return formatter
+}
+
+function timeZoneOffsetMs(date: Date, timeZone: string): number {
+  try {
+    const parts = zoneFormatter(timeZone).formatToParts(date)
     const values = Object.fromEntries(parts.map(part => [part.type, part.value]))
     const asUTC = Date.UTC(
       Number(values.year),
@@ -149,10 +161,17 @@ export function addMonths(date: Date, delta: number): Date {
   return new Date(date.getFullYear(), date.getMonth() + delta, 1)
 }
 
+// Cron strings are few and immutable, but this runs per row per render.
+const cronDescriptions = new Map<string, string>()
 export function describeCron(expr: string): string {
+  const cached = cronDescriptions.get(expr)
+  if (cached !== undefined) return cached
+  let description: string
   try {
-    return cronstrue.toString(expr, { throwExceptionOnParseError: true })
+    description = cronstrue.toString(expr, { throwExceptionOnParseError: true })
   } catch {
-    return expr
+    description = expr
   }
+  cronDescriptions.set(expr, description)
+  return description
 }

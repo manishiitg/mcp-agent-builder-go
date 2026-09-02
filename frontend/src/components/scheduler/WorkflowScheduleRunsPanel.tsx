@@ -1,9 +1,10 @@
 import React from 'react'
-import ReactDOM from 'react-dom'
 import { Clock, Search, MessageSquare } from 'lucide-react'
+import ModalPortal from '../ui/ModalPortal'
 import type { ScheduledJob } from '../../services/api-types'
 import { TooltipProvider } from '../ui/tooltip'
 import { useScheduleRunsData } from './scheduleRuns/useScheduleRunsData'
+import type { WorkflowScope } from './scheduleRuns/helpers'
 import { ScheduleRunsHeader } from './scheduleRuns/ScheduleRunsHeader'
 import { ScheduleOverviewView } from './scheduleRuns/ScheduleOverviewView'
 import { ScheduleCalendarView } from './scheduleRuns/ScheduleCalendarView'
@@ -14,11 +15,7 @@ interface WorkflowScheduleRunsPanelProps {
   onClose: () => void
   embedded?: boolean
   onJobsLoaded?: (jobs: ScheduledJob[]) => void
-  workflowScope?: {
-    presetQueryId?: string | null
-    workspacePath?: string | null
-    label?: string | null
-  }
+  workflowScope?: WorkflowScope
 }
 
 const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ onClose, onJobsLoaded, workflowScope, embedded = false }) => {
@@ -243,7 +240,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
     </TooltipProvider>
   )
 
-  return embedded ? panelElement : ReactDOM.createPortal(panelElement, document.body)
+  return embedded ? panelElement : <ModalPortal>{panelElement}</ModalPortal>
 }
 
 export default WorkflowScheduleRunsPanel

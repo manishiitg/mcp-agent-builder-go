@@ -84,6 +84,8 @@ import type {
   PulseContextResponse,
   PulseEvalResultsResponse,
   OrgDashboardNotification,
+  WhatsAppRoute,
+  WhatsAppStatus,
 } from './api-types'
 import type { PlanStep, AgentConfigs } from '../utils/stepConfigMatching'
 
@@ -1424,21 +1426,7 @@ export const agentApi = {
   // ── WhatsApp bot connector ────────────────────────────────────────────────
   // Status: is the connector enabled, paired, connected? When a pairing flow
   // is active, returns the QR expiration timestamp so the UI can auto-refresh.
-  getWhatsAppStatus: async (): Promise<{
-    enabled: boolean;
-    paired: boolean;
-    connected: boolean;
-    own_jid: string;
-    qr_available: boolean;
-    qr_expires_at?: string;
-    link_code?: string;
-    link_code_expires_at?: string;
-    bound_chat_count?: number;
-    owner_user_id?: string;
-    owner_email?: string;
-    owner_username?: string;
-    owner_paired_at?: string;
-  }> => {
+  getWhatsAppStatus: async (): Promise<WhatsAppStatus> => {
     const response = await api.get('/api/whatsapp/status')
     return response.data
   },
@@ -1473,18 +1461,14 @@ export const agentApi = {
 
   // Slug → workflow routing for incoming WhatsApp messages. A message that
   // starts with "@<slug> " routes to the workflow mapped for that slug.
-  getWhatsAppRouting: async (): Promise<{
-    routing: Record<string, { workflow_id: string; workspace_path?: string; workshop_mode?: string; send_full_details?: boolean }>;
-  }> => {
+  getWhatsAppRouting: async (): Promise<{ routing: Record<string, WhatsAppRoute> }> => {
     const response = await api.get('/api/whatsapp/routing')
     return response.data
   },
 
   updateWhatsAppRouting: async (
-    routing: Record<string, { workflow_id: string; workspace_path?: string; workshop_mode?: string; send_full_details?: boolean }>
-  ): Promise<{
-    routing: Record<string, { workflow_id: string; workspace_path?: string; workshop_mode?: string; send_full_details?: boolean }>;
-  }> => {
+    routing: Record<string, WhatsAppRoute>
+  ): Promise<{ routing: Record<string, WhatsAppRoute> }> => {
     const response = await api.put('/api/whatsapp/routing', { routing })
     return response.data
   },

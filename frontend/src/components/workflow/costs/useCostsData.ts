@@ -21,13 +21,13 @@ import {
 } from './helpers'
 
 interface UseCostsDataArgs {
-  isOpen: boolean
-  embedded: boolean
+  /** The panel is showing (embedded in the pane, or the modal is open). */
+  active: boolean
   workspacePath: string | null
   selectedRunFolder: string | null
 }
 
-export function useCostsData({ isOpen, embedded, workspacePath, selectedRunFolder }: UseCostsDataArgs) {
+export function useCostsData({ active, workspacePath, selectedRunFolder }: UseCostsDataArgs) {
   const [loading, setLoading] = useState(false)
   const [runCosts, setRunCosts] = useState<RunCosts[]>([])
   const [phaseCostSummary, setPhaseCostSummary] = useState<PhaseCostSummary | null>(null)
@@ -53,7 +53,7 @@ export function useCostsData({ isOpen, embedded, workspacePath, selectedRunFolde
 
   // Load costs for all workflow runs
   useEffect(() => {
-    if ((isOpen || embedded) && workspacePath) {
+    if (active && workspacePath) {
       loadAllCosts()
     } else {
       setRunCosts([])
@@ -74,11 +74,11 @@ export function useCostsData({ isOpen, embedded, workspacePath, selectedRunFolde
       loadGenerationRef.current += 1
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, embedded, workspacePath])
+  }, [active, workspacePath])
 
   // Auto-expand selected run folder when it changes
   useEffect(() => {
-    if ((isOpen || embedded) && selectedRunFolder && runCosts.some(c => c.runFolder === selectedRunFolder)) {
+    if (active && selectedRunFolder && runCosts.some(c => c.runFolder === selectedRunFolder)) {
       setExpandedRunFolders(prev => {
         if (prev.has(selectedRunFolder!)) return prev
         const next = new Set(prev)
@@ -86,7 +86,7 @@ export function useCostsData({ isOpen, embedded, workspacePath, selectedRunFolde
         return next
       })
     }
-  }, [isOpen, embedded, selectedRunFolder, runCosts])
+  }, [active, selectedRunFolder, runCosts])
 
   const loadAllCosts = async () => {
     if (!workspacePath) return

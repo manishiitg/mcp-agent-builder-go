@@ -53,8 +53,7 @@ export interface StepContentProps {
 }
 
 // Recursive: sub-agent executions render the nested step's content through
-// the same component. The local alias keeps the recursive call sites in the
-// body identical to when this lived inline in ExecutionLogsPopup.
+// the same component.
 export function StepContent(props: StepContentProps) {
   const {
     stepId,
@@ -73,32 +72,42 @@ export function StepContent(props: StepContentProps) {
     loadingFiles,
     toggleFileExpansion,
   } = props
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const renderStepContent = (nestedStepId: string, nestedStepLogs: any) => (
-    <StepContent {...props} stepId={nestedStepId} stepLogs={nestedStepLogs} />
-  )
       const validations = stepLogs.validations || []
       const searchQuery = stepSearchQueries[stepId] || ''
-      
+      const searchNeedle = searchQuery.toLowerCase()
+
       const matchesSearch = (item: unknown) => {
         if (!searchQuery) return true
-        return JSON.stringify(item).toLowerCase().includes(searchQuery.toLowerCase())
+        return JSON.stringify(item).toLowerCase().includes(searchNeedle)
       }
 
+      // Same identity rule as before (run + output path + sorted artifact
+      // paths), keeping the first occurrence; one pass instead of a
+      // findIndex-inside-filter that re-stringified every pair.
+      const seenArchiveIdentities = new Set<string>()
       const visibleArchivedExecutions = (stepLogs.archived_executions || [])
         .filter((archive: any) => archive.output_content || (archive.artifacts?.length || 0) > 0)
-        .filter((archive: any, index: number, archives: any[]) => {
+        .filter((archive: any) => {
           const identity = JSON.stringify({
             run: archive.run_number,
             output: archive.output_content?.file_path || '',
             artifacts: (archive.artifacts || []).map((artifact: any) => artifact.file_path).sort(),
           })
-          return archives.findIndex((candidate: any) => JSON.stringify({
-            run: candidate.run_number,
-            output: candidate.output_content?.file_path || '',
-            artifacts: (candidate.artifacts || []).map((artifact: any) => artifact.file_path).sort(),
-          }) === identity) === index
+          if (seenArchiveIdentities.has(identity)) return false
+          seenArchiveIdentities.add(identity)
+          return true
         })
+
+      // Each section filtered once per render (they used to be filtered
+      // twice: once for the "any?" guard and again for the map).
+      const visibleExecutions = stepLogs.executions.filter(matchesSearch)
+      const visibleArtifacts = (stepLogs.artifacts || []).filter(matchesSearch)
+      const visibleValidations = validations.filter(matchesSearch)
+      const visibleLearnings = (stepLogs.learnings || []).filter(matchesSearch)
+      const visibleOrchestration = (stepLogs.orchestration || []).filter(matchesSearch)
+      const visibleTodoTask = (stepLogs.todo_task || []).filter(matchesSearch)
+      const visibleArchivedLogs = (stepLogs.archived_logs || []).filter(matchesSearch)
+      const visibleArchivedRuns = visibleArchivedExecutions.filter(matchesSearch)
       
       return (
         <div className="border-t border-border divide-y divide-border">
@@ -168,12 +177,12 @@ export function StepContent(props: StepContentProps) {
             </div>
           )}
           {/* Executions Section */}
-          {stepLogs.executions.filter(matchesSearch).length > 0 && (
+          {visibleExecutions.length > 0 && (
             <div className="p-4 bg-background">
               <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Execution Logs</h4>
               <div className="space-y-3">
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                {stepLogs.executions.filter(matchesSearch).map((exec: any, idx: number) => {
+                {visibleExecutions.map((exec: any, idx: number) => {
                   const execId = `${stepId}-exec-${exec.attempt}-${exec.iteration}`
                   // executions is already filtered to searchQuery matches above,
                   // so an active search implies every rendered row is a hit --
@@ -419,7 +428,7 @@ export function StepContent(props: StepContentProps) {
           )}
 
           {/* Artifacts Section */}
-          {stepLogs.artifacts && stepLogs.artifacts.filter(matchesSearch).length > 0 && (
+          {visibleArtifacts.length > 0 && (
             <div className="p-4 bg-gray-50 dark:bg-gray-900/30">
               <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
                 <FileText className="w-3.5 h-3.5" />
@@ -427,7 +436,7 @@ export function StepContent(props: StepContentProps) {
               </h4>
               <div className="space-y-2">
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                {stepLogs.artifacts.filter(matchesSearch).map((artifact: any, idx: number) => {
+                {visibleArtifacts.map((artifact: any, idx: number) => {
                   const isFileExpanded = expandedFiles.has(artifact.file_path)
                   return (
                     <div key={idx} className="bg-background rounded border border-border overflow-hidden">
@@ -464,12 +473,12 @@ export function StepContent(props: StepContentProps) {
           )}
 
           {/* Validations Section */}
-          {validations.filter(matchesSearch).length > 0 && (
+          {visibleValidations.length > 0 && (
             <div className="p-4 bg-muted/30">
               <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Validations</h4>
               <div className="space-y-3">
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                {validations.filter(matchesSearch).map((val: any, idx: number) => {
+                {visibleValidations.map((val: any, idx: number) => {
                   const valId = `${stepId}-val-${val.kind || 'validation'}-${val.attempt}`
                   const isValExpanded = expandedValidations.has(valId)
                   const valStatus = val.content?.execution_status
@@ -565,14 +574,14 @@ export function StepContent(props: StepContentProps) {
           )}
 
           {/* Learnings Section */}
-          {stepLogs.learnings && stepLogs.learnings.filter(matchesSearch).length > 0 && (
+          {visibleLearnings.length > 0 && (
             <div className="p-4 bg-background border-t border-border">
               <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
                 <BookOpen className="w-4 h-4" /> Learning Logs
               </h4>
               <div className="space-y-3">
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                {stepLogs.learnings.filter(matchesSearch).map((log: any, idx: number) => (
+                {visibleLearnings.map((log: any, idx: number) => (
                   <div key={idx} className="bg-background rounded border border-border p-3 text-sm">
                     <div className="flex items-center gap-2 mb-2">
                       <span className={`px-2 py-0.5 rounded text-xs uppercase font-medium border ${
@@ -664,14 +673,14 @@ export function StepContent(props: StepContentProps) {
             </div>
           )}
           {/* Orchestration Section */}
-          {stepLogs.orchestration && stepLogs.orchestration.filter(matchesSearch).length > 0 && (
+          {visibleOrchestration.length > 0 && (
             <div className="p-4 bg-muted/30 border-t border-border">
               <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
                 <Network className="w-4 h-4" /> Orchestration & Routing Logs
               </h4>
               <div className="space-y-6">
                 {Object.entries(
-                  stepLogs.orchestration.filter(matchesSearch).reduce((acc: Record<number, any[]>, log: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+                  visibleOrchestration.reduce((acc: Record<number, any[]>, log: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
                     const iter = log.iteration || 1
                     if (!acc[iter]) acc[iter] = []
                     // Skip main_step as it's redundant with routing
@@ -783,7 +792,7 @@ export function StepContent(props: StepContentProps) {
                                                     View Sub-Agent Execution ({logs!.steps[log.orchestration_response.selected_sub_agent_path].title})
                                                 </summary>
                                                 <div className="mt-3 pl-2 border-l-2 border-primary/20">
-                                                    {renderStepContent(log.orchestration_response.selected_sub_agent_path, logs!.steps[log.orchestration_response.selected_sub_agent_path])}
+                                                    <StepContent {...props} stepId={log.orchestration_response.selected_sub_agent_path} stepLogs={logs!.steps[log.orchestration_response.selected_sub_agent_path]} />
                                                 </div>
                                             </details>
                                         </div>
@@ -864,7 +873,7 @@ export function StepContent(props: StepContentProps) {
             </div>
           )}
           {/* Todo Task Section */}
-          {stepLogs.todo_task && stepLogs.todo_task.filter(matchesSearch).length > 0 && (
+          {visibleTodoTask.length > 0 && (
             <div className="p-4 bg-muted/30 border-t border-border">
               <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2">
                 <ListTodo className="w-4 h-4" /> Todo Task Logs
@@ -872,7 +881,7 @@ export function StepContent(props: StepContentProps) {
               <div className="space-y-6">
                 {Object.entries(
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  stepLogs.todo_task.filter(matchesSearch).reduce((acc: Record<number, any[]>, log: any) => {
+                  visibleTodoTask.reduce((acc: Record<number, any[]>, log: any) => {
                     const iter = log.iteration || 1
                     if (!acc[iter]) acc[iter] = []
                     acc[iter].push(log)
@@ -1060,7 +1069,7 @@ export function StepContent(props: StepContentProps) {
                                       View Sub-Agent Execution ({logs!.steps[log.todo_task_response.selected_sub_agent_path].title})
                                     </summary>
                                     <div className="mt-3 ml-2 pl-3 border-l-2 border-purple-200 dark:border-purple-900/50">
-                                      {renderStepContent(log.todo_task_response.selected_sub_agent_path, logs!.steps[log.todo_task_response.selected_sub_agent_path])}
+                                      <StepContent {...props} stepId={log.todo_task_response.selected_sub_agent_path} stepLogs={logs!.steps[log.todo_task_response.selected_sub_agent_path]} />
                                     </div>
                                   </details>
                                 )}
@@ -1102,14 +1111,14 @@ export function StepContent(props: StepContentProps) {
             </div>
           )}
           {/* Archived Logs Section (Previous Runs) */}
-          {stepLogs.archived_logs && stepLogs.archived_logs.filter(matchesSearch).length > 0 && (
+          {visibleArchivedLogs.length > 0 && (
             <div className="p-4 bg-amber-500/5 border-t border-amber-500/20">
               <h4 className="text-xs font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                <History className="w-4 h-4" /> Previous Runs ({stepLogs.archived_logs.filter(matchesSearch).length})
+                <History className="w-4 h-4" /> Previous Runs ({visibleArchivedLogs.length})
               </h4>
               <div className="space-y-3">
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                {stepLogs.archived_logs.filter(matchesSearch).map((archive: any, archiveIdx: number) => {
+                {visibleArchivedLogs.map((archive: any, archiveIdx: number) => {
                   const archiveId = `${stepId}-archive-${archiveIdx}`
                   const isArchiveExpanded = expandedArchived.has(archiveId)
                   const totalLogs = (archive.validations?.length || 0) + (archive.executions?.length || 0) +
@@ -1317,14 +1326,14 @@ export function StepContent(props: StepContentProps) {
           )}
 
           {/* Archived execution outputs from deterministic routing. */}
-          {visibleArchivedExecutions.filter(matchesSearch).length > 0 && (
+          {visibleArchivedRuns.length > 0 && (
             <div className="p-4 bg-indigo-500/[0.03] border-t border-indigo-500/15">
               <h4 className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                <Archive className="w-4 h-4" /> Archived Execution Runs ({visibleArchivedExecutions.filter(matchesSearch).length})
+                <Archive className="w-4 h-4" /> Archived Execution Runs ({visibleArchivedRuns.length})
               </h4>
               <div className="space-y-3">
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                {visibleArchivedExecutions.filter(matchesSearch).map((archive: any, archiveIdx: number) => {
+                {visibleArchivedRuns.map((archive: any, archiveIdx: number) => {
                   const archiveId = `${stepId}-archived-exec-${archiveIdx}`
                   const isArchiveExpanded = expandedArchived.has(archiveId)
                   const hasOutput = !!archive.output_content

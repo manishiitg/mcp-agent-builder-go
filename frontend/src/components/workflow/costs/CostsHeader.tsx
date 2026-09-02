@@ -1,15 +1,14 @@
 import React from 'react'
-import { X, DollarSign, Coins, RefreshCw } from 'lucide-react'
+import { DollarSign, Coins, RefreshCw } from 'lucide-react'
 import { formatStartedAt } from '../../../utils/duration'
 import { formatUSD, formatTokens } from './helpers'
 import type { CostsData } from './useCostsData'
 
 type CostsHeaderProps = Pick<CostsData, 'overallSummary' | 'aggregateSummary' | 'phaseCostSummary' | 'loading' | 'loadAllCosts'> & {
   startedAt?: string | null
-  embedded: boolean
-  onClose: () => void
 }
 
+// Header content only; InspectorShell owns the row wrapper and the close X.
 const CostsHeader: React.FC<CostsHeaderProps> = ({
   startedAt,
   overallSummary,
@@ -17,10 +16,7 @@ const CostsHeader: React.FC<CostsHeaderProps> = ({
   phaseCostSummary,
   loading,
   loadAllCosts,
-  embedded,
-  onClose,
 }) => (
-        <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-border sm:px-6 sm:py-4">
           <div className="flex-1 min-w-0">
             <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
               <DollarSign className="w-5 h-5 text-primary" />
@@ -67,13 +63,6 @@ const CostsHeader: React.FC<CostsHeaderProps> = ({
               </button>
             </div>
           </div>
-          {!embedded && <button
-            onClick={onClose}
-            className="p-2 rounded-full hover:bg-accent hover:text-accent-foreground transition-colors ml-4"
-          >
-            <X className="w-5 h-5 text-muted-foreground" />
-          </button>}
-        </div>
 )
 
 export default CostsHeader

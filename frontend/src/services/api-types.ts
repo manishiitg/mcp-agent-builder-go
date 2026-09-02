@@ -845,6 +845,33 @@ export interface ChannelRoute {
   send_full_details?: boolean
 }
 
+// Shape of GET/PUT /api/whatsapp/routing entries. Same idea as ChannelRoute
+// but workshop_mode is an untyped string on this endpoint.
+export interface WhatsAppRoute {
+  workflow_id: string
+  workspace_path?: string
+  workshop_mode?: string
+  send_full_details?: boolean
+}
+
+// Shape of GET /api/whatsapp/status. enabled = connector started at server
+// startup; paired = device identity stored; connected = live WS.
+export interface WhatsAppStatus {
+  enabled: boolean
+  paired: boolean
+  connected: boolean
+  own_jid: string
+  qr_available: boolean
+  qr_expires_at?: string
+  link_code?: string
+  link_code_expires_at?: string
+  bound_chat_count?: number
+  owner_user_id?: string
+  owner_email?: string
+  owner_username?: string
+  owner_paired_at?: string
+}
+
 export interface SlackConfig {
   enabled: boolean
   bot_token?: string  // Masked in GET response

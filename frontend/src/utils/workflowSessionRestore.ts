@@ -10,6 +10,7 @@ import type { CustomPreset, PredefinedPreset } from '../types/preset'
 import { isInternalChildSession, isScheduledSession } from './workflowSessionKinds'
 import { isVisibleActivitySession } from './activitySessions'
 import { openWorkflowInDefaultPreview } from './reportPreviewPreference'
+import { normalizeWorkspacePath } from './workspacePathUtils'
 import { activateWorkflowTab, beginWorkflowNavigation, isCurrentWorkflowNavigation, selectWorkflowPreset } from './workflowNavigation'
 import { scheduleTabLabel } from './scheduleTabLabel'
 
@@ -30,11 +31,6 @@ type OpenWorkflowPresetPageOptions = {
 
 function isPresetStillActive(presetId?: string | null): boolean {
   return !presetId || useGlobalPresetStore.getState().activePresetIds.workflow === presetId
-}
-
-
-function normalizeWorkspacePath(path?: string): string {
-  return (path || '').replace(/\/+$/, '')
 }
 
 function isActiveWorkflowSession(session: ActiveSessionInfo): boolean {

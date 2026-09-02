@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import type React from 'react'
 import {
   ChevronRight,
@@ -42,10 +43,15 @@ export interface StepListProps {
 }
 
 export function StepList({ logs, focusedStepId, routeFilterKey, expandedSteps, toggleStep, renderStepContent }: StepListProps) {
+  // The sort comparator walks every execution of both steps per comparison;
+  // do it once per logs payload, not on every 2.5 s poll re-render.
+  const sortedStepEntries = useMemo(
+    () => Object.entries(logs?.steps || {}).sort(sortStepEntriesByExecution),
+    [logs],
+  )
   return (
     <>
-              {Object.entries(logs?.steps || {})
-                .sort(sortStepEntriesByExecution)
+              {sortedStepEntries
                 .filter(([stepId]) => !focusedStepId || stepId === focusedStepId)
                 .filter(([, stepLogs]) =>
                   !routeFilterKey ||

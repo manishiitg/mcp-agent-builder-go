@@ -1,6 +1,7 @@
 import React from 'react'
 import { DollarSign, Award, TrendingUp, TrendingDown } from 'lucide-react'
 import { formatUSD, formatTokens, formatTimestampLabel } from './helpers'
+import StageCostCard from './StageCostCard'
 import type { CostsData } from './useCostsData'
 
 type CostsSummarySectionsProps = Pick<
@@ -214,38 +215,14 @@ const CostsSummarySections: React.FC<CostsSummarySectionsProps> = ({
 
                   {/* Stage Costs Summary */}
                   <div className="mt-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
-                    <div className="bg-card border border-border rounded-lg p-3">
-                      <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Execution</div>
-                      <div className="text-lg font-bold text-foreground">{formatUSD(aggregateSummary.stageCosts.execution)}</div>
-                    </div>
-                    <div className="bg-card border border-border rounded-lg p-3">
-                      <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Learning</div>
-                      <div className="text-lg font-bold text-foreground">{formatUSD(aggregateSummary.stageCosts.learning)}</div>
-                    </div>
-                    <div className="bg-card border border-border rounded-lg p-3">
-                      <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Reflection</div>
-                      <div className="text-lg font-bold text-foreground">{formatUSD(aggregateSummary.stageCosts.reflection)}</div>
-                    </div>
-                    <div className="bg-card border border-border rounded-lg p-3">
-                      <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Knowledgebase</div>
-                      <div className="text-lg font-bold text-foreground">{formatUSD(aggregateSummary.stageCosts.knowledgebase)}</div>
-                    </div>
-                    <div className="bg-card border border-border rounded-lg p-3">
-                      <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Routing</div>
-                      <div className="text-lg font-bold text-foreground">{formatUSD(aggregateSummary.stageCosts.routing)}</div>
-                    </div>
-                    <div className="bg-card border border-border rounded-lg p-3">
-                      <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Workshop</div>
-                      <div className="text-lg font-bold text-foreground">{formatUSD(aggregateSummary.stageCosts.workshop)}</div>
-                    </div>
-                    <div className="bg-card border border-border rounded-lg p-3">
-                      <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Evaluation</div>
-                      <div className="text-lg font-bold text-foreground">{formatUSD(aggregateSummary.stageCosts.evaluation)}</div>
-                    </div>
-                    <div className="bg-card border border-border rounded-lg p-3">
-                      <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Other</div>
-                      <div className="text-lg font-bold text-foreground">{formatUSD(aggregateSummary.stageCosts.other)}</div>
-                    </div>
+                    <StageCostCard label="Execution" value={aggregateSummary.stageCosts.execution} />
+                    <StageCostCard label="Learning" value={aggregateSummary.stageCosts.learning} />
+                    <StageCostCard label="Reflection" value={aggregateSummary.stageCosts.reflection} />
+                    <StageCostCard label="Knowledgebase" value={aggregateSummary.stageCosts.knowledgebase} />
+                    <StageCostCard label="Routing" value={aggregateSummary.stageCosts.routing} />
+                    <StageCostCard label="Workshop" value={aggregateSummary.stageCosts.workshop} />
+                    <StageCostCard label="Evaluation" value={aggregateSummary.stageCosts.evaluation} />
+                    <StageCostCard label="Other" value={aggregateSummary.stageCosts.other} />
                   </div>
                 </div>
               )}

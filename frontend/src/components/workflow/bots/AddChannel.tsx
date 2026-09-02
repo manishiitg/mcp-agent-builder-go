@@ -6,7 +6,14 @@ import type { WorkflowBots } from './useWorkflowBots'
 // One "Add a channel" row: connection status, Set up/Settings drill-in, and
 // the inline add form once the connector is ready.
 
-export function ChannelRow({ bots, kind }: { bots: WorkflowBots; kind: ChannelKind }) {
+type ChannelRowBots = Pick<WorkflowBots,
+  | 'readOnly' | 'workflowId' | 'setSetup'
+  | 'slackReady' | 'waReady' | 'slackStatusLabel' | 'waStatusLabel' | 'slackLoading' | 'slackOriginal' | 'waStatus' | 'waError'
+  | 'newSlackChannel' | 'setNewSlackChannel' | 'newWaSlug' | 'setNewWaSlug' | 'addSlackRoute' | 'addWaRoute'
+  | 'routeSaving' | 'myRoutes' | 'addError' | 'setAddError'
+>
+
+export function ChannelRow({ bots, kind }: { bots: ChannelRowBots; kind: ChannelKind }) {
   const {
     readOnly, workflowId, setSetup,
     slackReady, waReady, slackStatusLabel, waStatusLabel, slackLoading, slackOriginal, waStatus, waError,
@@ -25,7 +32,7 @@ export function ChannelRow({ bots, kind }: { bots: WorkflowBots; kind: ChannelKi
   const adding = routeSaving?.startsWith(`${kind}:`) && !myRoutes.some(r => routeId(r) === routeSaving)
   const error = addError[kind]
   return (
-    <div key={kind} className="px-3 py-2.5">
+    <div className="px-3 py-2.5">
       <div className="flex items-center gap-2">
         <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="text-sm font-medium text-foreground">{name}</span>

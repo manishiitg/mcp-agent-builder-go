@@ -13,7 +13,10 @@ import {
 import type { ScheduleRunsPanelState } from './useScheduleRunsData'
 
 type ScheduleOverviewViewProps = {
-  panel: ScheduleRunsPanelState
+  panel: Pick<ScheduleRunsPanelState,
+    | 'isSchedulerPaused' | 'schedulerConfig' | 'summary' | 'setActiveFilter' | 'setActiveView'
+    | 'missedJobs' | 'presetMap' | 'showJobInWorkflowGroups' | 'upcomingJobs'
+  >
 }
 
 export const ScheduleOverviewView: React.FC<ScheduleOverviewViewProps> = ({ panel }) => {

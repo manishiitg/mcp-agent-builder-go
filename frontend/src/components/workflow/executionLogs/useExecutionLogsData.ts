@@ -12,18 +12,11 @@ export interface UseExecutionLogsDataArgs {
 }
 
 export function useExecutionLogsData({ isOpen, workspacePath, initialRunFolder, runFolders }: UseExecutionLogsDataArgs) {
-  const [localRunFolders, setLocalRunFolders] = useState<string[]>(() => runFolders)
-
-  // Synchronize local run folders when props update
-  useEffect(() => {
-    setLocalRunFolders(runFolders)
-  }, [runFolders])
-
   const runFolderOptions = useMemo(() => {
-    const defaultRunFolder = getDefaultRunFolder(initialRunFolder, localRunFolders)
-    if (!defaultRunFolder || localRunFolders.includes(defaultRunFolder)) return localRunFolders
-    return [defaultRunFolder, ...localRunFolders]
-  }, [initialRunFolder, localRunFolders])
+    const defaultRunFolder = getDefaultRunFolder(initialRunFolder, runFolders)
+    if (!defaultRunFolder || runFolders.includes(defaultRunFolder)) return runFolders
+    return [defaultRunFolder, ...runFolders]
+  }, [initialRunFolder, runFolders])
 
   const [loading, setLoading] = useState(false)
   const [logs, setLogs] = useState<ExecutionLogsResponse | null>(null)
@@ -80,8 +73,8 @@ export function useExecutionLogsData({ isOpen, workspacePath, initialRunFolder, 
 
   // Update selected run folder when prop changes
   useEffect(() => {
-    setSelectedRunFolder(getDefaultRunFolder(initialRunFolder, localRunFolders))
-  }, [initialRunFolder, localRunFolders, isOpen])
+    setSelectedRunFolder(getDefaultRunFolder(initialRunFolder, runFolders))
+  }, [initialRunFolder, runFolders, isOpen])
 
   // A route filter from one run's routes rarely means anything for another run
   useEffect(() => {
@@ -272,7 +265,6 @@ export function useExecutionLogsData({ isOpen, workspacePath, initialRunFolder, 
   }, [logs, expandedSteps, stepSearchQueries])
 
   return {
-    localRunFolders,
     runFolderOptions,
     loading,
     logs,

@@ -7,12 +7,15 @@ import {
   ArrowLeft,
 } from 'lucide-react'
 import type { StepExecutionLogs } from '../../services/api-types'
-import ModalPortal from '../ui/ModalPortal'
+import InspectorShell from './InspectorShell'
 import { PulseReviewsPanel } from './executionLogs/LogPrimitives'
 import { LogsHeader } from './executionLogs/LogsHeader'
 import { StepContent } from './executionLogs/StepContent'
 import { StepList } from './executionLogs/StepList'
 import { useExecutionLogsData } from './executionLogs/useExecutionLogsData'
+
+const headerRowClass = (embedded: boolean) =>
+  `flex items-center justify-between gap-3 border-b border-border ${embedded ? 'px-3 py-2' : 'px-4 py-3 sm:px-6 sm:py-4'}`
 
 interface ExecutionLogsPopupProps {
   isOpen: boolean
@@ -43,7 +46,6 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
   onRefreshRunFolders
 }) => {
   const {
-    localRunFolders,
     runFolderOptions,
     loading,
     logs,
@@ -94,15 +96,15 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
     />
   )
 
-  if (!embedded && !isOpen) return null
-
-  const shell = (
-      <div className={`bg-background flex flex-col border border-border relative ${
-        embedded
-          ? 'h-full min-h-0 rounded-none border-0'
-          : 'rounded-lg shadow-xl w-full max-w-[calc(100vw-1rem)] sm:max-w-[90vw] h-[calc(100dvh-1rem)] sm:h-[95vh]'
-      }`}>
-        {/* Header */}
+  return (
+    <InspectorShell
+      embedded={embedded}
+      isOpen={isOpen}
+      onClose={onClose}
+      embeddedClassName="bg-background flex flex-col border border-border relative h-full min-h-0 rounded-none border-0"
+      modalClassName="bg-background flex flex-col border border-border relative rounded-lg shadow-xl w-full max-w-[calc(100vw-1rem)] sm:max-w-[90vw] h-[calc(100dvh-1rem)] sm:h-[95vh]"
+      headerClassName={headerRowClass(embedded)}
+      header={
         <LogsHeader
           embedded={embedded}
           startedAt={startedAt}
@@ -112,9 +114,9 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
           loading={loading}
           loadLogs={loadLogs}
           onRefreshRunFolders={onRefreshRunFolders}
-          onClose={onClose}
         />
-
+      }
+    >
         {/* Content */}
         <div
           className={`flex-1 overflow-y-auto bg-background ${embedded ? 'p-4' : 'p-6'}`}
@@ -172,7 +174,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
                 <div className="flex flex-col items-center justify-center py-8 text-muted-foreground border border-dashed border-border rounded-lg">
                   <FileText className="w-10 h-10 mb-2 opacity-50" />
                   <p className="text-sm">No step execution logs found for <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">{selectedRunFolder}</span>.</p>
-                  {localRunFolders.length > 1 && (
+                  {runFolders.length > 1 && (
                     <p className="text-xs mt-2 opacity-70">
                       Try selecting a different iteration or group from the dropdown above.
                     </p>
@@ -225,29 +227,7 @@ const ExecutionLogsPopup: React.FC<ExecutionLogsPopupProps> = ({
             </div>
           )}
         </div>
-
-        {/* Footer */}
-        {!embedded && (
-          <div className="px-6 py-4 border-t border-border flex justify-end bg-background rounded-b-lg">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors text-sm font-medium"
-            >
-              Close
-            </button>
-          </div>
-        )}
-      </div>
-  )
-
-  if (embedded) return shell
-
-  return (
-    <ModalPortal>
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-2 sm:p-4">
-      {shell}
-    </div>
-    </ModalPortal>
+    </InspectorShell>
   )
 }
 

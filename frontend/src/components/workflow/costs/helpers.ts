@@ -8,15 +8,31 @@ import type {
   PhaseTokenUsageFile,
 } from '../../../services/api-types'
 
+// Intl formatters are expensive to construct and are called per table cell;
+// build each once at module load. Options are unchanged from the per-call
+// versions they replace.
+const usdFormatter = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 4,
+  maximumFractionDigits: 4
+})
+const timestampLabelFormatter = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit'
+})
+const runBadgeFormatter = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric'
+})
+
 // Format cost in USD
 export const formatUSD = (amount?: number) => {
   if (amount === undefined || amount === null) return '$0.00'
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 4,
-    maximumFractionDigits: 4
-  }).format(amount)
+  return usdFormatter.format(amount)
 }
 
 // Format token count (e.g., 1,234,567 -> 1.23M)
@@ -169,7 +185,7 @@ export const getRunFolderDisplayName = (runFolder: string) => {
 //   routing, todo_task, kb_update, kb_reorganize,
 //   kb_consolidate, review_step_code,
 //   Goal Advisor proposal/application work, evaluation_scoring.
-export const getRunTimestamp = (runCost: Pick<RunCosts, 'tokenUsage' | 'evaluationTokenUsage'>) => {
+const getRunTimestamp = (runCost: Pick<RunCosts, 'tokenUsage' | 'evaluationTokenUsage'>) => {
   const timestamp =
     runCost.tokenUsage?.updated_at ||
     runCost.evaluationTokenUsage?.updated_at ||
@@ -183,31 +199,16 @@ export const getRunTimestamp = (runCost: Pick<RunCosts, 'tokenUsage' | 'evaluati
   return parsed
 }
 
-export const formatRunTimestampLabel = (runCost: Pick<RunCosts, 'tokenUsage' | 'evaluationTokenUsage'>) => {
+const formatRunTimestampLabel = (runCost: Pick<RunCosts, 'tokenUsage' | 'evaluationTokenUsage'>) => {
   const timestamp = getRunTimestamp(runCost)
-  if (!timestamp) return ''
-
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  }).format(timestamp)
+  return timestamp ? timestampLabelFormatter.format(timestamp) : ''
 }
 
 export const formatTimestampLabel = (timestamp?: string | null) => {
   if (!timestamp) return ''
   const parsed = new Date(timestamp)
   if (Number.isNaN(parsed.getTime())) return ''
-
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  }).format(parsed)
+  return timestampLabelFormatter.format(parsed)
 }
 
 export const compareRunCosts = (a: RunCosts, b: RunCosts, selectedRunFolder: string | null) => {
@@ -245,14 +246,7 @@ export const getRunFolderTitle = (runCost: RunCosts) => {
 
 export const getRunBadgeLabel = (runCost: RunCosts) => {
   const timestamp = getRunTimestamp(runCost)
-  if (timestamp) {
-    return new Intl.DateTimeFormat('en-US', {
-      month: 'short',
-      day: 'numeric'
-    }).format(timestamp)
-  }
-
-  return 'Run'
+  return timestamp ? runBadgeFormatter.format(timestamp) : 'Run'
 }
 
 // Calculate cost summary from token usage

@@ -1,4 +1,5 @@
 import type { ScheduledJob } from '../../../services/api-types'
+import { normalizeWorkspacePath } from '../../../utils/workspacePathUtils'
 
 export type JobFilter = 'running' | 'enabled' | 'paused' | 'missed' | 'issues' | 'all'
 export type SchedulePanelView = 'overview' | 'calendar' | 'by-workflow' | 'schedules'
@@ -63,17 +64,20 @@ export function formatLastRunLabel(dateStr?: string): string {
   return dateStr ? timeAgo(dateStr) : 'never'
 }
 
+// Same options as the per-call toLocaleString this replaces, built once.
+const exactDateTimeFormatter = new Intl.DateTimeFormat([], {
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: true,
+})
+
 export function formatExactDateTime(dateStr?: string): string {
   if (!dateStr) return 'No scheduled runs recorded yet'
   try {
-    return new Date(dateStr).toLocaleString([], {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true,
-    })
+    return exactDateTimeFormatter.format(new Date(dateStr))
   } catch {
     return dateStr
   }
@@ -126,7 +130,7 @@ export function isMissedSchedule(job: ScheduledJob): boolean {
   return !!job.enabled && (job.missed_run_count ?? 0) > 0
 }
 
-export type ScheduleExecutionScope = {
+type ScheduleExecutionScope = {
   label: string
   title: string
 }
@@ -199,7 +203,7 @@ export function formatLocalScheduleTime(dateStr?: string): string {
   }
 }
 
-export function formatLocalScheduleTimeShort(dateStr?: string): string {
+function formatLocalScheduleTimeShort(dateStr?: string): string {
   if (!dateStr) return ''
 
   try {
@@ -213,7 +217,7 @@ export function formatLocalScheduleTimeShort(dateStr?: string): string {
   }
 }
 
-export function stripTimezoneSuffix(label: string): string {
+function stripTimezoneSuffix(label: string): string {
   return label.replace(/\s*\([^()]*\b(?:[A-Z]{2,5}|UTC|GMT)\b[^()]*\)\s*$/, '').trim()
 }
 
@@ -246,10 +250,6 @@ export function getWorkflowFilterMeta(
     label: workflowLabel,
     workflowLabel,
   }
-}
-
-export function normalizeWorkspacePath(path?: string | null): string {
-  return (path || '').replace(/\/+$/, '')
 }
 
 export function getWorkflowScopeLabel(

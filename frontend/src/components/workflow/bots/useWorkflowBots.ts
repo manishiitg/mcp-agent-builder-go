@@ -4,12 +4,35 @@ import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestSto
 import { useCanWriteWorkflow } from '../../../hooks/useCanWriteWorkflow'
 import type {
   ChannelRoute, GmailConfigRequest, GmailConfigResponse, GmailTestResponse,
-  SlackConfig, SlackConfigRequest, SlackTestResponse,
+  SlackConfig, SlackConfigRequest, SlackTestResponse, WhatsAppRoute, WhatsAppStatus,
 } from '../../../services/api-types'
-import {
-  SLUG_RE, emptyGmailConfig, normalizeGmailEmails, routeId,
-  type ChannelKind, type WaRoute, type WhatsAppStatus, type WorkflowRoute,
-} from './types'
+import { routeId, type ChannelKind, type WorkflowRoute } from './types'
+
+type WaRoute = WhatsAppRoute
+
+const SLUG_RE = /^[a-z0-9-]+$/
+
+const normalizeGmailEmails = (values: string | string[] | undefined): string[] => {
+  const source = Array.isArray(values) ? values : [values || '']
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const raw of source) {
+    for (const part of String(raw).split(/[\s,;]+/)) {
+      const email = part.trim().toLowerCase()
+      if (!email || seen.has(email)) continue
+      seen.add(email)
+      result.push(email)
+    }
+  }
+  return result
+}
+
+const emptyGmailConfig: GmailConfigResponse = {
+  enabled: false,
+  default_to: '',
+  auth: { gws_installed: false, authenticated: false, has_gmail_scope: false },
+  ready: false,
+}
 
 // All state, loaders, effects, routing writes, and handlers for the Bots
 // panel. The panel and its children are composition over this hook's result.

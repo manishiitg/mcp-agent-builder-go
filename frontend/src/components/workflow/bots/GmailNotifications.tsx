@@ -1,12 +1,20 @@
-import { AlertCircle, AlertTriangle, CheckCircle, ChevronRight, Loader2, Mail, RotateCcw } from 'lucide-react'
+import { AlertTriangle, ChevronRight, Loader2, Mail, RotateCcw } from 'lucide-react'
 import { Button } from '../../ui/Button'
 import { Card } from '../../ui/Card'
 import { READ_ONLY_TITLE } from '../../../hooks/useCanWriteWorkflow'
 import type { WorkflowBots } from './useWorkflowBots'
+import { StatusBanner } from './StatusBanner'
 
 // ── Email notifications (account-wide, shared by every workflow) ──────────
 
-export function GmailNotifications({ bots }: { bots: WorkflowBots }) {
+type GmailNotificationsBots = Pick<WorkflowBots,
+  | 'readOnly'
+  | 'gmailOpen' | 'setGmailOpen' | 'gmailConfig' | 'setGmailConfig' | 'gmailBlockedText' | 'setGmailBlockedText'
+  | 'gmailLoading' | 'gmailChecking' | 'gmailSaving' | 'gmailTesting' | 'gmailError' | 'gmailSuccess' | 'gmailTestResult'
+  | 'gmailBlockedDefaults' | 'gmailDefaultIsBlocked' | 'gmailTestPassed' | 'gmailHasChanges' | 'loadGmail' | 'saveGmail' | 'testGmail'
+>
+
+export function GmailNotifications({ bots }: { bots: GmailNotificationsBots }) {
   const {
     readOnly,
     gmailOpen, setGmailOpen, gmailConfig, setGmailConfig, gmailBlockedText, setGmailBlockedText,
@@ -39,18 +47,8 @@ export function GmailNotifications({ bots }: { bots: WorkflowBots }) {
           ) : (
             <>
               <p className="text-xs text-muted-foreground">Account-wide one-way email delivery, shared by <code>notify_user</code> across every workflow and product chat. Turn this off to stop all outbound email. Email replies do not resume an agent.</p>
-              {gmailError && (
-                <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
-                  <p className="text-sm text-red-700 dark:text-red-300">{gmailError}</p>
-                </div>
-              )}
-              {gmailSuccess && (
-                <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg flex items-start gap-2">
-                  <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
-                  <p className="text-sm text-green-700 dark:text-green-300">{gmailSuccess}</p>
-                </div>
-              )}
+              {gmailError && <StatusBanner tone="error">{gmailError}</StatusBanner>}
+              {gmailSuccess && <StatusBanner tone="success">{gmailSuccess}</StatusBanner>}
               <Card className="p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>

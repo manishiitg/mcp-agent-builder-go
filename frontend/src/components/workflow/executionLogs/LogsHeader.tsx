@@ -1,8 +1,9 @@
-import { Filter, RefreshCw, Terminal, X } from 'lucide-react'
+import { Filter, RefreshCw, Terminal } from 'lucide-react'
 import { formatStartedAt } from '../../../utils/duration'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select'
 
 export interface LogsHeaderProps {
+  /** Embedded density: the pane header is one compact row, the modal's is two. */
   embedded: boolean
   startedAt?: string | null
   runFolderOptions: string[]
@@ -11,9 +12,9 @@ export interface LogsHeaderProps {
   loading: boolean
   loadLogs: () => void
   onRefreshRunFolders?: () => void | Promise<void>
-  onClose: () => void
 }
 
+// Header content only; InspectorShell owns the row wrapper and the close X.
 export function LogsHeader({
   embedded,
   startedAt,
@@ -23,10 +24,8 @@ export function LogsHeader({
   loading,
   loadLogs,
   onRefreshRunFolders,
-  onClose,
 }: LogsHeaderProps) {
   return (
-        <div className={`flex items-center justify-between gap-3 border-b border-border ${embedded ? 'px-3 py-2' : 'px-4 py-3 sm:px-6 sm:py-4'}`}>
           <div className={`flex min-w-0 flex-1 ${embedded ? 'items-center gap-3' : 'items-start gap-3'}`}>
             <h2 className={`${embedded ? 'text-sm' : 'text-lg'} flex shrink-0 items-center gap-2 font-semibold text-foreground`}>
               <Terminal className={`${embedded ? 'h-4 w-4' : 'h-5 w-5'} text-primary`} />
@@ -78,14 +77,5 @@ export function LogsHeader({
               </button>
             </div>
           </div>
-          {!embedded && (
-            <button
-              onClick={onClose}
-              className="p-2 rounded-full hover:bg-accent hover:text-accent-foreground transition-colors ml-4"
-            >
-              <X className="w-5 h-5 text-muted-foreground" />
-            </button>
-          )}
-        </div>
   )
 }

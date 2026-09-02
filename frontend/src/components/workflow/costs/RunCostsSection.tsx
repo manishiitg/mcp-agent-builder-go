@@ -14,6 +14,7 @@ import {
   getRunFolderTitle,
   getRunBadgeLabel,
 } from './helpers'
+import StageCostCard from './StageCostCard'
 import type { CostsData } from './useCostsData'
 
 type RunCostsSectionProps = Pick<
@@ -58,6 +59,17 @@ const RunCostsSection: React.FC<RunCostsSectionProps> = ({
                   const isExpanded = expandedRunFolders.has(runCost.runFolder)
                   const viewMode = costViewMode[runCost.runFolder] || 'step'
                   const costSummary = runCost.costSummary
+                  // step_id -> {stepNum, title}, built once per run instead of a
+                  // linear scan of runCost.steps for every by_step_and_model key.
+                  const stepInfoById = new Map<string, { stepNum: number; title: string }>()
+                  for (const [key, stepData] of Object.entries(runCost.steps || {})) {
+                    if (!stepData.step_id || stepInfoById.has(stepData.step_id)) continue
+                    const match = key.match(/step-(\d+)/)
+                    stepInfoById.set(stepData.step_id, {
+                      stepNum: match ? parseInt(match[1], 10) : 0,
+                      title: stepData.title || stepData.step_id,
+                    })
+                  }
                   const displayRunFolderName = getRunFolderDisplayName(runCost.runFolder)
                   const secondaryRunFolderLabel = getRunFolderSecondaryLabel(runCost)
                   const routeFilterKey = routeFilterByRunFolder[runCost.runFolder] || null
@@ -179,34 +191,13 @@ const RunCostsSection: React.FC<RunCostsSectionProps> = ({
                         <div className="border-t border-border p-4 space-y-4">
                           {/* Stage Summary Cards */}
                           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
-                            <div className="bg-card border border-border rounded-lg p-3 shadow-sm">
-                              <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Execution</div>
-                              <div className="text-lg font-bold text-foreground">{formatUSD(costSummary.stageCosts.execution)}</div>
-                            </div>
-                            <div className="bg-card border border-border rounded-lg p-3 shadow-sm">
-                              <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Learning</div>
-                              <div className="text-lg font-bold text-foreground">{formatUSD(costSummary.stageCosts.learning)}</div>
-                            </div>
-                            <div className="bg-card border border-border rounded-lg p-3 shadow-sm">
-                              <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Knowledgebase</div>
-                              <div className="text-lg font-bold text-foreground">{formatUSD(costSummary.stageCosts.knowledgebase)}</div>
-                            </div>
-                            <div className="bg-card border border-border rounded-lg p-3 shadow-sm">
-                              <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Routing</div>
-                              <div className="text-lg font-bold text-foreground">{formatUSD(costSummary.stageCosts.routing)}</div>
-                            </div>
-                            <div className="bg-card border border-border rounded-lg p-3 shadow-sm">
-                              <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Workshop</div>
-                              <div className="text-lg font-bold text-foreground">{formatUSD(costSummary.stageCosts.workshop)}</div>
-                            </div>
-                            <div className="bg-card border border-border rounded-lg p-3 shadow-sm">
-                              <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Evaluation</div>
-                              <div className="text-lg font-bold text-foreground">{formatUSD(costSummary.stageCosts.evaluation)}</div>
-                            </div>
-                            <div className="bg-card border border-border rounded-lg p-3 shadow-sm">
-                              <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Other</div>
-                              <div className="text-lg font-bold text-foreground">{formatUSD(costSummary.stageCosts.other)}</div>
-                            </div>
+                            <StageCostCard shadow label="Execution" value={costSummary.stageCosts.execution} />
+                            <StageCostCard shadow label="Learning" value={costSummary.stageCosts.learning} />
+                            <StageCostCard shadow label="Knowledgebase" value={costSummary.stageCosts.knowledgebase} />
+                            <StageCostCard shadow label="Routing" value={costSummary.stageCosts.routing} />
+                            <StageCostCard shadow label="Workshop" value={costSummary.stageCosts.workshop} />
+                            <StageCostCard shadow label="Evaluation" value={costSummary.stageCosts.evaluation} />
+                            <StageCostCard shadow label="Other" value={costSummary.stageCosts.other} />
                           </div>
 
                           {/* Cost Breakdown Table with View Toggle */}
@@ -408,8 +399,9 @@ const RunCostsSection: React.FC<RunCostsSectionProps> = ({
                                         const modelKey = `${runCost.runFolder}-${modelId}`
                                         const isModelExpanded = expandedCostModels.has(modelKey)
 
-                                        // Calculate step-wise breakdown for this model
-                                        const modelSteps = runCost.tokenUsage && runCost.tokenUsage.by_step_and_model
+                                        // Calculate step-wise breakdown for this model -- only rendered
+                                        // when the model row is expanded, so only computed then.
+                                        const modelSteps = isModelExpanded && runCost.tokenUsage && runCost.tokenUsage.by_step_and_model
                                           ? Object.entries(runCost.tokenUsage.by_step_and_model)
                                               .map(([stepKey, modelMap]) => {
                                                 const stepUsage = modelMap[modelId]
@@ -429,18 +421,9 @@ const RunCostsSection: React.FC<RunCostsSectionProps> = ({
                                                 else { phaseLabel = phase }
 
                                                 // Try to find step info from stepID
-                                                let stepNum = 0
-                                                let stepTitle = stepID
-                                                if (runCost.steps) {
-                                                  for (const [key, stepData] of Object.entries(runCost.steps)) {
-                                                    if (stepData.step_id === stepID) {
-                                                      const match = key.match(/step-(\d+)/)
-                                                      stepNum = match ? parseInt(match[1], 10) : 0
-                                                      stepTitle = stepData.title || stepID
-                                                      break
-                                                    }
-                                                  }
-                                                }
+                                                const stepInfo = stepInfoById.get(stepID)
+                                                const stepNum = stepInfo?.stepNum ?? 0
+                                                const stepTitle = stepInfo?.title ?? stepID
 
                                                 let label = ''
                                                 if (stepNum > 0) {

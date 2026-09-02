@@ -3,10 +3,15 @@ import { Button } from '../../ui/Button'
 import { Card } from '../../ui/Card'
 import { READ_ONLY_TITLE } from '../../../hooks/useCanWriteWorkflow'
 import type { WorkflowBots } from './useWorkflowBots'
+import { StatusBanner } from './StatusBanner'
 
 // ── Drill-in: WhatsApp setup ──────────────────────────────────────────────
 
-export function WhatsAppSetup({ bots }: { bots: WorkflowBots }) {
+type WhatsAppSetupBots = Pick<WorkflowBots,
+  | 'readOnly' | 'waStatus' | 'waError' | 'qrImageURL' | 'qrLoading' | 'qrError' | 'unpairConfirm' | 'unpairing' | 'handleUnpairWhatsApp'
+>
+
+export function WhatsAppSetup({ bots }: { bots: WhatsAppSetupBots }) {
   const {
     readOnly,
     waStatus, waError, qrImageURL, qrLoading, qrError, unpairConfirm, unpairing,
@@ -15,12 +20,7 @@ export function WhatsAppSetup({ bots }: { bots: WorkflowBots }) {
 
   return (
     <div className="space-y-4">
-      {waError && (
-        <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-start gap-2">
-          <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
-          <p className="text-sm text-red-700 dark:text-red-300">{waError}</p>
-        </div>
-      )}
+      {waError && <StatusBanner tone="error">{waError}</StatusBanner>}
 
       {/* Connector disabled at server startup */}
       {waStatus && !waStatus.enabled && (

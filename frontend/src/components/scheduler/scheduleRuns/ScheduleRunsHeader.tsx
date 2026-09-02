@@ -5,7 +5,10 @@ import { formatExactDateTime, formatLastRunLabel } from './helpers'
 import type { ScheduleRunsPanelState } from './useScheduleRunsData'
 
 type ScheduleRunsHeaderProps = {
-  panel: ScheduleRunsPanelState
+  panel: Pick<ScheduleRunsPanelState,
+    | 'panelTitle' | 'isLoading' | 'isWorkflowScoped' | 'workflowScheduleSummary' | 'summary'
+    | 'isSchedulerPaused' | 'isReadOnlyUser' | 'handleToggleGlobalPause' | 'isUpdatingSchedulerPause' | 'loadJobs'
+  >
   onClose: () => void
 }
 

@@ -5,7 +5,9 @@ import type { WorkflowBots } from './useWorkflowBots'
 
 // One "this workflow answers on" chip with its expandable route options.
 
-export function RouteChip({ bots, route }: { bots: WorkflowBots; route: WorkflowRoute }) {
+type RouteChipBots = Pick<WorkflowBots, 'readOnly' | 'expandedChip' | 'setExpandedChip' | 'routeSaving' | 'removeRoute' | 'updateRoute'>
+
+export function RouteChip({ bots, route }: { bots: RouteChipBots; route: WorkflowRoute }) {
   const { readOnly, expandedChip, setExpandedChip, routeSaving, removeRoute, updateRoute } = bots
 
   const id = routeId(route)
@@ -14,7 +16,7 @@ export function RouteChip({ bots, route }: { bots: WorkflowBots; route: Workflow
   const label = route.kind === 'slack' ? `Slack #${route.key}` : `WhatsApp @${route.key}`
   const Icon = route.kind === 'slack' ? MessageSquare : Phone
   return (
-    <div key={id} className="min-w-0">
+    <div className="min-w-0">
       <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 py-1 pl-2 pr-1 text-xs font-medium text-primary">
         <button
           type="button"

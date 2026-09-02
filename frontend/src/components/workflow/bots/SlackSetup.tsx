@@ -2,12 +2,22 @@ import { AlertCircle, AlertTriangle, CheckCircle, Eye, EyeOff, Loader2 } from 'l
 import { Button } from '../../ui/Button'
 import { Card } from '../../ui/Card'
 import { READ_ONLY_TITLE } from '../../../hooks/useCanWriteWorkflow'
-import { toggleClass } from './types'
 import type { WorkflowBots } from './useWorkflowBots'
+import { StatusBanner } from './StatusBanner'
+
+const toggleClass = "w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"
 
 // ── Drill-in: Slack setup ─────────────────────────────────────────────────
 
-export function SlackSetup({ bots }: { bots: WorkflowBots }) {
+type SlackSetupBots = Pick<WorkflowBots,
+  | 'readOnly'
+  | 'slackConfig' | 'setSlackConfig' | 'slackLoading' | 'slackSaving' | 'slackTesting' | 'slackError' | 'slackSuccess'
+  | 'testResult' | 'testReply' | 'pollingForReply' | 'showBotToken' | 'setShowBotToken' | 'showAppToken' | 'setShowAppToken'
+  | 'allowedEmails' | 'setAllowedEmails' | 'emailsDirty' | 'setEmailsDirty' | 'emailsSaving' | 'emailsSaved' | 'setEmailsSaved'
+  | 'handleEmailsSave' | 'handleSlackSave' | 'handleSlackTest' | 'slackHasChanges'
+>
+
+export function SlackSetup({ bots }: { bots: SlackSetupBots }) {
   const {
     readOnly,
     slackConfig, setSlackConfig, slackLoading, slackSaving, slackTesting, slackError, slackSuccess,
@@ -22,18 +32,8 @@ export function SlackSetup({ bots }: { bots: WorkflowBots }) {
         <div className="flex items-center justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>
       ) : (
         <>
-          {slackError && (
-            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-red-700 dark:text-red-300">{slackError}</p>
-            </div>
-          )}
-          {slackSuccess && (
-            <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg flex items-start gap-2">
-              <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-green-700 dark:text-green-300">{slackSuccess}</p>
-            </div>
-          )}
+          {slackError && <StatusBanner tone="error">{slackError}</StatusBanner>}
+          {slackSuccess && <StatusBanner tone="success">{slackSuccess}</StatusBanner>}
 
           {/* Enable Slack */}
           <Card className="p-4">

@@ -4,7 +4,10 @@ import { formatLocalDayLabel } from './cron'
 import type { ScheduleRunsPanelState } from './useScheduleRunsData'
 
 type ScheduleCalendarViewProps = {
-  panel: ScheduleRunsPanelState
+  panel: Pick<ScheduleRunsPanelState,
+    | 'setCalendarMonth' | 'monthlyCalendar' | 'selectedCalendarDate' | 'setSelectedCalendarDate'
+    | 'showJobInWorkflowGroups' | 'selectedCalendarCell'
+  >
 }
 
 export const ScheduleCalendarView: React.FC<ScheduleCalendarViewProps> = ({ panel }) => {

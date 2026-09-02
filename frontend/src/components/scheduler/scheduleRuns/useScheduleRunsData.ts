@@ -9,8 +9,7 @@ import { activateTab } from '../../../utils/activateTab'
 import { selectWorkflowPreset } from '../../../utils/workflowNavigation'
 import { scheduleTabLabel } from '../../../utils/scheduleTabLabel'
 import type { ScheduledJob, ScheduledJobRun, SchedulerConfig } from '../../../services/api-types'
-import { useAuthStore } from '../../../stores/useAuthStore'
-import { isWorkflowReadOnly } from '../../../utils/workflowPermissions'
+import { useCanWriteWorkflow } from '../../../hooks/useCanWriteWorkflow'
 import {
   WORKFLOW_SCHEDULE_PANEL_LIMIT,
   getMissedScheduleDelayMs,
@@ -43,7 +42,7 @@ export type UseScheduleRunsDataArgs = {
 }
 
 export function useScheduleRunsData({ onClose, onJobsLoaded, workflowScope }: UseScheduleRunsDataArgs) {
-  const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
+  const isReadOnlyUser = !useCanWriteWorkflow()
   const [jobs, setJobs] = useState<ScheduledJob[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -91,14 +90,25 @@ export function useScheduleRunsData({ onClose, onJobsLoaded, workflowScope }: Us
     return map
   }, [workflowPresets])
 
+  // Callers pass `workflowScope` as an inline object literal, so depending on
+  // it directly would re-run every memo below (including the 3-month cron
+  // expansion) on each parent render. Depend on its primitives instead.
+  const scopePresetId = workflowScope?.presetQueryId ?? null
+  const scopePath = workflowScope?.workspacePath ?? null
+  const scopeLabel = workflowScope?.label ?? null
+  const stableScope = useMemo<WorkflowScope | undefined>(
+    () => (isWorkflowScoped ? { presetQueryId: scopePresetId, workspacePath: scopePath, label: scopeLabel } : undefined),
+    [isWorkflowScoped, scopePresetId, scopePath, scopeLabel],
+  )
+
   const panelJobs = useMemo(() => {
-    return jobs.filter(job => jobMatchesWorkflowScope(job, workflowScope, presetMap))
-  }, [jobs, workflowScope, presetMap])
+    return jobs.filter(job => jobMatchesWorkflowScope(job, stableScope, presetMap))
+  }, [jobs, stableScope, presetMap])
 
   const panelTitle = useMemo(() => {
     if (!isWorkflowScoped) return 'Automation Schedules'
-    return `Schedules for ${getWorkflowScopeLabel(workflowScope, presetMap)}`
-  }, [isWorkflowScoped, workflowScope, presetMap])
+    return `Schedules for ${getWorkflowScopeLabel(stableScope, presetMap)}`
+  }, [isWorkflowScoped, stableScope, presetMap])
 
   useEffect(() => {
     const runningWorkflowKeys = new Set(
@@ -196,32 +206,29 @@ export function useScheduleRunsData({ onClose, onJobsLoaded, workflowScope }: Us
       .sort((a, b) => a.label.localeCompare(b.label))
   }, [panelJobs, presetMap])
 
-  const upcomingJobs = useMemo(() => {
-    return [...panelJobs]
-      .filter(job => {
-        if (!job.enabled || !job.next_run_at) return false
-        if (isMissedSchedule(job)) return false
-        if (selectedWorkflowFilter === 'all') return true
-        return getWorkflowFilterMeta(job, presetMap).value === selectedWorkflowFilter
-      })
-      .sort((a, b) => (a.next_run_at || '').localeCompare(b.next_run_at || ''))
-      .slice(0, 4)
+  // Jobs narrowed to the selected workflow filter; upcoming/missed both derive from it.
+  const scopedJobs = useMemo(() => {
+    if (selectedWorkflowFilter === 'all') return panelJobs
+    return panelJobs.filter(job => getWorkflowFilterMeta(job, presetMap).value === selectedWorkflowFilter)
   }, [panelJobs, presetMap, selectedWorkflowFilter])
 
+  const upcomingJobs = useMemo(() => {
+    return scopedJobs
+      .filter(job => job.enabled && !!job.next_run_at && !isMissedSchedule(job))
+      .sort((a, b) => (a.next_run_at || '').localeCompare(b.next_run_at || ''))
+      .slice(0, 4)
+  }, [scopedJobs])
+
   const missedJobs = useMemo(() => {
-    return [...panelJobs]
-      .filter(job => {
-        if (!isMissedSchedule(job)) return false
-        if (selectedWorkflowFilter === 'all') return true
-        return getWorkflowFilterMeta(job, presetMap).value === selectedWorkflowFilter
-      })
+    return scopedJobs
+      .filter(job => isMissedSchedule(job))
       .sort((a, b) => {
         const aDelay = getMissedScheduleDelayMs(a) ?? 0
         const bDelay = getMissedScheduleDelayMs(b) ?? 0
         return bDelay - aDelay
       })
       .slice(0, 4)
-  }, [panelJobs, presetMap, selectedWorkflowFilter])
+  }, [scopedJobs])
 
   const filteredJobs = useMemo(() => {
     return [...panelJobs]
