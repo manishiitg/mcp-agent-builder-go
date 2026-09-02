@@ -116,9 +116,6 @@ const (
 
 	// Todo task orchestration events
 	TodoTaskRouteSelected events.EventType = "todo_task_route_selected" // When orchestrator selects a route/sub-agent
-	TodoTaskItemCreated   events.EventType = "todo_task_item_created"   // When a todo item is created
-	TodoTaskItemUpdated   events.EventType = "todo_task_item_updated"   // When a todo item is updated
-	TodoTaskItemCompleted events.EventType = "todo_task_item_completed" // When a todo item is completed
 	TodoTaskStepCompleted events.EventType = "todo_task_step_completed" // When the entire todo task step is completed
 
 )
@@ -134,7 +131,7 @@ func GetComponentFromEventType(eventType events.EventType) string {
 		HumanVerificationResponse, RequestHumanFeedback, BlockingHumanFeedback, PlanApproval,
 		LearningSkipped,
 		RoutingEvaluated, PreValidationCompleted,
-		TodoTaskRouteSelected, TodoTaskItemCreated, TodoTaskItemUpdated, TodoTaskItemCompleted, TodoTaskStepCompleted:
+		TodoTaskRouteSelected, TodoTaskStepCompleted:
 		return "orchestrator"
 	default:
 		return "system"

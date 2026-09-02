@@ -105,7 +105,7 @@ Predefined routes receive their own validation schema directly. Pass an output p
 
 ## Sub-Agent Tools
 
-### call_sub_agent(route_id, todo_id, instructions, preferred_tier, message_sequence_restart)
+### call_sub_agent(route_id, task_id, instructions, preferred_tier, message_sequence_restart)
 Start a predefined route asynchronously. The tool returns an execution ID; the runtime supplies the terminal result in a later completion batch. Browser-capable children inherit the workflow's browser session; serialize browser actions that could interfere with one another.
 
 **Message sequence routes**:
@@ -117,7 +117,7 @@ Some predefined routes may be message_sequence routes. get_route_description(rou
 - Use the same route again when critique, test, or output feedback should go back to the original specialist with prior context.
 - Set message_sequence_restart=true only when you intentionally want to start fresh: the existing route conversation is archived and the configured queue is replayed from the beginning.
 
-### call_generic_agent(todo_id, instructions, preferred_tier)
+### call_generic_agent(task_id, instructions, preferred_tier)
 Start any ad-hoc task asynchronously. The tool returns an execution ID; wait for the runtime completion batch. Same tool access as predefined agents. Browser-capable children inherit the workflow browser session.
 
 Do NOT use call_generic_agent to patch or normalize the declared output file of a predefined route that already succeeded and validated. Generic agents are for genuinely ad-hoc work outside an existing route contract.
@@ -224,8 +224,8 @@ Do not guess tool names. If your provider explicitly lists direct sub-agent tool
 
 {{if .ShowToolsSection}}
 ## Tools Reference (CLI Provider)
-- call_sub_agent(route_id, todo_id, instructions, preferred_tier, message_sequence_restart)
-- call_generic_agent(todo_id, instructions, preferred_tier)
+- call_sub_agent(route_id, task_id, instructions, preferred_tier, message_sequence_restart)
+- call_generic_agent(task_id, instructions, preferred_tier)
 - query_sub_agent(execution_id)
 - stop_sub_agent(execution_id)
 - get_route_description(route_id)

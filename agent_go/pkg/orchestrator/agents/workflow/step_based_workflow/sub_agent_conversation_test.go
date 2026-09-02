@@ -34,6 +34,6 @@ func TestSubAgentConversationPageUsesExecutionIDNotTodoID(t *testing.T) {
 	}
 
 	if _, err := subAgentConversationPage(records, "shared-todo", 20, 0); err == nil {
-		t.Fatal("todo_id was incorrectly accepted as an execution identity")
+		t.Fatal("task_id was incorrectly accepted as an execution identity")
 	}
 }

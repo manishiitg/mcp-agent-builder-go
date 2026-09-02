@@ -43,11 +43,7 @@ export const SUMMARY_MODE_EVENTS = new Set([
 
   // Task & step progress
   'todo_task_route_selected',
-  'todo_task_item_created',
-  'todo_task_item_updated',
-  'todo_task_item_completed',
   'todo_task_step_completed',
-  'todo_task_status_update',
   'step_progress_updated',
   'batch_group_start',
   'batch_group_end',

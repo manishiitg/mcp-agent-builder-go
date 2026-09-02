@@ -197,57 +197,6 @@ func (e *TodoTaskRouteSelectedEvent) GetEventType() baseevents.EventType {
 	return events.TodoTaskRouteSelected
 }
 
-// TodoTaskItemCreatedEvent represents when a todo item is created
-type TodoTaskItemCreatedEvent struct {
-	baseevents.BaseEventData
-	StepIndex   int    `json:"step_index"`
-	StepPath    string `json:"step_path"`
-	StepID      string `json:"step_id"`
-	TodoID      string `json:"todo_id"`
-	Title       string `json:"title"`
-	Description string `json:"description,omitempty"`
-	Priority    string `json:"priority,omitempty"`
-	CreatedBy   string `json:"created_by"` // "orchestrator" or agent name
-}
-
-func (e *TodoTaskItemCreatedEvent) GetEventType() baseevents.EventType {
-	return events.TodoTaskItemCreated
-}
-
-// TodoTaskItemUpdatedEvent represents when a todo item is updated
-type TodoTaskItemUpdatedEvent struct {
-	baseevents.BaseEventData
-	StepIndex int    `json:"step_index"`
-	StepPath  string `json:"step_path"`
-	StepID    string `json:"step_id"`
-	TodoID    string `json:"todo_id"`
-	Title     string `json:"title"`
-	OldStatus string `json:"old_status,omitempty"`
-	NewStatus string `json:"new_status"`
-	UpdatedBy string `json:"updated_by"` // "orchestrator" or agent name
-	Notes     string `json:"notes,omitempty"`
-}
-
-func (e *TodoTaskItemUpdatedEvent) GetEventType() baseevents.EventType {
-	return events.TodoTaskItemUpdated
-}
-
-// TodoTaskItemCompletedEvent represents when a todo item is completed
-type TodoTaskItemCompletedEvent struct {
-	baseevents.BaseEventData
-	StepIndex   int    `json:"step_index"`
-	StepPath    string `json:"step_path"`
-	StepID      string `json:"step_id"`
-	TodoID      string `json:"todo_id"`
-	Title       string `json:"title"`
-	Result      string `json:"result,omitempty"`
-	CompletedBy string `json:"completed_by"` // "orchestrator" or agent name
-}
-
-func (e *TodoTaskItemCompletedEvent) GetEventType() baseevents.EventType {
-	return events.TodoTaskItemCompleted
-}
-
 // TodoTaskStepCompletedEvent represents when the entire todo task step is completed
 type TodoTaskStepCompletedEvent struct {
 	baseevents.BaseEventData

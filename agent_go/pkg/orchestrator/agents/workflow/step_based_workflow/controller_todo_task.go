@@ -329,7 +329,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 				if summaryErr := hcpo.persistCompletedTodoTaskSummary(ctx, todoTaskStep, stepIndex, todoTaskStepPath, todoTaskAgent, subAgentExecCtx, &conversationHistory); summaryErr != nil {
 					return false, "", fmt.Errorf("todo task completion summary failed: %w", summaryErr)
 				}
-				hcpo.emitTodoTaskStepCompletedEvent(ctx, step, stepIndex, todoTaskStepPath, 1, nil, "Pre-validation passed", todoTaskStep.NextStepID)
+				hcpo.emitTodoTaskStepCompletedEvent(ctx, step, stepIndex, todoTaskStepPath, 1, "Pre-validation passed", todoTaskStep.NextStepID)
 				hcpo.emitStepFinishedEvent(ctx, step, stepIndex, todoTaskStepPath)
 				return true, todoTaskStep.NextStepID, nil
 			}
@@ -380,7 +380,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeTodoTaskStep(
 		if summaryErr := hcpo.persistCompletedTodoTaskSummary(ctx, todoTaskStep, stepIndex, todoTaskStepPath, todoTaskAgent, subAgentExecCtx, &conversationHistory); summaryErr != nil {
 			return false, "", fmt.Errorf("todo task completion summary failed: %w", summaryErr)
 		}
-		hcpo.emitTodoTaskStepCompletedEvent(ctx, step, stepIndex, todoTaskStepPath, 1, nil, "Execution completed", todoTaskStep.NextStepID)
+		hcpo.emitTodoTaskStepCompletedEvent(ctx, step, stepIndex, todoTaskStepPath, 1, "Execution completed", todoTaskStep.NextStepID)
 		hcpo.emitStepFinishedEvent(ctx, step, stepIndex, todoTaskStepPath)
 		return true, todoTaskStep.NextStepID, nil
 	}
@@ -1526,7 +1526,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) emitTodoTaskRouteSelectedEvent(
 	stepPath string,
 	iteration int,
 	response *TodoTaskResponse,
-	todoFile *virtualtools.TodoFile,
 	executionLLM string,
 ) {
 	bridge := hcpo.GetContextAwareBridge()
@@ -1534,16 +1533,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) emitTodoTaskRouteSelectedEvent(
 		return
 	}
 
-	// Get todo title if a todo is being executed
-	var todoTitle string
-	if response.TodoIDToExecute != "" && todoFile != nil {
-		for _, todo := range todoFile.Todos {
-			if todo.ID == response.TodoIDToExecute {
-				todoTitle = todo.Title
-				break
-			}
-		}
-	}
+	// The todo list this event once summarized no longer exists; the task label
+	// itself is the only title available. Field names stay for wire compatibility.
+	todoTitle := response.TodoIDToExecute
 
 	// Get route name if predefined route selected
 	var selectedRouteName string
@@ -1613,7 +1605,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) emitTodoTaskStepCompletedEvent(
 	stepIndex int,
 	stepPath string,
 	totalIterations int,
-	todoFile *virtualtools.TodoFile,
 	completionReason string,
 	nextStepID string,
 ) {
@@ -1622,12 +1613,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) emitTodoTaskStepCompletedEvent(
 		return
 	}
 
+	// No todo list exists any more; counts stay in the event for wire compatibility.
 	totalTodos := 0
 	completedCount := 0
-	if todoFile != nil {
-		totalTodos = todoFile.Summary.Total
-		completedCount = todoFile.Summary.Completed
-	}
 
 	event := &TodoTaskStepCompletedEvent{
 		BaseEventData: baseevents.BaseEventData{

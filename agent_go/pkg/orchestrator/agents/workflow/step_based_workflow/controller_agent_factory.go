@@ -1450,7 +1450,7 @@ type SubAgentCallRecord struct {
 	Index         int                 `json:"index"` // 1-based call order
 	ExecutionID   string              `json:"execution_id"`
 	CalledAt      time.Time           `json:"called_at"`
-	TodoID        string              `json:"todo_id"`
+	TodoID        string              `json:"task_id"`
 	RouteID       string              `json:"route_id,omitempty"` // empty for generic
 	AgentType     string              `json:"agent_type"`         // "predefined" | "generic"
 	Success       bool                `json:"success"`
@@ -2047,7 +2047,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutePredefinedSubAgentSyncFu
 		}
 
 		// Emit route selected event BEFORE sub-agent execution so it appears before the agent card
-		hcpo.emitTodoTaskRouteSelectedEvent(ctx, execCtx.TodoTaskStep, execCtx.StepIndex, execCtx.StepPath, 0, response, nil, "")
+		hcpo.emitTodoTaskRouteSelectedEvent(ctx, execCtx.TodoTaskStep, execCtx.StepIndex, execCtx.StepPath, 0, response, "")
 
 		startTime := time.Now()
 
@@ -2134,7 +2134,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecuteGenericAgentSyncFunc(
 		}
 
 		// Emit route selected event BEFORE sub-agent execution so it appears before the agent card
-		hcpo.emitTodoTaskRouteSelectedEvent(ctx, execCtx.TodoTaskStep, execCtx.StepIndex, execCtx.StepPath, 0, response, nil, "")
+		hcpo.emitTodoTaskRouteSelectedEvent(ctx, execCtx.TodoTaskStep, execCtx.StepIndex, execCtx.StepPath, 0, response, "")
 
 		startTime := time.Now()
 
