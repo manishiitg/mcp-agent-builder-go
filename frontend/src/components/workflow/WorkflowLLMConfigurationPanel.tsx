@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { AlertCircle, ArrowLeft, CheckCircle, ChevronDown, ChevronRight, Loader2, Lock, RefreshCw, Search, X } from 'lucide-react'
+import { AlertCircle, ArrowLeft, CheckCircle, ChevronRight, Loader2, Lock, RefreshCw, Search, X } from 'lucide-react'
 import LLMRoleSelector from '../LLMRoleSelector'
 import LLMSelectionDropdown from '../LLMSelectionDropdown'
 import { WorkflowProviderCredentialField } from '../WorkflowProviderCredentialField'
@@ -127,10 +127,6 @@ function roleConfig(config: PresetLLMConfig | undefined, key: RoleKey): AgentLLM
   return config?.[key]
 }
 
-function configLabel(config?: AgentLLMConfig): string {
-  return config ? `${config.provider}/${config.model_id}` : 'Not configured'
-}
-
 const statusToneClasses = {
   ready: { dot: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400' },
   warn: { dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' },
@@ -216,7 +212,6 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   // keys, publish, Pi keys) and role edits write immediately -- disable all of
   // it for read-only users rather than only the Save button upstream.
   const readOnly = !useCanWriteWorkflow()
-  const [expandedRole, setExpandedRole] = useState<RoleKey | null>(null)
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [tokenOpen, setTokenOpen] = useState(false)
@@ -422,16 +417,14 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   const selectRow = (row: ProviderRow) => {
     const config = configForRow(row)
     if (!config) return
-    setExpandedRole(null)
     onChange(config)
   }
 
   // "Use in this workflow": select the provider and persist right away. Used
   // by the inline row button for sign-in CLIs and by the Pi drill-in.
-  const useRowInWorkflow = async (row: ProviderRow) => {
+  const applyRowToWorkflow = async (row: ProviderRow) => {
     const config = configForRow(row)
     if (!config) return
-    setExpandedRole(null)
     setRowUsing(row.id)
     try {
       onChange(config)
@@ -442,9 +435,9 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     }
   }
 
-  const useActiveRowInWorkflow = async () => {
+  const applyActiveRowToWorkflow = async () => {
     if (!activeRow) return
-    await useRowInWorkflow(activeRow)
+    await applyRowToWorkflow(activeRow)
     setActiveProviderId(null)
   }
 
@@ -469,7 +462,6 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   const useManagedDefaults = () => {
     if (!selectedProfile) return
     onChange({ schema_version: 2, mode: 'provider_profile', provider: selectedProfile.provider as LLMProvider })
-    setExpandedRole(null)
   }
 
   const updateRole = (key: RoleKey, next: AgentLLMConfig, preserveFallbacks = true) => {
@@ -611,7 +603,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
             variant="workflow"
             initialModelId={activeRow.modelId ?? undefined}
             inUse={activeRow.id === selectedRowId}
-            onUseInWorkflow={useActiveRowInWorkflow}
+            onUseInWorkflow={applyActiveRowToWorkflow}
           />
         )}
       </div>
@@ -778,7 +770,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
           </button>
           <button
             type="button"
-            onClick={() => void useRowInWorkflow(row)}
+            onClick={() => void applyRowToWorkflow(row)}
             disabled={readOnly || selected || !row.selectable || rowUsing === row.id}
             title={readOnly ? READ_ONLY_TITLE : selected ? 'Already in use' : !usable ? 'Not verified yet: Test first, or use anyway' : `Use ${row.name} for this workflow`}
             className="inline-flex shrink-0 items-center gap-1 rounded-md bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
