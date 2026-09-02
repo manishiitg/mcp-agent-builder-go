@@ -90,7 +90,7 @@ function ToolbarGroup({ label, state, dotClass, open, onToggle, title, children,
         onClick={onToggle}
         aria-expanded={open}
         title={title}
-        className={`inline-flex h-6 items-center gap-1.5 rounded px-2 text-[11px] font-medium transition-colors ${open ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
+        className={`inline-flex h-6 items-center gap-1.5 rounded px-2 text-[11px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring ${open ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
       >
         <span>{label}</span>
         {state && <span className={`max-w-[9rem] truncate text-[10px] font-semibold tracking-wide ${open ? 'text-muted-foreground' : 'text-foreground/70'}`}>{state}</span>}
