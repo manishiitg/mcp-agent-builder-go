@@ -9,6 +9,7 @@ import React, {
   useRef,
   useState,
 } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { ReactFlowProvider } from '@xyflow/react'
 import Workspace from '../../Workspace'
 import { FileContentViewerBody } from '../../FileContentViewer'
@@ -20,13 +21,24 @@ import { useEvaluationPlanData } from '../hooks/useEvaluationPlanData'
 import { useWorkflowExecution } from '../hooks/useWorkflowExecution'
 import { useWorkspaceState } from '../hooks/useWorkspaceState'
 import { useWorkflowStore } from '../../../stores/useWorkflowStore'
+import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestStore'
 import { useAppStore } from '../../../stores/useAppStore'
-import type { ExecutionOptions, VariablesManifest } from '../../../services/api-types'
+import { agentApi } from '../../../services/api'
+import type {
+  ExecutionOptions,
+  PulseFinalCommandState,
+  PulseModuleState,
+  PulseReviewFocus,
+  PulseShadowSignalObservation,
+  VariablesManifest,
+} from '../../../services/api-types'
+import { PULSE_FIXED_COMMANDS, PULSE_MODULE_COMMANDS } from './pulseSections'
 import { assertNeverView, isInspectorView, type InspectorViewId } from '../workspaceViews'
 import {
   WorkspaceViewDataContext,
   useWorkspaceViewData,
   type FlowShell,
+  type PulseData,
   type WorkflowImageExportFormat,
   type WorkspaceViewData,
 } from './workspaceViewData'
@@ -51,6 +63,22 @@ const PulseEvalSummary = lazy(() => import('../PulseEvalSummary').then(module =>
 const WorkflowScheduleRunsPanel = lazy(() => import('../../scheduler/WorkflowScheduleRunsPanel'))
 const WorkflowCapabilitiesPanel = lazy(() => import('../WorkflowCapabilitiesPanel'))
 const WorkflowFolderAccessView = lazy(() => import('../WorkflowFolderAccessView'))
+const PulseView = lazy(() => import('../PulseView'))
+const WorkflowBackupView = lazy(() => import('../WorkflowBackupView'))
+const WorkflowPublishView = lazy(() => import('../WorkflowPublishView'))
+const WorkflowNotificationView = lazy(() => import('../WorkflowNotificationView'))
+
+function formatPulseTimestamp(value?: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
 
 type ViewKind = 'flow' | 'report' | 'files' | 'inspector'
 
@@ -108,7 +136,7 @@ function FilesBody() {
 
 function InspectorBody({ workspacePath, presetQueryId }: { workspacePath: string | null; presetQueryId: string | null }) {
   const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
-  const { planData, selectedRunFolder, runFolderNames, workspace } = useWorkspaceViewData()
+  const { planData, selectedRunFolder, runFolderNames, workspace, pulse } = useWorkspaceViewData()
   const plan = planData.plan
   const refreshWorkspaceState = workspace.refresh
 
@@ -166,6 +194,29 @@ function InspectorBody({ workspacePath, presetQueryId }: { workspacePath: string
         )
       case 'folders':
         return <WorkflowFolderAccessView workspacePath={workspacePath} />
+      case 'pulse':
+        return (
+          <PulseView
+            workspacePath={workspacePath}
+            monitorOn={pulse.monitorOn}
+            monitorSaving={pulse.monitorSaving}
+            onToggleMonitor={pulse.toggleMonitor}
+            moduleStates={pulse.moduleStates}
+            finalCommandStates={pulse.finalCommandStates}
+            reviewFocuses={pulse.reviewFocuses}
+            reviewFocusSelections={pulse.reviewFocusSelections}
+            statusError={pulse.statusError}
+            statusLoading={pulse.statusLoading}
+            overview={pulse.overview}
+            onRefresh={() => { void pulse.refresh() }}
+          />
+        )
+      case 'backup':
+        return <WorkflowBackupView workspacePath={workspacePath} />
+      case 'publish':
+        return <WorkflowPublishView workspacePath={workspacePath} />
+      case 'notify':
+        return <WorkflowNotificationView workspacePath={workspacePath} />
       case 'skills':
       case 'mcp':
       case 'secrets':
@@ -251,6 +302,139 @@ export const WorkspaceViewHost = React.memo(forwardRef<WorkflowCanvasRef, Workfl
   const plan = planData.plan
   const workspaceState = workspace.state
   const isLoadingWorkspaceState = workspace.loading
+
+  // --- Pulse: the toolbar's badge and the pane's PulseView are siblings, so
+  // this lives here and reaches both through props / the WorkspaceViewData
+  // context rather than either fetching its own copy.
+  // useShallow is load-bearing: this selector builds a new object per call,
+  // and without shallow comparison zustand's useSyncExternalStore sees a fresh
+  // snapshot every render and loops ("Maximum update depth exceeded").
+  const pulseConfig = useWorkflowManifestStore(useShallow(state => {
+    const wf = state.workflows.find(w => w.workspace_path === workspacePath)
+    return {
+      enabled: wf?.manifest.pulse?.enabled,
+      legacyEnabled: wf?.manifest.schedules?.some(schedule => schedule.pulse_review_only && schedule.enabled),
+    }
+  }))
+  const monitorOn = !!(pulseConfig.enabled || pulseConfig.legacyEnabled)
+  const updateWorkflowManifest = useWorkflowManifestStore(state => state.updateWorkflow)
+  const [monitorSaving, setMonitorSaving] = useState(false)
+  const toggleMonitor = useCallback(() => {
+    if (!workspacePath || monitorSaving) return
+    setMonitorSaving(true)
+    updateWorkflowManifest(workspacePath, { pulse_enabled: !monitorOn })
+      .catch(err => console.error('[WorkspaceViewHost] Failed to toggle Pulse review schedule:', err))
+      .finally(() => setMonitorSaving(false))
+  }, [workspacePath, monitorOn, monitorSaving, updateWorkflowManifest])
+
+  const [pulseModuleStates, setPulseModuleStates] = useState<PulseModuleState[]>([])
+  const [pulseFinalCommandStates, setPulseFinalCommandStates] = useState<PulseFinalCommandState[]>([])
+  const [pulseReviewFocuses, setPulseReviewFocuses] = useState<PulseReviewFocus[]>([])
+  const [pulseReviewFocusSelections, setPulseReviewFocusSelections] = useState<PulseReviewFocus[]>([])
+  const [pulseLoopClosureObservation, setPulseLoopClosureObservation] = useState<PulseShadowSignalObservation | null>(null)
+  const [pulseStatusLoading, setPulseStatusLoading] = useState(false)
+  const [pulseStatusError, setPulseStatusError] = useState<string | null>(null)
+
+  const refreshPulseModuleStates = useCallback(async (showLoading = true) => {
+    if (!workspacePath) {
+      setPulseModuleStates([])
+      setPulseFinalCommandStates([])
+      setPulseReviewFocuses([])
+      setPulseReviewFocusSelections([])
+      setPulseLoopClosureObservation(null)
+      setPulseStatusError(null)
+      return
+    }
+    if (showLoading) setPulseStatusLoading(true)
+    setPulseStatusError(null)
+    try {
+      const resp = await agentApi.getPulseModuleState(workspacePath)
+      if (!resp.success) {
+        throw new Error(resp.error || 'Failed to load Pulse status')
+      }
+      setPulseModuleStates(resp.modules || [])
+      setPulseFinalCommandStates(resp.commands || [])
+      setPulseReviewFocuses(resp.review_focus_history || [])
+      setPulseReviewFocusSelections(resp.review_focus_selections || [])
+      setPulseLoopClosureObservation(
+        (resp.shadow_signal_observations || []).find(observation => observation.detector === 'loop_closure') || null
+      )
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load Pulse status'
+      setPulseStatusError(message)
+    } finally {
+      if (showLoading) setPulseStatusLoading(false)
+    }
+  }, [workspacePath])
+
+  // Used by cross-workflow decision links: opening a decision must surface
+  // Pulse, but re-renders after that must not keep reopening a view the user
+  // deliberately navigated away from -- one-shot, gated the same as before
+  // (only from the flow view, so a user already on e.g. Costs isn't yanked
+  // into Pulse).
+  const openedInitialPulseRef = useRef(false)
+  useEffect(() => {
+    if (!openPulseOnMount || openedInitialPulseRef.current || kind !== 'flow') return
+    openedInitialPulseRef.current = true
+    useWorkflowStore.getState().openWorkspaceView('pulse')
+    void refreshPulseModuleStates()
+  }, [openPulseOnMount, kind, refreshPulseModuleStates])
+
+  useEffect(() => {
+    if (workflowWorkspaceView !== 'pulse') return
+    void refreshPulseModuleStates()
+    const timer = window.setInterval(() => { void refreshPulseModuleStates(false) }, 5_000)
+    return () => window.clearInterval(timer)
+  }, [workflowWorkspaceView, refreshPulseModuleStates])
+
+  const pulseModuleStateByModule = useMemo(
+    () => new Map(pulseModuleStates.map(state => [state.module, state])),
+    [pulseModuleStates],
+  )
+  const pulseFinalCommandStateByCommand = useMemo(
+    () => new Map(pulseFinalCommandStates.map(state => [state.command, state])),
+    [pulseFinalCommandStates],
+  )
+  const pulseOverview = useMemo(() => {
+    const timestamps = [
+      ...pulseModuleStates.map(state => state.updated_at || state.last_ran_at || state.last_checked_at),
+      ...pulseFinalCommandStates.map(state => state.updated_at || state.finished_at || state.started_at),
+      pulseLoopClosureObservation?.observed_at,
+    ].filter((value): value is string => !!value)
+    const latestTimestamp = timestamps.reduce((latest, value) => {
+      const time = new Date(value).getTime()
+      return Number.isNaN(time) || time <= latest ? latest : time
+    }, 0)
+    const recordedModuleStates = PULSE_MODULE_COMMANDS
+      .map(command => pulseModuleStateByModule.get(command.id))
+      .filter((state): state is PulseModuleState => !!state)
+    const recordedFinalStates = PULSE_FIXED_COMMANDS
+      .map(command => pulseFinalCommandStateByCommand.get(command.id))
+      .filter((state): state is PulseFinalCommandState => !!state)
+    return {
+      recorded: recordedModuleStates.length + recordedFinalStates.length,
+      total: PULSE_MODULE_COMMANDS.length + PULSE_FIXED_COMMANDS.length,
+      latest: latestTimestamp > 0 ? formatPulseTimestamp(new Date(latestTimestamp).toISOString()) : '',
+    }
+  }, [pulseFinalCommandStateByCommand, pulseFinalCommandStates, pulseLoopClosureObservation, pulseModuleStateByModule, pulseModuleStates])
+
+  const pulse = useMemo<PulseData>(() => ({
+    monitorOn,
+    monitorSaving,
+    toggleMonitor,
+    moduleStates: pulseModuleStates,
+    finalCommandStates: pulseFinalCommandStates,
+    reviewFocuses: pulseReviewFocuses,
+    reviewFocusSelections: pulseReviewFocusSelections,
+    statusError: pulseStatusError,
+    statusLoading: pulseStatusLoading,
+    overview: pulseOverview,
+    refresh: refreshPulseModuleStates,
+  }), [
+    monitorOn, monitorSaving, toggleMonitor, pulseModuleStates, pulseFinalCommandStates,
+    pulseReviewFocuses, pulseReviewFocusSelections, pulseStatusError, pulseStatusLoading,
+    pulseOverview, refreshPulseModuleStates,
+  ])
 
   // The flow canvas's VariablesSidebar edits the manifest in place; keep the
   // toolbar showing that edit until the next workspace refresh replaces it.
@@ -350,9 +534,11 @@ export const WorkspaceViewHost = React.memo(forwardRef<WorkflowCanvasRef, Workfl
     flowShell,
     flowError,
     registerExportHandler,
+    pulse,
   }), [
     planData, evalData, status, workspace, selectedRunFolder, runFolderNames,
     variablesManifest, isLoadingVariables, isRefreshingPlan, flowShell, flowError, registerExportHandler,
+    pulse,
   ])
 
   const showToolbar = !hideToolbar && !(kind === 'flow' && flowShell !== 'ready')
@@ -398,7 +584,7 @@ export const WorkspaceViewHost = React.memo(forwardRef<WorkflowCanvasRef, Workfl
               onToggleChatArea={onToggleChatArea}
               onExport={onExport}
               chatTabsSlot={chatTabsSlot}
-              openPulseOnMount={kind === 'flow' ? openPulseOnMount : false}
+              monitorOn={monitorOn}
             />
           </div>
         )}

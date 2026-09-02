@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, Check, Copy, ExternalLink, Eye, EyeOff, Globe, Info, Loader2, LockKeyhole, RefreshCw, X } from 'lucide-react'
 import type { WorkflowPublishInfoResponse, WorkflowPublishStrategyInfo } from '../../services/api-types'
-import ModalPortal from '../ui/ModalPortal'
 import { formatPublishStateLabel, getPublishStateVisual } from '../workflow/publishStatus'
 import {
   extractErrorMessage,
@@ -16,8 +15,6 @@ type PublishSetupAction = {
 }
 
 export interface PublishPopupProps {
-  isOpen: boolean
-  onClose: () => void
   loadInfo: () => Promise<WorkflowPublishInfoResponse>
   onStateLoaded?: (state: string) => void
   fallbackStrategies: WorkflowPublishStrategyInfo[]
@@ -123,9 +120,7 @@ const getPublishAccessInfo = (info: WorkflowPublishInfoResponse | null): Publish
   return readDestinationAccessInfo(destinationVisibility)
 }
 
-const PublishPopup: React.FC<PublishPopupProps> = ({
-  isOpen,
-  onClose,
+const PublishPopupBody: React.FC<PublishPopupProps> = ({
   loadInfo,
   onStateLoaded,
   fallbackStrategies,
@@ -168,17 +163,8 @@ const PublishPopup: React.FC<PublishPopupProps> = ({
   }, [loadErrorMessage, loadInfo, onStateLoaded])
 
   useEffect(() => {
-    if (isOpen) void load()
-  }, [isOpen, load])
-
-  useEffect(() => {
-    if (!isOpen) {
-      setAccessSecretValue(null)
-      setAccessSecretVisible(false)
-      setAccessSecretCopied(false)
-      setAccessSecretError(null)
-    }
-  }, [isOpen])
+    void load()
+  }, [load])
 
   useEffect(() => {
     setAccessSecretValue(null)
@@ -231,8 +217,6 @@ const PublishPopup: React.FC<PublishPopupProps> = ({
     } catch { /* clipboard unavailable */ }
   }
 
-  if (!isOpen) return null
-
   const state = info?.effective_state || 'not_configured'
   const visual = getPublishStateVisual(state)
   const StateIcon = visual.Icon
@@ -249,9 +233,7 @@ const PublishPopup: React.FC<PublishPopupProps> = ({
   )
 
   return (
-    <ModalPortal>
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-2 backdrop-blur-sm sm:p-4">
-        <div className="relative flex max-h-[calc(100dvh-1rem)] w-full max-w-3xl flex-col rounded-lg border border-border bg-background shadow-xl sm:max-h-[86vh]">
+        <div className="flex h-full min-h-0 w-full max-w-none flex-col bg-background">
           <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3 sm:px-5 sm:py-3.5">
             <div className="min-w-0">
               <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
@@ -260,9 +242,6 @@ const PublishPopup: React.FC<PublishPopupProps> = ({
               </h2>
               <p className="mt-0.5 truncate text-xs text-muted-foreground">{subtitle}</p>
             </div>
-            <button onClick={onClose} className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" aria-label="Close">
-              <X className="h-4 w-4" />
-            </button>
           </div>
 
           {error && (
@@ -470,9 +449,7 @@ const PublishPopup: React.FC<PublishPopupProps> = ({
             )}
           </div>
         </div>
-      </div>
-    </ModalPortal>
   )
 }
 
-export default PublishPopup
+export default PublishPopupBody

@@ -7,7 +7,7 @@ import {
   type LucideIcon
 } from 'lucide-react'
 
-// Shared publish-status presentation helpers used by both the WorkflowPublishPopup
+// Shared publish-status presentation helpers used by both the WorkflowPublishView
 // and the toolbar status dot, so the two never drift. Mirrors backupStatus.ts.
 
 export const formatPublishStateLabel = (state?: string): string => {

@@ -1,14 +1,18 @@
 import {
+  Activity,
+  BellRing,
   BookOpen,
   Bot,
   BrainCircuit,
   CalendarClock,
   ClipboardCheck,
+  Cloud,
   Database,
   DollarSign,
   Files,
   FileText,
   FolderOpen,
+  Globe,
   KeyRound,
   LayoutDashboard,
   Monitor,
@@ -79,8 +83,17 @@ const VIEWS = [
   // -- files (last button of the "views" cluster) --------------------------
   { id: 'files', kind: 'files', label: 'Files', icon: Files, toolbarGroup: 'views', pane: false },
   // -- inspectors (toolbar "pulse" cluster) --------------------------------
+  // The toolbar builds this cluster by hand (status dots, a run button, and a
+  // divider between the schedule/eval group and the backup/publish/notify
+  // group don't fit a generic button loop), so `toolbarGroup: 'pulse'` here
+  // is categorization only -- nothing filters on it the way `views` and
+  // `capabilities` are filtered into their auto-rendered clusters below.
+  { id: 'pulse', kind: 'inspector', label: 'Pulse', icon: Activity, toolbarGroup: 'pulse', pane: true },
   { id: 'evaluation', kind: 'inspector', label: 'Evaluation', icon: ClipboardCheck, toolbarGroup: 'pulse', pane: true },
   { id: 'schedules', kind: 'inspector', label: 'Schedules', icon: CalendarClock, toolbarGroup: 'pulse', pane: true },
+  { id: 'backup', kind: 'inspector', label: 'Backup', icon: Cloud, toolbarGroup: 'pulse', pane: true },
+  { id: 'publish', kind: 'inspector', label: 'Publish', icon: Globe, toolbarGroup: 'pulse', pane: true },
+  { id: 'notify', kind: 'inspector', label: 'Notify', icon: BellRing, toolbarGroup: 'pulse', pane: true },
   // -- capability sections (WorkflowCapabilitiesPanel), then folders -------
   { id: 'skills', kind: 'capability', label: 'Workflow skills', icon: Puzzle, toolbarGroup: 'capabilities', pane: true, managesOwnScroll: true },
   { id: 'secrets', kind: 'capability', label: 'Workflow secrets', icon: KeyRound, toolbarGroup: 'capabilities', pane: true, managesOwnScroll: true },

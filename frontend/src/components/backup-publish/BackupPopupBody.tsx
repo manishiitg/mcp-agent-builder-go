@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, Cloud, Download, GitBranch, HardDrive, Info, Loader2, RefreshCw, X } from 'lucide-react'
 import type { WorkflowBackupInfoResponse, WorkflowBackupStrategyInfo } from '../../services/api-types'
-import ModalPortal from '../ui/ModalPortal'
 import { formatBackupStateLabel, getBackupStateVisual } from '../workflow/backupStatus'
 import {
   backupDestinationTitle,
@@ -24,8 +23,6 @@ type BackupExportAction = {
 }
 
 export interface BackupPopupProps {
-  isOpen: boolean
-  onClose: () => void
   loadInfo: () => Promise<WorkflowBackupInfoResponse>
   onStateLoaded?: (state: string) => void
   fallbackStrategies: WorkflowBackupStrategyInfo[]
@@ -43,9 +40,7 @@ export interface BackupPopupProps {
 const iconButtonClass = 'inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50'
 const actionClass = 'inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted'
 
-const BackupPopup: React.FC<BackupPopupProps> = ({
-  isOpen,
-  onClose,
+const BackupPopupBody: React.FC<BackupPopupProps> = ({
   loadInfo,
   onStateLoaded,
   fallbackStrategies,
@@ -79,8 +74,8 @@ const BackupPopup: React.FC<BackupPopupProps> = ({
   }, [loadErrorMessage, loadInfo, onStateLoaded])
 
   useEffect(() => {
-    if (isOpen) void load()
-  }, [isOpen, load])
+    void load()
+  }, [load])
 
   const handleExport = async () => {
     if (!exportAction) return
@@ -103,8 +98,6 @@ const BackupPopup: React.FC<BackupPopupProps> = ({
     }
   }
 
-  if (!isOpen) return null
-
   const state = info?.effective_state || 'not_configured'
   const visual = getBackupStateVisual(state)
   const StateIcon = visual.Icon
@@ -120,9 +113,7 @@ const BackupPopup: React.FC<BackupPopupProps> = ({
   )
 
   return (
-    <ModalPortal>
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-2 backdrop-blur-sm sm:p-4">
-        <div className="relative flex max-h-[calc(100dvh-1rem)] w-full max-w-4xl flex-col rounded-lg border border-border bg-background shadow-xl sm:max-h-[86vh]">
+        <div className="flex h-full min-h-0 w-full max-w-none flex-col bg-background">
           <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3 sm:px-5 sm:py-3.5">
             <div className="min-w-0">
               <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
@@ -131,9 +122,6 @@ const BackupPopup: React.FC<BackupPopupProps> = ({
               </h2>
               <p className="mt-0.5 truncate text-xs text-muted-foreground">{subtitle}</p>
             </div>
-            <button onClick={onClose} className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" aria-label="Close">
-              <X className="h-4 w-4" />
-            </button>
           </div>
 
           {error && (
@@ -300,9 +288,7 @@ const BackupPopup: React.FC<BackupPopupProps> = ({
             )}
           </div>
         </div>
-      </div>
-    </ModalPortal>
   )
 }
 
-export default BackupPopup
+export default BackupPopupBody

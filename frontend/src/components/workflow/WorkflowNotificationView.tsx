@@ -20,12 +20,9 @@ import {
   type WorkflowNotificationState,
 } from '../../services/workflow-notifications'
 import { agentApi } from '../../services/api'
-import ModalPortal from '../ui/ModalPortal'
 import { formatNotificationStateLabel } from './notificationStatus'
 
-interface WorkflowNotificationPopupProps {
-  isOpen: boolean
-  onClose: () => void
+interface WorkflowNotificationViewProps {
   workspacePath: string | null
   onStateLoaded?: (state: WorkflowNotificationState) => void
   loadInfo?: () => Promise<WorkflowNotificationInfo>
@@ -187,14 +184,12 @@ const summaryFor = (info: WorkflowNotificationInfo): string => {
   }
 }
 
-export default function WorkflowNotificationPopup({
-  isOpen,
-  onClose,
+export default function WorkflowNotificationView({
   workspacePath,
   onStateLoaded,
   loadInfo,
   onSetup,
-}: WorkflowNotificationPopupProps) {
+}: WorkflowNotificationViewProps) {
   const [loading, setLoading] = useState(false)
   const [info, setInfo] = useState<WorkflowNotificationInfo | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -228,19 +223,17 @@ export default function WorkflowNotificationPopup({
   }, [loadInfo, onStateLoaded, workspacePath])
 
   useEffect(() => {
-    if (isOpen) void load()
-  }, [isOpen, load])
+    void load()
+  }, [load])
 
   // Gmail auth resolves in a background subprocess on the server (~5s), so the
   // first read returns state="checking" rather than making the popup wait. Poll
   // until it settles; this is the only field that arrives late.
   useEffect(() => {
-    if (!isOpen || info?.gmail?.state !== 'checking') return
+    if (info?.gmail?.state !== 'checking') return
     const timer = setTimeout(() => { void load() }, 1500)
     return () => clearTimeout(timer)
-  }, [isOpen, info?.gmail?.state, load])
-
-  if (!isOpen) return null
+  }, [info?.gmail?.state, load])
 
   const state = info?.effectiveState || 'not_configured'
   const StateIcon = state === 'ready' ? CheckCircle2 : state === 'missing_secret' || state === 'invalid_secret' ? AlertCircle : BellRing
@@ -308,9 +301,7 @@ export default function WorkflowNotificationPopup({
   }
 
   return (
-    <ModalPortal>
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-2 backdrop-blur-sm sm:p-4">
-        <div className="relative flex max-h-[calc(100dvh-1rem)] w-full max-w-3xl flex-col rounded-lg border border-border bg-background shadow-xl sm:max-h-[86vh]">
+        <div className="flex h-full min-h-0 w-full max-w-none flex-col bg-background">
           <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3 sm:px-5 sm:py-3.5">
             <div className="min-w-0">
               <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
@@ -319,9 +310,6 @@ export default function WorkflowNotificationPopup({
               </h2>
               <p className="mt-0.5 truncate text-xs text-muted-foreground">Agentic, one-way notifications for {scopeName}</p>
             </div>
-            <button onClick={onClose} className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" aria-label="Close">
-              <X className="h-4 w-4" />
-            </button>
           </div>
 
           {error && (
@@ -567,7 +555,5 @@ export default function WorkflowNotificationPopup({
             ) : null}
           </div>
         </div>
-      </div>
-    </ModalPortal>
   )
 }

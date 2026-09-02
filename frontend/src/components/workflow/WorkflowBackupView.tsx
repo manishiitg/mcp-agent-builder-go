@@ -1,11 +1,9 @@
 import React, { useCallback } from 'react'
 import { agentApi } from '../../services/api'
 import type { WorkflowBackupInfoResponse, WorkflowBackupStrategyInfo } from '../../services/api-types'
-import BackupPopup from '../backup-publish/BackupPopup'
+import BackupPopupBody from '../backup-publish/BackupPopupBody'
 
-interface WorkflowBackupPopupProps {
-  isOpen: boolean
-  onClose: () => void
+interface WorkflowBackupViewProps {
   workspacePath: string | null
   // Called whenever backup info is (re)loaded, so the parent can keep an
   // at-a-glance status indicator (e.g. the toolbar dot) in sync.
@@ -60,9 +58,7 @@ const getBackupSummary = (backupInfo: WorkflowBackupInfoResponse | null): string
   }
 }
 
-const WorkflowBackupPopup: React.FC<WorkflowBackupPopupProps> = ({
-  isOpen,
-  onClose,
+const WorkflowBackupView: React.FC<WorkflowBackupViewProps> = ({
   workspacePath,
   onStateLoaded
 }) => {
@@ -79,9 +75,7 @@ const WorkflowBackupPopup: React.FC<WorkflowBackupPopupProps> = ({
   const name = workspacePath?.split('/').filter(Boolean).pop() || 'workflow'
 
   return (
-    <BackupPopup
-      isOpen={isOpen}
-      onClose={onClose}
+    <BackupPopupBody
       loadInfo={loadInfo}
       onStateLoaded={onStateLoaded}
       fallbackStrategies={FALLBACK_SUPPORTED_STRATEGIES}
@@ -102,4 +96,4 @@ const WorkflowBackupPopup: React.FC<WorkflowBackupPopupProps> = ({
   )
 }
 
-export default WorkflowBackupPopup
+export default WorkflowBackupView

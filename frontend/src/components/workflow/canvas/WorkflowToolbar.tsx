@@ -9,46 +9,26 @@ import {
   Activity,
   BellRing,
   CalendarClock,
-  ClipboardCheck,
-  RefreshCw,
-  X,
+  Gauge,
 } from 'lucide-react'
 import ModalPortal from '../../ui/ModalPortal'
 import { useWorkflowStore, type RunFolder } from '../../../stores/useWorkflowStore'
 import { WORKSPACE_VIEWS, isInspectorView, type WorkspaceViewId } from '../workspaceViews'
-import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestStore'
 import { useChatStore } from '../../../stores/useChatStore'
 import { useAuthStore } from '../../../stores/useAuthStore'
-import type {
-  PulseFinalCommandState,
-  PulseModuleState,
-  PulseRunMode,
-  PulseReviewFocus,
-  PulseShadowSignalObservation,
-  ScheduledJob,
-  VariablesManifest,
-} from '../../../services/api-types'
+import type { ScheduledJob, VariablesManifest } from '../../../services/api-types'
 import type { PlanningResponse } from '../../../utils/stepConfigMatching'
 import type { WorkflowExecutionStatus } from '../hooks/useWorkflowExecution'
 import type { ExecutionOptions } from '../../../services/api-types'
 import { agentApi } from '../../../services/api'
 import { schedulerApi } from '../../../api/scheduler'
-import WorkflowBackupPopup from '../WorkflowBackupPopup'
 import { getBackupDotClass } from '../backupStatus'
-import WorkflowPublishPopup from '../WorkflowPublishPopup'
 import { getPublishDotClass } from '../publishStatus'
-import WorkflowNotificationPopup from '../WorkflowNotificationPopup'
-import { PulseWorkspace } from '../PulseWorkspace'
 import { getNotificationDotClass } from '../notificationStatus'
 import { loadWorkflowNotificationInfo, type WorkflowNotificationState } from '../../../services/workflow-notifications'
 import WorkflowAccessPopup from '../WorkflowAccessPopup'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip'
-import { WORKFLOW_SOUL_REFRESH_EVENT } from '../SoulViewer'
 import { hasWorkflowWriteAccess, hasWorkflowOwnerAccess } from '../../../utils/workflowPermissions'
-import {
-  PULSE_FIXED_COMMANDS,
-  PULSE_MODULE_COMMANDS,
-} from './pulseSections'
 import { sendWorkflowMessageToChat } from '../../../utils/reportHumanInputChat'
 
 // Execution phase ID - special phase that should be displayed separately
@@ -242,18 +222,6 @@ function CompactToolbarMenuItem({ icon, label, detail, active = false, trailingA
   )
 }
 
-function formatPulseTimestamp(value?: string): string {
-  if (!value) return ''
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
 interface WorkflowToolbarProps {
   status: WorkflowExecutionStatus
   hasPlan: boolean
@@ -274,10 +242,9 @@ interface WorkflowToolbarProps {
   // workflow chat tabs + new-chat share one row with the status/tools instead of
   // sitting in a separate bar below.
   chatTabsSlot?: React.ReactNode
-  // Used by cross-workflow decision links. This is intentionally one-shot:
-  // opening a decision must surface Pulse, but normal re-renders must not keep
-  // reopening a modal the user deliberately closed.
-  openPulseOnMount?: boolean
+  // Whether Pulse review is enabled for this workflow -- owned by the host
+  // (shared with the pane's PulseView), just read here for the badge.
+  monitorOn: boolean
   className?: string
 }
 
@@ -289,7 +256,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   variablesManifest,
   isLoadingWorkspaceState = false,
   chatTabsSlot,
-  openPulseOnMount = false,
+  monitorOn,
   className = ''
 }) => {
   const canWriteWorkflow = useAuthStore(state => hasWorkflowWriteAccess(state.user, state.isMultiUserMode))
@@ -335,42 +302,10 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     [],
   )
 
-  const pulseConfig = useWorkflowManifestStore(useShallow((s) => {
-    const wf = s.workflows.find((w) => w.workspace_path === workspacePath)
-    return {
-      enabled: wf?.manifest.pulse?.enabled,
-      legacyEnabled: wf?.manifest.schedules?.some((schedule) => schedule.pulse_review_only && schedule.enabled),
-    }
-  }))
-  const monitorOn = !!(pulseConfig.enabled || pulseConfig.legacyEnabled)
-  const updateWorkflowManifest = useWorkflowManifestStore((s) => s.updateWorkflow)
-  const [monitorSaving, setMonitorSaving] = useState(false)
-  const toggleMonitor = useCallback(async () => {
-    if (!workspacePath || monitorSaving) return
-    setMonitorSaving(true)
-    try {
-      await updateWorkflowManifest(workspacePath, { pulse_enabled: !monitorOn })
-    } catch (err) {
-      console.error('[WorkflowToolbar] Failed to toggle Pulse review schedule:', err)
-    } finally {
-      setMonitorSaving(false)
-    }
-  }, [workspacePath, monitorOn, monitorSaving, updateWorkflowManifest])
-  const [showMonitorHelp, setShowMonitorHelp] = useState(false)
-  const [pulseModuleStates, setPulseModuleStates] = useState<PulseModuleState[]>([])
-  const [pulseFinalCommandStates, setPulseFinalCommandStates] = useState<PulseFinalCommandState[]>([])
-  const [pulseGateMode, setPulseGateMode] = useState<PulseRunMode | null>(null)
-  const [pulseReviewFocuses, setPulseReviewFocuses] = useState<PulseReviewFocus[]>([])
-  const [pulseReviewFocusSelections, setPulseReviewFocusSelections] = useState<PulseReviewFocus[]>([])
-  const [pulseLoopClosureObservation, setPulseLoopClosureObservation] = useState<PulseShadowSignalObservation | null>(null)
-  const [pulseStatusLoading, setPulseStatusLoading] = useState(false)
-  const [pulseStatusError, setPulseStatusError] = useState<string | null>(null)
-  // Backup popup state
-  const [showBackupPopup, setShowBackupPopup] = useState(false)
+  // Backup/publish/notify status dots -- lightweight polls independent of
+  // whether the pane is showing that view.
   const [backupState, setBackupState] = useState<string>('loading')
-  const [showPublishPopup, setShowPublishPopup] = useState(false)
   const [publishState, setPublishState] = useState<string>('not_configured')
-  const [showNotifications, setShowNotifications] = useState(false)
   const [notificationState, setNotificationState] = useState<WorkflowNotificationState | 'loading'>('loading')
   const [showAccessPopup, setShowAccessPopup] = useState(false)
   const [workflowScheduleStats, setWorkflowScheduleStats] = useState<WorkflowScheduleStats>(EMPTY_WORKFLOW_SCHEDULE_STATS)
@@ -400,85 +335,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     }
   }, [manualPulseStarting, workspacePath])
 
-  const refreshPulseModuleStates = useCallback(async (showLoading = true) => {
-    if (!workspacePath) {
-      setPulseModuleStates([])
-      setPulseFinalCommandStates([])
-      setPulseGateMode(null)
-      setPulseReviewFocuses([])
-      setPulseReviewFocusSelections([])
-      setPulseLoopClosureObservation(null)
-      setPulseStatusError(null)
-      return
-    }
-    if (showLoading) setPulseStatusLoading(true)
-    setPulseStatusError(null)
-    try {
-      const resp = await agentApi.getPulseModuleState(workspacePath)
-      if (!resp.success) {
-        throw new Error(resp.error || 'Failed to load Pulse status')
-      }
-      setPulseModuleStates(resp.modules || [])
-      setPulseFinalCommandStates(resp.commands || [])
-      setPulseGateMode(resp.gate_mode || null)
-      setPulseReviewFocuses(resp.review_focus_history || [])
-      setPulseReviewFocusSelections(resp.review_focus_selections || [])
-      setPulseLoopClosureObservation(
-        (resp.shadow_signal_observations || []).find(observation => observation.detector === 'loop_closure') || null
-      )
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load Pulse status'
-      setPulseStatusError(message)
-    } finally {
-      if (showLoading) setPulseStatusLoading(false)
-    }
-  }, [workspacePath])
-
-  const openedInitialPulseRef = useRef(false)
-  useEffect(() => {
-    if (!openPulseOnMount || openedInitialPulseRef.current) return
-    openedInitialPulseRef.current = true
-    setShowMonitorHelp(true)
-    void refreshPulseModuleStates()
-  }, [openPulseOnMount, refreshPulseModuleStates])
-
-  useEffect(() => {
-    if (!showMonitorHelp) return
-    void refreshPulseModuleStates()
-    const timer = window.setInterval(() => { void refreshPulseModuleStates(false) }, 5_000)
-    return () => window.clearInterval(timer)
-  }, [showMonitorHelp, refreshPulseModuleStates])
-
-  const pulseModuleStateByModule = useMemo(() => {
-    return new Map(pulseModuleStates.map(state => [state.module, state]))
-  }, [pulseModuleStates])
-
-  const pulseFinalCommandStateByCommand = useMemo(() => {
-    return new Map(pulseFinalCommandStates.map(state => [state.command, state]))
-  }, [pulseFinalCommandStates])
-
-  const pulseOverview = useMemo(() => {
-    const timestamps = [
-      ...pulseModuleStates.map(state => state.updated_at || state.last_ran_at || state.last_checked_at),
-      ...pulseFinalCommandStates.map(state => state.updated_at || state.finished_at || state.started_at),
-      pulseLoopClosureObservation?.observed_at,
-    ].filter((value): value is string => !!value)
-    const latestTimestamp = timestamps.reduce((latest, value) => {
-      const time = new Date(value).getTime()
-      return Number.isNaN(time) || time <= latest ? latest : time
-    }, 0)
-    const recordedModuleStates = PULSE_MODULE_COMMANDS
-      .map(command => pulseModuleStateByModule.get(command.id))
-      .filter((state): state is PulseModuleState => !!state)
-    const recordedFinalStates = PULSE_FIXED_COMMANDS
-      .map(command => pulseFinalCommandStateByCommand.get(command.id))
-      .filter((state): state is PulseFinalCommandState => !!state)
-    return {
-      recorded: recordedModuleStates.length + recordedFinalStates.length,
-      total: PULSE_MODULE_COMMANDS.length + PULSE_FIXED_COMMANDS.length,
-      latest: latestTimestamp > 0 ? formatPulseTimestamp(new Date(latestTimestamp).toISOString()) : '',
-    }
-  }, [pulseFinalCommandStateByCommand, pulseFinalCommandStates, pulseLoopClosureObservation, pulseModuleStateByModule, pulseModuleStates])
 
   const updateWorkflowScheduleStats = useCallback((jobs: ScheduledJob[]) => {
     const normalizedWorkspacePath = normalizeWorkspacePath(workspacePath)
@@ -571,27 +427,21 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     void refreshNotificationState()
   }, [refreshNotificationState])
 
-  const closeAllPopups = useCallback(() => {
-    setShowBackupPopup(false)
-    setShowPublishPopup(false)
-    setShowNotifications(false)
-    setShowMonitorHelp(false)
-  }, [])
-  
-  // Close popups only when switching between two concrete workflows.
-  // Preset refreshes can briefly unset workspacePath; treating that as a switch
-  // closes every toolbar popup even though the user is still on the same workflow.
-  const prevWorkspacePathRef = useRef<string | null>(workspacePath ?? null)
+  // Backup/publish/notify each load richer status than this toolbar's own
+  // lightweight poll while their pane view is open; catch the dot up once the
+  // user navigates away, rather than leaving it stale until workspacePath
+  // next changes.
+  const prevWorkspaceViewRef = useRef(workflowWorkspaceView)
   useEffect(() => {
-    if (!workspacePath) {
-      return
+    const prev = prevWorkspaceViewRef.current
+    if (prev !== workflowWorkspaceView) {
+      if (prev === 'backup') void refreshBackupState()
+      if (prev === 'publish') void refreshPublishState()
+      if (prev === 'notify') void refreshNotificationState()
     }
-    if (prevWorkspacePathRef.current && prevWorkspacePathRef.current !== workspacePath) {
-      closeAllPopups()
-    }
-    prevWorkspacePathRef.current = workspacePath
-  }, [workspacePath, closeAllPopups])
-  
+    prevWorkspaceViewRef.current = workflowWorkspaceView
+  }, [workflowWorkspaceView, refreshBackupState, refreshPublishState, refreshNotificationState])
+
   // Main workflow execution phase for the canvas toolbar
   const targetExecutionPhaseId = EXECUTION_PHASE_ID
   
@@ -811,7 +661,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 <TooltipTrigger asChild>
                   <button
                     type="button"
-                    onClick={() => setShowMonitorHelp(true)}
+                    onClick={() => openWorkspaceView('pulse')}
                     className="inline-flex h-full items-center gap-1.5 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted"
                   >
                     <Activity className={`h-3.5 w-3.5 ${monitorOn ? 'text-primary' : ''}`} />
@@ -830,7 +680,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                     className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                     aria-label="Evaluation"
                   >
-                    <ClipboardCheck className="h-3.5 w-3.5" />
+                    <Gauge className="h-3.5 w-3.5" />
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom"><p>Evaluation results</p></TooltipContent>
@@ -864,6 +714,50 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom"><p>Run Pulse on the latest retained run</p></TooltipContent>
+              </Tooltip>
+              <span className="h-4 w-px bg-border" aria-hidden="true" />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => openWorkspaceView('backup')}
+                    className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    aria-label="Backup"
+                  >
+                    <Cloud className="h-3.5 w-3.5" />
+                    <span className={`absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full border border-background ${getBackupDotClass(backupState)}`} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom"><p>Backup</p></TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => openWorkspaceView('publish')}
+                    className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    aria-label="Publish"
+                  >
+                    <Globe className="h-3.5 w-3.5" />
+                    <span className={`absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full border border-background ${getPublishDotClass(publishState)}`} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom"><p>Publish</p></TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    data-testid="workflow-notification-settings-button"
+                    onClick={() => openWorkspaceView('notify')}
+                    className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    aria-label="Notify"
+                  >
+                    <BellRing className="h-3.5 w-3.5" />
+                    <span className={`absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full border border-background ${getNotificationDotClass(notificationState)}`} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom"><p>Notify</p></TooltipContent>
               </Tooltip>
             </div>
           )}
@@ -905,147 +799,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
         </TooltipProvider>
       </div>
     </div>
-    {/* Database-native Pulse workspace */}
-    {showMonitorHelp && (
-      <ModalPortal>
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => { setShowMonitorHelp(false) }}>
-          <div className="flex h-[calc(100vh-1rem)] w-[calc(100vw-1rem)] max-w-7xl flex-col overflow-hidden rounded-lg border bg-background shadow-xl sm:h-[calc(100vh-2rem)] sm:w-[calc(100vw-2rem)]" onClick={(e) => e.stopPropagation()}>
-            <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3.5 sm:px-5">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-primary/25 bg-primary/10 text-primary">
-                  <Activity className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-sm font-semibold text-foreground">Pulse</h2>
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${monitorOn ? 'border-primary/25 bg-primary/10 text-primary' : 'border-border bg-muted text-muted-foreground'}`}>
-                      {monitorOn ? 'On' : 'Off'}
-                    </span>
-                  </div>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
-                    <span>{pulseOverview.recorded}/{pulseOverview.total} statuses recorded</span>
-                    {pulseOverview.latest && <span>Updated {pulseOverview.latest}</span>}
-                  </div>
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                {monitorOn && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      window.dispatchEvent(new CustomEvent(WORKFLOW_SOUL_REFRESH_EVENT))
-                      void refreshPulseModuleStates()
-                    }}
-                    disabled={pulseStatusLoading}
-                    className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-60"
-                    aria-label="Refresh Pulse status"
-                    title="Refresh Pulse status"
-                  >
-                    <RefreshCw className={`h-3.5 w-3.5 ${pulseStatusLoading ? 'animate-spin' : ''}`} />
-                  </button>
-                )}
-                <button onClick={() => { setShowMonitorHelp(false) }} className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Close">
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <div className="p-3 sm:p-4">
-                {workspacePath && (
-                  <PulseWorkspace
-                    workspacePath={workspacePath}
-                    moduleStates={pulseModuleStates}
-                    finalCommandStates={pulseFinalCommandStates}
-                    reviewFocuses={pulseReviewFocuses}
-                    reviewFocusSelections={pulseReviewFocusSelections}
-                    statusError={pulseStatusError}
-                  />
-                )}
-              </div>
-            </div>
-
-            {/* Pulse control and related workflow operations */}
-            <div className="flex shrink-0 flex-col gap-3 border-t bg-background px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-              <div className="flex min-w-0 items-center gap-3">
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={monitorOn}
-                  onClick={() => { void toggleMonitor() }}
-                  disabled={monitorSaving}
-                  className={`relative inline-flex h-5 w-9 flex-none items-center rounded-full p-0 transition-colors disabled:opacity-50 ${monitorOn ? 'bg-primary' : 'bg-muted-foreground/30'}`}
-                  aria-label="Toggle Pulse"
-                >
-                  <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${monitorOn ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
-                </button>
-                <div className="min-w-0">
-                  <div className="text-xs font-medium text-foreground">{monitorOn ? 'Reviews scheduled runs' : 'Pulse is off'}</div>
-                  <div className="truncate text-[11px] text-muted-foreground">{monitorOn ? 'Pulse Gate runs after each normal scheduled run.' : 'Turn on to review completed scheduled runs.'}</div>
-                </div>
-              </div>
-              <div className="inline-flex h-8 items-center overflow-hidden rounded-lg border border-border bg-muted/30">
-                <button
-                  type="button"
-                  onClick={() => { setShowMonitorHelp(false); setShowBackupPopup(true) }}
-                  className="relative inline-flex h-full items-center gap-1.5 px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  <Cloud className="h-3.5 w-3.5" />
-                  Backup
-                  <span className={`h-1.5 w-1.5 rounded-full ${getBackupDotClass(backupState)}`} />
-                </button>
-                <span className="h-4 w-px bg-border" aria-hidden="true" />
-                <button
-                  type="button"
-                  onClick={() => { setShowMonitorHelp(false); setShowPublishPopup(true) }}
-                  className="relative inline-flex h-full items-center gap-1.5 px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  <Globe className="h-3.5 w-3.5" />
-                  Publish
-                  <span className={`h-1.5 w-1.5 rounded-full ${getPublishDotClass(publishState)}`} />
-                </button>
-                <span className="h-4 w-px bg-border" aria-hidden="true" />
-                <button
-                  type="button"
-                  data-testid="workflow-notification-settings-button"
-                  onClick={() => { setShowMonitorHelp(false); setShowNotifications(true) }}
-                  className="relative inline-flex h-full items-center gap-1.5 px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  <BellRing className="h-3.5 w-3.5" />
-                  Notify
-                  <span className={`h-1.5 w-1.5 rounded-full ${getNotificationDotClass(notificationState)}`} />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </ModalPortal>
-    )}
-
-    {/* Backup Popup (dedicated remote backup status + strategy) */}
-    <WorkflowBackupPopup
-      isOpen={showBackupPopup}
-      onClose={() => { setShowBackupPopup(false); refreshBackupState() }}
-      workspacePath={workspacePath || null}
-      onStateLoaded={setBackupState}
-    />
-
-    {/* Publish Popup (share HTML to a public URL) */}
-    <WorkflowPublishPopup
-      isOpen={showPublishPopup}
-      onClose={() => { setShowPublishPopup(false); refreshPublishState() }}
-      workspacePath={workspacePath || null}
-      onStateLoaded={setPublishState}
-    />
-
-    {/* Agentic notification status + builder-driven setup */}
-    <WorkflowNotificationPopup
-      isOpen={showNotifications}
-      onClose={() => { setShowNotifications(false); void refreshNotificationState() }}
-      workspacePath={workspacePath || null}
-      onStateLoaded={setNotificationState}
-    />
-
     {/* Workflow Access Popup (multi-user owners only) */}
     <WorkflowAccessPopup
       isOpen={showAccessPopup}
