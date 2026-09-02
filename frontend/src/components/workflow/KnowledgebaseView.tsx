@@ -6,7 +6,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
-  X,
   Database,
   Loader2,
   AlertCircle,
@@ -18,13 +17,9 @@ import {
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import { MarkdownRenderer } from '../ui/MarkdownRenderer'
-import ModalPortal from '../ui/ModalPortal'
 
-interface KBPopupProps {
-  isOpen: boolean
-  onClose: () => void
+interface KnowledgebaseViewProps {
   workspacePath: string | null
-  embedded?: boolean
 }
 
 interface KBNotesTopic {
@@ -192,7 +187,7 @@ function formatFreshnessDate(timestamp: string): string {
   return `Fresh ${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
 }
 
-export default function KBPopup({ isOpen, onClose, workspacePath, embedded = false }: KBPopupProps) {
+export default function KnowledgebaseView({ workspacePath }: KnowledgebaseViewProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notesIndex, setNotesIndex] = useState<KBNotesIndex | null>(null)
@@ -231,16 +226,8 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
   }, [freshnessPath, notesIndexPath])
 
   useEffect(() => {
-    if (isOpen || embedded) load()
-  }, [isOpen, embedded, load])
-
-  useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === 'Escape' && isOpen && !embedded) onClose()
-    }
-    if (isOpen && !embedded) window.addEventListener('keydown', handleKey)
-    return () => window.removeEventListener('keydown', handleKey)
-  }, [isOpen, embedded, onClose])
+    load()
+  }, [load])
 
   const toggleNoteExpanded = useCallback(
     async (topic: KBNotesTopic) => {
@@ -272,12 +259,8 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
     ? topics.filter(topic => topic.id === focusedTopicId)
     : filteredTopics
 
-  if (!embedded && !isOpen) return null
-
-  const shell = (
-      <div className={embedded
-        ? 'flex h-full min-h-0 w-full flex-col bg-background'
-        : 'bg-background border border-border rounded-lg shadow-xl w-full max-w-6xl xl:max-w-7xl h-[calc(100dvh-1rem)] sm:h-[92vh] flex flex-col'}>
+  return (
+      <div className="flex h-full min-h-0 w-full flex-col bg-background">
         {/* Header */}
         <div className="flex items-start justify-between gap-3 p-3 border-b border-border flex-shrink-0 sm:p-4">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -296,13 +279,6 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
             >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             </button>
-            {!embedded && <button
-              onClick={onClose}
-              className="p-1 rounded-md hover:bg-muted transition-colors ml-2"
-              title="Close (Esc)"
-            >
-              <X className="w-5 h-5" />
-            </button>}
           </div>
         </div>
 
@@ -469,15 +445,5 @@ export default function KBPopup({ isOpen, onClose, workspacePath, embedded = fal
           )}
         </div>
       </div>
-  )
-
-  if (embedded) return shell
-
-  return (
-    <ModalPortal>
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-2 sm:p-4">
-        {shell}
-      </div>
-    </ModalPortal>
   )
 }

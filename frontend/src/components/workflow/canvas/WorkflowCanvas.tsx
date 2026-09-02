@@ -64,13 +64,13 @@ import { assertNeverView, isInspectorView, type InspectorViewId } from '../works
 // "Loading…" line the views use for their own data loading.
 const CostsPopup = lazy(() => import('../CostsPopup'))
 const ExecutionLogsPopup = lazy(() => import('../ExecutionLogsPopup'))
-const LearningsPopup = lazy(() => import('../LearningsPopup'))
-const KBPopup = lazy(() => import('../KBPopup'))
-const DatabasePopup = lazy(() => import('../DatabasePopup'))
+const LearningsView = lazy(() => import('../LearningsView'))
+const KnowledgebaseView = lazy(() => import('../KnowledgebaseView'))
+const DatabaseView = lazy(() => import('../DatabaseView'))
 const PulseEvalSummary = lazy(() => import('../PulseEvalSummary').then(module => ({ default: module.PulseEvalSummary })))
 const WorkflowScheduleRunsPanel = lazy(() => import('../../scheduler/WorkflowScheduleRunsPanel'))
 const WorkflowCapabilitiesPanel = lazy(() => import('../WorkflowCapabilitiesPanel'))
-const WorkflowFolderAccessPopup = lazy(() => import('../WorkflowFolderAccessPopup'))
+const WorkflowFolderAccessView = lazy(() => import('../WorkflowFolderAccessView'))
 
 // Duration to show highlights before clearing (in ms)
 const HIGHLIGHT_DURATION = 4000
@@ -510,19 +510,11 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
           />
         )
       case 'learnings':
-        return (
-          <LearningsPopup
-            isOpen
-            embedded
-            onClose={closeInspector}
-            workspacePath={workspacePath}
-            plan={plan}
-          />
-        )
+        return <LearningsView workspacePath={workspacePath} plan={plan} />
       case 'knowledgebase':
-        return <KBPopup isOpen embedded onClose={closeInspector} workspacePath={workspacePath} />
+        return <KnowledgebaseView workspacePath={workspacePath} />
       case 'database':
-        return <DatabasePopup isOpen embedded onClose={closeInspector} workspacePath={workspacePath} />
+        return <DatabaseView workspacePath={workspacePath} />
       case 'evaluation':
         return (
           <div className="h-full overflow-y-auto">
@@ -538,7 +530,7 @@ const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanva
           />
         )
       case 'folders':
-        return <WorkflowFolderAccessPopup isOpen embedded workspacePath={workspacePath} onClose={closeInspector} />
+        return <WorkflowFolderAccessView workspacePath={workspacePath} />
       case 'skills':
       case 'mcp':
       case 'secrets':

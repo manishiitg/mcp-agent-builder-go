@@ -145,7 +145,7 @@ union gained `BranchPlanStep` + `isBranchStep`/`isRouteSwitchStep` guards;
 layout sizing now handle branch alongside routing; `nodes/index.ts`/
 `edges/index.ts` register `branch: RoutingStepNode`/`branch: RoutingEdge`
 (reused as-is, not forked, since branch renders identically to routing);
-`WorkflowCanvas.tsx`'s node inspector and `LearningsPopup.tsx`'s
+`WorkflowCanvas.tsx`'s node inspector and `LearningsView.tsx`'s
 learnings-eligible-step filter both extended; `ExecutionLogsPopup.tsx`'s
 three step-type label/description/badge helpers gained a `branch` case
 with its own cyan badge, distinct from routing's indigo, so the two are

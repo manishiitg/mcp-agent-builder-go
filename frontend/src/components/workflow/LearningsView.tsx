@@ -6,14 +6,10 @@ import { isRouteSwitchStep, isTodoTaskStep } from '../../utils/stepConfigMatchin
 import { MarkdownRenderer } from '../ui/MarkdownRenderer'
 import type { PlannerFile } from '../../services/api-types'
 import ConfirmationDialog from '../ui/ConfirmationDialog'
-import ModalPortal from '../ui/ModalPortal'
 
-interface LearningsPopupProps {
-  isOpen: boolean
-  onClose: () => void
+interface LearningsViewProps {
   workspacePath: string | null
   plan: PlanningResponse | null
-  embedded?: boolean
 }
 
 // LearningMetadata — fields read from learnings/{stepId}/.learning_metadata.json,
@@ -168,7 +164,7 @@ function formatFreshnessDate(timestamp: string): string {
   return `Fresh ${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
 }
 
-export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, embedded = false }: LearningsPopupProps) {
+export default function LearningsView({ workspacePath, plan }: LearningsViewProps) {
   const [learnings, setLearnings] = useState<Record<string, LearningMetadata | null>>({})
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -237,9 +233,9 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
     return 'read'
   }, [])
 
-  // Fetch learnings when popup opens (API now includes step config data merged in)
+  // Fetch learnings on mount (API now includes step config data merged in)
   useEffect(() => {
-    if ((!isOpen && !embedded) || !workspacePath) return
+    if (!workspacePath) return
 
     setIsLoading(true)
     setError(null)
@@ -257,19 +253,19 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
         }
       })
       .catch((err: Error) => {
-        console.error('[LearningsPopup] Error fetching learnings:', err)
+        console.error('[LearningsView] Error fetching learnings:', err)
         setError('Failed to load learnings: ' + (err.message || 'Unknown error'))
       })
       .finally(() => {
         setIsLoading(false)
       })
-  }, [isOpen, embedded, workspacePath])
+  }, [workspacePath])
 
-  // Fetch everything under _global/ on open: SKILL.md content + the full file
+  // Fetch everything under _global/ on mount: SKILL.md content + the full file
   // tree (references/, scripts/, assets/, any other artifacts the learning agent
   // decided to write). Per-file content is lazy-loaded on click.
   useEffect(() => {
-    if ((!isOpen && !embedded) || !workspacePath) return
+    if (!workspacePath) return
     let cancelled = false
     setGlobalLoading(true)
     setGlobalError(null)
@@ -396,7 +392,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
         const msg = err instanceof Error ? err.message : 'Unknown error'
         const isMissing = /not found|no such|doesn't exist|does not exist/i.test(msg)
         if (!cancelled && !isMissing) {
-          console.error('[LearningsPopup] Error loading global skill:', err)
+          console.error('[LearningsView] Error loading global skill:', err)
           setGlobalError('Failed to load global skill: ' + msg)
         }
       } finally {
@@ -404,7 +400,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
       }
     })()
     return () => { cancelled = true }
-  }, [isOpen, embedded, workspacePath])
+  }, [workspacePath])
 
   // Lazy-load a single file under _global/ when its row is expanded.
   const toggleGlobalFile = async (relPath: string, absPath: string) => {
@@ -467,7 +463,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
         setLearnings(parseLearningsResponse(response.learnings || {}))
       }
     } catch (err: unknown) {
-      console.error('[LearningsPopup] Error deleting learnings:', err)
+      console.error('[LearningsView] Error deleting learnings:', err)
       const errorMessage = err instanceof Error ? err.message : 'Unknown error'
       setError('Failed to delete learnings: ' + errorMessage)
     } finally {
@@ -478,23 +474,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
       })
     }
   }
-
-  // Handle Escape key to close modal
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && isOpen && !embedded) {
-        onClose()
-      }
-    }
-
-    if (isOpen && !embedded) {
-      document.addEventListener('keydown', handleKeyDown)
-    }
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [isOpen, embedded, onClose])
 
   // Fetch learning content when an item is expanded
   const fetchLearningContent = async (stepId: string) => {
@@ -652,7 +631,7 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
         [stepId]: { content: mdContent, codeContent, codeFileName, error }
       }))
     } catch (err: unknown) {
-      console.error('[LearningsPopup] Error fetching learning content:', err)
+      console.error('[LearningsView] Error fetching learning content:', err)
       const errorMessage = err instanceof Error ? err.message : 'Unknown error'
       setLearningContentCache(prev => ({
         ...prev,
@@ -719,8 +698,6 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
     return stepsWithMetadata
   }, [plan])
 
-  if (!embedded && !isOpen) return null
-
   // Steps in execution order. _global is rendered separately as a featured card
   // above — no longer prepended into this list.
   const allStepsInOrder = getStepsInExecutionOrder()
@@ -749,25 +726,16 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
     searchTerm,
   })
 
-  const shell = (
-      <div className={embedded
-        ? 'flex h-full min-h-0 w-full flex-col bg-background text-foreground'
-        : 'bg-background text-foreground border border-border rounded-lg shadow-2xl w-full max-w-6xl xl:max-w-7xl h-[calc(100dvh-1rem)] sm:h-[92vh] flex flex-col'}>
-        {/* Header — title + close only. Step search / filter / expand controls
-            moved to sit above the step list so they're visually adjacent to what
-            they operate on (the per-step section, not the global skill). */}
+  return (
+      <div className="flex h-full min-h-0 w-full flex-col bg-background text-foreground">
+        {/* Header — title only. Step search / filter / expand controls sit
+            above the step list so they're visually adjacent to what they
+            operate on (the per-step section, not the global skill). */}
         <div className="flex items-start justify-between gap-3 border-b border-border flex-shrink-0 p-3 sm:p-4">
           <div className="flex min-w-0 items-center gap-2">
             <BookOpen className="w-5 h-5 text-primary" />
             <h2 className="truncate text-lg font-semibold">Automation Learnings</h2>
           </div>
-          {!embedded && <button
-            onClick={onClose}
-            className="p-1 rounded-md hover:bg-muted transition-colors"
-            title="Close (Esc)"
-          >
-            <X className="w-5 h-5" />
-          </button>}
         </div>
 
         {/* Content */}
@@ -1285,15 +1253,5 @@ export default function LearningsPopup({ isOpen, onClose, workspacePath, plan, e
         type="danger"
       />
     </div>
-  )
-
-  if (embedded) return shell
-
-  return (
-    <ModalPortal>
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-2 sm:p-4">
-      {shell}
-    </div>
-    </ModalPortal>
   )
 }

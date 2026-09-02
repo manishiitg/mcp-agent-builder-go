@@ -1,16 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { FolderOpen, LoaderCircle, Plus, Trash2, X } from 'lucide-react'
-import ModalPortal from '../ui/ModalPortal'
+import { FolderOpen, LoaderCircle, Plus, Trash2 } from 'lucide-react'
 import { workflowManifestApi } from '../../services/api'
 import type { WorkflowFolderAccessRequest, WorkflowFolderGrant } from '../../services/api-types'
 import { useWorkflowManifestStore } from '../../stores/useWorkflowManifestStore'
 
-interface WorkflowFolderAccessPopupProps {
-  isOpen: boolean
-  onClose: () => void
+interface WorkflowFolderAccessViewProps {
   workspacePath: string | null
-  /** Render inside the workflow's right pane instead of a modal overlay. */
-  embedded?: boolean
 }
 
 function aliasFromPath(path: string): string {
@@ -40,7 +35,7 @@ function requestReasonFor(request: WorkflowFolderAccessRequest): string {
   return legacyFolderRequest(request)?.reason || request.reason
 }
 
-export default function WorkflowFolderAccessPopup({ isOpen, onClose, workspacePath, embedded = false }: WorkflowFolderAccessPopupProps) {
+export default function WorkflowFolderAccessView({ workspacePath }: WorkflowFolderAccessViewProps) {
   const [grants, setGrants] = useState<WorkflowFolderGrant[]>([])
   const [requests, setRequests] = useState<WorkflowFolderAccessRequest[]>([])
   const [loading, setLoading] = useState(false)
@@ -68,8 +63,8 @@ export default function WorkflowFolderAccessPopup({ isOpen, onClose, workspacePa
   }, [workspacePath])
 
   useEffect(() => {
-    if (isOpen) void load()
-  }, [isOpen, load])
+    void load()
+  }, [load])
 
   const canAdd = useMemo(() => {
     const alias = pendingAlias.trim().toLowerCase()
@@ -164,18 +159,16 @@ export default function WorkflowFolderAccessPopup({ isOpen, onClose, workspacePa
     await persist(grants.map(candidate => candidate.id === grant.id ? { ...candidate, access, updated_at: now } : candidate))
   }, [grants, persist])
 
-  if (!isOpen) return null
-  const panel = (
-        <div className={embedded ? 'flex h-full min-h-0 w-full max-w-none flex-col bg-background' : 'w-full max-w-2xl overflow-hidden rounded-xl border border-border bg-background shadow-2xl'} onClick={event => event.stopPropagation()}>
+  return (
+        <div className="flex h-full min-h-0 w-full max-w-none flex-col bg-background">
           <div className="flex items-start justify-between border-b border-border px-5 py-4">
             <div>
               <h2 className="text-base font-semibold text-foreground">Attached folders</h2>
               <p className="mt-1 text-xs text-muted-foreground">Give this workflow explicit access to a folder outside workspace-docs.</p>
             </div>
-            <button type="button" onClick={onClose} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Close"><X className="h-4 w-4" /></button>
           </div>
 
-          <div className={`${embedded ? 'min-h-0 flex-1' : 'max-h-[70vh]'} space-y-5 overflow-y-auto p-5`}>
+          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
             {error && <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</div>}
             {loading ? (
               <div className="flex justify-center py-8"><LoaderCircle className="h-5 w-5 animate-spin text-muted-foreground" /></div>
@@ -246,14 +239,5 @@ export default function WorkflowFolderAccessPopup({ isOpen, onClose, workspacePa
             <p className="text-[11px] leading-relaxed text-muted-foreground">Attached folders are host-local. Shell commands receive a WORKFLOW_FOLDER_* environment variable, and safe patches can use the linked:// alias. Existing tools are not duplicated or restored.</p>
           </div>
         </div>
-  )
-
-  if (embedded) return panel
-  return (
-    <ModalPortal>
-      <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/55 p-4" onClick={onClose}>
-        {panel}
-      </div>
-    </ModalPortal>
   )
 }

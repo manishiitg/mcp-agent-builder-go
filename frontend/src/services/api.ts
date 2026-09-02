@@ -1573,7 +1573,7 @@ export const agentApi = {
   },
 
   // List tables (schema + row count + sample) in a workflow's db/db.sqlite for
-  // the read-only DatabasePopup inspector.
+  // the read-only DatabaseView inspector.
   getWorkflowDBTables: async (dbPath: string) => {
     const response = await workspaceApi.get('/api/db/tables', { params: { db_path: dbPath } })
     return response.data as {

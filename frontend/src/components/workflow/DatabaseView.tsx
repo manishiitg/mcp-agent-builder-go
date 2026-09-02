@@ -17,13 +17,9 @@ import {
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { PlannerFile } from '../../services/api-types'
-import ModalPortal from '../ui/ModalPortal'
 
-interface DatabasePopupProps {
-  isOpen: boolean
-  onClose: () => void
+interface DatabaseViewProps {
   workspacePath: string | null
-  embedded?: boolean
 }
 
 type FileSummary = {
@@ -354,7 +350,7 @@ async function readText(filepath: string): Promise<string | null> {
   }
 }
 
-export default function DatabasePopup({ isOpen, onClose, workspacePath, embedded = false }: DatabasePopupProps) {
+export default function DatabaseView({ workspacePath }: DatabaseViewProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [files, setFiles] = useState<PlannerFile[]>([])
@@ -430,21 +426,8 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath, embedded
   }, [dbFile])
 
   useEffect(() => {
-    if (isOpen || embedded) load()
-  }, [isOpen, embedded, load])
-
-  useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      if (e.key !== 'Escape' || !isOpen || embedded) return
-      if (maximizedCell) {
-        setMaximizedCell(null)
-        return
-      }
-      onClose()
-    }
-    if (isOpen && !embedded) window.addEventListener('keydown', handleKey)
-    return () => window.removeEventListener('keydown', handleKey)
-  }, [isOpen, embedded, maximizedCell, onClose])
+    load()
+  }, [load])
 
   const selectFile = useCallback(async (path: string) => {
     setSelectedPath(path)
@@ -491,12 +474,8 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath, embedded
     return relationships.filter(rel => rel.fromTable === selectedRel || rel.toTable === selectedRel || rel.fromTable.startsWith(`${selectedRel}.`) || rel.toTable.startsWith(`${selectedRel}.`))
   }, [relationships, selectedRel])
 
-  if (!embedded && !isOpen) return null
-
-  const shell = (
-        <div className={embedded
-          ? 'flex h-full min-h-0 w-full flex-col bg-background'
-          : 'flex max-h-[calc(100dvh-1rem)] w-full max-w-5xl flex-col rounded-lg border border-border bg-background shadow-xl sm:max-h-[90vh]'}>
+  return (
+        <div className="flex h-full min-h-0 w-full flex-col bg-background">
           <div className="flex flex-shrink-0 items-start justify-between gap-3 border-b border-border p-3 sm:p-4">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <Table2 className="h-5 w-5 text-primary" />
@@ -512,13 +491,6 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath, embedded
               >
                 <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               </button>
-              {!embedded && <button
-                onClick={onClose}
-                className="ml-2 rounded-md p-1 transition-colors hover:bg-muted"
-                title="Close (Esc)"
-              >
-                <X className="h-5 w-5" />
-              </button>}
             </div>
           </div>
 
@@ -858,15 +830,5 @@ export default function DatabasePopup({ isOpen, onClose, workspacePath, embedded
           </div>
         )}
       </div>
-  )
-
-  if (embedded) return shell
-
-  return (
-    <ModalPortal>
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-2 sm:p-4">
-        {shell}
-      </div>
-    </ModalPortal>
   )
 }
