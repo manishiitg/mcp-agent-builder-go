@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { AlertCircle, ArrowLeft, CheckCircle, ChevronRight, Loader2, Lock, RefreshCw, Search, X } from 'lucide-react'
+import LLMRoleSelector from '../LLMRoleSelector'
 import LLMSelectionDropdown from '../LLMSelectionDropdown'
 import { WorkflowProviderCredentialField } from '../WorkflowProviderCredentialField'
 import { CodingAgentSection } from '../llm/CodingAgentSection'
@@ -849,23 +850,6 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     )
   }
 
-  // Resolve a role's config back to a library option for the dropdown's
-  // current selection, falling back to a synthetic entry (provider/model,
-  // still selected) when it isn't in the loaded library list.
-  const optionForConfig = (config?: AgentLLMConfig): LLMOption | null => {
-    if (!config) return null
-    const exact = workflowOptions.find(option => optionKey(option) === configKey(config))
-    if (exact) return exact
-    const sameModel = workflowOptions.find(option => option.provider === config.provider && option.model === config.model_id)
-    if (sameModel) return sameModel
-    return {
-      provider: config.provider,
-      model: config.model_id,
-      label: `${config.provider} · ${config.model_id}`,
-      ...(hasOptions(config.options) ? { options: config.options } : {}),
-    }
-  }
-
   // One flat row per role: what it runs on now, and the picker right there.
   // Changing a role switches the workflow to per-role (explicit) mode via
   // updateRole, which seeds the other roles from the provider's defaults, so
@@ -889,16 +873,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
         </div>
         <div className="min-w-0 flex-1 space-y-1.5">
           {value ? (
-            <LLMSelectionDropdown
-              inModal
-              availableLLMs={workflowOptions}
-              selectedLLM={optionForConfig(value)}
-              onLLMSelect={llm => updateRole(row.key, toAgentLLMConfig(llm), true)}
-              onRefresh={loadDefaultsFromBackend}
-              title={row.label}
-              placeholder="Select a model"
-              disabled={readOnly}
-            />
+            <LLMRoleSelector availableLLMs={workflowOptions} value={value} onLLMSelect={llm => updateRole(row.key, toAgentLLMConfig(llm), true)} disabled={readOnly} />
           ) : (
             <span className="text-xs text-muted-foreground">Select a provider first.</span>
           )}
