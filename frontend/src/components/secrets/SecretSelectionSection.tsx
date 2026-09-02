@@ -223,7 +223,7 @@ export const SecretSelectionSection: React.FC<SecretSelectionSectionProps> = ({
         </div>
       )}
 
-      <div className={`border border-gray-200 dark:border-gray-700 rounded-md overflow-y-auto bg-white dark:bg-gray-800 ${fillAvailableHeight ? 'min-h-0 flex-1' : 'max-h-64'}`}>
+      <div className={`border border-gray-200 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 ${fillAvailableHeight ? 'min-h-0 flex-1 overflow-y-auto' : ''}`}>
         {sortedWorkflowSecrets.map((secret) => (
           <div key={`workflow-${secret.name}`} className="flex items-center gap-2 p-3 border-b border-gray-200 dark:border-gray-700 last:border-b-0 hover:bg-gray-100 dark:hover:bg-gray-700">
             <Checkbox
