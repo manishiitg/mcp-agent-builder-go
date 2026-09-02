@@ -21,6 +21,7 @@ import (
 	orchestratorevents "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulerstate"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
 	"github.com/robfig/cron/v3"
 )
 
@@ -2458,6 +2459,9 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 	// the pre-insertion length and never see it.
 	for i := 0; i < len(steps); i++ {
 		st := steps[i]
+		if st.label == "finalize" {
+			st.query += s.prepareWorkflowDatabaseBackupSnapshot(ctx, sctx)
+		}
 		// No Pulse turn stamps a contract version, so none of them is granted
 		// one. Revoking after each turn keeps that true even if a future step
 		// starts minting.
@@ -2579,6 +2583,56 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 	// Pulse owns its own notification from the durable SQLite state. The popup is
 	// the only Pulse presentation; there is no parallel HTML journal to update.
 	return pulseResult
+}
+
+// prepareWorkflowDatabaseBackupSnapshot makes the protected live SQLite DB
+// backupable before the agent begins the ordinary Git/object-store backup.
+// This is deliberately deterministic: an agent never needs shell access to
+// db.sqlite, its WAL, or its SHM file, and a snapshot failure cannot suppress
+// the later publish or notification operations.
+func (s *SchedulerService) prepareWorkflowDatabaseBackupSnapshot(ctx context.Context, sctx *ScheduleContext) string {
+	if sctx == nil {
+		return ""
+	}
+	manifest, exists, err := ReadWorkflowManifest(ctx, sctx.WorkspacePath)
+	if err != nil {
+		s.logf(sctx, "[BACKUP] could not inspect workflow backup config before finalization: %v", err)
+		return fmt.Sprintf("\n\nMANAGED DATABASE SNAPSHOT. The backend could not inspect workflow backup config: %v. Keep backup status truthful, but continue independently through Publish and Notify.", err)
+	}
+	if !exists || !workflowBackupRequiresDatabaseSnapshot(manifest.Backup, sctx.TriggerSource) {
+		return ""
+	}
+
+	client := workspace.NewClient(getWorkspaceAPIURL())
+	dbPath := filepath.ToSlash(filepath.Join(sctx.WorkspacePath, "db", "db.sqlite"))
+	result, err := client.CreateWorkflowDatabaseBackupSnapshot(ctx, workspace.CreateWorkflowDatabaseBackupSnapshotParams{DBPath: dbPath})
+	if err != nil {
+		s.logf(sctx, "[BACKUP] managed workflow database snapshot failed: %v", err)
+		return fmt.Sprintf("\n\nMANAGED DATABASE SNAPSHOT. The backend attempted the required WAL-aware snapshot before this turn, but it failed: %v. Mark the database portion of Backup partial/failed as appropriate; do not try to read or stage live db/db.sqlite. Publish and Notify are independent and must still run.", err)
+	}
+	s.logf(sctx, "[BACKUP] managed workflow database snapshot ready at %s", result.SnapshotPath)
+	return fmt.Sprintf("\n\nMANAGED DATABASE SNAPSHOT. The backend already created and integrity-checked the current SQLite backup image at %q (sha256 %s, %d bytes). Stage that snapshot and its checksum at %q for every destination covering db-sqlite; never read or stage live db/db.sqlite. Publish and Notify are independent of the Backup result.", result.SnapshotPath, result.SHA256, result.SizeBytes, result.ChecksumPath)
+}
+
+func workflowBackupRequiresDatabaseSnapshot(config *WorkflowBackupConfig, triggerSource string) bool {
+	if config == nil || !config.Enabled {
+		return false
+	}
+	manual := strings.EqualFold(strings.TrimSpace(triggerSource), "manual")
+	if manual && !config.Triggers.AfterManualRun {
+		return false
+	}
+	if !manual && !config.Triggers.AfterScheduledRun {
+		return false
+	}
+	for _, destination := range config.Destinations {
+		for _, covered := range destination.Covers {
+			if strings.EqualFold(strings.TrimSpace(covered), "db-sqlite") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func pulseReviewFixCostContext(ledger *costledger.Ledger, workspacePath string, startedAt, completedAt time.Time) string {
@@ -2968,11 +3022,11 @@ func scheduledRunFinalizeStepWithPulseTiming(runID, pulseTiming string, instruct
 			"or Fixer, do not read old Pulse findings and present them as new, and do not write builder/improve.html.\n\n"+
 			"Do these in order and record each with record_pulse_result(command=..., result=..., reason=...): "+
 			"(1) run the configured source-hash-gated backup and record its truthful terminal result; "+
-			"(2) read workflow.json's publish.targets. A \"report\" (or any non-\"pulse\") target is this run's own execution "+
+			"(2) independently of whether backup succeeded, read workflow.json's publish.targets. A \"report\" (or any non-\"pulse\") target is this run's own execution "+
 			"output — publish it normally, following publish-strategy.md, exactly as an ordinary run would; it is fresh this "+
 			"run regardless of whether Pulse reviewed anything. The \"pulse\" target specifically has nothing new this pass — "+
 			"no Gate/Review+Fix ran — and must be skipped for that reason alone. If \"pulse\" is the only configured target, "+
-			"mark the whole publish command skipped with that reason. Record one truthful terminal result for publish either way; "+
+			"mark the whole publish command skipped with that reason. Never suppress a valid report publish merely because backup was partial or failed. Record one truthful terminal result for publish either way; "+
 			"(3) call notify_user exactly once with notification_kind=\"run_summary\" describing plainly and factually what this run "+
 			"itself did (actions taken, errors, outcome) — do not include a Pulse findings/fixes section, since none ran this pass — "+
 			"then record notify truthfully.%s%s%s",

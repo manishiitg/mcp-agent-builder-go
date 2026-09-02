@@ -32,6 +32,7 @@ func setupWorkflowDBTest(t *testing.T) (string, string, *gin.Engine) {
 	router.POST("/api/query", QueryWorkflowDB)
 	router.POST("/api/mutate", MutateWorkflowDB)
 	router.POST("/api/db/initialize", InitializeWorkflowDB)
+	router.POST("/api/db/backup-snapshot", CreateWorkflowDatabaseBackupSnapshot)
 	return rel, abs, router
 }
 

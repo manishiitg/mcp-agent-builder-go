@@ -20,13 +20,11 @@ func TestEverySpendingStageCarriesTheApprovalGate(t *testing.T) {
 		"longform-narration":           true,
 		"longform-anchor-shot":         true,
 		"longform-next-shot":           true,
-		"longform-seam-bridge":         true,
 		"shortform-characters":         true,
 		"shortform-visual-development": true,
 		"shortform-narration":          true,
 		"shortform-anchor-shot":        true,
 		"shortform-next-shot":          true,
-		"shortform-seam-bridge":        true,
 	}
 
 	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
@@ -52,6 +50,34 @@ func TestEverySpendingStageCarriesTheApprovalGate(t *testing.T) {
 	}
 }
 
+func TestCinematicPipelinesUseDirectCutReviewAndDeterministicAssembly(t *testing.T) {
+	for _, pipeline := range []*Pipeline{longformPipeline, shortformPipeline} {
+		stages := map[string]PipelineStage{}
+		for _, stage := range pipeline.Stages {
+			if strings.Contains(stage.ID, "seam-bridge") || strings.Contains(stage.ID, "stitch-plan") {
+				t.Fatalf("%s still exposes retired bridge/planning stage %q", pipeline.ID, stage.ID)
+			}
+			stages[stage.ID] = stage
+		}
+
+		seam := stages[pipeline.ID+"-seam-proof"].Description
+		for _, required := range []string{"lightweight receipt", "Do not create a third bridge clip", "minimax/h3-max/reference-to-video"} {
+			if !strings.Contains(seam, required) {
+				t.Fatalf("%s direct-cut review is missing %q", pipeline.ID, required)
+			}
+		}
+		assembly := stages[pipeline.ID+"-assemble"]
+		for _, required := range []string{pipeline.ID + "-assembly-manifest.json", "accepted clip ledger", "Resolve every input"} {
+			if !strings.Contains(assembly.Description, required) {
+				t.Fatalf("%s deterministic assembly is missing %q", pipeline.ID, required)
+			}
+		}
+		if !containsSkill(assembly.Skills, "video-stitching") || !containsSkill(assembly.Skills, "video-editing") {
+			t.Fatalf("%s assembly lacks deterministic media skills: %v", pipeline.ID, assembly.Skills)
+		}
+	}
+}
+
 func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T) {
 	index := map[string]int{}
 	for i, stage := range shortformPipeline.Stages {
@@ -67,10 +93,7 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 		{"shortform-shotlist", "shortform-anchor-shot"},
 		{"shortform-anchor-shot", "shortform-next-shot"},
 		{"shortform-next-shot", "shortform-seam-proof"},
-		{"shortform-seam-proof", "shortform-seam-bridge"},
-		{"shortform-seam-bridge", "shortform-stitch-plan"},
-		{"shortform-seam-proof", "shortform-stitch-plan"},
-		{"shortform-stitch-plan", "shortform-assemble"},
+		{"shortform-seam-proof", "shortform-assemble"},
 		{"shortform-assemble", "shortform-check"},
 	} {
 		before, after := ordered[0], ordered[1]
@@ -112,7 +135,7 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 			t.Fatalf("short-form shot list is missing %q", required)
 		}
 	}
-	for _, required := range []string{"exactly one next clip", "multi-clip-cinematic-generation", "durable history from prior runs", "seam-generation route", "extension/reference-video continuation", "last usable stable frame", "orientation/aspect-ratio", "camera-angle change", "cumulatively"} {
+	for _, required := range []string{"exactly one next clip", "multi-clip-cinematic-generation", "durable history from prior runs", "seam-generation route", "minimax/h3-max/reference-to-video", "reference_video_urls", "last usable stable frame", "orientation/aspect-ratio", "camera-angle change", "cumulatively"} {
 		if !strings.Contains(next, required) {
 			t.Fatalf("short-form next-shot generation is missing follow-up guidance %q", required)
 		}
@@ -129,39 +152,20 @@ func TestShortformStagesPutDirectionAndMeasuredNarrationBeforeShots(t *testing.T
 		}
 	}
 	seamProof := shortformPipeline.Stages[index["shortform-seam-proof"]]
-	for _, required := range []string{"two-clip seam-preview MP4", "show_video", "Only a passing proof", "hard cut or crossfade"} {
+	for _, required := range []string{"lightweight receipt", "ffprobe", "Do not create a third bridge clip", "minimax/h3-max/reference-to-video", "does not block"} {
 		if !strings.Contains(seamProof.Description, required) {
 			t.Fatalf("short-form seam-proof step is missing %q", required)
 		}
 	}
-	seamBridge := shortformPipeline.Stages[index["shortform-seam-bridge"]]
-	for _, required := range []string{"minimax/h3-max/image-to-video", "image_url", "end_image_url", "prompt_expansion_mode: \"balanced\"", "rerun Prove the latest seam"} {
-		if !strings.Contains(seamBridge.Description, required) {
-			t.Fatalf("short-form seam-bridge step is missing %q", required)
-		}
-	}
-
-	stitchPlan := shortformPipeline.Stages[index["shortform-stitch-plan"]]
-	for _, required := range []string{"video-stitching", "every seam", "show_document", "meaningful plain-language editorial options", "Do not render"} {
-		if !strings.Contains(stitchPlan.Description, required) {
-			t.Fatalf("short-form stitch plan is missing %q", required)
-		}
-	}
-	for _, skill := range []string{"video-stitching", "video-editing"} {
-		if !containsSkill(stitchPlan.Skills, skill) {
-			t.Fatalf("short-form stitch plan does not attach %s: %v", skill, stitchPlan.Skills)
-		}
-	}
-
 	assemble := shortformPipeline.Stages[index["shortform-assemble"]].Description
-	for _, required := range []string{"shortform-stitch-plan.json", "video-stitching", "required narration segment", "Cut visuals to the measured narration timeline", "music, ambience, sound effects, and captions", "selected background/look decisions", "native-dialogue source per beat"} {
+	for _, required := range []string{"shortform-assembly-manifest.json", "accepted clip ledger", "video-stitching", "required narration segment", "Cut visuals to the measured narration timeline", "music, ambience, sound effects, and captions", "selected background/look decisions", "native-dialogue source per beat"} {
 		if !strings.Contains(assemble, required) {
 			t.Fatalf("short-form assembly is missing %q", required)
 		}
 	}
 
 	check := shortformPipeline.Stages[index["shortform-check"]].Description
-	for _, required := range []string{"missing or silent narration is a deterministic failure", "may not be marked not_applicable", "narration_alignment", "shortform-seam-report.json", "EVERY edit boundary"} {
+	for _, required := range []string{"missing or silent narration is a deterministic failure", "may not be marked not_applicable", "narration_alignment", "same quality-report.json", "Record join evidence"} {
 		if !strings.Contains(check, required) {
 			t.Fatalf("short-form QA is missing %q", required)
 		}
@@ -240,10 +244,7 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 		{"longform-shotlist", "longform-anchor-shot"},
 		{"longform-anchor-shot", "longform-next-shot"},
 		{"longform-next-shot", "longform-seam-proof"},
-		{"longform-seam-proof", "longform-seam-bridge"},
-		{"longform-seam-bridge", "longform-stitch-plan"},
-		{"longform-seam-proof", "longform-stitch-plan"},
-		{"longform-stitch-plan", "longform-assemble"},
+		{"longform-seam-proof", "longform-assemble"},
 		{"longform-assemble", "longform-check"},
 	} {
 		before, after := ordered[0], ordered[1]
@@ -259,7 +260,7 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 		}
 	}
 	next := longformPipeline.Stages[index["longform-next-shot"]].Description
-	for _, required := range []string{"exactly one next clip", "multi-clip-cinematic-generation", "durable history from prior runs", "recorded seam-generation route", "extension/reference-video continuation", "last usable stable frame", "orientation/aspect-ratio", "camera-angle cut", "cumulatively"} {
+	for _, required := range []string{"exactly one next clip", "multi-clip-cinematic-generation", "durable history from prior runs", "recorded seam-generation route", "minimax/h3-max/reference-to-video", "reference_video_urls", "last usable stable frame", "orientation/aspect-ratio", "camera-angle cut", "cumulatively"} {
 		if !strings.Contains(next, required) {
 			t.Fatalf("long-form next-shot generation is missing follow-up-shot guidance %q", required)
 		}
@@ -276,15 +277,9 @@ func TestLongformStagesKeepTheirLoadBearingOrder(t *testing.T) {
 		}
 	}
 	seamProof := longformPipeline.Stages[index["longform-seam-proof"]]
-	for _, required := range []string{"two-clip seam-preview MP4", "show_video", "Only a passing proof", "hard cut or crossfade"} {
+	for _, required := range []string{"lightweight receipt", "ffprobe", "Do not create a third bridge clip", "minimax/h3-max/reference-to-video", "does not block"} {
 		if !strings.Contains(seamProof.Description, required) {
 			t.Fatalf("long-form seam-proof step is missing %q", required)
-		}
-	}
-	seamBridge := longformPipeline.Stages[index["longform-seam-bridge"]]
-	for _, required := range []string{"minimax/h3-max/image-to-video", "image_url", "end_image_url", "prompt_expansion_mode: \"balanced\"", "rerun Prove the latest seam"} {
-		if !strings.Contains(seamBridge.Description, required) {
-			t.Fatalf("long-form seam-bridge step is missing %q", required)
 		}
 	}
 }
@@ -407,7 +402,7 @@ func TestLongformPipelineOwnsCinematicContinuityAndSeamEvidence(t *testing.T) {
 		"longform-next-shot":   {"longform-continuity-ledger.json"},
 		"longform-stitch-plan": {"longform-stitch-plan.json"},
 		"longform-assemble":    {"longform-final.mp4", "longform-edit-decision-list.json"},
-		"longform-check":       {"quality-report.json", "longform-seam-report.json"},
+		"longform-check":       {"quality-report.json"},
 	}
 
 	for _, stage := range longformPipeline.Stages {

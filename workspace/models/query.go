@@ -65,6 +65,24 @@ type InitializeDatabaseRequest struct {
 	MigrationFile string `json:"migration_file,omitempty"`
 }
 
+// WorkflowDatabaseBackupSnapshotRequest asks the trusted workspace service to
+// materialize a consistent backup image of one workflow database. The caller
+// supplies only the canonical managed DB path; the service owns the snapshot
+// destination so this route cannot become an arbitrary file-copy primitive.
+type WorkflowDatabaseBackupSnapshotRequest struct {
+	DBPath string `json:"db_path" binding:"required"`
+}
+
+type WorkflowDatabaseBackupSnapshotResult struct {
+	SourceDBPath string `json:"source_db_path"`
+	SnapshotPath string `json:"snapshot_path"`
+	ChecksumPath string `json:"checksum_path"`
+	SHA256       string `json:"sha256"`
+	SizeBytes    int64  `json:"size_bytes"`
+	CreatedAt    string `json:"created_at"`
+	Integrity    string `json:"integrity"`
+}
+
 // DBTablesResponse describes the tables in a workflow's SQLite DB, for the
 // read-only DatabasePopup inspector.
 type DBTablesResponse struct {

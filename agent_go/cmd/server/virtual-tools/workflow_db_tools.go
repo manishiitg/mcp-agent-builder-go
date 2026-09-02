@@ -153,6 +153,18 @@ func workflowDBApplyMigrationToolDefinition() llmtypes.Tool {
 	}}
 }
 
+func workflowDBBackupSnapshotToolDefinition() llmtypes.Tool {
+	return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
+		Name:        "create_workflow_database_snapshot",
+		Description: "Create the current workflow's managed SQLite backup image. This is an operational Builder/Pulse backup tool, not a query or mutation tool. It accepts no path or SQL: the backend resolves db/db.sqlite, includes committed WAL rows, runs integrity_check, and atomically writes backup/database/db.sqlite plus its stable checksum sidecar. Use the returned snapshot_path and checksum_path for Git/object backup; never stage or copy the protected live db/db.sqlite directly.",
+		Parameters: llmtypes.NewParameters(map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{},
+			"additionalProperties": false,
+		}),
+	}}
+}
+
 // splitSQLStatements splits a SQL script into individual statements on
 // top-level semicolons, tracking quoted text and comments so a semicolon
 // inside a string literal or comment never creates a spurious split.
@@ -489,18 +501,47 @@ func CreateWorkflowDBToolRegistry(workspaceURL, userID, fallbackSessionID string
 		return string(encoded), nil
 	}
 
-	tools := []llmtypes.Tool{workflowDBQueryToolDefinition(), workflowDBMutateToolDefinition(), workflowDBApplyMigrationToolDefinition()}
+	backupSnapshotExecutor := func(ctx context.Context, _ map[string]any) (string, error) {
+		sessionID, cfg, err := resolveWorkflowDBSession(ctx, fallbackSessionID)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(cfg.Env["STEP_OUTPUT_DIR"]) != "" || strings.TrimSpace(cfg.Env["RUNLOOP_STEP_ID"]) != "" {
+			return "", fmt.Errorf("workflow database backup snapshots are restricted to the parent Builder/Pulse session, not workflow steps")
+		}
+		access := strings.TrimSpace(cfg.Env[workflowDBAccessEnv])
+		if access != "read" && access != "read-write" {
+			return "", fmt.Errorf("workflow database backup snapshot denied for session %q: explicit db_access=read or read-write is required (effective value %q)", sessionID, access)
+		}
+		dbPath, err := resolveWorkflowDBPathFromConfig(sessionID, cfg)
+		if err != nil {
+			return "", err
+		}
+		result, err := client.CreateWorkflowDatabaseBackupSnapshot(ctx, workspace.CreateWorkflowDatabaseBackupSnapshotParams{DBPath: dbPath})
+		if err != nil {
+			return "", err
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return "", fmt.Errorf("encode workflow database backup snapshot result: %w", err)
+		}
+		return string(encoded), nil
+	}
+
+	tools := []llmtypes.Tool{workflowDBQueryToolDefinition(), workflowDBMutateToolDefinition(), workflowDBApplyMigrationToolDefinition(), workflowDBBackupSnapshotToolDefinition()}
 	return WorkflowDBToolRegistry{
 		Tools: tools,
 		Executors: map[string]func(context.Context, map[string]any) (string, error){
-			"query_workflow_db":           queryExecutor,
-			"mutate_workflow_db":          mutationExecutor,
-			"apply_workflow_db_migration": migrationExecutor,
+			"query_workflow_db":                 queryExecutor,
+			"mutate_workflow_db":                mutationExecutor,
+			"apply_workflow_db_migration":       migrationExecutor,
+			"create_workflow_database_snapshot": backupSnapshotExecutor,
 		},
 		Categories: map[string]string{
-			"query_workflow_db":           WorkflowDBToolCategory,
-			"mutate_workflow_db":          WorkflowDBToolCategory,
-			"apply_workflow_db_migration": WorkflowDBToolCategory,
+			"query_workflow_db":                 WorkflowDBToolCategory,
+			"mutate_workflow_db":                WorkflowDBToolCategory,
+			"apply_workflow_db_migration":       WorkflowDBToolCategory,
+			"create_workflow_database_snapshot": WorkflowDBToolCategory,
 		},
 	}
 }
@@ -530,7 +571,7 @@ func workflowDBParams(args map[string]any) []interface{} {
 }
 
 func WorkflowDBToolNames() map[string]bool {
-	return map[string]bool{"query_workflow_db": true, "mutate_workflow_db": true, "apply_workflow_db_migration": true}
+	return map[string]bool{"query_workflow_db": true, "mutate_workflow_db": true, "apply_workflow_db_migration": true, "create_workflow_database_snapshot": true}
 }
 
 func resolveCurrentWorkflowDBPath(ctx context.Context, fallbackSessionID string) (string, error) {

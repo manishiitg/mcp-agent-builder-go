@@ -200,7 +200,9 @@ inline content, but an uploaded URL is the form that works everywhere.
 - Verify what was actually generated before treating a job as done: check
   duration, dimensions, and (for video) that the file is not silently
   truncated or corrupt, with `ffprobe` -- a completed job status is not proof
-  the asset is usable.
+  the asset is usable. This is the per-clip receipt, not the final full QA
+  suite: do not create a contact sheet or run the final quality report for a
+  normal preview.
 
 ## Cost awareness
 

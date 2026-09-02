@@ -12,9 +12,16 @@ Run Backup, Publish, then Notify. Before and after each, call
 1. **Backup.** Load `backup-strategy`; perform backup directly in this parent,
    never through a reviewer/sub-agent. Skip only when the current source hash is
    backed up. Keep `backup/status.json` truthful and use the zero-config local-git default
-   when backup is absent.
-2. **Publish.** Skip when disabled, unverified, or current. Never perform first
-   verification unattended or publish unbacked changes after backup failure.
+   when backup is absent. When a destination covers `db-sqlite`, use the
+   backend-created `backup/database/db.sqlite` snapshot and
+   `backup/database/db.sqlite.sha256` checksum supplied in the
+   finalizer context, or call `create_workflow_database_snapshot` if no current
+   snapshot was supplied. Stage both managed files, never protected live
+   `db/db.sqlite` or its WAL/SHM files.
+2. **Publish.** Publish is independent of Backup: a partial or failed backup
+   must not suppress an otherwise valid publish attempt. Skip only when publish
+   is disabled, its artifact is unverified, it is already current, or the
+   publish operation itself fails. Never perform first verification unattended.
    Keep status truthful and record the live URL.
 3. **Notify.** Notify every run. Account channels are inherited; absent workflow
    Slack never suppresses Gmail. The backend applies `notifications`

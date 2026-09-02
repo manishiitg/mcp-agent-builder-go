@@ -5,7 +5,9 @@ description: Check AI-generated footage for the failure modes generation causes 
 
 # Quality checks specific to generated footage
 
-`video-quality` covers what applies to every video this product makes:
+Use this only for the final assembled delivery MP4, alongside `video-quality`;
+do not run it after each generated preview clip. `video-quality` covers what
+applies to every video this product makes:
 decode/duration/dimensions, black frames and freezes, legible text, a
 coherent edit, and a passing `quality-report.json`. Run it first and in
 full -- this skill does not repeat it.

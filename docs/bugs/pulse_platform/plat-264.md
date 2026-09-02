@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Codex |
-| Ticket state | `implemented; focused backend/frontend verification passed; live notification/UI reverify pending` |
-| Last synchronized | `2026-08-31` |
+| Ticket state | `runtime workspace-context defect fixed; focused verification passed; live notification/UI reverify pending` |
+| Last synchronized | `2026-09-02` |
 
 - **Priority:** P1 product-truth and observability boundary.
 - **Related:** [PLAT-018](plat-018.md), [PLAT-083](plat-083.md),
@@ -130,6 +130,26 @@ After restarting with this build:
    Dashboard.
 
 The ticket becomes `done` only after that producing-run/UI verification.
+
+## 2026-09-02 runtime acceptance failure and repair
+
+The first producing-run check exposed a bridge-only defect that the original
+direct-context test did not exercise. `notificationDestinationFromQuery`
+correctly supplied the trusted `WorkspacePath`, but
+`RegisterSessionNotificationDestination` omitted that field while copying the
+destination into the session registry. Custom-tool HTTP requests retain the
+trusted session ID rather than the original Go context, so `notify_user`
+recovered a destination with no workspace path. Gmail could still deliver,
+while the internal provider repeatedly failed with
+`org_dashboard requires a workflow workspace path`; every workflow therefore
+appeared as `Awaiting first run` even after real runs.
+
+The registry now preserves a non-empty `WorkspacePath`. A regression test
+uses only the session ID in the tool context and proves that a classified
+summary recovers `Workflow/demo` across the same registry boundary used by the
+MCP bridge. Existing empty dashboard stores are not populated by this code
+repair; live re-verification still requires one new typed summary per workflow
+or a separately approved truthful backfill.
 
 ## Decision history
 

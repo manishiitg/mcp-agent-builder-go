@@ -6,6 +6,7 @@ description: Plan and generate Video Studio's MiniMax H3 Max routes through fal.
 # Use MiniMax H3 Max deliberately
 
 Read `video-provider-capabilities`, `fal-ai`, `video-cinematography`, and the
+local prompting reference at `references/fal-h3-max-prompting.md`, then the
 live machine-readable guide for the selected route before every paid call:
 
 - `https://fal.ai/models/minimax/h3-max/text-to-video/llms.txt`;
@@ -23,6 +24,71 @@ user explicitly requests that slower treatment. Use 768P only when the user
 explicitly requests and approves the higher cost; do not offer or use 2K or
 4K. Verify live rates before estimating a run.
 
+Treat an explicit user per-clip duration as a hard creative constraint, not a
+suggestion to optimise away. For example, when the user asks for 5-second
+clips, request 5 seconds for every applicable H3 generation; do not replace
+them with longer 10–15-second takes to reduce cost or seam count. Recommend a
+duration tradeoff only when the user has not fixed one.
+
+## Prompt from an H3 Max shot contract
+
+Before writing an H3 prompt, write `shot-contracts/<shot-id>.md` and present it
+with `show_document` for review. It is a required pre-generation contract, not
+a post-hoc explanation. Include route, exact duration, aspect ratio, each
+reference asset and its job, subject identity and invariants, and the sections
+below. Then apply the eight rules in `references/fal-h3-max-prompting.md`. Do
+not turn a user's precise camera or dialogue direction into a looser generic
+cinematic prompt.
+
+### Required shot-contract detail
+
+- **Purpose, success, and priority:** name the story/emotional beat, one
+  observable success criterion, and a ranked conflict policy. State what wins
+  if H3 cannot satisfy every request—for example: `1. identity and exact
+  dialogue/lip-sync; 2. true-POV framing; 3. continuity; 4. performance;
+  5. set dressing.` Never let the model silently choose the tradeoff.
+- **Subject and performance:** identity reference, face/hair/wardrobe, body
+  position, gaze/eyeline, expression at the beginning and end of each timed
+  beat, exact emotional turn, hand/prop action, and things the subject must
+  not do. Describe an expression concretely: for example, "brow slightly
+  drawn, lips relaxed and closed, concern in the eyes; no smile" rather than
+  "warm and patient."
+- **Place and set dressing:** foreground, midground, and background; named
+  objects, their screen side/relative placement, practical lights, time of
+  day, weather, lighting direction, palette, texture, and atmosphere. Identify
+  which details come from the approved location reference and which must remain
+  absent.
+- **Camera:** shot scale, camera height, side, distance, viewpoint, lens
+  character when relevant, composition, focus behavior, movement/vector or
+  explicit static lock, and prohibited reframing. A true POV must say whose
+  eyes, what body/reflection/shadow must never appear, and the relative
+  eye-level and distance to each visible subject.
+- **Timed action and sound:** a `[0–N seconds]` list covering visual action,
+  expression, camera, and sound. Record exact dialogue, speaker, language,
+  delivery, native lip-sync, voice/performance reference, ambience, foley,
+  music, and explicit exclusions. Mark whether dialogue is verbatim and
+  confirm that its words fit the clip duration naturally before generating.
+- **Continuity and negatives:** approved reference roles, the prior clip's
+  exact outgoing state and required incoming match, plus named visual/audio
+  failures to prevent—text, subtitles, watermark, smile, body parts, extra
+  people, a wrong prop, camera drift, an unwanted cut, or a change of location.
+- **Approval, retry, and delivery:** exact approved source paths and a
+  `do-not-regenerate/change` marker for protected references; aspect ratio and
+  safe-area/text/caption rules; preview versus final status; the approved cost
+  and retry allowance; and the frames/audio checks that decide acceptance.
+
+The visible contract is the approval boundary: do not send a paid request until
+the user approves it, unless the user has explicitly asked to skip that review
+for the current shot.
+
+For a single static dialogue beat, use one timed block rather than a long
+unstructured paragraph. State the speaker, exact spoken line, performance,
+room tone, and prohibited sound separately. Do not put a second, competing
+gesture or action into a tightly constrained performance unless the user asked
+for it. If the required dialogue cannot be spoken naturally in the requested
+duration, flag that before spending rather than silently rushing, truncating,
+or inventing new words.
+
 ## Choose the route by control need
 
 1. **Prompt-only establishing shot:** use
@@ -32,10 +98,8 @@ explicitly requests and approves the higher cost; do not offer or use 2K or
 2. **Opening/closing-frame control:** use
    `minimax/h3-max/image-to-video` when an approved `image_url` must define
    the first frame; add `end_image_url` only when a specific ending frame must
-   be reached. Output follows the supplied start image's aspect ratio. A
-   first/last-frame seam bridge remains a separately approved repair after a
-   direct-cut seam proof visibly fails; it is not a way to conceal unrelated
-   footage.
+   be reached. Output follows the supplied start image's aspect ratio. Do not
+   use this route to fabricate a bridge between two generated clips.
 3. **Identity, motion, voice, or continuation:** use
    `minimax/h3-max/reference-to-video` whenever a shot needs subject/style
    locking, a predecessor's motion or performance, reference audio, or any
@@ -90,16 +154,36 @@ overwrite the last accepted version.
 
 ## Continue and review
 
-For a continuous sequence, prefer a supported reference-video or boundary-frame
-chain over independent prompts. Carry forward the accepted output, endpoint
-route, reference order, seed when available, subject state, screen direction,
-lighting, and audio bed. A direct-cut seam must be previewed on its actual
-boundary frames. If it visibly jumps, mark it failed — never call a hard cut or
-crossfade a pass — and offer the first/last-frame bridge as a separately
-approved paid repair. Do not create extra clips when one longer supported take
-or a motivated in-model cut will satisfy the brief.
+For a continuous sequence, use Reference-to-Video from the accepted immediate
+predecessor as Video 1. Carry forward the accepted output, endpoint route,
+reference order, subject state, screen direction, lighting, audio bed, and the
+precise next camera/action handoff. Prefer this generation-time continuity over
+manual stitching or a bridge workaround. H3 Max produces a new bounded file;
+it does not append footage to its predecessor.
 
 Persist the queue request ID immediately and rejoin it after timeouts. Download
-the result once, run technical, identity, motion, audio, prompt, and seam checks,
-then call `show_video` for every candidate clip the user needs to review. Never
-assemble an unreviewed clip.
+the result once and perform a clip receipt: `ffprobe` the actual file and
+inspect its stable opening and ending frames. Call `show_video` for each
+reviewable candidate. Do not run a full contact-sheet, black/freeze, audio,
+prompt, and seam audit for every preview. If a visible boundary is wrong,
+regenerate or redesign the successor through Reference-to-Video with a more
+specific prompt/reference set; do not hide it with a bridge clip, crossfade,
+blend, reframe, zoom, or other creative FFmpeg repair. The full inspection is
+run once on the final direct-concatenated delivery MP4.
+
+## Treat speed and playback honestly
+
+H3 Max may report a very short `inference` duration, but that is model time
+only. Do not turn it into a fixed end-to-end promise: queueing, reference-media
+upload, output download, local validation, and human review also take time.
+Record and report those intervals separately.
+
+The API returns a completed MP4. It does not stream partial playable footage,
+append a continuation onto the predecessor file, or guarantee that a successor
+will be ready before the current clip ends. A UI may begin playing each
+completed clip immediately and can provide gapless playlist playback only when
+the next completed clip is already buffered. For Reference-to-Video, wait until
+the immediate predecessor exists; do not pretend the next request can start
+from footage that has not been returned. Video Studio requires a lightweight
+boundary receipt before accepting a successor, and one full QA pass only after
+the final assembly exists.

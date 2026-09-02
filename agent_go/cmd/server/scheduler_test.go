@@ -1960,10 +1960,42 @@ func TestPulseFinalBackupRunsOnlyInParentTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read finalizer contract: %v", err)
 	}
-	for _, required := range []string{"directly in this parent", "never through a reviewer/sub-agent", "zero-config local-git default"} {
+	for _, required := range []string{"directly in this parent", "never through a reviewer/sub-agent", "zero-config local-git default", "backup/database/db.sqlite", "Publish is independent of Backup"} {
 		if !strings.Contains(string(raw), required) {
 			t.Fatalf("finalizer contract missing parent-only backup guard %q", required)
 		}
+	}
+	if strings.Contains(string(raw), "publish unbacked changes after backup failure") {
+		t.Fatalf("finalizer still couples publish eligibility to backup success")
+	}
+}
+
+func TestWorkflowBackupRequiresDatabaseSnapshotOnlyForDueTriggerAndCoverage(t *testing.T) {
+	config := &WorkflowBackupConfig{
+		Enabled:  true,
+		Triggers: WorkflowBackupTriggers{AfterScheduledRun: true},
+		Destinations: []WorkflowBackupDestination{{
+			ID: "config-repo", Covers: []string{"workflow", "db-sqlite"},
+		}},
+	}
+	if !workflowBackupRequiresDatabaseSnapshot(config, "cron") {
+		t.Fatal("scheduled db-sqlite backup did not require a managed snapshot")
+	}
+	if workflowBackupRequiresDatabaseSnapshot(config, "manual") {
+		t.Fatal("manual trigger incorrectly used after_scheduled_run")
+	}
+	config.Triggers.AfterManualRun = true
+	if !workflowBackupRequiresDatabaseSnapshot(config, "manual") {
+		t.Fatal("manual db-sqlite backup did not require a managed snapshot")
+	}
+	config.Destinations[0].Covers = []string{"workflow"}
+	if workflowBackupRequiresDatabaseSnapshot(config, "cron") {
+		t.Fatal("backup without db-sqlite coverage requested a database snapshot")
+	}
+	config.Enabled = false
+	config.Destinations[0].Covers = []string{"db-sqlite"}
+	if workflowBackupRequiresDatabaseSnapshot(config, "cron") {
+		t.Fatal("disabled backup requested a database snapshot")
 	}
 }
 
@@ -2216,6 +2248,7 @@ func TestLightweightFinalizeStepNeverRunsGateOrPublishesFindings(t *testing.T) {
 		"publish it normally",
 		"is fresh this run regardless of whether Pulse reviewed anything",
 		"The \"pulse\" target specifically has nothing new this pass",
+		"Never suppress a valid report publish merely because backup was partial or failed",
 		"do not include a Pulse findings/fixes section",
 	} {
 		if !strings.Contains(query, want) {

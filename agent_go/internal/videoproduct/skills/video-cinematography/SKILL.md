@@ -276,9 +276,9 @@ default above:
 - **Shot-to-shot anchoring.** For an H3 continuation, add the accepted
   predecessor as Video 1 alongside the approved character image. Write the
   two adjoining prompts so the final described moment of clip N matches the
-  first described moment of clip N+1. Use an extracted boundary frame only
-  when a direct seam proof fails and the approved H3 seam-bridge route calls
-  for it.
+  first described moment of clip N+1. Use an extracted stable boundary frame
+  to inspect a failed direct cut and correct the Reference-to-Video successor
+  prompt; do not use it to generate a third bridge clip.
 
 **When none of the above holds well enough**, treat that as a real
 constraint to report, not a defect to hide: tell the user H3 cannot reliably

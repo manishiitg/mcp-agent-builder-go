@@ -125,8 +125,8 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 		{"fal-ai", []string{"SECRET_FAL_KEY", "Never invent a model ID", "@fal-ai/client", "up to **15 minutes**", "request ID, input, and submission timestamp", "provider failure: rejoin"}},
 		{"google-ai", []string{"SECRET_GEMINI_API_KEY", "Google image and TTS", "@google/genai"}},
 		{"seeddance-api", []string{"SECRET_SEEDANCE_API_KEY", "/v1/videos/generations", "task_id", "show_video"}},
-		{"longform-cinematic-video", []string{"longform-sequence-plan.json", "longform-edit-decision-list.json", "longform-seam-report.json", "one film"}},
-		{"cinematic-visual-development", []string{"FLUX.2 Max", "fal-ai/flux-2-max", "fal-ai/flux-2-max/edit", "Subject type", "Human / presenter", "Animal / pet", "Product / object", "show_reference", "endpoint_input", "seam proof"}},
+		{"longform-cinematic-video", []string{"longform-sequence-plan.json", "longform-edit-decision-list.json", "single final `video-quality` report", "one film"}},
+		{"cinematic-visual-development", []string{"FLUX.2 Max", "fal-ai/flux-2-max", "fal-ai/flux-2-max/edit", "Subject type", "Human / presenter", "Animal / pet", "Product / object", "show_reference", "endpoint_input", "lightweight receipt"}},
 		{"multi-clip-cinematic-generation", []string{"reference manifest", "orientation", "reference-to-video", "Cut on action", "HyperFrames"}},
 		{"video-provider-capabilities", []string{"official API", "capability record", "maximum_approved_cost", "pending_user_review", "continuity-plan.json", "generation-ledger.json"}},
 		{"kling-video", []string{"multi_prompt", "@Element1", "motion-transfer", "show_video"}},
@@ -174,8 +174,35 @@ func TestGenerationSkillsRegisterAndStayOutOfTheInfographicPipeline(t *testing.T
 	}
 	for _, name := range []string{"longform-cinematic-video", "kling-video", "seedance-video", "seeddance-api", "veo-video", "minimax-h3-video", "gemini-omni-video"} {
 		attached := skills.LoadAttachable("", []string{name})
-		if len(attached) != 1 || len(attached[0].SupportingFiles) != 1 || attached[0].SupportingFiles[0].RelPath != "agents/openai.yaml" {
+		if len(attached) != 1 {
 			t.Fatalf("%s must carry its generated UI metadata: %+v", name, attached)
+		}
+		hasGeneratedMetadata := false
+		for _, file := range attached[0].SupportingFiles {
+			if file.RelPath == "agents/openai.yaml" {
+				hasGeneratedMetadata = true
+				break
+			}
+		}
+		if !hasGeneratedMetadata {
+			t.Fatalf("%s must carry its generated UI metadata: %+v", name, attached)
+		}
+	}
+
+	h3Attached := skills.LoadAttachable("", []string{"minimax-h3-video"})
+	if len(h3Attached) != 1 {
+		t.Fatalf("minimax-h3-video bundle = %v", h3Attached)
+	}
+	h3PromptingReference := ""
+	for _, file := range h3Attached[0].SupportingFiles {
+		if file.RelPath == "references/fal-h3-max-prompting.md" {
+			h3PromptingReference = string(file.Content)
+			break
+		}
+	}
+	for _, want := range []string{"Assign every reference exactly one job", "timed shot list", "Static true-POV dialogue pattern"} {
+		if !strings.Contains(h3PromptingReference, want) {
+			t.Fatalf("minimax-h3-video prompting reference missing %q: %q", want, h3PromptingReference)
 		}
 	}
 

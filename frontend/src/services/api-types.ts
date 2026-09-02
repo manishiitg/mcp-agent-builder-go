@@ -2216,6 +2216,44 @@ export interface ExecutionLogsResponse {
   success: boolean;
   steps: Record<string, StepExecutionLogs>; // key is step ID or name (e.g. "step-1")
   token_usage?: TokenUsageFile;
+  pulse_reviews?: PulseReviewRunLog[];
+}
+
+export interface PulseReviewTranscriptEvent {
+  timestamp: string;
+  type: 'user_message' | 'assistant_message' | 'tool_call' | string;
+  role?: string;
+  text?: string;
+  tool_call?: Record<string, unknown>;
+}
+
+export interface PulseBackgroundAgentLog {
+  agent_id: string;
+  name: string;
+  kind?: string;
+  parent_execution_id?: string;
+  status: string;
+  result?: string;
+  error?: string;
+  duration?: string;
+  started_at?: string;
+  completed_at?: string;
+  transcript_path?: string;
+  transcript_status?: string;
+  provider?: string;
+  model_id?: string;
+  events?: PulseReviewTranscriptEvent[];
+}
+
+export interface PulseReviewRunLog {
+  run_id: string;
+  session_id: string;
+  schedule_id?: string;
+  trigger_source?: string;
+  status?: string;
+  started_at: string;
+  completed_at?: string;
+  agents: PulseBackgroundAgentLog[];
 }
 
 

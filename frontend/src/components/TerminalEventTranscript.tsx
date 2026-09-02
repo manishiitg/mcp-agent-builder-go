@@ -564,7 +564,10 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   // inspect. AgentWorks keeps the existing full-turn follow behaviour above.
   useEffect(() => {
     if (autoScrollMode !== 'reveal-first-response') return
+    let userMessageFrame: number | undefined
+    let userMessageSettledLayoutTimer: number | undefined
     const isInitialTranscript = !initializedFirstResponseRevealRef.current
+    let shouldRevealUserMessage = false
     const isNewUserMessage = Boolean(
       !isInitialTranscript &&
       latestUserMessageKey &&
@@ -576,18 +579,54 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
       // A page reload can reconnect while the agent is already thinking. Arm
       // that live turn without treating a completed, restored conversation as
       // a new response that should steal the reader's position.
-      revealFirstResponseRef.current = Boolean(
-        latestUserMessageKey && (streamingText.trim() || streamingStatus.trim()) && !assistantResponseAfterLatestUser,
+      // A brand-new conversation mounts only after its optimistic first user
+      // row exists. That row is not history: it needs the same one-time
+      // reveal as any later sent message once the response begins.
+      const isOnlyPendingInitialUserMessage = Boolean(
+        latestUserMessageKey && items.length === 1 && !assistantResponseAfterLatestUser,
       )
+      revealFirstResponseRef.current = Boolean(
+        latestUserMessageKey && !assistantResponseAfterLatestUser && (
+          streamingText.trim() || streamingStatus.trim() || isOnlyPendingInitialUserMessage
+        ),
+      )
+      shouldRevealUserMessage = isOnlyPendingInitialUserMessage
       suppressFirstResponseRevealRef.current = false
     } else if (isNewUserMessage) {
       firstResponseUserMessageKeyRef.current = latestUserMessageKey
       revealFirstResponseRef.current = true
       suppressFirstResponseRevealRef.current = false
+      shouldRevealUserMessage = true
+    }
+    if (shouldRevealUserMessage) {
+      // Video Studio deliberately does not follow every streamed token, but a
+      // sent message must still move into view. ChatArea's legacy scroller is
+      // outside this Virtuoso instance, so it cannot do this for product
+      // transcripts. Reveal the new user row once; the existing branch below
+      // will reveal the first assistant text once it arrives.
+      const revealUserMessage = () => {
+        virtuosoRef.current?.scrollToIndex({
+          index: Math.max(0, items.length - 1),
+          align: 'end',
+          behavior: 'auto',
+        })
+      }
+      // This must happen synchronously in the committed render. Streaming
+      // status can update before the next animation frame; if scrolling lives
+      // only in rAF, effect cleanup cancels it and the newly sent message stays
+      // hidden above the fixed composer.
+      revealUserMessage()
+      userMessageFrame = window.requestAnimationFrame(revealUserMessage)
+      userMessageSettledLayoutTimer = window.setTimeout(revealUserMessage, 160)
     }
 
     const assistantHasBegun = Boolean(streamingText.trim()) || assistantResponseAfterLatestUser
-    if (!revealFirstResponseRef.current || suppressFirstResponseRevealRef.current || !assistantHasBegun) return
+    if (!revealFirstResponseRef.current || suppressFirstResponseRevealRef.current || !assistantHasBegun) {
+      return () => {
+        if (userMessageFrame !== undefined) window.cancelAnimationFrame(userMessageFrame)
+        if (userMessageSettledLayoutTimer !== undefined) window.clearTimeout(userMessageSettledLayoutTimer)
+      }
+    }
 
     revealFirstResponseRef.current = false
     const targetIndex = Math.max(0, (streamingText || streamingStatus) ? items.length : items.length - 1)
@@ -598,9 +637,16 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     const reveal = () => {
       virtuosoRef.current?.scrollToIndex({ index: targetIndex, align: 'start', behavior: 'auto' })
     }
+    // Reveal now as well as after layout settles. The first SSE status/text
+    // update can otherwise clean up the scheduled rAF before it has a chance
+    // to run, which is exactly why the first response appeared below the
+    // composer after sending a message.
+    reveal()
     const frame = window.requestAnimationFrame(reveal)
     const settledLayoutTimer = window.setTimeout(reveal, 160)
     return () => {
+      if (userMessageFrame !== undefined) window.cancelAnimationFrame(userMessageFrame)
+      if (userMessageSettledLayoutTimer !== undefined) window.clearTimeout(userMessageSettledLayoutTimer)
       window.cancelAnimationFrame(frame)
       window.clearTimeout(settledLayoutTimer)
     }

@@ -1615,6 +1615,14 @@ export const agentApi = {
     }
   },
 
+  deleteAgentProfilePresentation: async (profileId: string, presentationId: string, request: {
+    conversation_key: string
+    kind: 'media.video' | 'media.character'
+  }) => {
+    const response = await api.delete(`/api/agent-profiles/${encodeURIComponent(profileId)}/presentations/${encodeURIComponent(presentationId)}`, { data: request })
+    return response.data as { deleted: boolean; presentation_id: string }
+  },
+
   // List tables (schema + row count + sample) in a workflow's db/db.sqlite for
   // the read-only DatabasePopup inspector.
   getWorkflowDBTables: async (dbPath: string) => {

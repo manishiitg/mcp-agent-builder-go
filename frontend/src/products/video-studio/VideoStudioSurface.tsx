@@ -274,16 +274,19 @@ function VideoStudioConversation({
   )
 }
 
-function MediaVideoPresentation({ presentation, workspacePath }: PresentationRendererProps) {
+function MediaVideoPresentation({ presentation, workspacePath, autoPlay = false }: PresentationRendererProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [loading, setLoading] = useState(true)
   const [playbackError, setPlaybackError] = useState('')
   const relativePath = typeof presentation.payload.path === 'string' ? presentation.payload.path.replace(/^\/+/, '') : ''
   const mediaURL = relativePath ? workspaceMediaURL(`${workspacePath}/${relativePath}`) : ''
-  // A presentation makes a clip visible in the production panel, but must not
-  // start media merely because React mounted it. Mounts happen on refresh and
-  // reload too, and surprising audible (or muted) playback is especially bad
-  // for a large production asset. Playback is always an explicit user action.
+  useEffect(() => {
+    if (!autoPlay) return
+    void videoRef.current?.play().catch(() => {
+      // Browsers can reject audible autoplay. Controls remain visible so the
+      // selected clip is still immediately ready for one click.
+    })
+  }, [autoPlay, mediaURL])
   if (!relativePath) return <div className="grid aspect-video place-items-center bg-slate-950 text-xs text-slate-400">Video path is unavailable.</div>
   const retryPlayback = () => {
     setPlaybackError('')
@@ -300,12 +303,19 @@ function MediaVideoPresentation({ presentation, workspacePath }: PresentationRen
         data-presentation-revision={presentation.revision}
         controls
         playsInline
+        autoPlay={autoPlay}
         preload="metadata"
         className="h-full w-full bg-black object-contain"
         src={mediaURL}
         onLoadStart={() => { setLoading(true); setPlaybackError('') }}
         onLoadedMetadata={() => setLoading(false)}
-        onCanPlay={() => setLoading(false)}
+        onCanPlay={() => {
+          setLoading(false)
+          if (autoPlay) void videoRef.current?.play().catch(() => {
+            // Browsers can reject audible autoplay. Controls remain visible so
+            // the selected clip is still immediately ready for one click.
+          })
+        }}
         onError={() => {
           setLoading(false)
           setPlaybackError('This video could not be loaded. Refresh it to reconnect to the project file.')
@@ -350,9 +360,20 @@ function ProductionSection({ id, title, count, icon, children, forceOpenKey }: {
   )
 }
 
-function VideosSection({ project, videos }: { project: VideoProject; videos: VideoPresentation[] }) {
+function videoPresentationKey(video: VideoPresentation | undefined): string {
+  return video ? `${video.id}:${video.revision}:${video.updatedAt}` : ''
+}
+
+type PendingPresentationDelete = {
+  id: string
+  kind: 'media.video' | 'media.character'
+  title: string
+}
+
+function VideosSection({ project, videos, autoPlayPresentationKey = '', onAutoPlayConsumed, onDelete }: { project: VideoProject; videos: VideoPresentation[]; autoPlayPresentationKey?: string; onAutoPlayConsumed?: () => void; onDelete?: (presentation: PendingPresentationDelete) => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const latestVideoKey = videos[0] ? `${videos[0].id}:${videos[0].revision}:${videos[0].updatedAt}` : ''
+  const [autoPlayKey, setAutoPlayKey] = useState('')
+  const latestVideoKey = videoPresentationKey(videos[0])
   const previousLatestVideoKey = useRef(latestVideoKey)
   const selected = videos.find((video) => video.id === selectedId) || videos[0]
   useEffect(() => {
@@ -362,6 +383,12 @@ function VideosSection({ project, videos }: { project: VideoProject; videos: Vid
       setSelectedId(videos[0].id)
     } else if (!videos.some((video) => video.id === selectedId)) setSelectedId(videos[0].id)
   }, [latestVideoKey, selectedId, videos])
+  const selectedKey = videoPresentationKey(selected)
+  useEffect(() => {
+    if (!autoPlayPresentationKey || autoPlayPresentationKey !== selectedKey || autoPlayKey === selectedKey) return
+    setAutoPlayKey(selectedKey)
+    onAutoPlayConsumed?.()
+  }, [autoPlayKey, autoPlayPresentationKey, onAutoPlayConsumed, selectedKey])
   if (!selected) return null
 
   const mediaURL = workspaceMediaURL(`${project.workspacePath}/${selected.path.replace(/^\/+/, '')}`)
@@ -370,7 +397,7 @@ function VideosSection({ project, videos }: { project: VideoProject; videos: Vid
     <ProductionSection id="videos" title="Videos" count={videos.length} icon={<Film className="h-3.5 w-3.5" />} forceOpenKey={videos.length}>
       <div data-testid="video-studio-videos-panel" data-video-count={videos.length}>
         <div className="overflow-hidden rounded-2xl bg-black shadow-lg">
-          <PresentationRenderer presentation={selected.workspacePresentation} workspacePath={project.workspacePath} fallback={<div className="grid aspect-video place-items-center text-xs text-slate-400">No renderer is registered for this presentation.</div>} />
+          <PresentationRenderer presentation={selected.workspacePresentation} workspacePath={project.workspacePath} autoPlay={autoPlayKey === selectedKey} fallback={<div className="grid aspect-video place-items-center text-xs text-slate-400">No renderer is registered for this presentation.</div>} />
         </div>
         <div className="mt-3 flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -384,7 +411,12 @@ function VideosSection({ project, videos }: { project: VideoProject; videos: Vid
               {videoStamp(selected.updatedAt).short ? <span data-testid="video-studio-video-timestamp" title={videoStamp(selected.updatedAt).full} className="text-slate-500 dark:text-slate-400">{videoStamp(selected.updatedAt).short}{selected.revision > 1 ? ` · rev ${selected.revision}` : ''}</span> : null}
             </p>
           </div>
-          <a href={mediaURL} download className="shrink-0 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Download</a>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <a href={mediaURL} download className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Download</a>
+            <button type="button" onClick={() => onDelete?.({ id: selected.id, kind: 'media.video', title: selected.title })} className="grid h-7 w-7 place-items-center rounded-lg border border-red-200 text-red-600 transition hover:bg-red-50 dark:border-red-950 dark:text-red-300 dark:hover:bg-red-950/50" aria-label={`Delete ${selected.title}`} title="Delete video">
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
         {selected.note ? <p className="mt-3 rounded-xl bg-slate-100 p-3 text-xs leading-5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">{selected.note}</p> : null}
         {videos.length > 1 ? (
@@ -407,7 +439,7 @@ function VideosSection({ project, videos }: { project: VideoProject; videos: Vid
 // the written artifacts approved between stages. These were three sibling tabs,
 // which hid the sequence and made Characters something you had to already know
 // to click.
-function ProductionPanel({ project, videos, characters, references, documents }: { project: VideoProject; videos: VideoPresentation[]; characters: CharacterPresentation[]; references: ReferencePresentation[]; documents: DocumentPresentation[] }) {
+function ProductionPanel({ project, videos, characters, references, documents, autoPlayPresentationKey, onAutoPlayConsumed, onDelete }: { project: VideoProject; videos: VideoPresentation[]; characters: CharacterPresentation[]; references: ReferencePresentation[]; documents: DocumentPresentation[]; autoPlayPresentationKey?: string; onAutoPlayConsumed?: () => void; onDelete?: (presentation: PendingPresentationDelete) => void }) {
   const [isDraggingAssets, setIsDraggingAssets] = useState(false)
   const [uploadingAssets, setUploadingAssets] = useState(false)
   const [uploadMessage, setUploadMessage] = useState('')
@@ -493,8 +525,8 @@ function ProductionPanel({ project, videos, characters, references, documents }:
         </div>
       ) : (
         <>
-          <VideosSection project={project} videos={videos} />
-          <CharactersSection project={project} characters={characters} />
+          <VideosSection project={project} videos={videos} autoPlayPresentationKey={autoPlayPresentationKey} onAutoPlayConsumed={onAutoPlayConsumed} onDelete={onDelete} />
+          <CharactersSection project={project} characters={characters} onDelete={onDelete} />
           <ReferencesSection project={project} references={references} />
           <DocumentsSection documents={documents} />
         </>
@@ -534,7 +566,7 @@ function ReferencesSection({ project, references }: { project: VideoProject; ref
 // at a size worth judging a face at, beside the exact spec text that will be
 // repeated verbatim into every prompt, and the model the subject's whole arc
 // is committed to.
-function CharactersSection({ project, characters }: { project: VideoProject; characters: CharacterPresentation[] }) {
+function CharactersSection({ project, characters, onDelete }: { project: VideoProject; characters: CharacterPresentation[]; onDelete?: (presentation: PendingPresentationDelete) => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selected = characters.find((character) => character.id === selectedId) || characters[0]
   useEffect(() => {
@@ -558,7 +590,12 @@ function CharactersSection({ project, characters }: { project: VideoProject; cha
             {videoStamp(selected.updatedAt).short ? <span title={videoStamp(selected.updatedAt).full}>{videoStamp(selected.updatedAt).short}{selected.revision > 1 ? ` · rev ${selected.revision}` : ''}</span> : null}
           </p>
         </div>
-        <a href={imageURL} download className="shrink-0 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Download</a>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <a href={imageURL} download className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">Download</a>
+          <button type="button" onClick={() => onDelete?.({ id: selected.id, kind: 'media.character', title: selected.name })} className="grid h-7 w-7 place-items-center rounded-lg border border-red-200 text-red-600 transition hover:bg-red-50 dark:border-red-950 dark:text-red-300 dark:hover:bg-red-950/50" aria-label={`Delete ${selected.name}`} title="Delete character">
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
       {selected.note ? <p className="mt-3 rounded-xl bg-slate-100 p-3 text-xs leading-5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">{selected.note}</p> : null}
       {selected.spec ? (
@@ -570,7 +607,7 @@ function CharactersSection({ project, characters }: { project: VideoProject; cha
         <div className="mt-5 grid grid-cols-2 gap-2 border-t border-slate-200 pt-4 sm:grid-cols-3 dark:border-slate-800">
           {characters.map((character) => (
             <button key={character.id} type="button" data-testid="video-studio-character-list-item" data-character-id={character.id} data-selected={character.id === selected.id} onClick={() => setSelectedId(character.id)} className={`overflow-hidden rounded-xl border text-left ${character.id === selected.id ? 'border-violet-500/60 shadow-sm' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800'}`}>
-              <img src={workspaceMediaURL(`${project.workspacePath}/${character.imagePath.replace(/^\/+/, '')}`)} alt="" className="h-20 w-full bg-slate-950 object-cover" />
+              <img src={workspaceMediaURL(`${project.workspacePath}/${character.imagePath.replace(/^\/+/, '')}`)} alt="" className="aspect-[3/4] w-full bg-slate-950 object-contain" />
               <strong className="block truncate px-2 py-1.5 text-[11px] text-slate-800 dark:text-slate-200">{character.name}</strong>
             </button>
           ))}
@@ -636,6 +673,34 @@ function WorkflowPanel({ project }: { project: VideoProject }) {
   )
 }
 
+function DeletePresentationDialog({ presentation, deleting, error, onClose, onConfirm }: {
+  presentation: PendingPresentationDelete
+  deleting: boolean
+  error: string
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const isVideo = presentation.kind === 'media.video'
+  const itemLabel = isVideo ? 'video' : 'character'
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/55 p-5 backdrop-blur-sm" role="presentation">
+      <div role="dialog" aria-modal="true" aria-labelledby="delete-presentation-title" className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300"><Trash2 className="h-5 w-5" /></span>
+        <h2 id="delete-presentation-title" className="mt-4 text-lg font-semibold text-slate-950 dark:text-white">Delete this {itemLabel}?</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300"><strong className="font-semibold">{presentation.title}</strong> will be removed from the Production panel and its generated {isVideo ? 'video file' : 'reference image and character sheet'} will be permanently deleted.</p>
+        <p className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">Already-created clips are not changed, but a deleted character reference will no longer be available for future shots.</p>
+        {error ? <p role="alert" className="mt-3 rounded-lg bg-red-50 p-2.5 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300">{error}</p> : null}
+        <div className="mt-6 flex justify-end gap-2">
+          <button type="button" disabled={deleting} onClick={onClose} className="rounded-lg px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-800">Cancel</button>
+          <button type="button" data-testid="video-studio-delete-presentation-confirm" disabled={deleting} onClick={onConfirm} className="inline-flex min-w-24 items-center justify-center gap-1.5 rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-500 disabled:opacity-60">
+            {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}{deleting ? 'Deleting…' : `Delete ${itemLabel}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: () => void }) {
   const [tabId, setTabId] = useState<string | null>(null)
   const [panel, setPanel] = useState<WorkspacePanel>('production')
@@ -643,11 +708,16 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
   const [characters, setCharacters] = useState<CharacterPresentation[]>([])
   const [references, setReferences] = useState<ReferencePresentation[]>([])
   const [documents, setDocuments] = useState<DocumentPresentation[]>([])
+  const [autoPlayPresentationKey, setAutoPlayPresentationKey] = useState('')
   const [showVideoPlayer, setShowVideoPlayer] = useState(false)
   const [loadingProject, setLoadingProject] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [loadError, setLoadError] = useState('')
+  const [pendingDelete, setPendingDelete] = useState<PendingPresentationDelete | null>(null)
+  const [deletingPresentation, setDeletingPresentation] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
   const videoCountRef = useRef<number | null>(null)
+  const latestVideoKeyRef = useRef('')
 
   // Production panel width: draggable, and remembered per browser rather than
   // reset every visit. Read once on mount rather than on every render -- the
@@ -690,8 +760,14 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
         loadReferencePresentations(project),
         loadDocumentPresentations(project),
       ])
-      if (videoCountRef.current !== null && nextVideos.length > videoCountRef.current) setShowVideoPlayer(true)
+      const nextLatestVideoKey = videoPresentationKey(nextVideos[0])
+      const hasNewPresentation = videoCountRef.current !== null && nextLatestVideoKey !== '' && nextLatestVideoKey !== latestVideoKeyRef.current
+      if (hasNewPresentation) {
+        setAutoPlayPresentationKey(nextLatestVideoKey)
+        setShowVideoPlayer(true)
+      }
       videoCountRef.current = nextVideos.length
+      latestVideoKeyRef.current = nextLatestVideoKey
       setVideos(nextVideos)
       setCharacters(nextCharacters)
       setReferences(nextReferences)
@@ -792,6 +868,34 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
     void refreshProject(true)
   }, [presentationEvents, refreshProject])
 
+  const requestPresentationDelete = useCallback((presentation: PendingPresentationDelete) => {
+    setDeleteError('')
+    setPendingDelete(presentation)
+  }, [])
+
+  const deletePresentation = useCallback(async () => {
+    if (!pendingDelete || deletingPresentation) return
+    setDeletingPresentation(true)
+    setDeleteError('')
+    try {
+      await agentApi.deleteAgentProfilePresentation(VIDEO_PROFILE_ID, pendingDelete.id, {
+        conversation_key: project.id,
+        kind: pendingDelete.kind,
+      })
+      if (pendingDelete.kind === 'media.video') {
+        setVideos((current) => current.filter((video) => video.id !== pendingDelete.id))
+      } else {
+        setCharacters((current) => current.filter((character) => character.id !== pendingDelete.id))
+      }
+      setPendingDelete(null)
+      void refreshProject(true)
+    } catch (cause) {
+      setDeleteError(cause instanceof Error ? cause.message : `Could not delete this ${pendingDelete.kind === 'media.video' ? 'video' : 'character'}.`)
+    } finally {
+      setDeletingPresentation(false)
+    }
+  }, [deletingPresentation, pendingDelete, project.id, refreshProject])
+
   return (
     <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-slate-50 dark:bg-slate-950">
       <VideoStudioHeader projectTabId={tabId}>
@@ -860,7 +964,7 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
               <button type="button" onClick={() => void refreshProject()} disabled={refreshing} className="mt-2 inline-flex h-7 items-center rounded-lg bg-amber-600 px-2.5 text-[11px] font-semibold text-white hover:bg-amber-500 disabled:opacity-50">{refreshing ? 'Retrying…' : 'Retry'}</button>
             </div>
           ) : null}
-          {loadingProject ? <div className="grid h-full place-items-center text-xs text-slate-400"><Loader2 className="h-5 w-5 animate-spin" /></div> : panel === 'files' ? <FilesPanel project={project} /> : panel === 'workflow' ? <WorkflowPanel project={project} /> : <ProductionPanel project={project} videos={videos} characters={characters} references={references} documents={documents} />}
+          {loadingProject ? <div className="grid h-full place-items-center text-xs text-slate-400"><Loader2 className="h-5 w-5 animate-spin" /></div> : panel === 'files' ? <FilesPanel project={project} /> : panel === 'workflow' ? <WorkflowPanel project={project} /> : <ProductionPanel project={project} videos={videos} characters={characters} references={references} documents={documents} autoPlayPresentationKey={autoPlayPresentationKey} onAutoPlayConsumed={() => setAutoPlayPresentationKey('')} onDelete={requestPresentationDelete} />}
         </aside>
       </div>
       {showVideoPlayer && videos.length > 0 ? (
@@ -870,10 +974,11 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
             <button type="button" onClick={() => setShowVideoPlayer(false)} className="grid h-8 w-8 place-items-center rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white" aria-label="Close video player"><X className="h-4 w-4" /></button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto bg-white dark:bg-slate-950">
-            <VideosSection project={project} videos={videos} />
+            <VideosSection project={project} videos={videos} autoPlayPresentationKey={autoPlayPresentationKey} onAutoPlayConsumed={() => setAutoPlayPresentationKey('')} onDelete={requestPresentationDelete} />
           </div>
         </div>
       ) : null}
+      {pendingDelete ? <DeletePresentationDialog presentation={pendingDelete} deleting={deletingPresentation} error={deleteError} onClose={() => { if (!deletingPresentation) { setPendingDelete(null); setDeleteError('') } }} onConfirm={() => void deletePresentation()} /> : null}
       <FileContentViewer />
     </div>
   )

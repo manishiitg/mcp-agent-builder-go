@@ -78,16 +78,32 @@ func TestWorkflowDBToolDefinitionsExplainSafeShellPayloadEncoding(t *testing.T) 
 
 func TestWorkflowDBToolRegistryExposesQueryAndMutation(t *testing.T) {
 	registry := CreateWorkflowDBToolRegistry("http://127.0.0.1:1", "", "session")
-	if len(registry.Tools) != 3 {
-		t.Fatalf("tools=%d, want 3", len(registry.Tools))
+	if len(registry.Tools) != 4 {
+		t.Fatalf("tools=%d, want 4", len(registry.Tools))
 	}
-	for _, name := range []string{"query_workflow_db", "mutate_workflow_db", "apply_workflow_db_migration"} {
+	for _, name := range []string{"query_workflow_db", "mutate_workflow_db", "apply_workflow_db_migration", "create_workflow_database_snapshot"} {
 		if registry.Executors[name] == nil {
 			t.Fatalf("missing executor %q", name)
 		}
 		if registry.Categories[name] != WorkflowDBToolCategory {
 			t.Fatalf("category[%q]=%q", name, registry.Categories[name])
 		}
+	}
+}
+
+func TestWorkflowDBBackupSnapshotExecutorRejectsWorkflowStep(t *testing.T) {
+	sessionID := "workflow-db-step-backup"
+	defer common.ClearSessionShellConfig(sessionID)
+	common.SetSessionFolderGuard(sessionID, []string{"Workflow/demo/db"}, nil)
+	common.SetSessionShellEnv(sessionID, map[string]string{
+		workflowDBAccessEnv: "read",
+		"STEP_OUTPUT_DIR":   "Workflow/demo/runs/iteration-0/default/execution/step",
+	})
+
+	registry := CreateWorkflowDBToolRegistry("http://127.0.0.1:1", "", sessionID)
+	_, err := registry.Executors["create_workflow_database_snapshot"](context.Background(), map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "restricted to the parent Builder/Pulse session") {
+		t.Fatalf("step snapshot error=%v", err)
 	}
 }
 

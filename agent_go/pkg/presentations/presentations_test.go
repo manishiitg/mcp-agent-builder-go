@@ -129,6 +129,17 @@ func TestUpsertRequiresEveryField(t *testing.T) {
 	}
 }
 
+func TestDeleteRemovesOnlyTheRequestedPresentation(t *testing.T) {
+	server, lastParams := capturingWorkspaceServer(t)
+	defer server.Close()
+	if err := Delete(context.Background(), workspace.NewClient(server.URL), "Chats/Video Studio/projects/demo", "presentation-video", "media.video"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if len(*lastParams) != 2 || (*lastParams)[0] != "presentation-video" || (*lastParams)[1] != "media.video" {
+		t.Fatalf("delete params = %#v, want presentation id and kind", *lastParams)
+	}
+}
+
 // Event is a type alias for orchestrator_events.PresentationUpdatedEvent, so
 // this has nothing to unmarshal or convert by hand — the struct itself is
 // what reaches the frontend, registered in cmd/schema-gen so it gets a real

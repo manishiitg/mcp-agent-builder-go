@@ -99,9 +99,10 @@ supports them.
 Block the anchor or continuation when any required reference is missing,
 unapproved, inconsistent with the chosen sequence, or unsupported as the
 claimed endpoint input. A model change is a new sequence boundary unless the
-handoff pack, target-model bridge still, and seam proof are explicitly
-approved.
+handoff pack and target-model references are explicitly approved.
 
-After a follow-up clip, prove the join with the seam-preview recipe before
-generating another clip. Visual development makes a good seam possible; it
-does not replace seam proof.
+After a follow-up clip, perform its lightweight receipt: confirm the file with
+`ffprobe` and inspect stable opening/ending frames. If the new opening visibly
+breaks continuity, revise the H3 prompt/reference set and regenerate that
+successor. Visual development makes a good H3 handoff possible; it does not
+authorize an FFmpeg seam repair.
