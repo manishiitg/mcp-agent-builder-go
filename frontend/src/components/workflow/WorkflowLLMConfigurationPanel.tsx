@@ -412,8 +412,11 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
       : rows
     // The row this workflow is actually using bubbles to the top -- scanning
     // status dots down the list otherwise can't tell "in use" from "also ready".
+    // Pi rows keep their catalog order: the company in use is already
+    // marked, and reordering models under it would just look like a jump.
     if (!selectedRowId) return filtered
     return [...filtered].sort((a, b) => {
+      if (a.groupFilter || b.groupFilter) return 0
       if (a.id === selectedRowId) return -1
       if (b.id === selectedRowId) return 1
       return 0
@@ -987,23 +990,29 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
           </div>
           {open && models.map(row => {
             const selected = row.id === selectedRowId
+            const saving = rowUsing === row.id
+            const disabled = readOnly || !row.selectable || selected || rowUsing !== null
+            // Picking a model is the whole action: it is saved to the
+            // workflow and the list folds back to the "runs on" line, the
+            // same as Use on a CLI row.
+            const pick = () => { void applyRowToWorkflow(row) }
             return (
               <div key={row.id} className={`flex items-center gap-2 py-1.5 pl-9 pr-3 ${selected ? 'bg-primary/5' : ''}`}>
                 <button
                   type="button"
                   role="radio"
                   aria-checked={selected}
-                  disabled={readOnly || !row.selectable}
-                  onClick={() => selectRow(row)}
-                  title={readOnly ? READ_ONLY_TITLE : `Use ${row.modelId} for this workflow`}
+                  disabled={disabled}
+                  onClick={pick}
+                  title={readOnly ? READ_ONLY_TITLE : selected ? 'In use' : `Use ${row.modelId} for this workflow`}
                   className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-border transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {selected && <span className="h-2 w-2 rounded-full bg-primary" />}
                 </button>
                 <button
                   type="button"
-                  disabled={readOnly || !row.selectable}
-                  onClick={() => selectRow(row)}
+                  disabled={disabled}
+                  onClick={pick}
                   className="flex min-w-0 flex-1 items-center gap-2 text-left disabled:cursor-not-allowed"
                 >
                   <span className={`min-w-0 flex-1 truncate font-mono text-[11px] ${selected ? 'font-semibold text-foreground' : 'text-foreground'}`}>{row.modelId}</span>
@@ -1011,6 +1020,13 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
                     <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground" title="From your published LLMs">
                       Published
                     </span>
+                  )}
+                  {saving ? (
+                    <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Saving…</span>
+                  ) : selected ? (
+                    <span className="shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">In use</span>
+                  ) : (
+                    <span className="shrink-0 text-[11px] font-medium text-primary">Use</span>
                   )}
                 </button>
               </div>
