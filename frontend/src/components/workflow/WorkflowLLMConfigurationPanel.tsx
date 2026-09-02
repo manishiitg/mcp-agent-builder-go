@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { AlertCircle, ArrowLeft, CheckCircle, ChevronRight, Loader2, Lock, RefreshCw, Search, X } from 'lucide-react'
+import { AlertCircle, ArrowLeft, CheckCircle, ChevronDown, ChevronRight, Loader2, Lock, RefreshCw, Search, X } from 'lucide-react'
 import LLMRoleSelector from '../LLMRoleSelector'
 import LLMSelectionDropdown from '../LLMSelectionDropdown'
 import { WorkflowProviderCredentialField } from '../WorkflowProviderCredentialField'
@@ -244,6 +244,15 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   // Direct API providers are not selectable for a workflow, so they stay
   // behind a toggle; the sign-in CLIs and Pi backends are always listed.
   const [moreProviders, setMoreProviders] = useState(false)
+  // Pi backends list one company row each; its models unfold underneath on
+  // click. The backend the workflow runs on is always unfolded.
+  const [openPiGroups, setOpenPiGroups] = useState<Set<string>>(() => new Set())
+  const togglePiGroup = (group: string) => setOpenPiGroups(current => {
+    const next = new Set(current)
+    if (next.has(group)) next.delete(group)
+    else next.add(group)
+    return next
+  })
   const toggleRolesOpen = () => setRolesOpen(open => { writeRolesOpen(!open); return !open })
 
   useEffect(() => {
@@ -910,7 +919,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   // coding-agent CLI is signed in once and just needs test + use, while a
   // Pi-backed model family needs its own API key saved first. Label them so
   // the list reads as two categories instead of ten look-alike rows.
-  const renderGroup = (title: string, hint: string, groupRows: ProviderRow[]) => {
+  const renderGroup = (title: string, hint: string, groupRows: ProviderRow[], renderRows: (rows: ProviderRow[]) => ReactNode = rows => rows.map(renderRow)) => {
     if (groupRows.length === 0) return null
     return (
       <div key={title} className="divide-y divide-border">
@@ -918,9 +927,98 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
           <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</div>
           <div className="text-[11px] text-muted-foreground/80">{hint}</div>
         </div>
-        {groupRows.map(renderRow)}
+        {renderRows(groupRows)}
       </div>
     )
+  }
+
+  // Pi backends: one company row (Gemini, MiniMax, ...) that unfolds into its
+  // models. Selection happens on a model row; the company row carries the
+  // status and the way into keys / test / publish.
+  const renderPiGroups = (groupRows: ProviderRow[]) => {
+    const byGroup = new Map<string, ProviderRow[]>()
+    groupRows.forEach(row => {
+      const group = row.groupFilter ?? ''
+      byGroup.set(group, [...(byGroup.get(group) ?? []), row])
+    })
+    const searching = query.trim().length > 0
+    return Array.from(byGroup.entries()).map(([group, models]) => {
+      const head = models[0]
+      const status = providerStatus(head.entry, isProviderLocked(head.id))
+      const tone = statusTone(status.label)
+      const selectedInGroup = models.find(row => row.id === selectedRowId) ?? null
+      const open = searching || openPiGroups.has(group) || selectedInGroup !== null
+      return (
+        <div key={group} className="divide-y divide-border">
+          <div className={`flex items-center gap-2 px-3 py-2 ${selectedInGroup ? 'bg-primary/5' : ''}`}>
+            <button
+              type="button"
+              onClick={() => togglePiGroup(group)}
+              aria-expanded={open}
+              className="flex min-w-0 flex-1 items-center gap-2 text-left"
+              title={open ? `Hide ${group} models` : `Show ${group} models`}
+            >
+              <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${open ? '' : '-rotate-90'}`} />
+              <span className={`shrink-0 text-sm ${selectedInGroup ? 'font-semibold' : 'font-medium'} text-foreground`}>{group}</span>
+              {selectedInGroup && (
+                <span className="shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                  In use
+                </span>
+              )}
+              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
+                {selectedInGroup ? selectedInGroup.modelId : `${models.length} model${models.length === 1 ? '' : 's'}`}
+              </span>
+            </button>
+            <span
+              className={`inline-flex shrink-0 items-center gap-1 text-[11px] font-medium ${tone.text}`}
+              title={statusTitle(status.label)}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} />
+              {statusActionText(status.label)}
+            </span>
+            <button
+              type="button"
+              onClick={() => setActiveProviderId((selectedInGroup ?? head).id)}
+              className="inline-flex shrink-0 items-center gap-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+              title={`Keys, test and publish for ${group}`}
+            >
+              Set up <ChevronRight className="h-3 w-3" />
+            </button>
+          </div>
+          {open && models.map(row => {
+            const selected = row.id === selectedRowId
+            return (
+              <div key={row.id} className={`flex items-center gap-2 py-1.5 pl-9 pr-3 ${selected ? 'bg-primary/5' : ''}`}>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  disabled={readOnly || !row.selectable}
+                  onClick={() => selectRow(row)}
+                  title={readOnly ? READ_ONLY_TITLE : `Use ${row.modelId} for this workflow`}
+                  className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-border transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {selected && <span className="h-2 w-2 rounded-full bg-primary" />}
+                </button>
+                <button
+                  type="button"
+                  disabled={readOnly || !row.selectable}
+                  onClick={() => selectRow(row)}
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left disabled:cursor-not-allowed"
+                >
+                  <span className={`min-w-0 flex-1 truncate font-mono text-[11px] ${selected ? 'font-semibold text-foreground' : 'text-foreground'}`}>{row.modelId}</span>
+                  {row.published && (
+                    <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground" title="From your published LLMs">
+                      Published
+                    </span>
+                  )}
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )
+    })
   }
 
   // One flat row per role: what it runs on now, and the picker right there.
@@ -1047,8 +1145,9 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
             )}
             {renderGroup(
               'Models via Pi',
-              'Each provider needs its own API key saved. Add the key, test, then pick a model to use it in this workflow.',
+              'Each provider needs its own API key saved. Set up the key, then open a provider and pick the model to use.',
               visibleRows.filter(row => Boolean(row.groupFilter)),
+              renderPiGroups,
             )}
             <div className="bg-muted/20 px-3 py-1.5">
               <button
