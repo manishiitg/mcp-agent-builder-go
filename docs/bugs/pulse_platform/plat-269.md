@@ -5,7 +5,7 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `implemented; live e2e reverify pending` |
+| Ticket state | `implemented and pushed to main; unit/build green; live e2e reverify pending` |
 | Last synchronized | `2026-09-02` |
 
 - **Priority:** P2 maintainability with a P1 side effect: every fix to the
@@ -14,9 +14,16 @@
   were each patched separately in `controller_message_sequence.go` and
   `controller_todo_task.go`.
 - **Owner:** `pkg/orchestrator/agents/workflow/step_based_workflow/`
-  (`controller_todo_task.go`, `controller_message_sequence.go`,
-  `sub_agent_async.go`), `cmd/server/virtual-tools/sub_agent_tools.go`,
-  guidance `todo-task.md` / `optimize-playbook.md`.
+  (`controller_orchestrator.go` — was `controller_todo_task.go` —,
+  `controller_message_sequence.go`, `sub_agent_async.go`,
+  `orchestrator_step_type_migration.go`), `cmd/server/virtual-tools/sub_agent_tools.go`,
+  `cmd/server/workflow_version_upgrades.go`, guidance `orchestrator.md` /
+  `optimize-playbook.md`, frontend `stepConfigMatching.ts`.
+- **Commits on `main` (2026-09-02):** `a79c68371` remove scripted orchestrator
+  path · `53dc8a439` delete dead todo list, `todo_id`→`task_id` · `c0ae21cc3`
+  run the orchestrator on the message_sequence executor · `5716be7bc` Go
+  identifier/file rename · `a04bde4ae` plan type `orchestrator` + read alias,
+  tool aliases, drift ID, guidance, contract v1.0.35 migration.
 
 ## What was wrong
 
@@ -87,18 +94,33 @@ that todo item.
    repair loop, and a hard error when the gate is exhausted. Repairs keep the
    conversation and its sub-agent results instead of re-running every child.
 
+5. **Plan type renamed to `orchestrator`** (follow-up phases in the same
+   series). `StepTypeOrchestrator = "orchestrator"`; every parse site accepts
+   `todo_task` (`StepTypeTodoTaskLegacy`, `IsOrchestratorStepType`) and
+   normalizes it, `MarshalJSON` writes the new name. Planning tools are
+   `add_orchestrator_step`, `update_orchestrator_step`,
+   `add/update/delete_orchestrator_route`; the five `*_todo_task_*` names stay
+   registered as deprecated aliases for one contract version. Drift review
+   requires `orchestrator_best_practices`; records carrying
+   `todo_task_best_practices` still satisfy it. Guidance `todo-task.md` is now
+   `orchestrator.md` (registry key `orchestrator`). Contract **v1.0.35** adds
+   `migrate_orchestrator_step_type`, a raw-text rewrite of the `"type"`
+   discriminators only (key order and unknown fields survive), validated and
+   written through the managed planning writer with a changelog entry. Go
+   identifiers and files were renamed (`controller_orchestrator.go`,
+   `orchestrator_agent.go`, `OrchestratorPlanStep`, `OrchestratorDecision`).
+   Event wire names, execution kinds, cost phases and log file names are
+   deliberately unchanged.
+
 ## Not changed (by decision)
 
 - The event wire names (`todo_task_route_selected`, `todo_task_step_completed`,
-  execution kind `todo_task`) and the frontend compound-node graph. Same
-  pattern PLAT-259 used for branch vs routing: one executor, distinct type.
-- Follow-up done in the same series: the plan type string is now
-  `orchestrator` with `todo_task` accepted as a read alias, the planning tools
-  are `add/update_orchestrator_step` and `add/update/delete_orchestrator_route`
-  (old names kept as deprecated aliases for one contract version), the drift
-  check is `orchestrator_best_practices` (legacy records still satisfy it), the
-  guidance doc is `orchestrator.md`, and contract v1.0.35 adds
-  `migrate_orchestrator_step_type` to rewrite plan.json.
+  `todo_task_orchestrator`), execution kind `todo_task`, cost phase, and the
+  `execution-attempt-N-iteration-M` log files. 211 historical run files and
+  the frontend event consumers depend on them; a rename there buys nothing.
+- The frontend compound-node graph (`usePlanToFlow.ts`) and the
+  `ExecutionLogsPopup` route-selection view: the log shape they read is kept
+  by the delegation seam's log writer. Only the plan-type guards widened.
 - The PLAT-068 eligibility invariant. Reworded from "use todo_task only when"
   to the same rule about giving a step routes; the render test still asserts
   it in all four guides.
@@ -109,8 +131,18 @@ that todo item.
   `cmd/server`, `cmd/server/virtual-tools`, `cmd/server/guidance`,
   `internal/terminals`, `internal/events`: green. Frontend `tsc -b && vite
   build`: green.
+- Full suites green after every phase: `step_based_workflow`, `cmd/server`,
+  `cmd/server/guidance`, `cmd/server/virtual-tools`, `internal/terminals`,
+  `internal/events`, `cmd/server/services`; frontend `tsc -b && vite build`.
+- New deterministic tests: `orchestrator_step_type_migration_test.go`
+  (rewrite only discriminators, idempotent, legacy parse normalizes); the
+  upgrade-ladder tests gained the v1.0.35 rung; the PLAT-068 render test
+  asserts the new invariant wording.
 - **Live e2e still pending** (unit tests count as zero coverage for agent
-  code): run a real `todo_task` with routes (`testing` /
+  code). Blocked on 2026-09-02 because the session's permission classifier
+  refused to start the backend; run
+  `agent_go/run_server_with_logging.sh --with-workspace --without-electron --background`
+  and then: run a real orchestrator with routes (`testing` /
   `execution-regression-router`, or `linkedin` / `step-p2-multi-drafter`)
   via Workshop `execute_step` and confirm children launch async, the
   completion batch lands, the step completes only after children settle,
