@@ -34,7 +34,10 @@ generation step.
   run) already writes a row — title, status, message, structured fields,
   timestamp — into `org_dashboard_notifications` in this same `db.sqlite`.
   Query `notification_kind = 'run_summary'` from it for this tab; that is
-  the default and needs no new step, table, or column. Build something
+  the default and needs no new step, table, or column. The `message` is
+  agent-written markdown — render it with `window.report.renderMarkdown`,
+  never as raw text, or the reader sees `###` and stray backticks. The
+  structured `fields_json` / `sections_json` render as plain values. Build something
   custom only if the parent explicitly asks for a different or richer
   activity view than the run summaries already give them — never invent a
   step or table whose sole purpose is feeding this tab. See the

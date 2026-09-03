@@ -25,7 +25,9 @@ row (title, status, message, fields, timestamp) into
 `org_dashboard_notifications` in the same `db/db.sqlite`, for every run.
 Query `notification_kind = 'run_summary'` ordered by `created_at desc` for
 this tab — that is the default, and it needs no new step, table, or
-column. Show "no runs recorded yet" when the table has no rows rather
+column. Its `message` is agent-written markdown: pass it through
+`window.report.renderMarkdown` so headings, bullets and inline code read
+properly instead of showing raw `###` and backticks. Show "no runs recorded yet" when the table has no rows rather
 than treating it as an error. Only design something custom — a bespoke
 table, richer per-run detail — when the parent has explicitly asked for a
 different or more detailed activity view than the run summaries give
