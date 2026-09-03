@@ -236,3 +236,30 @@ func TestOpenToolsRefuseMissingTargetsAndUndeclaredPresentation(t *testing.T) {
 		t.Fatalf("missing activity must be reported: %v", err)
 	}
 }
+
+func TestInboxNoteNamesTheUnfiledUploads(t *testing.T) {
+	if got := InboxNote(nil); got != "" {
+		t.Fatalf("empty inbox produced a note: %q", got)
+	}
+	got := InboxNote([]string{"_users/u1/Chats/SparkQuill/inbox/worksheet.pdf", "_users/u1/Chats/SparkQuill/inbox/photo.jpg"})
+	for _, want := range []string{"2 file(s)", "worksheet.pdf", "photo.jpg", "process-file"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("inbox note %q lacks %q", got, want)
+		}
+	}
+}
+
+func TestParseFolderListingAcceptsTheDocumentsAPIShapes(t *testing.T) {
+	cases := map[string]string{
+		"bare array":     `[{"filepath":"inbox/a.pdf","type":"file"}]`,
+		"data wrapper":   `{"success":true,"data":[{"filepath":"inbox/a.pdf","type":"file"}]}`,
+		"single folder":  `{"filepath":"inbox","type":"folder","children":[{"filepath":"inbox/a.pdf","type":"file"}]}`,
+		"wrapped folder": `{"data":{"filepath":"inbox","type":"folder","children":[{"filepath":"inbox/a.pdf","type":"file"}]}}`,
+	}
+	for name, raw := range cases {
+		got := parseFolderListing([]byte(raw))
+		if len(got) != 1 || got[0].FilePath != "inbox/a.pdf" {
+			t.Fatalf("%s: parsed %+v", name, got)
+		}
+	}
+}

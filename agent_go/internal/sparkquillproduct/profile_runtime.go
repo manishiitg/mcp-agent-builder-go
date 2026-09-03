@@ -72,6 +72,7 @@ func ParentPromptVariables(s FamilyState) map[string]string {
 		"PARENT_LABEL_NUDGE": "",
 		"SCHEDULE_NUDGE":     "",
 		"CONNECTOR_NOTE":     "",
+		"INBOX_NOTE":         "",
 	}
 	if len(missing) > 0 {
 		vars["CHILD_INFO_NUDGE"] = "IMPORTANT — you do not yet know the child's " + strings.Join(missing, ", ") +
@@ -180,11 +181,14 @@ func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIU
 	}
 	loader := familyLoader{workspaceAPIURL: workspaceAPIURL}
 	if err := registry.RegisterPromptVariables(ParentProfileID, func(ctx context.Context, rt agentprofiles.RuntimeContext) (map[string]string, error) {
-		state, err := loader.load(ctx, rt.UserID, runtimeRoot(rt.UserID, rt.WorkspacePath))
+		familyRoot := runtimeRoot(rt.UserID, rt.WorkspacePath)
+		state, err := loader.load(ctx, rt.UserID, familyRoot)
 		if err != nil {
 			return nil, err
 		}
-		return ParentPromptVariables(state), nil
+		vars := ParentPromptVariables(state)
+		vars["INBOX_NOTE"] = InboxNote(loader.listInbox(ctx, rt.UserID, familyRoot))
+		return vars, nil
 	}); err != nil {
 		return err
 	}
@@ -200,6 +204,25 @@ func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIU
 		interests := loader.read(ctx, rt.UserID, path.Join(familyRoot, "memory", "interests.md"))
 		return ChildPromptVariables(state, activityRoot, interests), nil
 	})
+}
+
+// InboxNote turns the unfiled uploads into one turn-context line. The prompt
+// used to make the model run `ls inbox/` before every reply; the platform
+// renders the prompt per turn, so it can just say what is there.
+func InboxNote(files []string) string {
+	if len(files) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(files))
+	for _, f := range files {
+		if n := strings.TrimSpace(path.Base(f)); n != "" && n != "." && n != "/" {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("INBOX — %d file(s) the parent uploaded are not filed yet: %s. File them with the process-file skill as a quiet background step this turn, then answer what the parent actually asked.\n", len(names), strings.Join(names, ", "))
 }
 
 // familyRootFromActivity maps ".../Chats/SparkQuill/activities/<activity>"
@@ -230,6 +253,61 @@ func (l familyLoader) read(ctx context.Context, userID, filePath string) string 
 		return ""
 	}
 	return result.Content
+}
+
+// listInbox returns the files waiting in <familyRoot>/inbox, or nothing when
+// the folder is missing or the workspace cannot be reached (the note is a
+// convenience, never a reason to fail a turn).
+func (l familyLoader) listInbox(ctx context.Context, userID, familyRoot string) []string {
+	if strings.TrimSpace(l.workspaceAPIURL) == "" {
+		return nil
+	}
+	depth := 1
+	result, err := l.client(userID).ListWorkspaceFiles(ctx, workspace.ListWorkspaceFilesParams{Folder: path.Join(strings.Trim(familyRoot, "/"), "inbox"), MaxDepth: &depth})
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, e := range parseFolderListing(result.Raw) {
+		if e.Type == "folder" || strings.TrimSpace(e.FilePath) == "" || strings.HasSuffix(e.FilePath, ".meta.json") {
+			continue
+		}
+		files = append(files, e.FilePath)
+	}
+	return files
+}
+
+type folderEntry struct {
+	FilePath string        `json:"filepath"`
+	Type     string        `json:"type"`
+	Children []folderEntry `json:"children,omitempty"`
+}
+
+// parseFolderListing reads the documents API's folder listing in the shapes
+// it is known to use: a bare array, {data: [...]}, or a single folder object
+// whose children are the listing.
+func parseFolderListing(raw json.RawMessage) []folderEntry {
+	var list []folderEntry
+	if json.Unmarshal(raw, &list) == nil {
+		return list
+	}
+	var wrapped struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if json.Unmarshal(raw, &wrapped) == nil && len(wrapped.Data) > 0 {
+		if json.Unmarshal(wrapped.Data, &list) == nil {
+			return list
+		}
+		var one folderEntry
+		if json.Unmarshal(wrapped.Data, &one) == nil {
+			return one.Children
+		}
+	}
+	var one folderEntry
+	if json.Unmarshal(raw, &one) == nil {
+		return one.Children
+	}
+	return nil
 }
 
 // load reads family.json from the product root; a missing file is a new
