@@ -498,6 +498,7 @@ function dropDuplicateExecutionPromptMessages(events: PollingEvent[]): PollingEv
 
 function isTranscriptEvent(event: PollingEvent): boolean {
   if (NON_TRANSCRIPT_TYPES.has(event.type || '')) return false
+  if (isRunToolEnd(event)) return false
   if (isContainerTranscriptNoise(event)) return false
   if (isMessageSequenceWrapperEvent(event)) return false
   if (event.type === 'agent_end' || event.type === 'unified_completion') {
@@ -547,7 +548,7 @@ function isProductMainConversationEvent(event: PollingEvent): boolean {
 }
 
 function isToolBatchEvent(event: PollingEvent): boolean {
-  if (runActivity(event)) return false
+  if (runActivity(event) || isRunToolEnd(event)) return false
   const type = event.type || ''
   if (type === 'llm_generation_end') return isEmptyGenerationEnd(event)
   return TOOL_CALL_TYPES.has(type) || BATCH_BRIDGE_TYPES.has(type)
@@ -911,11 +912,25 @@ const RUN_TOOL_LABELS: Record<string, string> = {
   run_full_evaluation: 'Running evaluation',
 }
 
-export function runActivity(event: PollingEvent): { label: string; target: string; state: 'started' | 'finished' | 'failed' } | null {
+function runToolLabel(event: PollingEvent): string {
+  return RUN_TOOL_LABELS[mcpToolDisplayName(textField(toolCallField(event, 'tool_name'))).name] ?? ''
+}
+
+/**
+ * The row says a run STARTED, and nothing about how it ended.
+ *
+ * `execute_step` returns "Step … started in background" the moment the step is
+ * launched, so its tool_call_end means "launched", not "finished" — an earlier
+ * version of this row drew a green tick there and claimed a run had completed
+ * seconds after it began. Completion arrives separately, as the
+ * [AUTO-NOTIFICATION] the backend sends when the step really finishes, and that
+ * already has its own row. So: one row per run, and only a failed launch is
+ * reported as an outcome.
+ */
+export function runActivity(event: PollingEvent): { label: string; target: string; state: 'started' | 'failed' } | null {
   const type = event.type || ''
-  if (type !== 'tool_call_start' && type !== 'tool_call_end' && type !== 'tool_call_error') return null
-  const rawName = textField(toolCallField(event, 'tool_name'))
-  const label = RUN_TOOL_LABELS[mcpToolDisplayName(rawName).name]
+  if (type !== 'tool_call_start' && type !== 'tool_call_error') return null
+  const label = runToolLabel(event)
   if (!label) return null
   const args = toolCallArgs(event)
   let target = ''
@@ -927,11 +942,12 @@ export function runActivity(event: PollingEvent): { label: string; target: strin
       /* a partially streamed argument blob is not worth reporting on */
     }
   }
-  return {
-    label,
-    target,
-    state: type === 'tool_call_error' ? 'failed' : type === 'tool_call_end' ? 'finished' : 'started',
-  }
+  return { label, target, state: type === 'tool_call_error' ? 'failed' : 'started' }
+}
+
+/** The end of a run tool's launch call: its row was already drawn by the start. */
+function isRunToolEnd(event: PollingEvent): boolean {
+  return event.type === 'tool_call_end' && runToolLabel(event) !== ''
 }
 
 export interface PairedToolCall {

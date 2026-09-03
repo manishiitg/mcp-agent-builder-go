@@ -1,6 +1,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Loader2, XCircle } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, XCircle } from 'lucide-react'
 import { EventDispatcher } from './events/EventDispatcher'
 import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
 import {
@@ -353,7 +353,14 @@ const InternalActivityEvent: React.FC<{ title: string; content: string; timestam
         {timestamp && <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">{timestamp}</span>}
         {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
       </button>
-      {open && <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/60 p-3 text-[11px] leading-5 text-muted-foreground">{content}</pre>}
+      {open && (
+        // These are agent-written notes — headings, bullets, bold, inline code.
+        // A <pre> showed the raw markup: "### Close-out", "**step-x**", stray
+        // backticks. Render it the way the same text renders in a reply.
+        <div className="mt-2 max-h-56 overflow-auto rounded-lg bg-muted/60 p-3 [&_li]:!text-[12px] [&_p]:!text-[12px]">
+          <ConversationMarkdownRenderer content={content} framed={false} maxHeight="none" />
+        </div>
+      )}
     </div>
   )
 }
@@ -374,20 +381,18 @@ const PresentationActivityEvent: React.FC<{ label: string; title: string; destin
 // Running a step, the workflow, or an evaluation is the headline action of a
 // workflow turn, so it gets the same compact activity row a presentation gets
 // rather than disappearing into a collapsed "N tool calls" chip.
-const RunActivityEvent: React.FC<{ label: string; target: string; state: 'started' | 'finished' | 'failed'; timestamp: string }> = ({ label, target, state, timestamp }) => (
+const RunActivityEvent: React.FC<{ label: string; target: string; state: 'started' | 'failed'; timestamp: string }> = ({ label, target, state, timestamp }) => (
   <div data-testid="terminal-clear-run-activity" className="my-3 rounded-lg border border-border/60 bg-muted/40 px-3 py-2">
     <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-      {state === 'started'
-        ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary/70" aria-hidden="true" />
-        : state === 'failed'
-          ? <CircleDashed className="h-3.5 w-3.5 shrink-0 text-red-500" aria-hidden="true" />
-          : <CircleDashed className="h-3.5 w-3.5 shrink-0 text-emerald-500" aria-hidden="true" />}
+      {state === 'failed'
+        ? <CircleDashed className="h-3.5 w-3.5 shrink-0 text-red-500" aria-hidden="true" />
+        : <CircleDashed className="h-3.5 w-3.5 shrink-0 text-primary/70" aria-hidden="true" />}
       <span className="truncate">
         <span className="font-medium text-foreground/85">{label}</span>
         {target && <> · <span className="text-foreground">{target}</span></>}
       </span>
       <span className="hidden shrink-0 sm:inline">
-        {state === 'started' ? 'in the workflow' : state === 'failed' ? 'failed' : 'finished'}
+        {state === 'failed' ? 'could not start' : 'started'}
       </span>
       {timestamp && <span className="ml-auto shrink-0 tabular-nums">{timestamp}</span>}
     </div>

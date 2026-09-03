@@ -483,6 +483,18 @@ describe('buildTranscriptItems', () => {
     })
   })
 
+  it('says a run started and never that it finished', () => {
+    // execute_step returns "started in background" the moment it launches, so
+    // its end event knows nothing about the outcome — it must not draw a row.
+    const end = evt({ id: 'r2', session_id: 's1', type: 'tool_call_end', data: { data: { tool_call_id: 'c1', tool_name: 'execute_step' } } })
+    expect(runActivity(end)).toBeNull()
+    const items = buildTranscriptItems([
+      evt({ id: 'r1', session_id: 's1', type: 'tool_call_start', data: { data: { tool_call_id: 'c1', tool_name: 'execute_step', tool_params: { arguments: '{"step_id":"step-fetch"}' } } } }),
+      end,
+    ])
+    expect(items).toHaveLength(1)
+  })
+
   it('omits token usage because cost and context have dedicated UI', () => {
     const items = buildTranscriptItems([
       evt({ id: 'm1', session_id: 's1', type: 'agent_message' }),
