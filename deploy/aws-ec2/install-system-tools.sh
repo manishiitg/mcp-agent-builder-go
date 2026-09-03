@@ -65,7 +65,7 @@ chmod 0755 /usr/local/bin/ntn
 # workflow-attached secrets SECRET_SURGE_LOGIN / SECRET_SURGE_TOKEN onto the
 # SURGE_LOGIN / SURGE_TOKEN variables the CLI reads, because HOME is /tmp in the
 # sandbox and there is no ~/.netrc to log in with.
-if ! test -x /usr/lib/node_modules/surge/lib/cli.js; then
+if ! test -e /usr/lib/node_modules/surge/bin/surge; then
   npm install -g --silent surge >/dev/null
 fi
 rm -f /usr/local/bin/surge
@@ -73,7 +73,7 @@ cat > /usr/local/bin/surge <<'SURGE'
 #!/usr/bin/env bash
 if [[ -z "${SURGE_LOGIN:-}" && -n "${SECRET_SURGE_LOGIN:-}" ]]; then export SURGE_LOGIN="$SECRET_SURGE_LOGIN"; fi
 if [[ -z "${SURGE_TOKEN:-}" && -n "${SECRET_SURGE_TOKEN:-}" ]]; then export SURGE_TOKEN="$SECRET_SURGE_TOKEN"; fi
-exec /usr/bin/node /usr/lib/node_modules/surge/lib/cli.js "$@"
+exec /usr/bin/node /usr/lib/node_modules/surge/bin/surge "$@"
 SURGE
 chmod 0755 /usr/local/bin/surge
 
