@@ -264,12 +264,14 @@ const InternalActivityEvent: React.FC<{ title: string; content: string; timestam
 }
 
 const PresentationActivityEvent: React.FC<{ label: string; title: string; destination: string; detail: string; timestamp: string }> = ({ label, title, destination, detail, timestamp }) => (
-  <div data-testid="terminal-clear-presentation-activity" className="my-3 border-y border-violet-900/35 bg-violet-950/15 py-2">
-    <div className="flex items-center gap-2 px-1 text-[11px] text-violet-200/80">
-      <CircleDashed className="h-3.5 w-3.5 shrink-0 text-violet-300/75" />
-      <span className="truncate"><span className="font-medium text-violet-100">{label}</span> · {title}</span>
-      <span className="hidden shrink-0 text-violet-300/55 sm:inline">{detail} in {destination}</span>
-      {timestamp && <span className="ml-auto shrink-0 tabular-nums text-violet-300/50">{timestamp}</span>}
+  // Token-driven so it reads on light and dark products alike: the earlier
+  // violet-on-violet palette hid the title on a light surface.
+  <div data-testid="terminal-clear-presentation-activity" className="my-3 rounded-lg border border-border/60 bg-muted/40 px-3 py-2">
+    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+      <CircleDashed className="h-3.5 w-3.5 shrink-0 text-primary/70" />
+      <span className="truncate"><span className="font-medium text-foreground/85">{label}</span> · <span className="text-foreground">{title}</span></span>
+      <span className="hidden shrink-0 sm:inline">{detail} in {destination}</span>
+      {timestamp && <span className="ml-auto shrink-0 tabular-nums">{timestamp}</span>}
     </div>
   </div>
 )
