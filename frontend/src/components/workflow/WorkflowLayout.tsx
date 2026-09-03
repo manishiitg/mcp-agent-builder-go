@@ -72,6 +72,9 @@ const ChatAreaWithObserverId = forwardRef<ChatAreaRef, {
   // Show chat input for chat-compatible phases
   const effectiveHideInput = isChatCompatiblePhase(activePhaseId) ? false : hideInput
 
+  // The agent's open_workspace_view calls open the toolbar's views here.
+  useWorkflowViewPresentations(workflowTabId)
+
   return (
     <ChatArea
       ref={ref}
@@ -97,6 +100,7 @@ import {
   type RunningWorkflowInfo,
 } from '../../services/api-types'
 import { findOrCreateWorkflowTab, isChatCompatiblePhase } from '../../utils/chatSubmitHelpers'
+import { useWorkflowViewPresentations } from './useWorkflowViewPresentations'
 import { reusableBlankWorkflowChatTabId, hasWorkflowChatContent, workflowTabAlreadyHasContent } from './workflowChatTabConversion'
 import { hydrateTabEvents } from '../../utils/sessionRestore'
 import { isPreviewView, isWorkspacePaneView } from './workspaceViews'

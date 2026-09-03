@@ -1371,3 +1371,12 @@ scheduler's enable/disable/trigger routes, the cadence is the product's
 (shown, not edited), last run comes from the job, and watched websites live
 in family.json `watch_sites`, which the parent prompt already reads. The
 family server keeps its own cadence and preferred-hour controls.
+
+### 2026-09-03 — the workflow agent can open toolbar views
+
+`open_workspace_view` (registered for every workflow phase in
+`cmd/server/workflow_view_tool.go`) emits a `workflow.view` presentation;
+`useWorkflowViewPresentations` in `WorkflowLayout` turns it into the same
+`openWorkspaceView` call the toolbar buttons make. The Go list of views
+mirrors `workspaceViews.ts` and a vitest keeps them identical. This is the
+product presentation mechanism applied to AgentWorks itself.
