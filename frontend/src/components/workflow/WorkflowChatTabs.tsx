@@ -10,7 +10,7 @@ import {
   convertObservedWorkflowTabToInteractive,
   isMisclassifiedRestoredWorkflowChat,
 } from './workflowChatTabConversion'
-import { shouldDisplayWorkflowTab, workflowTabDisplayName } from './workflowRuntimeTabProjection'
+import { shouldDisplayWorkflowTab, staleWorkflowTabIds, workflowTabDisplayName } from './workflowRuntimeTabProjection'
 import { useAuthStore } from '../../stores/useAuthStore'
 import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
 
@@ -27,6 +27,10 @@ interface WorkflowTabItemProps {
   onMakeInteractive: (tabId: string) => void
   onStop: (tabId: string) => void
 }
+
+// How often the idle-tab sweep runs. The threshold it enforces is six hours,
+// so checking every few minutes is enough to keep the strip tidy.
+const STALE_TAB_SWEEP_INTERVAL_MS = 5 * 60 * 1000
 
 // Per-tab live status — mirrors the backend's consolidated busy/idle/stopped
 // (sessionDisplayStatus). The dot lives in the tab pill instead of the toolbar.
@@ -139,16 +143,26 @@ const WorkflowTabItem = React.memo<WorkflowTabItemProps>(({
         </button>
       )}
 
+      {/* A busy tab can't be closed. Closing never stopped its run — the work
+          kept executing on the backend and the still-running-workflow
+          reconciler recreated the tab on its next poll, so the X read as a
+          no-op. Stop the run first (the control to the left), then close. */}
       {canClose && (
         <button
           type="button"
+          disabled={isBusy}
           onClick={(e) => {
             e.stopPropagation()
+            if (isBusy) return
             onCloseTab(tab.tabId)
           }}
-          className="ml-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-gray-200"
-          aria-label={`Close ${displayName}`}
-          title="Close tab"
+          className={`ml-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded text-gray-400 transition-colors ${
+            isBusy
+              ? 'cursor-not-allowed opacity-40'
+              : 'hover:bg-gray-200 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-gray-200'
+          }`}
+          aria-label={isBusy ? `${displayName} is still running — stop it before closing` : `Close ${displayName}`}
+          title={isBusy ? 'Still running — stop the run before closing' : 'Close tab'}
         >
           <X className="h-3 w-3" />
         </button>
@@ -295,6 +309,22 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
       console.error('[WorkflowChatTabs] Failed to stop session:', error)
     }
   }, [setTabStreaming, setTabHasRunningBgAgents])
+
+  // Tabs otherwise only ever leave the strip when the user closes one, so a
+  // workflow that fires several schedules a day accumulates a tab per run
+  // (they persist across reloads too). Sweep the ones left untouched for
+  // six hours; the tab in front of the user and anything still running are
+  // never swept, so this can't take a conversation out from under them.
+  useEffect(() => {
+    const sweepStaleTabs = () => {
+      const state = useChatStore.getState()
+      const staleIds = staleWorkflowTabIds(Object.values(state.chatTabs), state.activeTabId)
+      staleIds.forEach(tabId => { void state.closeTab(tabId, false) })
+    }
+    const interval = window.setInterval(sweepStaleTabs, STALE_TAB_SWEEP_INTERVAL_MS)
+    sweepStaleTabs()
+    return () => window.clearInterval(interval)
+  }, [])
 
   // Close chat area when all workflow tabs are closed (but not on first render)
   useEffect(() => {

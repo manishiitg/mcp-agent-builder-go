@@ -131,8 +131,8 @@ export function reconcileWorkflowRuntimeTab(
 }
 
 /**
- * A tab, once opened, is closed only by the user — never auto-hidden because
- * its run finished or it fell out of focus.
+ * A tab is never auto-*hidden* because its run finished or it fell out of
+ * focus — visibility is unconditional.
  *
  * This was previously conditional for view-only Schedule lanes: hidden once
  * a run finished unless it was the active tab, streaming, or had running
@@ -141,12 +141,49 @@ export function reconcileWorkflowRuntimeTab(
  * pile up in the strip and reappear on every reload (tabs persist 24h with
  * isStreaming reset to false). Explicit product decision: revert to
  * user-closes-only and accept that a workflow scheduled several times a day
- * accumulates that many tabs until manually closed, including across a
- * reload — see selectDurableChatState's persistence filter, which no longer
- * excludes finished Schedule tabs either.
+ * accumulates that many tabs, including across a reload — see
+ * selectDurableChatState's persistence filter, which no longer excludes
+ * finished Schedule tabs either.
+ *
+ * The accumulation that decision accepted is now bounded by time rather than
+ * by run state: see staleWorkflowTabIds, which actually closes a tab left
+ * untouched for six hours. Finishing a run still never hides or closes
+ * anything.
  */
 export function shouldDisplayWorkflowTab(_tab: ChatTab, _activeTabId: string | null): boolean {
   return true
+}
+
+/** How long a workflow tab may sit untouched before it is closed for you. */
+export const WORKFLOW_TAB_IDLE_CLOSE_MS = 6 * 60 * 60 * 1000
+
+/** When the user last had this tab in front of them. */
+function tabIdleSince(tab: ChatTab): number {
+  return tab.lastAccessedAt ?? tab.createdAt ?? 0
+}
+
+/**
+ * Workflow tabs that have earned an automatic close: untouched for longer
+ * than WORKFLOW_TAB_IDLE_CLOSE_MS, not the tab currently being looked at,
+ * and not still running.
+ *
+ * Running tabs are excluded for the same reason the close button is disabled
+ * on them: closing never stops the underlying run, so a tab closed mid-run
+ * leaves work executing invisibly (and the still-running-workflow reconciler
+ * would recreate the tab on its next poll anyway). A long-running execution
+ * is closable the moment it stops.
+ */
+export function staleWorkflowTabIds(
+  tabs: ChatTab[],
+  activeTabId: string | null,
+  now: number = Date.now(),
+): string[] {
+  return tabs
+    .filter(tab => tab.metadata?.mode === 'workflow')
+    .filter(tab => tab.tabId !== activeTabId)
+    .filter(tab => !tab.isStreaming && !tab.hasRunningBgAgents)
+    .filter(tab => now - tabIdleSince(tab) > WORKFLOW_TAB_IDLE_CLOSE_MS)
+    .map(tab => tab.tabId)
 }
 
 /** Describe the top-level tab for one live workflow execution. */

@@ -7,6 +7,7 @@ import {
   reusableScheduleTabId,
   shouldCatchUpRunningWorkflowTranscript,
   shouldDisplayWorkflowTab,
+  staleWorkflowTabIds,
   workflowTabDisplayName,
   workflowRuntimeTabProjection,
 } from './workflowRuntimeTabProjection'
@@ -230,6 +231,57 @@ describe('shouldDisplayWorkflowTab', () => {
 
   it('keeps a finished Schedule you are not looking at -- user closes it, not auto-hide', () => {
     expect(shouldDisplayWorkflowTab(scheduleTab({}), 'chat-tab')).toBe(true)
+  })
+})
+
+describe('staleWorkflowTabIds', () => {
+  const NOW = 1_000_000_000_000
+  const hoursAgo = (hours: number) => NOW - hours * 60 * 60 * 1000
+
+  const tab = (overrides: Partial<ChatTab>): ChatTab => ({
+    tabId: 'tab-1', name: 'Daily execution', sessionId: 'session-1',
+    isStreaming: false, isCompleted: false, hasRunningBgAgents: false, isSyntheticTurn: false,
+    canSteer: false, hideToolCalls: true, viewMode: 'terminal', config: {} as ChatTab['config'],
+    createdAt: hoursAgo(8), lastAccessedAt: hoursAgo(8), lastViewedEventCount: 0,
+    lastViewedEventCounts: { micro: 0 },
+    metadata: { mode: 'workflow', presetQueryId: 'workflow-1' },
+    ...overrides,
+  })
+
+  it('closes a workflow tab left untouched past the six-hour threshold', () => {
+    expect(staleWorkflowTabIds([tab({})], 'other-tab', NOW)).toEqual(['tab-1'])
+  })
+
+  it('keeps a tab that was viewed within the threshold', () => {
+    const recent = tab({ lastAccessedAt: hoursAgo(5) })
+    expect(staleWorkflowTabIds([recent], 'other-tab', NOW)).toEqual([])
+  })
+
+  it('measures idleness from the last view, not from when the tab was created', () => {
+    const oldButRecentlyUsed = tab({ createdAt: hoursAgo(30), lastAccessedAt: hoursAgo(1) })
+    expect(staleWorkflowTabIds([oldButRecentlyUsed], 'other-tab', NOW)).toEqual([])
+  })
+
+  it('never closes the tab the user is looking at, however old', () => {
+    expect(staleWorkflowTabIds([tab({ lastAccessedAt: hoursAgo(72) })], 'tab-1', NOW)).toEqual([])
+  })
+
+  it('never closes a tab whose run is still streaming', () => {
+    expect(staleWorkflowTabIds([tab({ isStreaming: true })], 'other-tab', NOW)).toEqual([])
+  })
+
+  it('never closes a tab whose background agents are still running', () => {
+    expect(staleWorkflowTabIds([tab({ hasRunningBgAgents: true })], 'other-tab', NOW)).toEqual([])
+  })
+
+  it('leaves non-workflow tabs alone', () => {
+    const chatTab = tab({ metadata: { mode: 'multi-agent' } })
+    expect(staleWorkflowTabIds([chatTab], 'other-tab', NOW)).toEqual([])
+  })
+
+  it('falls back to createdAt when a tab has never been switched to', () => {
+    const neverViewed = tab({ lastAccessedAt: undefined, createdAt: hoursAgo(7) })
+    expect(staleWorkflowTabIds([neverViewed], 'other-tab', NOW)).toEqual(['tab-1'])
   })
 })
 
