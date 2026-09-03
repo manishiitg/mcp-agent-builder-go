@@ -1329,3 +1329,9 @@ prompt still decides when the tool is called.
 Family-server code paths stay in the learning app for now: the desktop
 shell (`desktop-sparkquill/main.js`) still spawns `family-server`, so the
 standalone backend is live until the desktop moves to the platform server.
+
+**Decision 2026-09-03:** the desktop app keeps its own family server. The
+standalone backend and its renderers stay in the learning app; the platform
+backend is the hosted deployment. The two are not expected to have feature
+parity: the shared-chat work (ChatArea hosting, pills, product rows, turn
+blocks) is platform-only, and the family server keeps its own chat UI.
