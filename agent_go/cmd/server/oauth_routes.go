@@ -851,7 +851,7 @@ func expandPath(path string) string {
 // ensureUserTokenDir creates the user-specific token directory if it doesn't exist
 // Returns the expanded path to the user's token directory
 func ensureUserTokenDir(userID string) (string, error) {
-	tokenDir := expandPath(fmt.Sprintf("~/.config/mcpagent/tokens/%s", userID))
+	tokenDir := filepath.Join(mcpagentTokensRoot(), userID)
 	if err := os.MkdirAll(tokenDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create user token directory: %w", err)
 	}
@@ -860,5 +860,17 @@ func ensureUserTokenDir(userID string) (string, error) {
 
 // getUserTokenFilePath returns the token file path for a specific user and server
 func getUserTokenFilePath(userID, serverName string) string {
-	return fmt.Sprintf("~/.config/mcpagent/tokens/%s/%s.json", userID, serverName)
+	return filepath.Join(mcpagentTokensRoot(), userID, serverName+".json")
+}
+
+// mcpagentTokensRoot is where per-user MCP connector OAuth tokens live. It
+// honours XDG_CONFIG_HOME so a host whose ~/.config is not writable by the
+// service user (RTS: root-owned, the bootstrap wrote the systemd units there)
+// can point the agent at a writable directory -- the same knob cursor-agent
+// needed. Falls back to the historical ~/.config/mcpagent/tokens.
+func mcpagentTokensRoot() string {
+	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
+		return filepath.Join(xdg, "mcpagent", "tokens")
+	}
+	return expandPath("~/.config/mcpagent/tokens")
 }

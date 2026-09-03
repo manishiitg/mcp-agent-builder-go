@@ -627,7 +627,7 @@ func hasOAuthTokenFile(cfg mcpclient.MCPServerConfig) bool {
 	}
 	tokenFile := cfg.OAuth.TokenFile
 	if tokenFile == "" {
-		tokenFile = "~/.config/mcpagent/tokens/default.json"
+		tokenFile = filepath.Join(mcpagentTokensRoot(), "default.json")
 	}
 	if strings.HasPrefix(tokenFile, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
