@@ -3413,8 +3413,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 terminalViewSelected ? 'formatted' : 'terminal',
               )}
               className="absolute right-0 h-7 w-7 p-0"
-              aria-label={terminalViewSelected ? 'Return to conversation' : 'Open tmux terminal'}
-              title={terminalViewSelected ? 'Return to conversation' : 'Open tmux terminal'}
+              aria-label={terminalViewSelected ? 'Return to conversation' : 'Open live view'}
+              title={terminalViewSelected ? 'Return to conversation' : 'Open live view'}
             >
               <Terminal className="h-3.5 w-3.5" />
             </Button>
@@ -3757,13 +3757,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                           terminalViewSelected ? 'formatted' : 'terminal',
                         )}
                         className="h-7 w-7 p-0"
-                        aria-label={terminalViewSelected ? 'Return to conversation' : 'Open tmux terminal'}
+                        aria-label={terminalViewSelected ? 'Return to conversation' : 'Open live view'}
                       >
                         <Terminal className="w-3.5 h-3.5" />
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>
-                      <p>{terminalViewSelected ? 'Return to conversation' : 'Open tmux terminal'}</p>
+                      <p>{terminalViewSelected ? 'Return to conversation' : 'Open live view'}</p>
                     </TooltipContent>
                   </Tooltip>
                 )}

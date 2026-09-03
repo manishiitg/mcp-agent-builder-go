@@ -33,7 +33,7 @@ export function MainAgentTerminal({ sessionId }: MainAgentTerminalProps) {
         setSnapshot(null)
         setError(null)
       } else {
-        setError(cause?.message || 'Could not load the main terminal.')
+        setError(cause?.message || 'Could not load the live view.')
       }
     } finally {
       setLoading(false)
@@ -59,7 +59,9 @@ export function MainAgentTerminal({ sessionId }: MainAgentTerminalProps) {
           <div className="p-4 text-sm text-red-300">{error}</div>
         ) : !snapshot ? (
           <div className="flex h-full items-center justify-center text-sm text-neutral-500">
-            {loading ? 'Loading main terminal…' : 'The main terminal is not available yet.'}
+            {/* Users are not told about terminals or tmux: while the live session has
+                not come up yet this simply reads as the agent starting. */}
+            {loading ? 'Starting…' : 'Starting…'}
           </div>
         ) : isLive ? (
           <LiveAttachXtermPane
