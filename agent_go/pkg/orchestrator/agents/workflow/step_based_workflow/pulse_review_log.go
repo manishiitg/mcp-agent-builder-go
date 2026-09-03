@@ -182,11 +182,19 @@ func ensurePulseReviewLogSchema(ctx context.Context, db pulseFindingLifecycleDB)
 	if _, err := db.ExecContext(ctx, pulseReviewLogIndex); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE pulse_review_log SET module=? WHERE module IN (?, ?)`,
+	// Probed first: this runs on every open, including pure reads, and a no-op
+	// UPDATE still takes the write lock (see pulseRowsExist).
+	if err := pulseExecIfRows(ctx, db,
+		`SELECT 1 FROM pulse_review_log WHERE module IN (?, ?)`,
+		[]interface{}{pulsemodules.LegacyStrategyAuditorID, pulsemodules.LegacyGoalAdvisorID},
+		`UPDATE pulse_review_log SET module=? WHERE module IN (?, ?)`,
 		pulsemodules.StrategicReviewID, pulsemodules.LegacyStrategyAuditorID, pulsemodules.LegacyGoalAdvisorID); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE pulse_review_log SET module=? WHERE module IN (?, ?)`,
+	if err := pulseExecIfRows(ctx, db,
+		`SELECT 1 FROM pulse_review_log WHERE module IN (?, ?)`,
+		[]interface{}{pulsemodules.LegacyWorkflowReviewID, pulsemodules.LegacyLLMOpsReviewID},
+		`UPDATE pulse_review_log SET module=? WHERE module IN (?, ?)`,
 		pulsemodules.TechnicalReviewID, pulsemodules.LegacyWorkflowReviewID, pulsemodules.LegacyLLMOpsReviewID); err != nil {
 		return err
 	}

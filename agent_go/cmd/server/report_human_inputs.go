@@ -275,7 +275,12 @@ func ensureReportHumanInputSchema(ctx context.Context, db *sql.DB) error {
 	// Historical rows predate trusted channel attribution. Preserve their user
 	// label but classify the provenance honestly instead of leaving an empty
 	// value that callers may mistake for a current verified UI answer.
-	if _, err := db.ExecContext(ctx, `UPDATE report_human_inputs
+	// Each migration below is probed with a SELECT first: this function runs on
+	// every open, including the pure reads behind get_pulse_state, and a no-op
+	// UPDATE still takes the write lock (see sqliteRowsExist).
+	if err := sqliteExecIfRows(ctx, db,
+		`SELECT 1 FROM report_human_inputs WHERE answered_by<>'' AND answered_by_kind=''`, nil,
+		`UPDATE report_human_inputs
 		SET answered_by_kind='legacy_unattributed', answered_via='legacy'
 		WHERE answered_by<>'' AND answered_by_kind=''`); err != nil {
 		return err
@@ -283,7 +288,9 @@ func ensureReportHumanInputSchema(ctx context.Context, db *sql.DB) error {
 	// Preserve pending/answered decisions while moving their attribution to the
 	// single live Strategic Review module. IDs remain stable historical keys;
 	// only new decisions use the strategic-proposal- namespace.
-	if _, err := db.ExecContext(ctx, `UPDATE report_human_inputs SET source='strategic_review'
+	if err := sqliteExecIfRows(ctx, db,
+		`SELECT 1 FROM report_human_inputs WHERE source IN ('strategy_auditor', 'goal_advisor')`, nil,
+		`UPDATE report_human_inputs SET source='strategic_review'
 		WHERE source IN ('strategy_auditor', 'goal_advisor')`); err != nil {
 		return err
 	}
@@ -297,7 +304,12 @@ func ensureReportHumanInputSchema(ctx context.Context, db *sql.DB) error {
 		PostRunProof:  "one post-change producing run",
 		FailurePolicy: "continue_unchanged",
 	})
-	if _, err := db.ExecContext(ctx, `UPDATE report_human_inputs
+	if err := sqliteExecIfRows(ctx, db,
+		`SELECT 1 FROM report_human_inputs
+		WHERE source='technical_review'
+		  AND id LIKE 'technical-decision-prompt-contract-consolidation-%'
+		  AND (apply_contract_json='' OR apply_contract_json='{}')`, nil,
+		`UPDATE report_human_inputs
 		SET apply_contract_json=?
 		WHERE source='technical_review'
 		  AND id LIKE 'technical-decision-prompt-contract-consolidation-%'

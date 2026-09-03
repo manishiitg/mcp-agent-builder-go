@@ -585,17 +585,29 @@ func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifec
 	if err := migrateRunConcernIssueIDs(ctx, db); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET step_id=?
+	// Each migration is probed with a SELECT first: this runs on every open,
+	// including pure reads, and a no-op UPDATE still takes the write lock (see
+	// pulseRowsExist).
+	if err := pulseExecIfRows(ctx, db,
+		`SELECT 1 FROM run_concerns WHERE phase=? AND step_id IN (?, ?)`,
+		[]interface{}{ConcernPhaseReview, pulsemodules.LegacyStrategyAuditorID, pulsemodules.LegacyGoalAdvisorID},
+		`UPDATE run_concerns SET step_id=?
 		WHERE phase=? AND step_id IN (?, ?)`, pulsemodules.StrategicReviewID,
 		ConcernPhaseReview, pulsemodules.LegacyStrategyAuditorID, pulsemodules.LegacyGoalAdvisorID); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET step_id=?
+	if err := pulseExecIfRows(ctx, db,
+		`SELECT 1 FROM run_concerns WHERE phase=? AND step_id IN (?, ?)`,
+		[]interface{}{ConcernPhaseReview, pulsemodules.LegacyWorkflowReviewID, pulsemodules.LegacyLLMOpsReviewID},
+		`UPDATE run_concerns SET step_id=?
 		WHERE phase=? AND step_id IN (?, ?)`, pulsemodules.TechnicalReviewID,
 		ConcernPhaseReview, pulsemodules.LegacyWorkflowReviewID, pulsemodules.LegacyLLMOpsReviewID); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE pulse_fix_attempts SET module=? WHERE module IN (?, ?)`,
+	if err := pulseExecIfRows(ctx, db,
+		`SELECT 1 FROM pulse_fix_attempts WHERE module IN (?, ?)`,
+		[]interface{}{pulsemodules.LegacyWorkflowReviewID, pulsemodules.LegacyLLMOpsReviewID},
+		`UPDATE pulse_fix_attempts SET module=? WHERE module IN (?, ?)`,
 		pulsemodules.TechnicalReviewID, pulsemodules.LegacyWorkflowReviewID, pulsemodules.LegacyLLMOpsReviewID); err != nil {
 		return err
 	}
@@ -836,9 +848,10 @@ func migrateRunConcernIssueIDs(ctx context.Context, db pulseFindingLifecycleDB) 
 			return err
 		}
 	}
-	_, err = db.ExecContext(ctx, `UPDATE run_concerns SET issue_id='PUL-' || upper(substr(fingerprint, 1, 8))
+	return pulseExecIfRows(ctx, db,
+		`SELECT 1 FROM run_concerns WHERE trim(issue_id)=''`, nil,
+		`UPDATE run_concerns SET issue_id='PUL-' || upper(substr(fingerprint, 1, 8))
 		WHERE trim(issue_id)=''`)
-	return err
 }
 
 // migrateMergedPulseAliasesClosed repairs aliases that old recurrence handling
@@ -846,7 +859,14 @@ func migrateRunConcernIssueIDs(ctx context.Context, db pulseFindingLifecycleDB) 
 // only the canonical issue may return to the active register.
 func migrateMergedPulseAliasesClosed(ctx context.Context, db pulseFindingLifecycleDB) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := db.ExecContext(ctx, `UPDATE run_concerns SET
+	return pulseExecIfRows(ctx, db,
+		`SELECT 1 FROM run_concerns
+		WHERE fingerprint IN (
+			SELECT fingerprint FROM pulse_finding_details
+			WHERE COALESCE(json_extract(detail_json, '$.merged_into_issue_id'), '')<>''
+		) AND status NOT IN (?, ?, ?)`,
+		[]interface{}{ConcernStatusResolved, ConcernStatusRejected, ConcernStatusExternalActionRequired},
+		`UPDATE run_concerns SET
 		status=?, resolved_at=?, resolved_by='pulse_backlog_consolidation',
 		resolution_note='Retired semantic alias; later evidence is attached to its canonical issue_id.'
 		WHERE fingerprint IN (
@@ -854,7 +874,6 @@ func migrateMergedPulseAliasesClosed(ctx context.Context, db pulseFindingLifecyc
 			WHERE COALESCE(json_extract(detail_json, '$.merged_into_issue_id'), '')<>''
 		) AND status NOT IN (?, ?, ?)`, ConcernStatusResolved, now,
 		ConcernStatusResolved, ConcernStatusRejected, ConcernStatusExternalActionRequired)
-	return err
 }
 
 // migrateAppliedPulseFixesClosed adopts the issue-register lifecycle for
@@ -865,7 +884,25 @@ func migrateMergedPulseAliasesClosed(ctx context.Context, db pulseFindingLifecyc
 // prove work Pulse had already completed.
 func migrateAppliedPulseFixesClosed(ctx context.Context, db pulseFindingLifecycleDB) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
+	// Every statement here is idempotent and normally matches nothing; probe
+	// first so an already-migrated database never takes the write lock on a
+	// read path (see pulseRowsExist).
+	appliedFixesPending, err := pulseRowsExist(ctx, db, `SELECT 1
+		FROM run_concerns c
+		JOIN pulse_fix_attempt_findings af ON af.fingerprint=c.fingerprint
+		JOIN pulse_fix_attempts a ON a.attempt_id=af.attempt_id
+		WHERE c.status NOT IN (?, ?, ?) AND af.disposition=?
+			AND a.changed_files_json NOT IN ('', '[]', 'null')
+			AND NOT EXISTS (
+				SELECT 1 FROM pulse_finding_events e
+				WHERE e.fingerprint=c.fingerprint AND e.event_type='reopened'
+					AND e.recorded_at>a.completed_at
+			)`, ConcernStatusResolved, ConcernStatusRejected, ConcernStatusExternalActionRequired, FindingDispositionChangedUnverified)
+	if err != nil {
+		return err
+	}
+	if appliedFixesPending {
+		if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
 		(fingerprint, finding_id, pulse_run_id, attempt_id, event_type, summary, metadata_json, recorded_at)
 		SELECT c.fingerprint, af.finding_id, 'migration:close-applied-fixes', af.attempt_id,
 			'fix_applied', 'Applied repair closed under the issue-register lifecycle.',
@@ -881,10 +918,10 @@ func migrateAppliedPulseFixesClosed(ctx context.Context, db pulseFindingLifecycl
 					AND e.recorded_at>a.completed_at
 			)
 		ON CONFLICT(fingerprint, pulse_run_id, attempt_id, event_type) DO NOTHING`,
-		now, ConcernStatusResolved, ConcernStatusRejected, ConcernStatusExternalActionRequired, FindingDispositionChangedUnverified); err != nil {
-		return err
-	}
-	if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET
+			now, ConcernStatusResolved, ConcernStatusRejected, ConcernStatusExternalActionRequired, FindingDispositionChangedUnverified); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE run_concerns SET
 		status=?, resolved_at=?, resolved_by='workflow_builder',
 		resolution_note='Applied repair closed; normal concern recurrence will reopen this issue.'
 		WHERE status NOT IN (?, ?, ?) AND EXISTS (
@@ -899,9 +936,18 @@ func migrateAppliedPulseFixesClosed(ctx context.Context, db pulseFindingLifecycl
 						AND e.recorded_at>a.completed_at
 				)
 		)`, ConcernStatusResolved, now, ConcernStatusResolved, ConcernStatusRejected, ConcernStatusExternalActionRequired, FindingDispositionChangedUnverified); err != nil {
-		return err
+			return err
+		}
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE pulse_fix_attempts SET status='applied'
+	if err := pulseExecIfRows(ctx, db,
+		`SELECT 1 FROM pulse_fix_attempts
+		WHERE status=? AND EXISTS (
+			SELECT 1 FROM pulse_fix_attempt_findings af
+			JOIN run_concerns c ON c.fingerprint=af.fingerprint
+			WHERE af.attempt_id=pulse_fix_attempts.attempt_id
+				AND af.disposition=? AND c.status=?
+		)`, []interface{}{ConcernStatusAwaitingVerification, FindingDispositionChangedUnverified, ConcernStatusResolved},
+		`UPDATE pulse_fix_attempts SET status='applied'
 		WHERE status=? AND EXISTS (
 			SELECT 1 FROM pulse_fix_attempt_findings af
 			JOIN run_concerns c ON c.fingerprint=af.fingerprint
@@ -914,6 +960,18 @@ func migrateAppliedPulseFixesClosed(ctx context.Context, db pulseFindingLifecycl
 	// it out of the ordinary queue made old findings wait forever even after
 	// their workflow ran many times. The current lifecycle closes repairs at
 	// application time; it does not use a future run as a second closure gate.
+	unfixedWaitsPending, err := pulseRowsExist(ctx, db, `SELECT 1
+		FROM run_concerns c
+		WHERE c.status=? AND NOT EXISTS (
+			SELECT 1 FROM pulse_fix_attempt_findings af
+			JOIN pulse_fix_attempts a ON a.attempt_id=af.attempt_id
+			WHERE af.fingerprint=c.fingerprint
+				AND af.disposition=?
+				AND a.changed_files_json NOT IN ('', '[]', 'null')
+		)`, ConcernStatusAwaitingRun, FindingDispositionChangedUnverified)
+	if err != nil || !unfixedWaitsPending {
+		return err
+	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO pulse_finding_events
 		(fingerprint, finding_id, pulse_run_id, event_type, summary, metadata_json, recorded_at)
 		SELECT c.fingerprint, c.issue_id, 'migration:reopen-unfixed-waits', 'reopened_for_review',
@@ -931,7 +989,7 @@ func migrateAppliedPulseFixesClosed(ctx context.Context, db pulseFindingLifecycl
 		now, ConcernStatusAwaitingRun, FindingDispositionChangedUnverified); err != nil {
 		return err
 	}
-	_, err := db.ExecContext(ctx, `UPDATE run_concerns SET
+	_, err = db.ExecContext(ctx, `UPDATE run_concerns SET
 		status=?, resolution_note='Legacy wait had no applied repair; returned to the active issue register.'
 		WHERE status=? AND NOT EXISTS (
 			SELECT 1 FROM pulse_fix_attempt_findings af

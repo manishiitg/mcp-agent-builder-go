@@ -366,6 +366,35 @@ func migratePulseReviewFocusCatalog(ctx context.Context, db *sql.DB) error {
 		"plan_orchestration_integrity": {"plan_contract_integrity", "orchestration_fitness"},
 		"model_cost_fitness":           {"model_tier_fitness", "cost_attribution"},
 	}
+	legacyStateKeys := []string{
+		"execution_correctness", "execution_efficiency", "tool_runtime_reliability", "schedule_capacity_recovery",
+		"plan_contract_integrity", "orchestration_fitness", "model_tier_fitness", "cost_attribution",
+		"report_eval_truth", "safety_permissions",
+	}
+	// Probe before opening a write transaction: this runs on every open of the
+	// module-state db, including pure reads, and on an already-migrated
+	// database every statement below is a no-op that would still take the
+	// write lock (see sqliteRowsExist).
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(legacyStateKeys)), ",")
+	probe := `SELECT 1 FROM pulse_review_focus_state WHERE module=? AND focus_key IN (` + placeholders + `)
+		UNION ALL SELECT 1 FROM pulse_review_focus_history WHERE module=? AND (focus_key IN (` + placeholders + `)`
+	probeArgs := make([]interface{}, 0, 3*len(legacyStateKeys)+2)
+	probeArgs = append(probeArgs, pulseModuleTechnicalReview)
+	for _, key := range legacyStateKeys {
+		probeArgs = append(probeArgs, key)
+	}
+	probeArgs = append(probeArgs, pulseModuleTechnicalReview)
+	for _, key := range legacyStateKeys {
+		probeArgs = append(probeArgs, key)
+	}
+	for _, key := range legacyStateKeys {
+		probe += ` OR deferred_focuses_json LIKE '%"' || ? || '"%'`
+		probeArgs = append(probeArgs, key)
+	}
+	probe += `)`
+	if found, err := sqliteRowsExist(ctx, db, probe, probeArgs...); err != nil || !found {
+		return err
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -396,11 +425,6 @@ func migratePulseReviewFocusCatalog(ctx context.Context, db *sql.DB) error {
 			}
 		}
 	}
-	legacyStateKeys := []string{
-		"execution_correctness", "execution_efficiency", "tool_runtime_reliability", "schedule_capacity_recovery",
-		"plan_contract_integrity", "orchestration_fitness", "model_tier_fitness", "cost_attribution",
-		"report_eval_truth", "safety_permissions",
-	}
 	for _, legacy := range legacyStateKeys {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM pulse_review_focus_state WHERE module=? AND focus_key=?`, pulseModuleTechnicalReview, legacy); err != nil {
 			return err
@@ -430,6 +454,9 @@ func migratePulseReviewFocusCatalog(ctx context.Context, db *sql.DB) error {
 		var keys []string
 		_ = json.Unmarshal([]byte(row.encoded), &keys)
 		encoded, _ := json.Marshal(canonicalPulseDeferredFocuses(keys))
+		if string(encoded) == row.encoded {
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE pulse_review_focus_history SET deferred_focuses_json=? WHERE _id=?`, string(encoded), row.id); err != nil {
 			return err
 		}
@@ -489,6 +516,15 @@ func migrateMergedStrategicReviewRows(ctx context.Context, db *sql.DB) error {
 }
 
 func migrateMergedModuleRows(ctx context.Context, db *sql.DB, canonical, legacyFirst, legacySecond string) error {
+	// Probe before opening a write transaction; see sqliteRowsExist.
+	found, err := sqliteRowsExist(ctx, db, `SELECT 1 FROM pulse_module_state WHERE module IN (?, ?)
+		UNION ALL SELECT 1 FROM pulse_module_audit WHERE module IN (?, ?)
+		UNION ALL SELECT 1 FROM pulse_review_focus_state WHERE module IN (?, ?)
+		UNION ALL SELECT 1 FROM pulse_review_focus_history WHERE module IN (?, ?)`,
+		legacyFirst, legacySecond, legacyFirst, legacySecond, legacyFirst, legacySecond, legacyFirst, legacySecond)
+	if err != nil || !found {
+		return err
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
