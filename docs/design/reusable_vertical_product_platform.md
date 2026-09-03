@@ -1246,3 +1246,14 @@ reader scrolls up, instead of the reveal-first-response variant.
   the end explicitly. Note for anyone verifying in Chrome: a background tab
   never fires ResizeObserver, so Virtuoso renders nothing there. Check in a
   foreground tab.
+
+### 2026-09-03 — "Give to <child>" on the platform backend
+
+The handoff is client-side workspace state, like it was on the family server:
+`FamilyWorkspace.handoff(dir, resume?)` checks the activity's manifest, moves
+`current-activity.json` to it and answers `{dir, title, goal, new_session}`.
+`new_session` is `!resume` when the app asked explicitly, otherwise "a
+different activity than the current one". The app then enters child mode and
+kicks off the child conversation (conversation key = activity slug) exactly
+as before. Until now `platformApi.handoff` was a `notYet` stub, so the button
+rejected silently on the platform backend.

@@ -277,7 +277,7 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     loadParentConversation: () => history(PARENT_PROFILE, ''),
 
     childActivity: () => ws.currentActivity(),
-    handoff: notYet('the handoff'),
+    handoff: (dir, resume) => ws.handoff(dir, resume),
     sendChildTurn: ({ messages, conversationId }, onEvent) => sendTurn(CHILD_PROFILE, conversationKeyFor(CHILD_PROFILE, conversationId), lastUserText(messages), onEvent),
     steerChild: (conversationId, message) => steer(CHILD_PROFILE, conversationKeyFor(CHILD_PROFILE, conversationId), message),
     watchChild: (activityDir, onEvent) => watch(CHILD_PROFILE, conversationKeyFor(CHILD_PROFILE, activityDir), onEvent),

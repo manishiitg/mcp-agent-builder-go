@@ -121,4 +121,21 @@ export class FamilyWorkspace {
     return this.activity(pointer.dir)
   }
 
+  /**
+   * "Give to <child>": binds the child to one activity by moving the
+   * current-activity pointer, the same file the family server kept. Returns
+   * what the app needs to enter child mode: the activity and whether the
+   * child starts a fresh conversation. `resume` (when given) decides that
+   * outright; otherwise a different activity than the current one is fresh.
+   */
+  async handoff(dir: string, resume?: boolean): Promise<{ dir: string; title: string; goal?: string; new_session: boolean }> {
+    const act = await this.activity(dir)
+    if (!act) throw new Error('activity not found')
+    const pointer = await this.readJSON<{ dir?: string }>('current-activity.json')
+    const previous = familyRelative(pointer?.dir ?? '').replace(/\/+$/, '')
+    const newSession = resume === undefined ? act.dir !== previous : !resume
+    await this.writeJSON('current-activity.json', { dir: act.dir })
+    return { dir: act.dir, title: act.title, goal: act.goal, new_session: newSession }
+  }
+
 }

@@ -69,6 +69,24 @@ describe('FamilyWorkspace', () => {
     expect(current?.title).toBe('Fractions')
   })
 
+  it('hands an activity to the child by moving the pointer and says whether the chat is fresh', async () => {
+    const files = {
+      'Chats/SparkQuill/activities/2026-09-03-fractions/activity.json': JSON.stringify({ title: 'Fractions', goal: 'add unlike fractions' }),
+      'Chats/SparkQuill/activities/2026-09-04-oceans/activity.json': JSON.stringify({ title: 'Oceans' }),
+      'Chats/SparkQuill/current-activity.json': JSON.stringify({ dir: 'activities/2026-09-03-fractions' }),
+    }
+    const fake = fakeRequester(files)
+    const ws = new FamilyWorkspace(fake.request)
+    const again = await ws.handoff('activities/2026-09-03-fractions')
+    expect(again).toEqual({ dir: 'activities/2026-09-03-fractions', title: 'Fractions', goal: 'add unlike fractions', new_session: false })
+    const other = await ws.handoff('activities/2026-09-04-oceans')
+    expect(other.new_session).toBe(true)
+    expect(JSON.parse(files['Chats/SparkQuill/current-activity.json'])).toEqual({ dir: 'activities/2026-09-04-oceans' })
+    expect((await ws.handoff('activities/2026-09-04-oceans', false)).new_session).toBe(true)
+    expect((await ws.handoff('activities/2026-09-04-oceans', true)).new_session).toBe(false)
+    await expect(ws.handoff('activities/missing')).rejects.toThrow('activity not found')
+  })
+
   it('uploads into a folder and keeps scene state as JSON files', async () => {
     const fake = fakeRequester({})
     const ws = new FamilyWorkspace(fake.request)
