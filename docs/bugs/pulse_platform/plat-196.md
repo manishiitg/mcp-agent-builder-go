@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |
-| Ticket state | `open` — investigated at length, no confirmed root cause, no fix; diagnostic logging shipped so the next occurrence carries evidence |
-| Last synchronized | `2026-08-28` |
+| Ticket state | `open` — investigated at length, no confirmed root cause, no fix; diagnostic logging shipped so the next occurrence carries evidence. See the 2026-09-03 update: much more frequent than scoped, but no occurrence since the diagnostics shipped |
+| Last synchronized | `2026-09-03` |
 
 - **Priority:** P2 — a background Pulse review can be reported incomplete
   (blocking the workflow) even when the review receipt is durably present,
@@ -142,6 +142,45 @@ previously-passing case.
 - No new tests added: there is nothing to unit-test yet — the new code paths
   are logging-only diagnostics whose value is in a live recurrence, not in
   synthetic coverage.
+
+## 2026-09-03 update: this was far more frequent than the original scope, and stopped exactly when diagnostics shipped
+
+A user reviewing a workflow's Execution Logs panel found an old `failed`
+entry with this exact error and asked what was wrong. Rather than treat it
+as one more anecdote, `error LIKE '%receipt for child session%'` was run
+against `background_agent_log` in every workflow's `db/db.sqlite` under
+`workspace-docs/Workflow/`. Result: **56 occurrences across 8 workflows**
+(`build-in-public` 13, `tectonicusadaytrading` 12, `social-media` 10,
+`upwork` 10, `salesoutreach` 5, `linkedin` 4, `rtslatency` 1, `hetznerssh`
+1), every one a `failed` background-task-agent row, spanning
+**2026-08-19 through 2026-08-28** — i.e. this was a routine, near-daily
+occurrence on several actively-scheduled workflows, not the rare edge case
+the original P2/"blast radius of the symptom" framing assumed.
+
+The more striking part: **zero occurrences after 2026-08-28**, the day the
+diagnostic-only logging above shipped. Checked the three highest-frequency
+workflows' most recent Pulse review rows (`build-in-public` through
+2026-09-02, `social-media` through 2026-09-03, `upwork` through
+2026-09-01) — all `completed`, none `failed`. Also checked this session's
+own local `agent_go/logs/server_debug.log`: the three `[PULSE]
+pulseRunIDForSession` lines present all resolved to a concrete, correct
+session id (none logged "resolved to EMPTY"), and no
+`requireBackgroundPulseReviewReceipts` failure or
+`RecentPulseReviewRunIDsForModule` dump appears at all — meaning the
+diagnostic path added for this ticket has not fired even once since it
+shipped, on any workflow checked.
+
+This does not confirm a fix — nothing in the diagnostic commit changed
+control flow — but it is real evidence the failure mode either resolved
+itself (a race narrowed or removed by an unrelated concurrent change in the
+same window) or was tied to some other August-only condition (e.g. load,
+timing, a since-changed scheduling cadence) rather than being evergreen.
+Recommend downgrading urgency on active investigation unless a new
+occurrence appears; the diagnostic logging should stay in place so the next
+one (if any) is still self-diagnosing. Did not have access to production
+scheduler logs (these workflows' Pulse runs are RTS-hosted, not local) to
+look for an unrelated August 28-ish change that might explain the timing;
+that would be the next thing to check if this recurs.
 
 ## Next step when this recurs
 
