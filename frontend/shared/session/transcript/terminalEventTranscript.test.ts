@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pairToolCalls, toolErrorContextByEventID, selectTerminalEvents, buildTranscriptItems, collapseCompletedLifecycleStarts, internalTranscriptMessageTitle, isExecutionPromptTranscriptMessage, isInternalTranscriptMessage, shouldCollapseTranscriptUserMessage, type TranscriptItem } from './terminalEventTranscript'
+import { pairToolCalls, runActivity, toolErrorContextByEventID, selectTerminalEvents, buildTranscriptItems, collapseCompletedLifecycleStarts, internalTranscriptMessageTitle, isExecutionPromptTranscriptMessage, isInternalTranscriptMessage, shouldCollapseTranscriptUserMessage, type TranscriptItem } from './terminalEventTranscript'
 import type { PollingEvent, TerminalSnapshot } from '../types'
 
 // The rail is the hierarchy: every agent and sub-agent owns its own terminal.
@@ -469,6 +469,18 @@ describe('buildTranscriptItems', () => {
     ])
     expect(items.map(i => i.kind)).toEqual(['event', 'tools', 'event'])
     expect((items[1] as Extract<TranscriptItem, { kind: 'tools' }>).toolCount).toBe(1)
+  })
+
+  it('gives a step run its own row instead of folding it into a tool chip', () => {
+    const items = buildTranscriptItems([
+      evt({ id: 'm1', session_id: 's1', type: 'agent_message' }),
+      evt({ id: 'r1', session_id: 's1', type: 'tool_call_start', data: { data: { tool_call_id: 'c1', tool_name: 'execute_step', tool_params: { arguments: '{"step_id":"step-fetch","group_name":"default"}' } } } }),
+      evt({ id: 'm2', session_id: 's1', type: 'agent_message' }),
+    ])
+    expect(items.map(i => i.kind)).toEqual(['event', 'event', 'event'])
+    expect(runActivity(items[1].kind === 'event' ? items[1].event : evt({ id: 'x', session_id: 's1' }))).toEqual({
+      label: 'Running step', target: 'step-fetch · default', state: 'started',
+    })
   })
 
   it('omits token usage because cost and context have dedicated UI', () => {

@@ -547,6 +547,7 @@ function isProductMainConversationEvent(event: PollingEvent): boolean {
 }
 
 function isToolBatchEvent(event: PollingEvent): boolean {
+  if (runActivity(event)) return false
   const type = event.type || ''
   if (type === 'llm_generation_end') return isEmptyGenerationEnd(event)
   return TOOL_CALL_TYPES.has(type) || BATCH_BRIDGE_TYPES.has(type)
@@ -898,6 +899,39 @@ export function buildTranscriptItems(events: PollingEvent[]): TranscriptItem[] {
   }
 
   return items
+}
+
+// A step run or a full-workflow run is the workflow's own headline action, not
+// plumbing. The transcript gives it a compact activity row of its own instead
+// of folding it into an "N tool calls" chip, the same way a presentation gets
+// one — so "it is running your workflow now" is visible at a glance.
+const RUN_TOOL_LABELS: Record<string, string> = {
+  execute_step: 'Running step',
+  run_full_workflow: 'Running workflow',
+  run_full_evaluation: 'Running evaluation',
+}
+
+export function runActivity(event: PollingEvent): { label: string; target: string; state: 'started' | 'finished' | 'failed' } | null {
+  const type = event.type || ''
+  if (type !== 'tool_call_start' && type !== 'tool_call_end' && type !== 'tool_call_error') return null
+  const rawName = textField(toolCallField(event, 'tool_name'))
+  const label = RUN_TOOL_LABELS[mcpToolDisplayName(rawName).name]
+  if (!label) return null
+  const args = toolCallArgs(event)
+  let target = ''
+  if (args) {
+    try {
+      const parsed = JSON.parse(args) as Record<string, unknown>
+      target = [parsed.step_id, parsed.group_name].filter(v => typeof v === 'string' && v).join(' · ')
+    } catch {
+      /* a partially streamed argument blob is not worth reporting on */
+    }
+  }
+  return {
+    label,
+    target,
+    state: type === 'tool_call_error' ? 'failed' : type === 'tool_call_end' ? 'finished' : 'started',
+  }
 }
 
 export interface PairedToolCall {

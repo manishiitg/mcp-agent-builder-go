@@ -46,8 +46,12 @@ const readOpenGroups = (): Record<ToolbarGroupId, boolean> => {
   const fallback: Record<ToolbarGroupId, boolean> = { views: true, pulse: false, setup: false }
   try {
     const raw = localStorage.getItem(TOOLBAR_OPEN_GROUPS_KEY)
-    const stored = raw ? { ...fallback, ...JSON.parse(raw) as Partial<Record<ToolbarGroupId, boolean>> } : fallback
-    return Object.values(stored).some(Boolean) ? stored : fallback
+    if (!raw) return fallback
+    const stored = { ...fallback, ...JSON.parse(raw) as Partial<Record<ToolbarGroupId, boolean>> }
+    // A preference saved before "one group at a time" can name several; keep
+    // the first one so a stored value never reopens all three.
+    const first = (Object.keys(stored) as ToolbarGroupId[]).find(group => stored[group])
+    return { views: first === 'views', pulse: first === 'pulse', setup: first === 'setup' }
   } catch {
     return fallback
   }
@@ -195,11 +199,14 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [workflowScheduleStats, setWorkflowScheduleStats] = useState<WorkflowScheduleStats>(EMPTY_WORKFLOW_SCHEDULE_STATS)
   const [manualPulseStarting, setManualPulseStarting] = useState(false)
   const [openGroups, setOpenGroups] = useState<Record<ToolbarGroupId, boolean>>(() => readOpenGroups())
+  // One group open at a time: three expanded clusters of icon buttons is more
+  // toolbar than chat. Opening one closes the others; clicking the open one
+  // closes it, so all three collapsed is a valid state.
   const toggleGroup = useCallback((group: ToolbarGroupId) => {
     setOpenGroups(current => {
-      const next = { ...current, [group]: !current[group] }
-      // Closing the last open group is a no-op.
-      if (!Object.values(next).some(Boolean)) return current
+      const opening = !current[group]
+      const next = { views: false, pulse: false, setup: false } as Record<ToolbarGroupId, boolean>
+      if (opening) next[group] = true
       try { localStorage.setItem(TOOLBAR_OPEN_GROUPS_KEY, JSON.stringify(next)) } catch { /* preference only */ }
       return next
     })
