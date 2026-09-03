@@ -156,6 +156,13 @@ func listGmailConnectionsHandler(api *StreamingAPI) http.HandlerFunc {
 			http.Error(w, fmt.Sprintf("failed to initialize Gmail service: %v", err), http.StatusInternalServerError)
 			return
 		}
+		// A host that was authenticated with `gws auth login` directly shows
+		// up as the default account instead of "No sending accounts yet".
+		if _, adopted, adoptErr := svc.AdoptHostAccount(r.Context()); adoptErr != nil {
+			log.Printf("[GMAIL] host account adoption failed: %v", adoptErr)
+		} else if adopted {
+			log.Printf("[GMAIL] adopted the host's authenticated gws account as the default connection")
+		}
 		defaultID := svc.GetConfig().DefaultConnectionID
 		conns := svc.ListConnections()
 		out := GmailConnectionsResponse{

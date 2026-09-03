@@ -98,6 +98,11 @@ type GmailConfig struct {
 	// Empty means "no default": callers must fail rather than pick an
 	// arbitrary account and send from the wrong identity.
 	DefaultConnectionID string `json:"default_connection_id,omitempty"`
+
+	// HostAccountDismissed records that the operator deleted the connection
+	// AdoptHostAccount seeded from the host's own gws login, so an empty
+	// registry is not re-seeded from it on the next listing.
+	HostAccountDismissed bool `json:"host_account_dismissed,omitempty"`
 }
 
 // GmailService implements NotificationConnector (and UserNotificationConnector)

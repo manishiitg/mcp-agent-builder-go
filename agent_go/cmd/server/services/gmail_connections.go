@@ -142,6 +142,55 @@ func migrateGmailConnections(cfg *GmailConfig) {
 	cfg.DefaultConnectionID = "gmail_001"
 }
 
+// hostAccountConnection builds the registry entry for the host's own gws
+// login. migrateGmailConnections only seeds from a legacy gmail-config.json;
+// an operator who ran `gws auth login` on the host (RTS, 2026-09-03) had a
+// working sender that the Sending accounts panel could not see ("No sending
+// accounts yet") and could not select per workflow. ConfigHome stays empty on
+// purpose: that is the host default gws directory, which the server's own
+// environment already points at, and the registry never deletes a directory
+// it did not provision. The address, not a placeholder, is the display name
+// so the panel shows which mailbox mail leaves from.
+func hostAccountConnection(st GmailAuthStatus, now time.Time) (GmailConnection, bool) {
+	email := strings.TrimSpace(st.Email)
+	if !st.GwsInstalled || !st.Authenticated || !st.HasGmailScope || email == "" {
+		return GmailConnection{}, false
+	}
+	return GmailConnection{
+		ID:          nextGmailConnectionID(nil),
+		DisplayName: email,
+		Email:       email,
+		Status:      GmailConnectionConnected,
+		Enabled:     true,
+		Scopes:      append([]string(nil), st.Scopes...),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}, true
+}
+
+// AdoptHostAccount seeds an empty registry from the host's own authenticated
+// gws login, so the account the host already sends from appears as the
+// default connection without the operator re-adding it by hand. A no-op once
+// any connection exists, and once the operator has deleted an adopted host
+// account (HostAccountDismissed): deleting it is a decision, not something
+// the next page load should undo.
+func (g *GmailService) AdoptHostAccount(ctx context.Context) (GmailConnection, bool, error) {
+	cfg := g.GetConfig()
+	if len(cfg.Connections) > 0 || cfg.HostAccountDismissed {
+		return GmailConnection{}, false, nil
+	}
+	conn, ok := hostAccountConnection(g.AuthStatus(ctx), time.Now().UTC())
+	if !ok {
+		return GmailConnection{}, false, nil
+	}
+	cfg.Connections = []GmailConnection{conn}
+	cfg.DefaultConnectionID = conn.ID
+	if err := g.SaveConfig(ctx, cfg); err != nil {
+		return GmailConnection{}, false, err
+	}
+	return conn, true, nil
+}
+
 // normalizeGmailConnections repairs registry invariants: no blank IDs, no
 // duplicates, and a DefaultConnectionID that names an enabled member.
 func normalizeGmailConnections(cfg *GmailConfig) {
@@ -366,6 +415,12 @@ func (g *GmailService) DeleteConnection(ctx context.Context, id string) error {
 	cfg.Connections = kept
 	if cfg.DefaultConnectionID == conn.ID {
 		cfg.DefaultConnectionID = ""
+	}
+	// An adopted host account (empty ConfigHome, see AdoptHostAccount) that
+	// the operator removes must stay removed; otherwise the next listing
+	// would adopt it straight back.
+	if strings.TrimSpace(conn.ConfigHome) == "" && len(kept) == 0 {
+		cfg.HostAccountDismissed = true
 	}
 
 	if err := g.SaveConfig(ctx, cfg); err != nil {
