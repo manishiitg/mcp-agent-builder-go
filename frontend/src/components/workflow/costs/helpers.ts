@@ -163,6 +163,10 @@ export interface CombinedDailyCostSummaryEntry {
   builderCost: number
   pulseCost: number | null
   totalCost: number
+  workflowTokens: number
+  evaluationTokens: number
+  builderTokens: number
+  pulseTokens: number | null
   totalTokens: number
   llmDurationMS: number
   runCount: number

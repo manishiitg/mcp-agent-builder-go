@@ -399,6 +399,10 @@ export function useCostsData({ active, workspacePath, selectedRunFolder }: UseCo
             workflowCost: 0,
             evaluationCost: 0,
             totalCost: 0,
+            builderTokens: 0,
+            pulseTokens: null,
+            workflowTokens: 0,
+            evaluationTokens: 0,
             totalTokens: 0,
             llmDurationMS: 0,
             runCount: 0,
@@ -413,12 +417,18 @@ export function useCostsData({ active, workspacePath, selectedRunFolder }: UseCo
         const entry = ensureLegacyEntry(daily.date)
         entry.builderCost += daily.summary.totalCost
         entry.totalCost += daily.summary.totalCost
+        entry.builderTokens += daily.summary.totalTokens
         entry.totalTokens += daily.summary.totalTokens
       })
       runDailyCostSummaries.forEach(daily => {
         const entry = ensureLegacyEntry(daily.date)
-        if (daily.scope === 'evaluation') entry.evaluationCost += daily.summary.totalCost
-        else entry.workflowCost += daily.summary.totalCost
+        if (daily.scope === 'evaluation') {
+          entry.evaluationCost += daily.summary.totalCost
+          entry.evaluationTokens += daily.summary.totalTokens
+        } else {
+          entry.workflowCost += daily.summary.totalCost
+          entry.workflowTokens += daily.summary.totalTokens
+        }
         entry.totalCost += daily.summary.totalCost
         entry.totalTokens += daily.summary.totalTokens
         entry.runKeys.add(`${daily.scope}:${daily.runFolder}`)
@@ -440,6 +450,7 @@ export function useCostsData({ active, workspacePath, selectedRunFolder }: UseCo
       .map(([date, total]): CombinedDailyCostSummaryEntry => {
         const byScope = total.by_scope || {}
         const costFor = (scope: string) => byScope[scope]?.total_cost_usd || 0
+        const tokensFor = (scope: string) => (byScope[scope]?.prompt_tokens || 0) + (byScope[scope]?.completion_tokens || 0)
         return {
           date,
           builderCost: costFor('builder') + costFor('chat'),
@@ -447,6 +458,10 @@ export function useCostsData({ active, workspacePath, selectedRunFolder }: UseCo
           workflowCost: costFor('workflow_execution'),
           evaluationCost: costFor('evaluation'),
           totalCost: total.total_cost_usd || 0,
+          builderTokens: tokensFor('builder') + tokensFor('chat'),
+          pulseTokens: tokensFor('pulse'),
+          workflowTokens: tokensFor('workflow_execution'),
+          evaluationTokens: tokensFor('evaluation'),
           totalTokens: (total.prompt_tokens || 0) + (total.completion_tokens || 0),
           llmDurationMS: total.llm_generation_duration_ms || 0,
           runCount: total.workflow_run_count || 0,

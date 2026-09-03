@@ -111,10 +111,24 @@ const CostsDailySection: React.FC<CostsDailySectionProps> = ({
                                   </div>
                                 </td>
                                 <td className="py-2 text-right font-mono text-muted-foreground">{entry.runCount.toLocaleString()}</td>
-                                <td className="py-2 text-right font-mono text-muted-foreground">{formatUSD(entry.builderCost)}</td>
-                                <td className="py-2 text-right font-mono text-muted-foreground">{entry.pulseCost === null ? '—' : formatUSD(entry.pulseCost)}</td>
-                                <td className="py-2 text-right font-mono text-muted-foreground">{formatUSD(entry.workflowCost)}</td>
-                                <td className="py-2 text-right font-mono text-muted-foreground">{formatUSD(entry.evaluationCost)}</td>
+                                <td className="py-2 text-right font-mono text-muted-foreground">
+                                  <div>{formatUSD(entry.builderCost)}</div>
+                                  <div className="text-[10px] text-muted-foreground/70">{formatTokens(entry.builderTokens)} tok</div>
+                                </td>
+                                <td className="py-2 text-right font-mono text-muted-foreground">
+                                  <div>{entry.pulseCost === null ? '—' : formatUSD(entry.pulseCost)}</div>
+                                  {entry.pulseTokens !== null && (
+                                    <div className="text-[10px] text-muted-foreground/70">{formatTokens(entry.pulseTokens)} tok</div>
+                                  )}
+                                </td>
+                                <td className="py-2 text-right font-mono text-muted-foreground">
+                                  <div>{formatUSD(entry.workflowCost)}</div>
+                                  <div className="text-[10px] text-muted-foreground/70">{formatTokens(entry.workflowTokens)} tok</div>
+                                </td>
+                                <td className="py-2 text-right font-mono text-muted-foreground">
+                                  <div>{formatUSD(entry.evaluationCost)}</div>
+                                  <div className="text-[10px] text-muted-foreground/70">{formatTokens(entry.evaluationTokens)} tok</div>
+                                </td>
                                 <td className="py-2 text-right font-mono text-muted-foreground">{formatDuration(entry.llmDurationMS)}</td>
                                 <td className="py-2 text-right font-mono text-muted-foreground">{formatTokens(entry.totalTokens)}</td>
                                 <td className="py-2 text-right font-bold text-green-600 dark:text-green-400">{formatUSD(entry.totalCost)}</td>
