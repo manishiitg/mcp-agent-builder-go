@@ -70,11 +70,12 @@ func TestResolveLockedLLMHonoursProfileBindingsAndFallsBackOtherwise(t *testing.
 }
 
 // A workflow's saved llm_config is what the Builder chat, scheduled runs and
-// step tiers actually use, so the lock must rewrite it: every role becomes
-// the published default (a role already on the list is kept), fallbacks go,
-// and the provider-profile shortcut is expanded so nothing derives models
-// from an unlocked provider. Off-lock the config passes through untouched.
-func TestLockedPresetLLMConfigRewritesEveryRoleToThePublishedDefault(t *testing.T) {
+// step tiers actually use, so the lock must rewrite it. Locking to a
+// coding-agent provider (Cursor) means locking to that provider's role
+// profile -- Builder/High grok-4.6, Medium composer-2.5, Low auto -- not
+// flattening every role onto one model; the saved config is never mutated
+// and passes through untouched off-lock.
+func TestLockedPresetLLMConfigLocksToThePublishedProvidersProfile(t *testing.T) {
 	t.Setenv("LLM_CONFIG_LOCKED", "true")
 	t.Setenv("DEFAULT_PUBLISHED_LLMS", cursorOnlyPublishedList)
 	t.Setenv("DEFAULT_PUBLISHED_LLMS_PATH", "")
@@ -82,32 +83,40 @@ func TestLockedPresetLLMConfigRewritesEveryRoleToThePublishedDefault(t *testing.
 	saved := &workflowtypes.PresetLLMConfig{
 		SchemaVersion: 2,
 		Mode:          workflowtypes.LLMConfigModeExplicit,
-		BuilderLLM:    &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-sonnet-5", Fallbacks: []workflowtypes.AgentLLMFallback{{Provider: "openai", ModelID: "gpt-5.2"}}},
-		PulseLLM:      &workflowtypes.AgentLLMConfig{Provider: "cursor-cli", ModelID: "cursor-cli", Fallbacks: []workflowtypes.AgentLLMFallback{{Provider: "openai", ModelID: "gpt-5.2"}}},
+		BuilderLLM:    &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-sonnet-5"},
 		TieredConfig:  &workflowtypes.TieredLLMConfig{Tier1: &workflowtypes.AgentLLMConfig{Provider: "openai", ModelID: "gpt-5.2"}},
 	}
 	got := lockedPresetLLMConfig(saved)
-	if got == saved {
-		t.Fatal("must return a rewritten copy, not the saved config")
+	if got == saved || got.Mode != workflowtypes.LLMConfigModeProviderProfile || got.Provider != "cursor-cli" {
+		t.Fatalf("expected a provider-profile lock on cursor-cli, got %+v", got)
 	}
-	for name, role := range map[string]*workflowtypes.AgentLLMConfig{"builder": got.BuilderLLM, "pulse": got.PulseLLM, "tier1": got.TieredConfig.Tier1, "tier2": got.TieredConfig.Tier2, "tier3": got.TieredConfig.Tier3} {
-		if role == nil || role.Provider != "cursor-cli" || role.ModelID != "cursor-cli" || len(role.Fallbacks) != 0 {
-			t.Fatalf("%s = %+v, want cursor-cli/cursor-cli with no fallbacks", name, role)
-		}
+	if got.BuilderLLM != nil || got.TieredConfig != nil || got.PulseLLM != nil {
+		t.Fatal("explicit roles must be dropped so the provider profile resolves them")
 	}
-	if got.Mode != workflowtypes.LLMConfigModeExplicit || got.Provider != "" {
-		t.Fatalf("mode/provider = %q/%q, want explicit with no provider profile", got.Mode, got.Provider)
+	builder, tiers, ok := workflowtypes.ResolveProviderProfileConfig(got)
+	if !ok || builder == nil || tiers == nil {
+		t.Fatal("provider profile must resolve")
+	}
+	if builder.Provider != "cursor-cli" || builder.ModelID != "grok-4.6" {
+		t.Fatalf("builder = %+v, want cursor-cli/grok-4.6", builder)
+	}
+	if tiers.Tier2.ModelID != "composer-2.5" || tiers.Tier3.ModelID != "auto" {
+		t.Fatalf("tiers = %+v/%+v, want composer-2.5 / auto", tiers.Tier2, tiers.Tier3)
 	}
 	if saved.BuilderLLM.Provider != "claude-code" {
 		t.Fatal("the saved config must not be mutated")
 	}
-
-	profile := &workflowtypes.PresetLLMConfig{SchemaVersion: 2, Mode: workflowtypes.LLMConfigModeProviderProfile, Provider: "claude-code"}
-	if got := lockedPresetLLMConfig(profile); got.BuilderLLM == nil || got.BuilderLLM.Provider != "cursor-cli" {
-		t.Fatalf("provider-profile config must be expanded to the published default, got %+v", got.BuilderLLM)
+	// The profile's own models are published by implication.
+	for _, m := range []string{"grok-4.6", "composer-2.5", "auto", "cursor-cli"} {
+		if !isAllowedDefaultLLM("cursor-cli", m) {
+			t.Fatalf("cursor-cli/%s must be allowed under the lock", m)
+		}
+	}
+	if isAllowedDefaultLLM("cursor-cli", "gpt-5") || isAllowedDefaultLLM("openai", "gpt-5.2") {
+		t.Fatal("models outside the published provider's profile must stay refused")
 	}
 	if lockedPresetLLMConfig(nil) == nil {
-		t.Fatal("a workflow with no llm_config still gets the published default under the lock")
+		t.Fatal("a workflow with no llm_config still gets the locked profile")
 	}
 
 	t.Setenv("LLM_CONFIG_LOCKED", "false")
