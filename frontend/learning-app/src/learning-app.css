@@ -1212,8 +1212,51 @@ audio.fl-viewer-media { background: var(--surface); }
    7 days into one unreadably narrow row. */
 
 .fl-mic-live-text.is-waiting { font-style: italic; color: #cfd8ea; }
-/* ---- platform mode: the shared AgentWorks chat hosted in the parent column ---- */
-.fl-platform-chat { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* ---- platform mode: the shared AgentWorks chat hosted in the parent column ----
+   The shared composer and transcript paint with the shadcn tokens; SparkQuill
+   sets them here, so the product owns the look while the components stay
+   shared. Values are HSL triplets, the form tailwind's hsl(var(--x)) expects. */
+.fl-platform-chat {
+  display: flex; flex-direction: column; flex: 1; min-height: 0;
+  --background: 43 100% 99%;        /* cream page */
+  --foreground: 221 65% 18%;        /* ink */
+  --card: 0 0% 100%;
+  --card-foreground: 221 65% 18%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 221 65% 18%;
+  --muted: 216 33% 96%;
+  --muted-foreground: 217 19% 44%;
+  --border: 215 37% 90%;            /* line */
+  --input: 215 37% 90%;
+  --ring: 45 100% 55%;              /* yellow focus */
+  --primary: 220 71% 15%;           /* navy */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 216 33% 96%;
+  --secondary-foreground: 221 65% 18%;
+  --accent: 45 100% 92%;
+  --accent-foreground: 221 65% 18%;
+}
+.learning-app[data-theme="dark"] .fl-platform-chat {
+  --background: 222 47% 8%;
+  --foreground: 210 40% 96%;
+  --card: 222 40% 12%;
+  --card-foreground: 210 40% 96%;
+  --popover: 222 40% 12%;
+  --popover-foreground: 210 40% 96%;
+  --muted: 222 30% 18%;
+  --muted-foreground: 215 20% 65%;
+  --border: 222 30% 22%;
+  --input: 222 30% 22%;
+  --ring: 45 100% 55%;
+  --primary: 45 100% 55%;
+  --primary-foreground: 222 47% 8%;
+  --secondary: 222 30% 18%;
+  --secondary-foreground: 210 40% 96%;
+  --accent: 222 30% 18%;
+  --accent-foreground: 210 40% 96%;
+}
 .fl-platform-chat > div { min-height: 0; }
 .fl-platform-transcript { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .fl-platform-transcript .fl-suggestions { padding: 6px 16px 10px; }
+
+.fl-platform-working { padding: 4px 16px 10px; }

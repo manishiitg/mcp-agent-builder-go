@@ -3427,7 +3427,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
   return (
     <TooltipProvider>
-      <div className={isProductSurface ? 'border-t border-slate-800 bg-slate-950 py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.12)]' : 'space-y-2'} data-product-chat-input={isProductSurface || undefined}>
+      <div className={isProductSurface ? 'border-t border-border bg-background py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.12)]' : 'space-y-2'} data-product-chat-input={isProductSurface || undefined}>
       {/* Pasted-text Attachments */}
       {chatPastedAttachments.length > 0 && (
         <div className={inputPadX}>
@@ -3601,7 +3601,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             // Keep the customer composer visually steady while events stream.
             // The former ring-4 plus catch-all `transition` made a harmless
             // focus hand-off look like a pulsing purple border on redraws.
-            ? 'space-y-1 rounded-2xl border border-slate-700 bg-slate-900 p-2 shadow-sm transition-colors duration-150 focus-within:border-violet-400'
+            ? 'space-y-1 rounded-2xl border border-border bg-card p-2 shadow-sm transition-colors duration-150 focus-within:border-ring'
             : 'space-y-1 rounded-xl border border-slate-700/80 bg-[#101513] p-1.5 shadow-sm transition focus-within:border-slate-500'}>
             {showLiveDelivery && liveMessageDelivery && (
               <div className={`flex min-w-0 items-center gap-1.5 text-[11px] ${liveDeliveryClass}`}>

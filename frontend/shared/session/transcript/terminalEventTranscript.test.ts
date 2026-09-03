@@ -1,16 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import {
-  pairToolCalls,
-  toolErrorContextByEventID,
-  selectTerminalEvents,
-  buildTranscriptItems,
-  collapseCompletedLifecycleStarts,
-  internalTranscriptMessageTitle,
-  isExecutionPromptTranscriptMessage,
-  isInternalTranscriptMessage,
-  shouldCollapseTranscriptUserMessage,
-  type TranscriptItem,
-} from './terminalEventTranscript'
+import { pairToolCalls, toolErrorContextByEventID, selectTerminalEvents, buildTranscriptItems, collapseCompletedLifecycleStarts, internalTranscriptMessageTitle, isExecutionPromptTranscriptMessage, isInternalTranscriptMessage, shouldCollapseTranscriptUserMessage, type TranscriptItem } from './terminalEventTranscript'
 import type { PollingEvent, TerminalSnapshot } from '../types'
 
 // The rail is the hierarchy: every agent and sub-agent owns its own terminal.
@@ -1192,5 +1181,27 @@ describe('a terminal does not repeat its own name as an opening card', () => {
       mainTerminal,
     )
     expect(events.map(e => e.id)).toEqual(['child'])
+  })
+})
+
+describe('main agent start card', () => {
+  it('never shows the main agent\'s own Agent Started card, matched end or not', () => {
+    const mk = (type: string, extra: Record<string, unknown> = {}) => ({
+      id: `${type}-${Math.random()}`, type, session_id: 's1', execution_kind: 'main_agent', execution_id: 'main:s1',
+      data: { type, data: { agent_type: 'simple', ...extra } },
+    }) as unknown as PollingEvent
+    const start = mk('agent_start', { model: 'claude-sonnet-5', provider: 'claude-code' })
+    const sub = { ...mk('agent_start', { agent_name: 'reviewer' }), execution_kind: 'delegation', execution_id: 'delegation-1' } as PollingEvent
+    const kept = collapseCompletedLifecycleStarts([start, sub, mk('unified_completion', { final_result: 'done' })])
+    expect(kept).not.toContain(start)
+    expect(kept).toContain(sub)
+  })
+})
+
+describe('product side-channel events', () => {
+  it('keeps product_interaction out of the transcript', () => {
+    const ev = { id: 'pi-1', type: 'product_interaction', session_id: 's1', execution_kind: 'main_agent', execution_id: 'main:s1',
+      data: { type: 'product_interaction', data: { product: 'sparkquill', kind: 'suggestions', payload: { actions: [] } } } } as unknown as PollingEvent
+    expect(selectTerminalEvents([ev], null, [])).toEqual([])
   })
 })

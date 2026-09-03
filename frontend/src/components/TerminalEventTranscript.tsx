@@ -174,7 +174,7 @@ const UserTranscriptMessage: React.FC<{ content: string; timestamp: string; comp
   if (!collapsible) {
     return (
       <div className={`ml-auto mt-4 max-w-[84%] text-right ${compactBottom ? 'mb-1' : 'mb-4'}`}>
-        <div className="whitespace-pre-wrap break-words text-[14px] leading-6 text-slate-800 dark:text-neutral-200">{shown}</div>
+        <div className="whitespace-pre-wrap break-words text-[14px] leading-6 text-foreground">{shown}</div>
         {timestamp && <div className="mt-1 text-[10px] tabular-nums text-neutral-600">{timestamp}</div>}
       </div>
     )
@@ -182,12 +182,12 @@ const UserTranscriptMessage: React.FC<{ content: string; timestamp: string; comp
 
   return (
     <article className={`ml-auto mt-4 w-[min(92%,52rem)] rounded-lg border border-neutral-800 bg-neutral-900/45 px-4 py-3 text-left ${compactBottom ? 'mb-1' : 'mb-4'}`}>
-      <div className="whitespace-pre-wrap break-words text-[13px] leading-6 text-slate-700 dark:text-neutral-300">{shown}</div>
+      <div className="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground/90">{shown}</div>
       <div className="mt-2 flex items-center gap-3">
         <button
           type="button"
           onClick={() => setExpanded(value => !value)}
-          className="text-[11px] font-medium text-slate-500 dark:text-neutral-500 transition-colors hover:text-slate-900 dark:hover:text-neutral-300"
+          className="text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
         >
           {expanded ? 'Show less' : 'Show full message'}
         </button>
@@ -211,7 +211,7 @@ const AssistantTranscriptMessage: React.FC<{ event: PollingEvent; content: strin
         <span>{label}</span>
         {metadata && <>
           <span className="h-1 w-1 rounded-full bg-neutral-600" />
-          <span className="normal-case font-medium tracking-normal text-slate-500 dark:text-neutral-500">{metadata}</span>
+          <span className="normal-case font-medium tracking-normal text-muted-foreground">{metadata}</span>
         </>}
       </div>
       <div className="[&_li]:!text-[14px] [&_p]:!text-[14px]">
@@ -229,14 +229,14 @@ const InternalActivityEvent: React.FC<{ title: string; content: string; timestam
         type="button"
         onClick={() => setOpen(value => !value)}
         aria-expanded={open}
-        className="flex w-full items-center gap-2 text-left text-[11px] text-slate-500 dark:text-neutral-500 transition-colors hover:text-slate-900 dark:hover:text-neutral-300"
+        className="flex w-full items-center gap-2 text-left text-[11px] text-muted-foreground transition-colors hover:text-foreground"
       >
-        <CircleDashed className="h-3.5 w-3.5 shrink-0 text-slate-500 dark:text-neutral-500" />
+        <CircleDashed className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="truncate">Automation update · {title}</span>
         {timestamp && <span className="ml-auto shrink-0 tabular-nums text-neutral-600">{timestamp}</span>}
         {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
       </button>
-      {open && <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-black/5 dark:bg-black/20 p-3 text-[11px] leading-5 text-slate-600 dark:text-neutral-400">{content}</pre>}
+      {open && <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/60 p-3 text-[11px] leading-5 text-muted-foreground">{content}</pre>}
     </div>
   )
 }
@@ -276,7 +276,7 @@ const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
 
   const mark = displayStatus === 'error' ? '✗' : displayStatus === 'ok' ? '✓' : '⋯'
   const markClass =
-    displayStatus === 'error' ? 'text-red-400' : displayStatus === 'ok' ? 'text-emerald-400' : 'text-slate-500 dark:text-neutral-500'
+    displayStatus === 'error' ? 'text-red-400' : displayStatus === 'ok' ? 'text-emerald-400' : 'text-muted-foreground'
   // Shared formatter rather than a local one: the local copy assumed milliseconds
   // while the wire value is nanoseconds, and it had no minutes branch, so long
   // calls printed absurd second counts.
@@ -299,21 +299,21 @@ const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
         className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-neutral-800/60"
       >
         <span className={`shrink-0 font-mono ${markClass}`}>{mark}</span>
-        <span className="truncate font-medium text-slate-800 dark:text-neutral-200">{pair.name}</span>
+        <span className="truncate font-medium text-foreground">{pair.name}</span>
         {pair.server && (
-          <span className="shrink-0 rounded bg-slate-200 dark:bg-neutral-800 px-1.5 py-0.5 text-[10px] text-slate-600 dark:text-neutral-400">
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
             {pair.server}
           </span>
         )}
-        {duration && <span className="shrink-0 tabular-nums text-[10px] text-slate-500 dark:text-neutral-500">{duration}</span>}
+        {duration && <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground">{duration}</span>}
         {displayStatus === 'error' && (
           <span className="shrink-0 rounded bg-red-950 px-1.5 py-0.5 text-[10px] text-red-300">
             failed
           </span>
         )}
         {open
-          ? <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-slate-500 dark:text-neutral-500" aria-label="Hide tool details" />
-          : <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-slate-500 dark:text-neutral-500" aria-label="Show tool details" />}
+          ? <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-label="Hide tool details" />
+          : <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-label="Show tool details" />}
       </button>
 
       {open && (
@@ -321,7 +321,7 @@ const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
           {pair.args && <ToolCallField label="Arguments" value={pair.args} />}
           {pair.result && <ToolCallField label="Output" value={pair.result} />}
           {!hasDetail && (
-            <p className="text-[11px] leading-5 text-slate-500 dark:text-neutral-500">
+            <p className="text-[11px] leading-5 text-muted-foreground">
               This coding-CLI call did not retain its arguments or output. New calls will include them once the bridge trace update is running.
             </p>
           )}
@@ -344,10 +344,10 @@ const ToolCallField: React.FC<{ label: string; value: string }> = ({ label, valu
   const shown = full || !isLong ? formatted.text : `${formatted.text.slice(0, PREVIEW_LIMIT)}…`
   return (
     <div className="min-w-0">
-      <div className="mb-0.5 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-neutral-500">
+      <div className="mb-0.5 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
         <span>{label}</span>
         {formatted.format !== 'text' && (
-          <span className="rounded bg-slate-200 dark:bg-neutral-800 px-1 py-0.5 text-[9px] tracking-normal text-slate-600 dark:text-neutral-400">
+          <span className="rounded bg-muted px-1 py-0.5 text-[9px] tracking-normal text-muted-foreground">
             {formatted.format}
           </span>
         )}
@@ -360,7 +360,7 @@ const ToolCallField: React.FC<{ label: string; value: string }> = ({ label, valu
       <pre className={`max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border p-2 text-[11px] leading-5 ${
         formatted.isError
           ? 'border-red-900/70 bg-red-950/30 text-red-200'
-          : 'border-transparent bg-black/30 text-slate-700 dark:text-neutral-300'
+          : 'border-transparent bg-black/30 text-foreground/90'
       }`}>
         {shown}
       </pre>
@@ -368,7 +368,7 @@ const ToolCallField: React.FC<{ label: string; value: string }> = ({ label, valu
         <button
           type="button"
           onClick={() => setFull(prev => !prev)}
-          className="mt-1 text-[10px] text-slate-500 dark:text-neutral-500 hover:text-slate-900 dark:hover:text-neutral-300"
+          className="mt-1 text-[10px] text-muted-foreground hover:text-foreground"
         >
           {full ? 'Show less' : `Show all (${formatted.text.length.toLocaleString()} chars)`}
         </button>
@@ -774,13 +774,13 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
             }`}
           />
           <div>
-            <div className="text-sm font-medium text-slate-800 dark:text-neutral-200">{title}</div>
-            <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-neutral-500">{detail}</div>
+            <div className="text-sm font-medium text-foreground">{title}</div>
+            <div className="mt-1 text-xs leading-5 text-muted-foreground">{detail}</div>
             {error && onRetry && (
               <button
                 type="button"
                 onClick={onRetry}
-                className="mt-3 rounded border border-neutral-700 px-2.5 py-1 text-xs text-slate-700 dark:text-neutral-300 hover:bg-neutral-800"
+                className="mt-3 rounded border border-neutral-700 px-2.5 py-1 text-xs text-foreground/90 hover:bg-neutral-800"
               >
                 Retry
               </button>
@@ -801,7 +801,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
         <div className={`flex shrink-0 items-center border-b px-3 py-1.5 text-[11px] ${
           error
             ? 'border-red-900/60 bg-red-950/25 text-red-300'
-            : 'border-neutral-800 bg-neutral-950/80 text-slate-500 dark:text-neutral-500'
+            : 'border-neutral-800 bg-neutral-950/80 text-muted-foreground'
         }`}>
           {error ? (
             <>
@@ -817,7 +817,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
               type="button"
               onClick={handleEarlierMessages}
               disabled={loadingOlder}
-              className="mx-auto rounded px-2 py-0.5 text-slate-600 dark:text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200 disabled:cursor-wait disabled:opacity-60"
+              className="mx-auto rounded px-2 py-0.5 text-muted-foreground hover:bg-neutral-800 hover:text-neutral-200 disabled:cursor-wait disabled:opacity-60"
             >
               {loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}
             </button>

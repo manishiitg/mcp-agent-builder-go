@@ -83,6 +83,9 @@ function SparkQuillConversation({ events, isStreaming, isRestoring, streamingTex
         surfaceClassName="fl-platform-surface"
         autoScrollMode="reveal-first-response"
       />
+      {isStreaming && !streamingText && (
+        <div className="fl-thinking fl-platform-working"><img src="/sparkquill-loader.svg" alt="" width={30} height={30} /><span>{streamingStatus ? `Quill is: ${streamingStatus}…` : 'Working on it…'}</span></div>
+      )}
       {suggestions.length > 0 && onSubmitQuery && (
         <div className="fl-suggestions" aria-label="Recommended next steps">
           {suggestions.map((s, i) => (

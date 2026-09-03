@@ -69,6 +69,9 @@ const NON_TRANSCRIPT_TYPES = new Set([
   // fall through EventDispatcher as noisy "Unknown Event Type" JSON cards.
   'streaming_start',
   'streaming_chunk',
+  // Product side-channel events (suggestion pills, family/pin updates) are
+  // read by the product's own surface, not rendered as transcript cards.
+  'product_interaction',
   'streaming_end',
 ])
 
@@ -243,6 +246,12 @@ function normalizedLifecycleName(fields: Record<string, unknown>): string {
     .replace(/^-+|-+$/g, '')
 }
 
+function isMainAgentLifecycle(event: PollingEvent): boolean {
+  const kind = textField(event.execution_kind) || textField(eventFields(event).execution_kind)
+  const executionID = textField(event.execution_id) || textField(eventFields(event).execution_id)
+  return kind === 'main_agent' || executionID.startsWith('main:')
+}
+
 function lifecycleFamily(event: PollingEvent): string {
   return LIFECYCLE_EVENT_FAMILIES[event.type || '']?.family || ''
 }
@@ -349,6 +358,16 @@ export function collapseCompletedLifecycleStarts(events: PollingEvent[]): Pollin
     const descriptor = LIFECYCLE_EVENT_FAMILIES[event.type || '']
     const key = lifecycleKey(event, aliasExecutions)
     if (!descriptor || !key) continue
+    // The main agent's own "Agent Started" card says nothing the user's
+    // message above it does not already say, and it outlived every turn in
+    // every product: the start arrives over SSE only, the store never keeps
+    // it, so no later agent_end ever matched it and the card stayed under
+    // finished answers ("Agent Started: simple | Model: … | Provider: …").
+    // Sub-agent and background lifecycles keep their cards.
+    if (descriptor.start && isMainAgentLifecycle(event)) {
+      hiddenStarts.add(event)
+      continue
+    }
     if (descriptor.start) {
       const current = openStarts.get(key)
       if (!current) {
@@ -373,6 +392,22 @@ export function collapseCompletedLifecycleStarts(events: PollingEvent[]): Pollin
         openStarts.delete(key)
       }
     }
+  }
+
+  // A restored trace can carry the main agent's start without its agent_end
+  // (the persisted UI trace is bounded), while the turn's unified_completion
+  // is present. A start whose turn has completed is not running; keep it out
+  // rather than rendering a "Started" card under a finished answer.
+  const completedExecutions = new Set<string>()
+  for (const event of events) {
+    if (event.type !== 'unified_completion') continue
+    const executionID = lifecycleExecutionID(event)
+    if (executionID) completedExecutions.add(executionID)
+  }
+  for (const start of openStarts.values()) {
+    if (lifecycleFamily(start) !== 'agent') continue
+    const executionID = lifecycleExecutionID(start)
+    if (executionID && completedExecutions.has(executionID)) hiddenStarts.add(start)
   }
 
   // Only ONE completion card per execution. Starts were already collapsed
