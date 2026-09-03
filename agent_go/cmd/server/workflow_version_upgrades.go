@@ -55,6 +55,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractPulseBacklogTriageVersion,
 		workflowContractPulseActionableBacklogVersion,
 		workflowContractOrchestratorStepTypeVersion,
+		workflowContractActivityTabFromRunSummaryVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -294,6 +295,22 @@ const upgradeOrchestratorStepType = `WORKFLOW CONTRACT UPGRADE: ORCHESTRATOR STE
 
 Do only this migration. The plan step type formerly called todo_task is now named orchestrator; the runtime reads both names, so nothing changes in behavior. Call migrate_orchestrator_step_type once. It rewrites every legacy "type": "todo_task" discriminator in planning/plan.json to "orchestrator", validates the plan, and records the change; a plan already on the new name is a no-op. Do not edit plan.json by hand and do not run the workflow. If the tool reports an error, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.35") and stop.`
 
+const upgradeActivityTabFromRunSummary = `WORKFLOW CONTRACT UPGRADE: THE ACTIVITY TAB CAN READ THE RUN SUMMARIES YOU ALREADY SEND.
+
+Do only this one-time review. Nothing here is mandatory — the point is to offer the parent a simpler option and let them choose.
+
+Every notify_user(notification_kind="run_summary") call already writes a structured row — title, status, message, fields, timestamp — into the org_dashboard_notifications table in this workflow's own db/db.sqlite, the same file the report queries. The required activity tab (Daily Action / Recent Activity) can therefore read ` + "`SELECT ... FROM org_dashboard_notifications WHERE notification_kind = 'run_summary' ORDER BY created_at DESC`" + ` with no step, table, or column of its own. The message is markdown: render it with window.report.renderMarkdown.
+
+If db/reports/index.html does not exist, this is a no-op — do not create a report in this migration.
+
+Otherwise read the report and find what feeds its activity tab:
+
+1. It already reads org_dashboard_notifications, or it reads the workflow's own domain tables that exist for real business reasons — nothing to do. Do not rewrite a working tab.
+2. A step, table, or column exists ONLY to feed this tab and has no other consumer — this is the case worth raising. Tell the parent plainly, in one or two sentences, what that extra machinery is and that the run summaries already carry the same facts, then ask whether to switch the tab over and retire it, or keep the custom version. Their answer decides; a richer bespoke view is a legitimate choice.
+3. You cannot tell which — leave it alone and say so.
+
+Do not delete a step or table without the parent agreeing in this conversation. Do not run the workflow. Call validate_report_html after any edit and repair every error. Then call set_workflow_contract_version(version="1.0.36") and stop — stamp it whichever way the parent chose, including "keep what we have".`
+
 const workflowUpgradeWorkspacePathPlaceholder = "{{WORKSPACE_PATH}}"
 
 func bindWorkflowUpgradeWorkspacePath(query, workspacePath string) string {
@@ -369,6 +386,10 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	// workflowContractOrchestratorStepTypeVersion ("1.0.35") sits at rank 34.
 	if rank < 34 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractOrchestratorStepTypeVersion, label: "upgrade-orchestrator-step-type", query: upgradeOrchestratorStepType})
+	}
+	// workflowContractActivityTabFromRunSummaryVersion ("1.0.36") sits at rank 35.
+	if rank < 35 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractActivityTabFromRunSummaryVersion, label: "upgrade-activity-tab-from-run-summary", query: upgradeActivityTabFromRunSummary})
 	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse
