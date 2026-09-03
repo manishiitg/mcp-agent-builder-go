@@ -9,6 +9,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { agentApi, workspaceApi } from '../../services/api'
 import { useReportFilePreviewStore } from '../../stores/useReportFilePreviewStore'
+import { useWorkflowStore } from '../../stores/useWorkflowStore'
 import {
   REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
   readReportPreviewPreference,
@@ -145,6 +146,12 @@ function ReportViewComponent({ workspacePath, onClose, focusTier }: ReportViewPr
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshNonce, setRefreshNonce] = useState(0)
+  // open_workspace_view(view="report", target="<tab>") lands here; the frame
+  // hands it to the report HTML, which owns its own tabs.
+  const viewTarget = useWorkflowStore(state => state.workspaceViewTarget)
+  const reportFocus = viewTarget?.view === 'report'
+    ? { value: viewTarget.target, token: viewTarget.token }
+    : undefined
   const [previewPreference, setPreviewPreference] = useState<ReportPreviewDevice>(() => readReportPreviewPreference(workspacePath))
   const dataApi = useReportDataApi(workspacePath)
 
@@ -213,7 +220,7 @@ function ReportViewComponent({ workspacePath, onClose, focusTier }: ReportViewPr
               </div>
             )}
             {!loading && report && !report.html && <div className="m-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">Could not read {report.label}.</div>}
-            {report?.html && <HtmlReportFrame html={report.html} title={report.label} autoHeight refreshToken={refreshNonce} className="block w-full border-0" />}
+            {report?.html && <HtmlReportFrame html={report.html} title={report.label} autoHeight refreshToken={refreshNonce} focusTarget={reportFocus} className="block w-full border-0" />}
           </div>
         </div>
         <FilePreviewModal />

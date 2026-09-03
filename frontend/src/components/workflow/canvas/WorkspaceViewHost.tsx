@@ -20,6 +20,7 @@ import { useWorkflowExecution } from '../hooks/useWorkflowExecution'
 import { useWorkspaceState } from '../hooks/useWorkspaceState'
 import { useWorkflowStore } from '../../../stores/useWorkflowStore'
 import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestStore'
+import { useWorkspaceStore } from '../../../stores/useWorkspaceStore'
 import { agentApi } from '../../../services/api'
 import type {
   ExecutionOptions,
@@ -477,6 +478,27 @@ export const WorkspaceViewHost = React.memo(forwardRef<WorkflowCanvasRef, Workfl
   // --- Imperative API: shared refresh for every view; the flow canvas keeps
   // its own granular refresh and node focus and is delegated to when active.
   const flowRef = useRef<WorkflowCanvasRef>(null)
+  // open_workspace_view(view, target) — focus something inside the view the
+  // agent just opened. Only the views that have something to focus act on it;
+  // the rest ignore the target, so the agent can always pass one.
+  const workspaceViewTarget = useWorkflowStore(state => state.workspaceViewTarget)
+  const setSelectedFile = useWorkspaceStore(state => state.setSelectedFile)
+  const setShowFileContent = useWorkspaceStore(state => state.setShowFileContent)
+  useEffect(() => {
+    if (!workspaceViewTarget) return
+    const { view, target } = workspaceViewTarget
+    if (view === 'flow') {
+      // The canvas mounts and lays out its nodes after this effect; give it a
+      // frame before asking it to focus one.
+      const frame = window.requestAnimationFrame(() => flowRef.current?.focusStep(target))
+      return () => window.cancelAnimationFrame(frame)
+    }
+    if (view === 'files') {
+      const path = target.replace(/^\/+/, '')
+      setSelectedFile({ name: path.split('/').filter(Boolean).pop() ?? path, path })
+      setShowFileContent(true)
+    }
+  }, [workspaceViewTarget, setSelectedFile, setShowFileContent])
   const loadPlanRefresh = planData.refresh
   const refreshWorkspaceState = workspace.refresh
   const sharedRefresh = useCallback(async () => {

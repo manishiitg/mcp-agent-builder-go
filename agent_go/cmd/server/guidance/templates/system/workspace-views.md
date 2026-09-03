@@ -35,4 +35,17 @@ The right-hand pane of the workflow page shows one view at a time; the toolbar a
 | `bots` | Connected bots (Slack, WhatsApp) for this workflow | You connected or changed a channel |
 | `folders` | Folders attached to the workflow | You attached a folder |
 
+### Focusing something inside a view: `target`
+
+Both tools take an optional `target` — what to focus once the view is up. A view with nothing to focus ignores it, so passing one is always safe.
+
+| View | `target` means |
+|------|----------------|
+| `report` | The top-level tab to switch to, named as the report's own HTML labels it. Delivered to the report as `report.focus` plus a `report:focus` event; a report that does not listen stays where it is. |
+| `flow` | A step id, scrolled to and highlighted on the canvas. |
+| `files` | A workspace-relative file path, opened in the pane instead of just showing the tree. |
+| `database` | A table name. |
+| `execution-logs` | A step id. |
+| `schedules` | A schedule id or name. |
+
 Views are independent of the chat: opening one changes nothing in the workflow. Prefer one open per reply, the view that best answers what the user asked.

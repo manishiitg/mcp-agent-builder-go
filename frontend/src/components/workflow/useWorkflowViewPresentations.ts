@@ -26,16 +26,19 @@ export function useWorkflowViewPresentations(tabId: string | null | undefined): 
     for (const p of presentations.slice(handed.current.count)) {
       const view = p.payload.view
       if (!isWorkspaceViewId(view)) continue
+      const target = typeof p.payload.target === 'string' ? p.payload.target : undefined
       const store = useWorkflowStore.getState()
       const shown = store.showWorkspacePane ? (store.workflowWorkspaceView ?? store.lastCanvasView) : null
       if (p.payload.action === 'refresh') {
         // refresh_workspace_view: reload what the view shows. A view that is
         // not on screen is opened first; opening mounts it fresh, so the
         // explicit reload is only needed when it was already there.
-        if (shown === view) store.refreshWorkspaceView()
-        else openWorkspaceView(view)
-      } else if (shown !== view) {
-        openWorkspaceView(view)
+        if (shown === view) store.refreshWorkspaceView(target)
+        else openWorkspaceView(view, target)
+      } else if (shown !== view || target) {
+        // A target re-fires even on the open view: "show me this step" is a
+        // real instruction, not a no-op, when the view is already up.
+        openWorkspaceView(view, target)
       }
     }
     handed.current = { sessionId, count: presentations.length }

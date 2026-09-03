@@ -40,6 +40,22 @@ generation step.
   step or table whose sole purpose is feeding this tab. See the
   `design-reporting-ui` skill for the full authoring requirement.
 
+### Responding to `report:focus` (tabbed reports)
+
+A report with top-level tabs should let the agent point the reader at one:
+
+```js
+window.addEventListener('report:focus', function () {
+  // window.report.focus is the tab name the agent asked for.
+  switchToTab(window.report.focus);
+});
+```
+
+`open_workspace_view(view="report", target="<tab>")` sets `report.focus` and
+fires this event. It is optional — a report that ignores it simply stays on
+its current tab — but a tabbed report that honors it lets the agent say
+"here is the answer" and land the reader on the right tab.
+
 ### Data lifecycle: always gate on `window.report.ready(fn)`
 
 `window.report` is injected into the page AFTER the report's own `<script>`

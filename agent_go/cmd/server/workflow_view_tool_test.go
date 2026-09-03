@@ -53,11 +53,22 @@ func TestOpenWorkspaceViewToolOpensAKnownViewAndRefusesOthers(t *testing.T) {
 	if err != nil || !strings.Contains(out, `"refreshed":"database"`) {
 		t.Fatalf("refresh out=%s err=%v", out, err)
 	}
+	targeted, err := open.exec(context.Background(), map[string]interface{}{"view": "flow", "target": "step-fetch"})
+	if err != nil || !strings.Contains(targeted, `"opened":"flow"`) {
+		t.Fatalf("targeted open = %s err=%v", targeted, err)
+	}
+	tv, err := workspaceViewAction("flow", "Workflow/x", "open", " step-fetch ")
+	if err != nil || tv.Payload["target"] != "step-fetch" || tv.Activity.Detail != "Plan · step-fetch" {
+		t.Fatalf("target must be trimmed and shown in the activity row: %+v err=%v", tv, err)
+	}
+	if untargeted, _ := workspaceViewAction("flow", "Workflow/x", "open", "  "); untargeted.Payload["target"] != nil {
+		t.Fatalf("a blank target must not reach the payload: %+v", untargeted.Payload)
+	}
 	ev, err := workspaceViewPresentation("costs", "Workflow/x")
 	if err != nil || ev.Kind != WorkflowViewPresentationKind || ev.Payload["view"] != "costs" || ev.Payload["action"] != "open" || ev.Activity == nil || ev.Activity.Detail != "Costs" || ev.WorkspacePath != "Workflow/x" {
 		t.Fatalf("event = %+v err=%v", ev, err)
 	}
-	rv, err := workspaceViewAction("report", "Workflow/x", "refresh")
+	rv, err := workspaceViewAction("report", "Workflow/x", "refresh", "")
 	if err != nil || rv.Payload["action"] != "refresh" || rv.Activity.Label != "Refreshed" || rv.PresentationID == ev.PresentationID {
 		t.Fatalf("refresh event = %+v err=%v", rv, err)
 	}

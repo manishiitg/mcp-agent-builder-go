@@ -4159,7 +4159,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                             type="button"
                             variant="outline"
                             size="icon"
-                            disabled={isStreaming || isSummarizing}
+                            disabled={isSummarizing}
                             onClick={openCommandMenu}
                             className="h-7 w-7 p-0"
                             data-testid="chat-command-menu-button"
@@ -4178,7 +4178,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                             type="button"
                             variant="outline"
                             size="icon"
-                            disabled={isStreaming || isSummarizing || isUploadingFiles}
+                            disabled={isSummarizing || isUploadingFiles}
                             onClick={() => {
                               const inputEl = fileUploadInputRef.current
                               if (!inputEl) {
@@ -4204,7 +4204,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                           <p>{isUploadingFiles ? 'Uploading files...' : isProductSurface ? 'Attach files to this project' : `Upload file(s) to ${uploadTargetFolder}`}</p>
                         </TooltipContent>
                       </Tooltip>
-                      {(!isStreaming || routeLiveInputToCLI) && (
+                      {/* Sending during a running turn is supported: routeSubmit
+                          queues the message and the live-delivery effect steers
+                          it into the turn. Hiding the button hid that. */}
+                      {(
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
@@ -4248,7 +4251,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
           multiple
           onChange={handleUploadFilesSelected}
           className="hidden"
-          disabled={isStreaming || isSummarizing || isUploadingFiles}
+          disabled={isSummarizing || isUploadingFiles}
         />
       </div>
       

@@ -233,7 +233,7 @@ const AssistantTurnHeader: React.FC<{ event: PollingEvent; timestamp: string; la
   const turn = typeof fields.turn === 'number' ? fields.turn : undefined
   const metadata = [turn != null ? `Turn ${turn}` : '', duration, timestamp].filter(Boolean).join(' · ')
   return (
-    <div data-testid="terminal-clear-assistant-header" className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700/80 dark:text-emerald-300/75">
+    <div data-testid="terminal-clear-assistant-header" className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
       {icon && <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center [&>img]:h-4 [&>img]:w-4 [&>svg]:h-4 [&>svg]:w-4" aria-hidden="true">{icon}</span>}
       <span>{label}</span>
       {metadata && <>
@@ -244,7 +244,7 @@ const AssistantTurnHeader: React.FC<{ event: PollingEvent; timestamp: string; la
   )
 }
 
-const AGENT_BLOCK_CLASS = 'border-l border-emerald-400/55 pl-3 pr-1'
+const AGENT_BLOCK_CLASS = 'pl-3 pr-1'
 
 const IS_ELECTRON = typeof navigator !== 'undefined' && /Electron/i.test(navigator.userAgent)
 
@@ -1120,7 +1120,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
 
 const LiveAssistantTranscript: React.FC<{ text: string; status: string }> = ({ text, status }) => (
   text ? (
-    <article data-testid="terminal-clear-live-assistant-message" className="mx-3 mt-4 mb-2 border-l border-emerald-400/55 pl-3 pr-1">
+    <article data-testid="terminal-clear-live-assistant-message" className="mx-3 mt-4 mb-2 pl-3 pr-1">
       <div className="[&_li]:!text-[length:calc(14px*var(--chat-scale,1))] [&_p]:!text-[length:calc(14px*var(--chat-scale,1))] [&_li]:!leading-[calc(24px*var(--chat-scale,1))] [&_p]:!leading-[calc(24px*var(--chat-scale,1))]">
         <ConversationMarkdownRenderer content={text} framed={false} maxHeight="none" />
       </div>

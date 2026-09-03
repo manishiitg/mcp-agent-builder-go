@@ -218,6 +218,7 @@ function HtmlReportFrameComponent({
   className,
   autoHeight = false,
   refreshToken = 0,
+  focusTarget,
 }: {
   html: string
   title: string
@@ -226,6 +227,10 @@ function HtmlReportFrameComponent({
   // A report's live data is deliberately refreshed only when its owner asks.
   // Background workflow/status polling must never turn into an iframe reload.
   refreshToken?: number
+  /** A top-level tab (or section) the report HTML should switch to. Delivered
+   * as `report.focus` + a `report:focus` event; a report that does not listen
+   * simply stays where it is. */
+  focusTarget?: { value: string; token: number }
 }) {
   const dataApi = useReportDataApi()
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -626,6 +631,34 @@ function HtmlReportFrameComponent({
     if (loadedDocumentRef.current !== iframeRef.current?.contentDocument) return
     inject()
   }, [inject])
+
+  // A focus target from open_workspace_view(view="report", target="<tab>").
+  // The report HTML owns its own tabs, so the platform cannot switch one: it
+  // hands the name over as `report.focus` and fires `report:focus`, the same
+  // shape as `report:theme`. A report that does not listen is unaffected.
+  useEffect(() => {
+    if (!focusTarget?.value) return
+    const deliver = () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const win = iframeRef.current?.contentWindow as any
+      if (!win?.report) return false
+      try {
+        win.report.focus = focusTarget.value
+        win.dispatchEvent(new win.Event('report:focus'))
+        return true
+      } catch {
+        return false // the frame navigated or reloaded under us
+      }
+    }
+    if (deliver()) return
+    // The report's own API is injected after load; retry briefly rather than
+    // dropping a focus that arrived while the frame was still coming up.
+    let tries = 0
+    const timer = window.setInterval(() => {
+      if (deliver() || ++tries > 20) window.clearInterval(timer)
+    }, 100)
+    return () => window.clearInterval(timer)
+  }, [focusTarget])
 
   // Keep the iframe theme in sync when the user toggles the app's light/dark mode
   // while the report is open (watches the app's <html> class).

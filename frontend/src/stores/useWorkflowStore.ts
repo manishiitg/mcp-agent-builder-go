@@ -314,6 +314,9 @@ interface WorkflowStore {
   workflowWorkspaceView: WorkflowWorkspaceView
   /** Bumped by refreshWorkspaceView; the view host remounts the open view on change. Transient, not per preset. */
   workspaceViewRefreshToken: number
+  /** What to focus inside the open view — a report tab, a plan step, a file path.
+   * The token lets the same target fire twice. Views that cannot focus ignore it. */
+  workspaceViewTarget: { view: WorkspaceViewId; target: string; token: number } | null
   focusedPane: FocusedPane // Which pane gets ~75% — 'preview' (canvas) or 'chat'
   layoutDirection: LayoutDirection // Canvas layout direction ('LR' = horizontal, 'TB' = vertical)
   // The canvas view (Plan or Report) the pane shows when workflowWorkspaceView
@@ -392,11 +395,11 @@ interface WorkflowStore {
   /** Show the workspace pane on `view` -- the one way to navigate the pane
    * (toolbar buttons, chat file links, jump-to-plan). Records Plan/Report as
    * `lastCanvasView` and un-minimizes the workspace for Files. */
-  openWorkspaceView: (view: WorkspaceViewId) => void
+  openWorkspaceView: (view: WorkspaceViewId, target?: string) => void
   /** Reload whatever the workspace pane is showing: the report re-reads its
    * HTML, every other view remounts and refetches. Used when the agent opens
    * a view that is already on screen after changing what it shows. */
-  refreshWorkspaceView: () => void
+  refreshWorkspaceView: (target?: string) => void
   setLayoutDirection: (direction: LayoutDirection) => void
 
   // Workflow chat tabs
@@ -436,6 +439,7 @@ export const useWorkflowStore = create<WorkflowStore>()(
     (set, get) => ({
       // === Initial State ===
       workspaceViewRefreshToken: 0,
+      workspaceViewTarget: null,
       // Constants
       phases: [],
       isLoadingPhases: false,
@@ -1214,8 +1218,11 @@ export const useWorkflowStore = create<WorkflowStore>()(
         set({ workflowWorkspaceView: normalizedView })
       },
 
-      openWorkspaceView: (view: WorkspaceViewId) => {
+      openWorkspaceView: (view: WorkspaceViewId, target?: string) => {
         const kind = getWorkspaceView(view).kind
+        if (target && target.trim()) {
+          set(state => ({ workspaceViewTarget: { view, target: target.trim(), token: (state.workspaceViewTarget?.token ?? 0) + 1 } }))
+        }
         if ((kind === 'canvas' || kind === 'preview') && isCanvasView(view)) {
           const presetId = useGlobalPresetStore.getState().activePresetIds.workflow ?? get()._currentPresetId
           persistWorkflowUIStateForPreset(presetId ?? null, { lastCanvasView: view })
@@ -1226,7 +1233,11 @@ export const useWorkflowStore = create<WorkflowStore>()(
         useAppStore.getState().setWorkspaceMinimized(view !== 'files')
       },
 
-      refreshWorkspaceView: () => {
+      refreshWorkspaceView: (target?: string) => {
+        const view = get().workflowWorkspaceView ?? get().lastCanvasView
+        if (target && target.trim()) {
+          set(state => ({ workspaceViewTarget: { view, target: target.trim(), token: (state.workspaceViewTarget?.token ?? 0) + 1 } }))
+        }
         set(state => ({ workspaceViewRefreshToken: state.workspaceViewRefreshToken + 1 }))
         // The report view keeps its HTML in its own state and listens for this.
         window.dispatchEvent(new Event(WORKFLOW_REPORT_REFRESH_EVENT))

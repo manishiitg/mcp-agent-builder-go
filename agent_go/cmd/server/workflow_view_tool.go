@@ -52,12 +52,25 @@ func workflowWorkspaceViewIDs() []string {
 
 // workspaceViewPresentation is the event that opens a view for the user.
 func workspaceViewPresentation(view, workspacePath string) (*orchestratorevents.PresentationUpdatedEvent, error) {
-	return workspaceViewAction(view, workspacePath, "open")
+	return workspaceViewAction(view, workspacePath, "open", "")
+}
+
+// workspaceViewTargets documents what `target` means for the views that honor
+// one. A view missing here ignores a target rather than failing, so the agent
+// can always pass one.
+var workspaceViewTargets = map[string]string{
+	"report":         "the report's top-level tab name, as the report HTML labels it",
+	"flow":           "a step id, focused on the canvas",
+	"files":          "a workspace-relative file path, opened in the pane",
+	"database":       "a table name",
+	"execution-logs": "a step id",
+	"schedules":      "a schedule id or name",
 }
 
 // workspaceViewAction builds the open or refresh event for a view; the page
-// reads payload.action to tell them apart.
-func workspaceViewAction(view, workspacePath, action string) (*orchestratorevents.PresentationUpdatedEvent, error) {
+// reads payload.action to tell them apart, and payload.target for what to
+// focus inside the view.
+func workspaceViewAction(view, workspacePath, action, target string) (*orchestratorevents.PresentationUpdatedEvent, error) {
 	view = strings.TrimSpace(strings.ToLower(view))
 	for _, v := range workflowWorkspaceViews {
 		if v.ID != view {
@@ -67,13 +80,19 @@ func workspaceViewAction(view, workspacePath, action string) (*orchestratorevent
 		if action == "refresh" {
 			label = "Refreshed"
 		}
+		detail := v.Label
+		payload := map[string]interface{}{"view": v.ID, "action": action}
+		if target = strings.TrimSpace(target); target != "" {
+			payload["target"] = target
+			detail = v.Label + " · " + target
+		}
 		return &orchestratorevents.PresentationUpdatedEvent{
 			PresentationID: "workspace-view:" + v.ID + ":" + action,
 			Kind:           WorkflowViewPresentationKind,
 			Title:          v.Label,
 			WorkspacePath:  workspacePath,
-			Payload:        map[string]interface{}{"view": v.ID, "action": action},
-			Activity:       &orchestratorevents.PresentationActivity{Label: label, Destination: "the workspace pane", Detail: v.Label},
+			Payload:        payload,
+			Activity:       &orchestratorevents.PresentationActivity{Label: label, Destination: "the workspace pane", Detail: detail},
 		}, nil
 	}
 	return nil, fmt.Errorf("unknown view %q; one of: %s", view, strings.Join(workflowWorkspaceViewIDs(), ", "))
@@ -90,17 +109,25 @@ func (api *StreamingAPI) registerOpenWorkspaceViewTool(registrar definitionToolR
 	}
 	description := "Open one of the workspace views on the right side of the user's screen, the same views as the toolbar above the chat. " +
 		"Use it when what you are talking about is on one of them: after you build or update the report, open `report`; when the user asks about spend, open `costs`; " +
-		"after adding a schedule, open `schedules`. Opening a view that is already on screen does nothing; to reload one you changed, use refresh_workspace_view. What each view contains, in detail: builder-reference/references/workspace-views.md. Views:\n" + strings.Join(lines, "\n")
+		"after adding a schedule, open `schedules`. Opening a view that is already on screen does nothing; to reload one you changed, use refresh_workspace_view. Pass `target` to focus something inside the view — a report tab, a plan step, a file, a table. What each view contains, in detail: builder-reference/references/workspace-views.md. Views:\n" + strings.Join(lines, "\n")
+	var targetHelp []string
+	for _, v := range workflowWorkspaceViews {
+		if meaning, ok := workspaceViewTargets[v.ID]; ok {
+			targetHelp = append(targetHelp, fmt.Sprintf("%s: %s", v.ID, meaning))
+		}
+	}
 	params := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"view": map[string]interface{}{"type": "string", "enum": workflowWorkspaceViewIDs(), "description": "which view to open"},
+			"view":   map[string]interface{}{"type": "string", "enum": workflowWorkspaceViewIDs(), "description": "which view to open"},
+			"target": map[string]interface{}{"type": "string", "description": "optional — what to focus inside the view. " + strings.Join(targetHelp, "; ") + ". Ignored by views that have nothing to focus."},
 		},
 		"required": []string{"view"},
 	}
 	if err := registrar.RegisterCustomTool("open_workspace_view", description, params, func(_ context.Context, args map[string]interface{}) (string, error) {
 		view, _ := args["view"].(string)
-		event, err := workspaceViewAction(view, workspacePath, "open")
+		target, _ := args["target"].(string)
+		event, err := workspaceViewAction(view, workspacePath, "open", target)
 		if err != nil {
 			return "", err
 		}
@@ -111,10 +138,11 @@ func (api *StreamingAPI) registerOpenWorkspaceViewTool(registrar definitionToolR
 		return err
 	}
 	refreshDescription := "Reload a workspace view after you changed what it shows: the report after editing db/reports/index.html, the database after writing rows, schedules after adding one, files after writing them. " +
-		"Opens the view first if it is not on screen. Same view names as open_workspace_view."
+		"Opens the view first if it is not on screen. Same view names and the same optional `target` as open_workspace_view."
 	return registrar.RegisterCustomTool("refresh_workspace_view", refreshDescription, params, func(_ context.Context, args map[string]interface{}) (string, error) {
 		view, _ := args["view"].(string)
-		event, err := workspaceViewAction(view, workspacePath, "refresh")
+		target, _ := args["target"].(string)
+		event, err := workspaceViewAction(view, workspacePath, "refresh", target)
 		if err != nil {
 			return "", err
 		}
