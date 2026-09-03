@@ -144,15 +144,10 @@ printf 'prefix=%s\n' "$tools_dir" > "$HOME/.npmrc"
 if ! test -x "$tools_dir/bin/claude"; then
   npm install -g --prefix "$tools_dir" @anthropic-ai/claude-code
 fi
-# AWS CLI v2 for workflows that shell out to aws (rtslatency's ops passes);
-# credentials come from the instance role (attach-instance-role.sh), never a
-# key file. Installed once into the service user's tool prefix.
-if ! test -x "$tools_dir/bin/aws"; then
-  tmp_aws="$(mktemp -d)"
-  curl -fsS "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "$tmp_aws/awscliv2.zip"
-  (cd "$tmp_aws" && unzip -q awscliv2.zip && ./aws/install -i "$HOME/.local/aws-cli" -b "$tools_dir/bin" >/dev/null)
-  rm -rf "$tmp_aws"
-fi
+# CLIs that WORKFLOW shells need (aws, ntn, git) are NOT installed here: the
+# sandbox those shells run in cannot read this tool prefix (strict env,
+# HOME=/tmp, system read roots only). They are installed system-wide as root
+# through SSM by install-system-tools.sh, once per box.
 PATH="$tools_dir/bin:/usr/local/bin:/usr/bin:/bin"
 export PATH
 test "$(HOME="$HOME" npm config get prefix)" = "$tools_dir"

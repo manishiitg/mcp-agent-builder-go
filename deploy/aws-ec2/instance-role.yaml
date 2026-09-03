@@ -23,6 +23,11 @@ Resources:
       # Read-only, scoped to what the ops workflows (rtslatency) call. Widen
       # here -- or swap in arn:aws:iam::aws:policy/ReadOnlyAccess under
       # ManagedPolicyArns for blanket read-only -- never by copying user keys.
+      # SSM is the box's root-level admin channel (no sudo, SSH is deploy-only):
+      # system tool installs go through `aws ssm send-command`, see
+      # install-system-tools.sh.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
       Policies:
         - PolicyName: workflow-readonly-observability
           PolicyDocument:
