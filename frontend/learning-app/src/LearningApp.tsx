@@ -703,62 +703,6 @@ const QUICK_SKILLS = [
   { label: 'Back up workspace', message: 'Back up my workspace now — follow your backup skill.' },
 ]
 
-// PARENT_WAIT_HINTS / CHILD_WAIT_HINTS cycle in the "thinking" indicator while
-// waiting for a reply with no live tool-status yet — real, usable tips on how
-// to use the chat, shown instead of a bare "thinking…" so the wait is at
-// least a little useful. Live tool status (e.g. "Opening the file…") always
-// takes priority over these when it's available.
-// Tips are onboarding, and onboarding ends. They rotate every 7s in the
-// thinking indicator, which is genuinely useful for the first handful of turns
-// and pure noise afterwards — this family had seen 747 replies when the
-// distraction was reported. Count turns and stop once the UI is obviously
-// learned, falling back to a calm static line. Live tool status ("Quill is:
-// Reading the image…") still takes priority over both: that is real
-// information, not a tip.
-const HINT_FADE_AFTER_TURNS = 8
-
-function readTurnsSeen(key: string): number {
-  try {
-    return Number(window.localStorage.getItem(key) || '0') || 0
-  } catch {
-    return 0
-  }
-}
-
-function noteTurnSeen(key: string) {
-  try {
-    const n = readTurnsSeen(key)
-    // Stop writing once past the threshold — the answer cannot change back.
-    if (n <= HINT_FADE_AFTER_TURNS) window.localStorage.setItem(key, String(n + 1))
-  } catch { /* private mode / disabled storage must not break the chat */ }
-}
-
-const PARENT_HINTS_SEEN_KEY = 'sq-parent-turns-seen'
-const CHILD_HINTS_SEEN_KEY = 'sq-child-turns-seen'
-
-const PARENT_WAIT_HINTS = [
-  'Tip: ask "How is my child doing so far?" anytime for an evidence-based read of their progress.',
-  'Tip: once a test or guide is ready, use the "Give to child" button to hand it over.',
-  'Tip: tell Quill how you want tutoring handled — e.g. "give one hint before the answer" — and it remembers.',
-  'Tip: ask for several things at once — "make a guide, a quick test, and an advanced one" — bundled as one activity.',
-  'Tip: Quill can look up board-specific tips and exam strategies — just ask.',
-  'Tip: you can ask Quill to explain a topic to you, not just make material for your child.',
-  'Tip: link WhatsApp in Connectors to chat with Quill from your phone, and get check-ins there.',
-  'Tip: set up the Browser connector and Quill can peek at your school portal for new assignments.',
-  'Tip: turn on Pulse (top bar) and Quill checks in on its own — reviewing progress and the school portal.',
-  'Tip: just mention things in passing — "her exam is next Friday", "she gets anxious with timers" — Quill remembers and applies them later.',
-]
-const CHILD_WAIT_HINTS = [
-  'Tip: stuck? Just say "give me a hint!"',
-  'Tip: you can ask Quill to explain it a different way.',
-  'Tip: tell Quill your answer — it will tell you if you got it right.',
-  'Tip: ask for an example if a question feels tricky.',
-  'Tip: you can ask Quill anything about what you\'re learning, not just the current question.',
-  'Tip: ask a parent to set up WhatsApp so you can practice with Quill on the phone too!',
-  'Tip: ask a parent to turn on Pulse so Quill keeps track of how you\'re doing.',
-  'Tip: ask a parent to connect the school portal so Quill can help with your assignments.',
-]
-
 // CHILD_QUICK_ACTIONS: fixed one-tap shortcuts for the handful of requests that
 // come up constantly but aren't worth typing out — same Sparkles-icon popover
 // pattern as QUICK_SKILLS in Parent Mode. Unlike suggest_actions (removed from
@@ -2155,28 +2099,6 @@ export default function LearningApp() {
     return () => cancelAnimationFrame(id)
   }, [childMessages, childSending, screen, childStreamingReply, childQueue, childRemoteStatus, childRemoteToolCalls])
 
-  // Cycle a usable "how to use the chat" tip in the thinking indicator instead
-  // of a bare "thinking…" — resets and restarts each time a new turn begins,
-  // and only matters while there's no real live tool status to show instead.
-  // Read once at mount: flipping mid-session would swap the text under the
-  // parent while they are watching it.
-  const [showParentHints] = useState(() => readTurnsSeen(PARENT_HINTS_SEEN_KEY) < HINT_FADE_AFTER_TURNS)
-  useEffect(() => { if (sending) noteTurnSeen(PARENT_HINTS_SEEN_KEY) }, [sending])
-  const [parentHintIndex, setParentHintIndex] = useState(0)
-  useEffect(() => {
-    if (!sending) { setParentHintIndex(0); return }
-    const id = window.setInterval(() => setParentHintIndex((i) => (i + 1) % PARENT_WAIT_HINTS.length), 7000)
-    return () => window.clearInterval(id)
-  }, [sending])
-  const [showChildHints] = useState(() => readTurnsSeen(CHILD_HINTS_SEEN_KEY) < HINT_FADE_AFTER_TURNS)
-  useEffect(() => { if (childSending) noteTurnSeen(CHILD_HINTS_SEEN_KEY) }, [childSending])
-  const [childHintIndex, setChildHintIndex] = useState(0)
-  useEffect(() => {
-    if (!childSending) { setChildHintIndex(0); return }
-    const id = window.setInterval(() => setChildHintIndex((i) => (i + 1) % CHILD_WAIT_HINTS.length), 7000)
-    return () => window.clearInterval(id)
-  }, [childSending])
-
   // Bridge for interactive HTML: the sandboxed viewer iframe posts SQ.save/load
   // messages; the app persists them to a workspace file (child/attempts) so the
   // child's answers survive reloads and Quill can read them later. 'choose' is
@@ -2333,6 +2255,7 @@ export default function LearningApp() {
     // of truth regardless of what streamed in.
     const onStream = (parsed: { type?: string; text?: string; tool_call?: ToolCallRecord }) => {
       if (parsed.type === 'delta') setStreamingReply((cur) => cur + (parsed.text ?? ''))
+      else if (parsed.type === 'replace') setStreamingReply(parsed.text ?? '')
       else if (parsed.type === 'status') setLiveStatus(parsed.text ?? '')
       // Live tool-call visibility as each call happens (not batched at the
       // end). No result yet; the final response
@@ -2443,6 +2366,7 @@ export default function LearningApp() {
     // Same JSON envelope as the parent stream ({type:"status"|"delta"|"tool_call",text,tool,args}).
     const onStream = (parsed: { type?: string; text?: string; tool_call?: ToolCallRecord }) => {
       if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
+      else if (parsed.type === 'replace') setChildStreamingReply(parsed.text ?? '')
       else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
       else if (parsed.type === 'tool_call' && parsed.tool_call) {
         setChildLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
@@ -2501,6 +2425,7 @@ export default function LearningApp() {
     setChildLiveToolCalls([])
     const onStream = (parsed: { type?: string; text?: string; tool_call?: ToolCallRecord }) => {
       if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
+      else if (parsed.type === 'replace') setChildStreamingReply(parsed.text ?? '')
       else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
       else if (parsed.type === 'tool_call' && parsed.tool_call) {
         setChildLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
@@ -3164,7 +3089,7 @@ export default function LearningApp() {
                     )}
                     <div className="fl-thinking">
                       {!streamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
-                      <span>{liveStatus ? `Quill is: ${liveStatus}…` : showParentHints ? PARENT_WAIT_HINTS[parentHintIndex] : 'Working on it…'}</span>
+                      <span>{liveStatus ? `Quill is: ${liveStatus}…` : 'Working on it…'}</span>
                     </div>
                     <ToolCallSummary calls={liveToolCalls} />
                   </div>
@@ -4301,7 +4226,7 @@ export default function LearningApp() {
                       )}
                       <div className="fl-thinking">
                         {!childStreamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
-                        <span>{childLiveStatus ? `Quill is: ${childLiveStatus}…` : showChildHints ? CHILD_WAIT_HINTS[childHintIndex] : 'Working on it…'}</span>
+                        <span>{childLiveStatus ? `Quill is: ${childLiveStatus}…` : 'Working on it…'}</span>
                       </div>
                       <ToolCallSummary calls={childLiveToolCalls} />
                     </div>

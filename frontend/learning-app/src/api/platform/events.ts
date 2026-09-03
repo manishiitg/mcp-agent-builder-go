@@ -5,7 +5,7 @@
 // the SparkQuill UI expects.
 import type { ToolCallRecord } from '../../stores/types'
 import type { ToolEvent, TurnResult, TurnStreamEvent } from '../familyApi'
-import { eventBelongsToSession, isForegroundSessionEvent, mcpToolDisplayName, parsePresentationUpdatedEvent } from '../../../../shared/session'
+import { appendStreamingText, eventBelongsToSession, isForegroundSessionEvent, looksLikeTerminalScreenText, mcpToolDisplayName, parsePresentationUpdatedEvent, splitStreamingStatusAndText } from '../../../../shared/session'
 import type { PollingEvent, SSEEventMessage } from '../../../../shared/session'
 
 /** The shapes the UI code below reads; aliases of the shared contract. */
@@ -56,6 +56,8 @@ export class TurnCollector {
   private suggestions: TurnResult['suggestions']
   private scene: string | undefined
   private reply = ''
+  private preview = ''
+  private lastChunkIndex = -1
   private lastText = ''
   private error: string | undefined
   done = false
@@ -78,11 +80,9 @@ export class TurnCollector {
     }
     if (!isMainEvent(e, this.sessionID)) return
     switch (type) {
-      case 'streaming_chunk': {
-        const content = typeof p.content === 'string' ? p.content : ''
-        if (content && p.is_delta !== false && !p.is_tool_call) this.onEvent({ type: 'delta', text: content })
+      case 'streaming_chunk':
+        this.chunk(p)
         return
-      }
       case 'tool_call_start': {
         const name = bareToolName(String(p.tool_name ?? ''))
         const id = String(p.tool_call_id ?? `${name}-${this.toolCalls.size}`)
@@ -129,6 +129,42 @@ export class TurnCollector {
         return
       }
     }
+  }
+
+  // Mirrors AgentWorks' appendStreamingChunk (stores/useChatStore.ts): the
+  // backend's `source` is authoritative, so a raw tmux pane frame (source
+  // "terminal", the "⏺ … ✻ Churned for 3s" capture) is never shown as prose;
+  // heartbeat/tool markers become a status line; chunk 0/1 starts a new
+  // generation; is_delta picks verbatim vs block joining.
+  private chunk(p: Record<string, unknown>) {
+    const content = typeof p.content === 'string' ? p.content : ''
+    if (!content || p.is_tool_call) return
+    const chunkIndex = typeof p.chunk_index === 'number' ? p.chunk_index : -1
+    if (chunkIndex === 0 || chunkIndex === 1) {
+      this.lastChunkIndex = -1
+      this.preview = ''
+    }
+    if (chunkIndex >= 0 && chunkIndex <= this.lastChunkIndex) return
+    this.lastChunkIndex = chunkIndex
+    const source = typeof p.source === 'string' ? p.source.trim().toLowerCase() : ''
+    const { statusText, text } = splitStreamingStatusAndText(content)
+    const terminal = source === 'terminal' || looksLikeTerminalScreenText(text || content)
+    const safeText = terminal ? '' : text
+    const status = statusText || (terminal ? 'Working' : null)
+    if (status) this.chunkStatus(status)
+    if (!safeText) return
+    if (!status) this.chunkStatus('')
+    const next = appendStreamingText(this.preview, safeText, p.is_delta === true ? true : p.is_delta === false ? false : undefined)
+    if (next === this.preview) return
+    this.preview = next
+    this.onEvent({ type: 'replace', text: next })
+  }
+
+  private lastChunkStatus = ''
+  private chunkStatus(text: string) {
+    if (text === this.lastChunkStatus) return
+    this.lastChunkStatus = text
+    this.onEvent({ type: 'status', text })
   }
 
   private interaction(kind: string, payload: Record<string, unknown>) {

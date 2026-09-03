@@ -32,7 +32,7 @@ describe('TurnCollector', () => {
     c.feed(main('unified_completion', { final_result: 'Got it, mom — Maya is all set.', status: 'completed' }))
     expect(c.done).toBe(true)
 
-    expect(seen[0]).toEqual({ type: 'delta', text: 'Got it' })
+    expect(seen[0]).toEqual({ type: 'replace', text: 'Got it' })
     expect(seen.filter((e) => e.type === 'status').map((e) => e.text)).toEqual(['Working in the workspace', '', ''])
     const calls = seen.filter((e) => e.type === 'tool_call').map((e) => `${e.tool_call?.tool_name}:${e.tool_call?.status}`)
     expect(calls).toEqual(['execute_shell_command:running', 'execute_shell_command:completed', 'set_child_profile:running', 'set_child_profile:completed'])
@@ -75,5 +75,29 @@ describe('TurnCollector', () => {
     expect(bareToolName('celebrate')).toBe('celebrate')
     expect(familyRelativePath('_users/u1/Chats/SparkQuill/activities/a')).toBe('activities/a')
     expect(familyRelativePath('reports/x.html')).toBe('reports/x.html')
+  })
+})
+
+describe('TurnCollector streaming preview', () => {
+  // The exact "Thinking" bug: the claude-code pane capture (source "terminal")
+  // was appended to the preview as prose. The platform's classification rules
+  // (same as AgentWorks' chat store) must apply here too.
+  it('never shows terminal captures as prose, turns tool markers into status, joins block chunks', () => {
+    const seen: TurnStreamEvent[] = []
+    const c = new TurnCollector(SID, (e) => seen.push(e))
+    c.feed(main('streaming_chunk', { content: '⏺ Two more options are ready for you. 🌟\n✻ Churned for 3s · done\n❯ Reply with exactly one short friendly line', chunk_index: 0, is_delta: false, source: 'terminal' }))
+    c.feed(main('streaming_chunk', { content: 'api-bridge - execute_shell_command (MCP)', chunk_index: 1, is_delta: false, source: 'transcript' }))
+    c.feed(main('streaming_chunk', { content: 'All good, mom! 😊', chunk_index: 2, is_delta: false, source: 'transcript' }))
+    c.feed(main('streaming_chunk', { content: 'All good, mom! 😊', chunk_index: 2, is_delta: false, source: 'transcript' })) // poll overlap
+    c.feed(main('streaming_chunk', { content: 'Two buttons are up for you. 🌟', chunk_index: 3, is_delta: false, source: 'transcript' }))
+    expect(seen.filter((e) => e.type === 'delta')).toEqual([])
+    expect(seen.filter((e) => e.type === 'replace').map((e) => e.text)).toEqual(['All good, mom! 😊', 'All good, mom! 😊\n\nTwo buttons are up for you. 🌟'])
+    const statuses = seen.filter((e) => e.type === 'status').map((e) => e.text)
+    expect(statuses[0]).toBe('Working')
+    expect(statuses[1]).toMatch(/execute|shell|working/i)
+    expect(statuses.at(-1)).toBe('')
+    // A fresh generation (chunk 0) restarts the preview instead of appending.
+    c.feed(main('streaming_chunk', { content: 'Second turn', chunk_index: 0, is_delta: true, source: 'content' }))
+    expect(seen.at(-1)).toEqual({ type: 'replace', text: 'Second turn' })
   })
 })

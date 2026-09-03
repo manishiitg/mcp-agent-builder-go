@@ -966,7 +966,6 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-header-handoff:hover { transform: translateY(-1px); }
 .fl-header-handoff:active { transform: translateY(2px); box-shadow: 0 1px 0 #d5a307; }
 .fl-header-handoff:disabled { background: var(--border, #e2ddd0); color: var(--muted, #8a8478); box-shadow: none; cursor: not-allowed; transform: none; }
-.fl-hint-label { display: inline-flex; align-items: center; gap: 5px; margin-right: 6px; padding: 2px 8px; border-radius: 999px; background: #fff3d6; color: #a9781a; font-size: var(--text-caption); font-weight: 800; vertical-align: 1px; }
 .fl-star-badge { display: inline-flex; align-items: center; gap: 5px; padding: 6px 13px; border-radius: 999px; background: linear-gradient(135deg, #fff3d6, #ffe6a8); color: #a9781a; font-size: var(--text-secondary); font-weight: 800; box-shadow: 0 1px 3px rgba(169, 120, 26, .18); }
 .fl-star-badge svg { color: #e0a51c; }
 .fl-child-top-right { display: flex; align-items: center; gap: 10px; }

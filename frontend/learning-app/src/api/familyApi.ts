@@ -17,7 +17,12 @@ export type SetupState = {
   parent_label?: string
 }
 
-export type TurnStreamEvent = { type?: string; text?: string; tool_call?: ToolCallRecord }
+/**
+ * `replace` carries the whole live preview so far (the platform joins chunks
+ * per provider: verbatim for fragment streams, block-wise for claude-code);
+ * `delta` is only used by the standalone backend which streams raw text.
+ */
+export type TurnStreamEvent = { type?: 'delta' | 'replace' | 'status' | 'tool_call' | string; text?: string; tool_call?: ToolCallRecord }
 
 /** Side-effect signals a turn produced; the same struct for parent and child. */
 export type ToolEvent = {
