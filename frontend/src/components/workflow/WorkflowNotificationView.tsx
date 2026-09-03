@@ -116,11 +116,18 @@ export default function WorkflowNotificationView({
     ...info.excludeChannels.map(channel => ({ key: `x-${channel}`, text: `No ${channel}` })),
     ...[...gmailBlocked, ...info.blockRecipients].map(email => ({ key: `b-${email}`, text: `Never to ${email}` })),
   ] : []
-  const chip = 'inline-flex max-w-full items-center truncate rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-foreground'
-  const chipMuted = 'inline-flex items-center rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground'
-  const chipWarn = 'inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-700 dark:text-amber-300'
+  // Colour carries meaning, sparingly: channels sky, sender violet, recipients
+  // green, warnings amber, everything else neutral -- so a row can be read by
+  // shape before its labels (user: "white on light white", 2026-09-03).
+  const chipBase = 'inline-flex max-w-full items-center truncate rounded-full border px-2 py-0.5 text-xs'
+  const chipMuted = `${chipBase} border-dashed border-border bg-background text-muted-foreground`
+  const chipWarn = `${chipBase} border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300`
+  const chipChannel = `${chipBase} border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300`
+  const chipFrom = `${chipBase} border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300`
+  const chipTo = `${chipBase} border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300`
   const rowClass = 'flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-2.5'
   const labelClass = 'flex w-28 shrink-0 items-center gap-1.5 text-xs font-medium text-foreground'
+  const sectionHeadClass = 'flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground'
   const stateLine = state === 'ready'
     ? 'Agentic notification delivery is on: the agent decides when, the server delivers.'
     : state === 'missing_secret'
@@ -167,20 +174,20 @@ export default function WorkflowNotificationView({
             ) : info ? (
               <div className="space-y-4">
                 <section className="rounded-md border border-border">
-                  <div className="border-b border-border px-4 py-2"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Channels</h3></div>
+                  <h3 className={sectionHeadClass}><span className="h-2 w-2 rounded-full bg-sky-500" />Channels</h3>
                   <div className="divide-y divide-border">
                     <div className={rowClass}>
-                      <span className={labelClass}><Webhook className="h-3.5 w-3.5 text-muted-foreground" />Workflow Slack webhook</span>
+                      <span className={labelClass}><Webhook className="h-3.5 w-3.5 text-sky-500" />Workflow Slack webhook</span>
                       {info.slackWebhook.secret_name
-                        ? <span className={`${chip} font-mono`}>{info.slackWebhook.secret_name}</span>
+                        ? <span className={`${chipChannel} font-mono`}>{info.slackWebhook.secret_name}</span>
                         : <span className={chipMuted}>None</span>}
                       <span className={`ml-auto rounded-full border px-2 py-0.5 text-xs ${stateBadgeClass(state)}`}>{formatNotificationStateLabel(state)}</span>
                     </div>
                     <div className={rowClass}>
-                      <span className={labelClass} title="Gmail account channel (inherited from the account)"><Mail className="h-3.5 w-3.5 text-muted-foreground" />Gmail</span>
-                      {gmailSender ? <span className={`${chip} font-mono`} title="Sends from">{gmailSender}</span> : <span className={chipMuted}>No sending account</span>}
+                      <span className={labelClass} title="Gmail account channel (inherited from the account)"><Mail className="h-3.5 w-3.5 text-violet-500" />Gmail</span>
+                      {gmailSender ? <span className={`${chipFrom} font-mono`} title="Sends from">{gmailSender}</span> : <span className={chipMuted}>No sending account</span>}
                       {gmailDefault
-                        ? <span className={chipMuted} title="Default recipients">→ {gmailDefault}</span>
+                        ? <span className={`${chipTo} font-mono`} title="Default recipients">→ {gmailDefault}</span>
                         : gmailReady && <span className={chipMuted} title="Mail that names no recipient has nowhere to go until one is set (Bots panel → Default recipients)">no default recipient</span>}
                       {!gmailReady && !gmailChecking && info.gmail?.summary && <span className={chipWarn}>{info.gmail.summary}</span>}
                       <span className={`ml-auto rounded-full border px-2 py-0.5 text-xs ${gmailReady ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-border bg-background text-muted-foreground'}`}>
@@ -189,7 +196,7 @@ export default function WorkflowNotificationView({
                     </div>
                     {overrides.length > 0 && (
                       <div className={rowClass}>
-                        <span className={labelClass}><Ban className="h-3.5 w-3.5 text-muted-foreground" />Overrides</span>
+                        <span className={labelClass}><Ban className="h-3.5 w-3.5 text-amber-500" />Overrides</span>
                         {overrides.map(item => <span key={item.key} className={chipWarn}>{item.text}</span>)}
                       </div>
                     )}
@@ -197,20 +204,20 @@ export default function WorkflowNotificationView({
                 </section>
 
                 <section className="rounded-md border border-border">
-                  <div className="border-b border-border px-4 py-2"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What gets sent</h3></div>
+                  <h3 className={sectionHeadClass}><span className="h-2 w-2 rounded-full bg-violet-500" />What gets sent</h3>
                   <div className="divide-y divide-border">
                     {summaries.map(summary => (
-                      <div key={summary.key} className="space-y-1.5 px-4 py-2.5">
+                      <div key={summary.key} className={`space-y-1.5 border-l-2 px-4 py-2.5 ${summary.key === 'run' ? 'border-sky-500/60' : 'border-violet-500/60'}`}>
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                           <span className="w-28 shrink-0 text-xs font-medium text-foreground">{summary.title}</span>
                           {summary.channels.length > 0
-                            ? summary.channels.map(channel => <span key={channel} className={`${chip} capitalize`}>{channel}</span>)
-                            : <span className={chipMuted}>All channels</span>}
-                          {summary.senders.map(sender => <span key={sender} className={`${chip} font-mono`} title="From">from {sender}</span>)}
+                            ? summary.channels.map(channel => <span key={channel} className={`${chipChannel} capitalize`}>{channel}</span>)
+                            : <span className={chipChannel}>All channels</span>}
+                          {summary.senders.map(sender => <span key={sender} className={`${chipFrom} font-mono`} title="From">from {sender}</span>)}
                           {summary.recipients.length > 0
-                            ? summary.recipients.map(email => <span key={email} className={`${chip} font-mono`} title="To">to {email}</span>)
+                            ? summary.recipients.map(email => <span key={email} className={`${chipTo} font-mono`} title="To">to {email}</span>)
                             : gmailDefault && <span className={chipMuted}>to {gmailDefault}</span>}
-                          {summary.slackWebhooks.map(secret => <span key={secret} className={`${chip} font-mono`} title="Slack webhook secret">#{secret}</span>)}
+                          {summary.slackWebhooks.map(secret => <span key={secret} className={`${chipChannel} font-mono`} title="Slack webhook secret">#{secret}</span>)}
                         </div>
                         {summary.instructions && (
                           <p className="truncate pl-0 text-xs italic text-muted-foreground sm:pl-[7.75rem]" title={summary.instructions}>“{summary.instructions}”</p>
