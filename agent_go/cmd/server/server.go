@@ -1129,7 +1129,7 @@ func applyMultiAgentCapabilitiesToRequest(req *QueryRequest, caps WorkflowCapabi
 		copied := append([]string(nil), (*caps.SelectedGlobalSecretNames)...)
 		req.SelectedGlobalSecrets = &copied
 	}
-	if cfg := queryLLMConfigFromPreset(caps.LLMConfig); cfg != nil {
+	if cfg := queryLLMConfigFromPreset(lockedPresetLLMConfig(caps.LLMConfig)); cfg != nil {
 		req.LLMConfig = cfg
 	}
 }
@@ -2885,17 +2885,21 @@ func (api *StreamingAPI) loadSelectedSecrets(ctx context.Context, userID, workfl
 	}
 
 	if strings.TrimSpace(workflowPath) != "" {
-		workflowSecrets, err := api.chatStore.ListWorkflowSecrets(ctx, userID, workflowPath)
+		// Workflow secrets are shared by everyone with access to the workflow
+		// (PLAT-272): they are read from the workflow's own document and bound
+		// to the workflow path, so the value is the same whether this run was
+		// started by the owner, a read-only user, or the scheduler.
+		workflowSecrets, err := api.ensureSharedWorkflowSecrets(ctx, workflowPath, userID)
 		if err != nil {
-			log.Printf("[SECRETS] Failed to list workflow secrets for %s (%s): %v", userID, workflowPath, err)
+			log.Printf("[SECRETS] Failed to list workflow secrets for %s: %v", workflowPath, err)
 		} else {
 			for _, s := range workflowSecrets {
 				if !selectedSet[s.Name] {
 					continue
 				}
-				plaintext, err := decryptSecretValue(s.EncryptedValue, userID)
+				plaintext, err := decryptSharedWorkflowSecret(workflowPath, s)
 				if err != nil {
-					log.Printf("[SECRETS] Failed to decrypt workflow secret %q for user %s workflow %s: %v", s.Name, userID, workflowPath, err)
+					log.Printf("[SECRETS] Failed to decrypt workflow secret %q for workflow %s: %v", s.Name, workflowPath, err)
 					continue
 				}
 				addResult(s.Name, plaintext)
@@ -3489,17 +3493,14 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	var fallbacks []agent.FallbackModel
 
 	if isGlobalLLMConfigLocked() {
-		// Locked mode: use server env for API keys; allow provider/model only if in default_published_llms
-		if req.LLMConfig != nil && req.LLMConfig.Primary.Provider != "" && req.LLMConfig.Primary.ModelID != "" {
-			p, m := req.LLMConfig.Primary.Provider, req.LLMConfig.Primary.ModelID
-			if isAllowedDefaultLLM(p, m) {
-				finalProvider, finalModelID = p, m
-			} else {
-				finalProvider, finalModelID = getPrimaryProviderAndModelFromDefaults()
-			}
-		} else {
-			finalProvider, finalModelID = getPrimaryProviderAndModelFromDefaults()
-		}
+		// Locked mode: use server env for API keys; the request's choice only
+		// counts if a product profile owns it or the published list names it.
+		finalProvider, finalModelID = resolveLockedLLM(req.LLMConfig, req.LLMConfigSource)
+		// Everything downstream that reads req.LLMConfig directly (the workflow
+		// orchestrator's base config, run metadata) must see the locked answer
+		// too, not the request's original choice.
+		req.LLMConfig = &orchestrator.LLMConfig{Primary: orchestrator.LLMModel{Provider: finalProvider, ModelID: finalModelID}}
+		req.LLMConfigSource = ""
 		supported := getSupportedProviders()
 		if len(supported) > 0 {
 			allowed := make(map[string]bool)
@@ -3644,7 +3645,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				workflowPhaseFolder = resolvedWPath
 				logfWithContext(queryLogCtx.WithWorkflow(resolvedWPath), "[WORKFLOW_PHASE] Loaded config from manifest at %s", resolvedWPath)
 				if manifest.Capabilities.LLMConfig != nil {
-					phaseLLM, _ := workshopResolveLLMConfig(manifest.Capabilities.LLMConfig)
+					phaseLLM, _ := workshopResolveLLMConfig(lockedPresetLLMConfig(manifest.Capabilities.LLMConfig))
 					if phaseLLM != nil && phaseLLM.Provider != "" && phaseLLM.ModelID != "" {
 						if requestLLMConfigOverridesManifest(req) {
 							logfWithContext(queryLogCtx.WithWorkflow(resolvedWPath), "[WORKFLOW_PHASE] Preserving request LLM %s/%s from %s over manifest phase LLM %s/%s",
@@ -3769,7 +3770,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[MANIFEST] Loaded workflow config from manifest at %s", manifestWorkspacePath)
 				selectedTools = caps.SelectedTools
 				selectedSkills = caps.SelectedSkills
-				presetLLMConfig = caps.LLMConfig
+				presetLLMConfig = lockedPresetLLMConfig(caps.LLMConfig)
 
 				if len(caps.SelectedServers) > 0 {
 					selectedServers = caps.SelectedServers
@@ -4411,7 +4412,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 		if wsPath != "" {
 			if manifest, found, mErr := ReadWorkflowManifest(context.Background(), wsPath); mErr == nil && found && manifest.Capabilities.LLMConfig != nil {
-				presetLLMConfig = manifest.Capabilities.LLMConfig
+				presetLLMConfig = lockedPresetLLMConfig(manifest.Capabilities.LLMConfig)
 			}
 		}
 	}
@@ -9291,7 +9292,7 @@ func (api *StreamingAPI) buildWorkshopConfig(
 			// LLM config from manifest
 			log.Printf("[WORKSHOP] LLMConfig from manifest: isNil=%v", caps.LLMConfig == nil)
 			if caps.LLMConfig != nil {
-				llmCfg := caps.LLMConfig
+				llmCfg := lockedPresetLLMConfig(caps.LLMConfig)
 				log.Printf("[WORKSHOP] LLMConfig details: mode=%q tieredConfig=%v providerProfile=%q",
 					llmCfg.Mode, llmCfg.TieredConfig != nil, llmCfg.Provider)
 				cfg.PresetPhaseLLM, cfg.TieredConfig = workshopResolveLLMConfig(llmCfg)

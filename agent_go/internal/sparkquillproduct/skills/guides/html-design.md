@@ -1,6 +1,9 @@
 # SparkQuill HTML design system
 
-Every HTML file the app generates (progress reports, academic map, study material,
+> Activity pages are Quill's own design now (see the parent prompt); this
+> guide is for the progress page.
+
+Every HTML file the app generates (the progress page, study material,
 tests, and anything else) shares this look so they feel like one product. Build a
 **complete standalone document** — inline the CSS, no web fonts, no hotlinked
 images, no network calls at load time.
@@ -181,7 +184,7 @@ that breaks the moment the page is printed or opened offline.
 ```
 
 Use `.card` for each section, `.badge` for marks or a "Current" tag, `.good`/`.focus`
-for going-well / to-practise, a `.grid` of `.card`s for the academic map's subjects,
+for going-well / to-practise, a `.grid` of `.card`s for the subject cards,
 `.note` for honest caveats, and `.answered-note` for the tutor's progress marks.
 
 `.answered-note` records WHAT she answered and never whether it was right. Write it
@@ -205,7 +208,7 @@ the credit to print under it.
   comparison, a bar of progress — a drawn figure is sharper, scales cleanly, and
   can use the page's own colours. A fetched picture is for things that genuinely
   exist in the world.
-- **For geometry, graphs and number lines, read `skills/_shared/diagrams.md`
+- **For geometry, graphs and number lines, read `skills/guides/diagrams.md`
   first.** An angle, a circle, a labelled triangle, a bar chart she reads values
   off — those are declared with JSXGraph (already available on every page), never
   hand-written as SVG coordinates. Hand-computed geometry gets the y-axis
@@ -277,7 +280,7 @@ button belongs in the generated page itself.
 ## Check a figure before you finish
 
 **Only when the page you just wrote contains a geometric figure, graph or chart**
-(see `skills/_shared/diagrams.md`) — plain prose, question and study pages need
+(see `skills/guides/diagrams.md`) — plain prose, question and study pages need
 none of this, so don't spend the time on them.
 
 A figure is the one thing on a page you cannot verify by re-reading your own

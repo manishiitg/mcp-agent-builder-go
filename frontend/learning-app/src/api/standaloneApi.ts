@@ -3,8 +3,8 @@
 import { FAMILY_API } from '../apiBase'
 import type { ApiEngine, Activity, VoiceStatus } from '../stores/types'
 import type {
-  FamilyApi, FastMode, FileContent, ModelInfo, PulseConfig, PulseConfigPatch, ScheduleEntry, SetupState,
-  StoredConversation, TreeResponse, TurnResult, TurnStreamEvent, UploadResult, WeekResponse,
+  FamilyApi, FastMode, FileContent, ModelInfo, PulseConfig, PulseConfigPatch, SetupState,
+  StoredConversation, TreeResponse, TurnResult, TurnStreamEvent, UploadResult,
   WhatsAppStatus, WhatsAppVoiceTranscription,
 } from './familyApi'
 
@@ -47,11 +47,37 @@ async function readConversation(path: string): Promise<StoredConversation | null
   return JSON.parse(d.content) as StoredConversation
 }
 
+// The standalone server has no product manifest, so its quick menus are fixed
+// here (the platform serves the same lists from product.yaml `commands:`).
+const STANDALONE_COMMANDS = {
+  parent: [
+  { label: "Create study material", message: "Create study material for my child \u2014 follow your create-study-material skill and make it a designed, static (view-only) HTML page." },
+  { label: "Create a practice test", message: "Create a practice test for my child \u2014 follow your create-test skill: an interactive HTML page that records my child\u2019s typed answers, plus a separate answer key for me." },
+  { label: "Update progress report", message: "Build an updated progress report \u2014 follow your create-progress-report skill, make it a designed HTML page, and give me a short coach-style read of the evidence here in chat too." },
+  { label: "Back up workspace", message: "Back up my workspace now \u2014 follow your backup skill." },
+],
+  child: [
+  { label: "Update answers for print", message: "Please update all my answered questions on this page so it's ready to print." },
+  { label: "No more hints", message: "Don't give me any more hints \u2014 just tell me if I'm right or wrong." },
+  { label: "Be stricter", message: "Grade my answers more strictly from now on \u2014 don't count a partial or close answer as correct, and tell me exactly what's wrong." },
+  { label: "Harder question", message: "Can you give me a harder question?" },
+  { label: "Easier question", message: "Can you give me an easier question?" },
+  { label: "Give me a hint", message: "Can you give me a hint?" },
+  { label: "Keep quizzing me, harder each time", message: "Keep asking me progressively harder questions on this until I fully understand it." },
+  { label: "One section at a time", message: "Let's go one section at a time \u2014 keep quizzing me on this section until I really understand it before moving to the next." },
+  { label: "Explain it a different way", message: "Can you explain this in a completely different way \u2014 not just the same explanation again?" },
+  { label: "Give me a real example", message: "Can you give me a real-world example of this, not just the definition?" },
+  { label: "Check my full working", message: "Please check my full working step by step, not just whether my final answer is right." },
+],
+}
+
 export const standaloneApi: FamilyApi = {
   baseUrl: FAMILY_API,
 
   setup: () => getJSON<SetupState>('/api/setup'),
   engines: () => getJSON<ApiEngine[]>('/api/engines'),
+  commands: async () => STANDALONE_COMMANDS,
+  ensureSession: async () => {},
   validateEngine: (provider) => sendJSON('POST', '/api/engines/validate', { provider, model_id: '' }),
   selectEngine: async (engine) => { await fetch(`${FAMILY_API}/api/engine/selection`, { method: 'POST', headers: json, body: JSON.stringify({ engine }) }) },
   saveChild: async (child) => { await fetch(`${FAMILY_API}/api/child`, { method: 'POST', headers: json, body: JSON.stringify(child) }) },
@@ -94,8 +120,6 @@ export const standaloneApi: FamilyApi = {
     return d?.data ?? null
   },
   activities: () => getJSON<Activity[]>('/api/activities'),
-  week: (offset) => getJSON<WeekResponse>(`/api/week?offset=${offset}`),
-  saveSchedule: async (entries: ScheduleEntry[]) => { await fetch(`${FAMILY_API}/api/child-schedule`, { method: 'POST', headers: json, body: JSON.stringify({ entries }) }) },
 
   models: async () => {
     const d = await getJSON<ModelInfo>('/api/models')

@@ -1,4 +1,5 @@
 import type { PollingEvent } from '../services/api-types'
+import { appendStreamingText } from './streamingStatus'
 import { humanReadableAgentResult } from '../components/events/system/eventDisplayUtils'
 import {
   looksLikeProductChatFailure,
@@ -162,7 +163,15 @@ export function buildCleanConversationItems(events: PollingEvent[]): Conversatio
 
     if (event.type === 'conversation_thinking') {
       const content = firstText(payload.thinking)
-      if (content) pushUnique({ id: event.id, role: 'reasoning', content, timestamp: event.timestamp })
+      if (!content) continue
+      // A token-streamed fragment (is_delta) continues the reasoning item
+      // before it rather than opening another one.
+      const previous = items.at(-1)
+      if (payload.is_delta === true && previous?.role === 'reasoning') {
+        items[items.length - 1] = { ...previous, content: appendStreamingText(previous.content, content, true) }
+        continue
+      }
+      pushUnique({ id: event.id, role: 'reasoning', content, timestamp: event.timestamp })
       continue
     }
 

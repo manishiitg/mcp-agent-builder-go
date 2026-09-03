@@ -303,7 +303,6 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-menu button:hover { background: #fdf4e0; }
 .fl-composer textarea { min-width: 0; min-height: 40px; max-height: 160px; padding: 9px 0; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: var(--heading); font: inherit; font-size: var(--text-body); line-height: 1.4; }
 .fl-composer textarea::placeholder { color: #5f708c; }
-.fl-disclaimer { margin: 0 clamp(16px, 2.5vw, 36px) 16px; color: #8090a6; font-size: var(--text-caption); text-align: center; }
 
 /* Centre thread messages */
 /* No cap at all: the row may use the full width .fl-thread's own padding leaves
@@ -966,7 +965,6 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-header-handoff:hover { transform: translateY(-1px); }
 .fl-header-handoff:active { transform: translateY(2px); box-shadow: 0 1px 0 #d5a307; }
 .fl-header-handoff:disabled { background: var(--border, #e2ddd0); color: var(--muted, #8a8478); box-shadow: none; cursor: not-allowed; transform: none; }
-.fl-hint-label { display: inline-flex; align-items: center; gap: 5px; margin-right: 6px; padding: 2px 8px; border-radius: 999px; background: #fff3d6; color: #a9781a; font-size: var(--text-caption); font-weight: 800; vertical-align: 1px; }
 .fl-star-badge { display: inline-flex; align-items: center; gap: 5px; padding: 6px 13px; border-radius: 999px; background: linear-gradient(135deg, #fff3d6, #ffe6a8); color: #a9781a; font-size: var(--text-secondary); font-weight: 800; box-shadow: 0 1px 3px rgba(169, 120, 26, .18); }
 .fl-star-badge svg { color: #e0a51c; }
 .fl-child-top-right { display: flex; align-items: center; gap: 10px; }
@@ -1204,22 +1202,6 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-thread:has(~ .fl-composer .fl-mic-live-banner) { padding-bottom: 78px; }
 .fl-child-thread:has(~ .fl-child-composer .fl-mic-live-banner) { padding-bottom: 78px; }
 
-/* "This Week" tab — recurring schedule + real activity log + Veracross deadlines, see week.go */
-.fl-week { display: flex; flex-direction: column; gap: 14px; }
-.fl-week-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.fl-week-nav-btn { border: 1px solid var(--line); background: var(--surface); color: var(--heading); border-radius: 999px; padding: 6px 14px; font: 700 var(--text-secondary)/1.2 inherit; cursor: pointer; }
-.fl-week-nav-btn:hover { background: var(--surface-2); }
-.fl-week-range { display: flex; align-items: center; gap: 8px; font-weight: 800; color: var(--heading); font-size: var(--text-secondary); }
-.fl-week-badge { background: var(--yellow); color: #5a4200; font-size: var(--text-caption); font-weight: 800; padding: 2px 9px; border-radius: 999px; }
-
-.fl-week-deadlines { border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px 14px; background: var(--surface-2); }
-.fl-week-deadline-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: var(--text-secondary); color: var(--ink); border-top: 1px dashed var(--line); }
-.fl-week-deadline-row:first-of-type { border-top: 0; }
-.fl-week-deadline-kind { flex: 0 0 auto; font-size: var(--text-caption); font-weight: 800; padding: 2px 8px; border-radius: 999px; background: var(--blue-soft); color: #2b5a8a; }
-.fl-week-deadline-kind.is-test { background: #ffe3df; color: #a2372a; }
-.fl-week-deadline-title { flex: 1 1 auto; font-weight: 700; }
-.fl-week-deadline-subject { color: var(--muted, #6b7690); font-size: var(--text-caption); }
-.fl-week-deadline-date { flex: 0 0 auto; color: var(--muted, #6b7690); font-size: var(--text-caption); font-weight: 700; }
 
 /* auto-fill (not a fixed 7-column grid, and not a VIEWPORT media query —
    this is a fixed-width side drawer, independent of window width, so a
@@ -1227,28 +1209,63 @@ audio.fl-viewer-media { background: var(--surface); }
    renders) wraps to fewer, wider columns and more rows whenever the drawer
    is its normal ~560-590px width, favoring vertical space over cramming all
    7 days into one unreadably narrow row. */
-.fl-week-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-.fl-week-day { border: 1px solid var(--line); border-radius: 14px; padding: 14px; min-height: 180px; background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
-.fl-week-day.is-today { border-color: var(--yellow); box-shadow: 0 0 0 2px rgba(255, 201, 27, .3); }
-.fl-week-day-head { display: flex; align-items: baseline; justify-content: space-between; color: var(--heading); margin-bottom: 4px; }
-.fl-week-day-head strong { font-size: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em; }
-.fl-week-day-head span { font-size: var(--text-subheading); font-weight: 800; }
-.fl-week-day-free { margin: 4px 0 0; color: var(--muted, #93a0b8); font-size: var(--text-secondary); font-style: italic; }
-.fl-week-block { font-size: var(--text-secondary); line-height: 1.4; padding: 8px 10px; border-radius: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fl-week-block.is-busy { background: var(--surface-2); color: var(--muted, #6b7690); border: 1px dashed var(--line); }
-.fl-week-block.is-activity { background: var(--mint-soft); color: #1f7a52; font-weight: 700; }
-.fl-week-block-time { font-weight: 400; opacity: .75; }
-.fl-week-block.is-deadline { background: var(--blue-soft); color: #2b5a8a; font-weight: 700; }
-.fl-week-block.is-deadline.is-test { background: #ffe3df; color: #a2372a; }
 
-.fl-week-edit-schedule { align-self: flex-start; border: 1px solid var(--line); background: var(--surface); color: var(--heading); border-radius: 999px; padding: 7px 16px; font: 700 var(--text-secondary)/1.2 inherit; cursor: pointer; }
-.fl-week-edit-schedule:hover { background: var(--surface-2); }
-.fl-week-editor { border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: var(--surface-2); display: flex; flex-direction: column; gap: 8px; }
-.fl-week-editor-row { display: grid; grid-template-columns: 1fr 100px 100px 1.4fr auto; gap: 8px; align-items: center; }
-@media (max-width: 640px) { .fl-week-editor-row { grid-template-columns: 1fr 1fr; } }
-.fl-week-editor-row select, .fl-week-editor-row input { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: var(--text-secondary); background: var(--surface); color: var(--ink); }
-.fl-week-editor-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-.fl-week-editor-spacer { flex: 1 1 auto; }
-.fl-week-editor-actions button { border: 1px solid var(--line); background: var(--surface); color: var(--heading); border-radius: 999px; padding: 7px 14px; font: 700 var(--text-secondary)/1.2 inherit; cursor: pointer; }
-.fl-week-editor-save { background: var(--yellow) !important; color: #5a4200 !important; border-color: var(--yellow) !important; }
 .fl-mic-live-text.is-waiting { font-style: italic; color: #cfd8ea; }
+/* ---- platform mode: the shared AgentWorks chat hosted in the parent column ----
+   The shared composer and transcript paint with the shadcn tokens; SparkQuill
+   sets them here, so the product owns the look while the components stay
+   shared. Values are HSL triplets, the form tailwind's hsl(var(--x)) expects. */
+.fl-platform-chat {
+  display: flex; flex-direction: column; flex: 1; min-height: 0;
+  --background: 43 100% 99%;        /* cream page */
+  --foreground: 221 65% 18%;        /* ink */
+  --card: 0 0% 100%;
+  --card-foreground: 221 65% 18%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 221 65% 18%;
+  --muted: 216 33% 96%;
+  --muted-foreground: 217 19% 44%;
+  --border: 215 37% 90%;            /* line */
+  --input: 215 37% 90%;
+  --ring: 45 100% 55%;              /* yellow focus */
+  --primary: 220 71% 15%;           /* navy */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 216 33% 96%;
+  --secondary-foreground: 221 65% 18%;
+  --accent: 45 100% 92%;
+  --accent-foreground: 221 65% 18%;
+}
+.learning-app[data-theme="dark"] .fl-platform-chat {
+  --background: 222 47% 8%;
+  --foreground: 210 40% 96%;
+  --card: 222 40% 12%;
+  --card-foreground: 210 40% 96%;
+  --popover: 222 40% 12%;
+  --popover-foreground: 210 40% 96%;
+  --muted: 222 30% 18%;
+  --muted-foreground: 215 20% 65%;
+  --border: 222 30% 22%;
+  --input: 222 30% 22%;
+  --ring: 45 100% 55%;
+  --primary: 45 100% 55%;
+  --primary-foreground: 222 47% 8%;
+  --secondary: 222 30% 18%;
+  --secondary-foreground: 210 40% 96%;
+  --accent: 222 30% 18%;
+  --accent-foreground: 210 40% 96%;
+}
+.fl-platform-chat > div { min-height: 0; }
+.fl-platform-transcript { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.fl-platform-transcript .fl-suggestions { padding: 6px 16px 10px; }
+
+.fl-platform-working { padding: 4px 16px 10px; }
+
+/* The shared components assume Tailwind's preflight (no browser default
+   button/textarea chrome). Preflight is off in this app to protect its own
+   styles, so give the hosted chat that baseline here; :where keeps it below
+   any utility class the components set. */
+.fl-platform-chat :where(button) { appearance: none; background: transparent; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; cursor: pointer; box-shadow: none; }
+.fl-platform-chat :where(button:disabled) { cursor: default; }
+.fl-platform-chat :where(textarea, input) { font: inherit; color: inherit; }
+.fl-platform-chat :where(pre, code) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.fl-platform-chat :where(p, ul, ol) { margin: 0; }

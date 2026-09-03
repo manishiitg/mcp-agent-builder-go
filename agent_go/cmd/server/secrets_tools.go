@@ -98,7 +98,7 @@ func (api *StreamingAPI) registerSecretManagementTools(agent definitionToolRegis
 
 			workflowNames := []string{}
 			if strings.TrimSpace(workflowPath) != "" {
-				workflowSecrets, err := api.chatStore.ListWorkflowSecrets(ctx, userID, workflowPath)
+				workflowSecrets, err := api.ensureSharedWorkflowSecrets(ctx, workflowPath, userID)
 				if err != nil {
 					return "", fmt.Errorf("failed to list workflow secrets: %w", err)
 				}
@@ -117,7 +117,7 @@ func (api *StreamingAPI) registerSecretManagementTools(agent definitionToolRegis
 				},
 				"workflow": map[string]interface{}{
 					"read_only":     false,
-					"source":        "per-user encrypted workflow store",
+					"source":        "encrypted workflow store, shared by every user with access to this workflow",
 					"workflow_path": workflowPath,
 					"names":         workflowNames,
 				},
@@ -231,7 +231,7 @@ func (api *StreamingAPI) registerSecretManagementTools(agent definitionToolRegis
 	if strings.TrimSpace(workflowPath) != "" {
 		if err := registerTool(
 			"set_workflow_secret",
-			"Create or update a secret scoped only to the active workflow. The value is AES-256-GCM encrypted and stored server-side under this workflow/user scope, so other workflows cannot list or attach it. The secret is AUTO-ATTACHED to the active workflow and injected into the live shell env, so $SECRET_<NAME> is usable immediately in this session — no separate update_workflow_config call needed.",
+			"Create or update a secret scoped only to the active workflow. The value is AES-256-GCM encrypted and stored server-side in the workflow's own store, shared by every user with access to this workflow (owners manage it; read-only users can run with it but never see the value); other workflows cannot list or attach it. The secret is AUTO-ATTACHED to the active workflow and injected into the live shell env, so $SECRET_<NAME> is usable immediately in this session — no separate update_workflow_config call needed.",
 			map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -256,11 +256,7 @@ func (api *StreamingAPI) registerSecretManagementTools(agent definitionToolRegis
 				if value == "" {
 					return "Error: 'value' is required (use delete_workflow_secret to remove a workflow secret).", nil
 				}
-				encrypted, err := encryptValue(value)
-				if err != nil {
-					return "", fmt.Errorf("encrypt failed: %w", err)
-				}
-				if err := api.chatStore.UpsertWorkflowSecret(ctx, userID, workflowPath, name, encrypted); err != nil {
+				if err := api.upsertSharedWorkflowSecret(ctx, workflowPath, name, value); err != nil {
 					return "", fmt.Errorf("store workflow secret: %w", err)
 				}
 				if afterUpsert != nil {
@@ -294,7 +290,7 @@ func (api *StreamingAPI) registerSecretManagementTools(agent definitionToolRegis
 				if name == "" {
 					return "Error: 'name' is required.", nil
 				}
-				if err := api.chatStore.DeleteWorkflowSecret(ctx, userID, workflowPath, name); err != nil {
+				if err := api.deleteSharedWorkflowSecret(ctx, workflowPath, name, userID); err != nil {
 					return "", fmt.Errorf("delete workflow secret: %w", err)
 				}
 				detached := false

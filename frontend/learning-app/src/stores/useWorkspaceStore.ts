@@ -3,7 +3,7 @@ import type { Activity, DrawerTab, TreeNode, WsFile } from './types'
 import { resolveSetState, type SetStateAction } from './storeUtils'
 
 // Parent-side workspace browsing: drawer tabs, the file tree/viewer, and the
-// generated HTML documents (academic map, progress report).
+// generated HTML documents (the progress page).
 interface WorkspaceState {
   drawerTab: DrawerTab
   setDrawerTab: (v: SetStateAction<DrawerTab>) => void
@@ -24,8 +24,6 @@ interface WorkspaceState {
   setViewerImageList: (v: SetStateAction<string[]>) => void
   viewerContent: { isText: boolean; content: string } | null
   setViewerContent: (v: SetStateAction<{ isText: boolean; content: string } | null>) => void
-  mapHtml: string | null
-  setMapHtml: (v: SetStateAction<string | null>) => void
   mapRefreshKey: number
   setMapRefreshKey: (v: SetStateAction<number>) => void
   progressHtml: string | null
@@ -45,7 +43,7 @@ interface WorkspaceState {
 }
 
 export const useWorkspaceStore = create<WorkspaceState>()((set) => ({
-  drawerTab: 'map',
+  drawerTab: 'progress',
   setDrawerTab: (v) => set((s) => ({ drawerTab: resolveSetState(v, s.drawerTab) })),
   treeNodes: [],
   setTreeNodes: (v) => set((s) => ({ treeNodes: resolveSetState(v, s.treeNodes) })),
@@ -61,8 +59,6 @@ export const useWorkspaceStore = create<WorkspaceState>()((set) => ({
   setViewerImageList: (v) => set((s) => ({ viewerImageList: resolveSetState(v, s.viewerImageList) })),
   viewerContent: null,
   setViewerContent: (v) => set((s) => ({ viewerContent: resolveSetState(v, s.viewerContent) })),
-  mapHtml: null,
-  setMapHtml: (v) => set((s) => ({ mapHtml: resolveSetState(v, s.mapHtml) })),
   mapRefreshKey: 0,
   setMapRefreshKey: (v) => set((s) => ({ mapRefreshKey: resolveSetState(v, s.mapRefreshKey) })),
   progressHtml: null,

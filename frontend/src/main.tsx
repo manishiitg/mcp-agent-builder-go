@@ -8,6 +8,7 @@ import ServerConnectionStatus from './components/ServerConnectionStatus'
 import ErrorBoundary from './components/ErrorBoundary'
 import { applyRuntimeBranding } from './runtime-branding'
 import { useCapabilitiesStore } from './stores/useCapabilitiesStore'
+import { clearStaleChunkReloadFlag, reloadOnceForStaleChunk } from './utils/staleChunkReload'
 
 applyRuntimeBranding(window.__APP_RUNTIME_CONFIG__ as Parameters<typeof applyRuntimeBranding>[0])
 
@@ -37,6 +38,13 @@ function reportRendererError(kind: string, detail: unknown) {
   }
 }
 
+// A deploy renames the hashed chunks; a tab from before it fails its next lazy
+// import. Vite reports that as vite:preloadError -- reload once instead of
+// surfacing "Something went wrong" (utils/staleChunkReload.ts).
+window.addEventListener('vite:preloadError', (e) => {
+  if (reloadOnceForStaleChunk((e as unknown as { payload?: unknown }).payload ?? e)) e.preventDefault()
+})
+window.addEventListener('load', () => clearStaleChunkReloadFlag())
 window.addEventListener('error', (e) => reportRendererError('window.error', e.error ?? e.message))
 window.addEventListener('unhandledrejection', (e) => reportRendererError('unhandledrejection', e.reason))
 

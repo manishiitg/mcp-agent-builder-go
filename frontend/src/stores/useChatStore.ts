@@ -15,6 +15,7 @@ import { logger } from '../utils/logger'
 import { compareEventsChronologically, compareEventsReverseChronologically } from '../utils/eventOrdering'
 import { getWorkspaceScopedStorageKey } from './useWorkspaceConnectionStore'
 import { appendStreamingText, looksLikeTerminalScreenText, splitStreamingStatusAndText } from '../utils/streamingStatus'
+import { coalesceThinkingDeltas } from '../utils/thinkingDeltas'
 
 /**
  * Per-chunk metadata carried by streaming_chunk events. `source` is the
@@ -1076,7 +1077,9 @@ export const useChatStore = create<ChatState>()(
             }
           }
 
-          const newEvents = [...baseEvents, ...uniqueNewEvents]
+          // Token-streamed thinking fragments (Cursor, is_delta) join the
+          // thinking event before them instead of becoming one card each.
+          const newEvents = coalesceThinkingDeltas([...baseEvents, ...uniqueNewEvents])
 
           // For scripted steps, keep only the final result event per step_id.
           // A step goes through multiple fix iterations; intermediate failures should
@@ -1157,7 +1160,7 @@ export const useChatStore = create<ChatState>()(
       setTabEvents: (sessionId: string, events: PollingEvent[]) => {
         clearPendingEventBatch(sessionId)
         const retainedEvents = trimLargeRetainedEvents(
-          events.filter(event => retainEventInSessionWorkingSet(sessionId, event)),
+          coalesceThinkingDeltas(events.filter(event => retainEventInSessionWorkingSet(sessionId, event))),
         )
         // Rebuild the persistent ID index for this session
         tabEventIdSets.set(sessionId, new Set(retainedEvents.map(e => e.id).filter(Boolean) as string[]))

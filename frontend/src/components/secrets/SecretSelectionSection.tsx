@@ -3,6 +3,7 @@ import { Checkbox } from '../ui/checkbox';
 import { KeyRound, Globe, Plus, Trash2, Eye, EyeOff } from 'lucide-react';
 import { useSecretsStore } from '../../stores';
 import { secretsApi } from '../../api/secrets';
+import { useCanWriteWorkflow, READ_ONLY_TITLE } from '../../hooks/useCanWriteWorkflow';
 
 interface SecretSelectionSectionProps {
   selectedSecrets: string[];
@@ -33,6 +34,11 @@ export const SecretSelectionSection: React.FC<SecretSelectionSectionProps> = ({
   const fetchWorkflowSecrets = useSecretsStore((s) => s.fetchWorkflowSecrets);
   const addWorkflowSecret = useSecretsStore((s) => s.addWorkflowSecret);
   const removeWorkflowSecret = useSecretsStore((s) => s.removeWorkflowSecret);
+  // Workflow secrets are shared by everyone with access to the workflow:
+  // owners add, delete and reveal them; a read-only user sees the names and
+  // may run the workflow with them, but the server refuses reveal and every
+  // mutation, so the controls disable here rather than fail on click.
+  const canWrite = useCanWriteWorkflow(workflowPath?.trim() || undefined);
   const [workflowSecretName, setWorkflowSecretName] = useState('');
   const [workflowSecretValue, setWorkflowSecretValue] = useState('');
   const [workflowSecretError, setWorkflowSecretError] = useState<string | null>(null);
@@ -54,7 +60,7 @@ export const SecretSelectionSection: React.FC<SecretSelectionSectionProps> = ({
     if (!secret.encrypted_value) return;
     setRevealingName(secret.name);
     try {
-      const { value } = await secretsApi.decrypt(secret.encrypted_value);
+      const { value } = await secretsApi.decrypt(secret.encrypted_value, workflowPath?.trim() || undefined);
       setRevealedValues((current) => ({ ...current, [secret.name]: value }));
     } catch {
       setWorkflowSecretError(`Could not read the value of ${secret.name}.`);
@@ -183,15 +189,18 @@ export const SecretSelectionSection: React.FC<SecretSelectionSectionProps> = ({
         Secrets
       </label>
 
-      {normalizedWorkflowPath && (
+      {normalizedWorkflowPath && canWrite && (
         <div className="shrink-0 space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/60 dark:bg-amber-950/20">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <div className="text-sm font-medium text-gray-900 dark:text-gray-100">Automation Secrets</div>
               <div className="truncate text-xs text-gray-500 dark:text-gray-400">{normalizedWorkflowPath}</div>
             </div>
-            <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/60 dark:text-amber-300">
-              Private
+            <span
+              className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/60 dark:text-amber-300"
+              title="Shared with everyone who has access to this workflow; only owners can change or reveal values"
+            >
+              Shared
             </span>
           </div>
           <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto]">
@@ -243,17 +252,18 @@ export const SecretSelectionSection: React.FC<SecretSelectionSectionProps> = ({
             <button
               type="button"
               onClick={() => { void toggleReveal(secret) }}
-              disabled={!secret.encrypted_value || revealingName === secret.name}
+              disabled={!canWrite || !secret.encrypted_value || revealingName === secret.name}
               className="shrink-0 p-1 text-gray-400 transition-colors hover:text-gray-700 dark:hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-40"
-              title={revealedValues[secret.name] !== undefined ? 'Hide value' : secret.encrypted_value ? 'Show value' : 'Value not available'}
+              title={!canWrite ? READ_ONLY_TITLE : revealedValues[secret.name] !== undefined ? 'Hide value' : secret.encrypted_value ? 'Show value' : 'Value not available'}
             >
               {revealedValues[secret.name] !== undefined ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
             </button>
             <button
               type="button"
               onClick={() => handleDeleteWorkflowSecret(secret.name)}
-              className="shrink-0 p-1 text-gray-400 transition-colors hover:text-red-600 dark:hover:text-red-400"
-              title="Delete automation secret"
+              disabled={!canWrite}
+              className="shrink-0 p-1 text-gray-400 transition-colors hover:text-red-600 dark:hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-gray-400"
+              title={canWrite ? 'Delete automation secret' : READ_ONLY_TITLE}
             >
               <Trash2 className="h-3.5 w-3.5" />
             </button>

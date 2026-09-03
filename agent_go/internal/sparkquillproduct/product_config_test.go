@@ -76,7 +76,7 @@ func TestPromptsRenderForNewAndKnownFamilies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"about their child: your child.", "do not yet know the child's name, grade, board", "what to call the parent", "recurring weekly schedule"} {
+	for _, want := range []string{"about their child: your child.", "do not yet know the child's name, grade, board", "what to call the parent"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("new-family parent prompt missing %q", want)
 		}
@@ -86,7 +86,7 @@ func TestPromptsRenderForNewAndKnownFamilies(t *testing.T) {
 	}
 
 	// A known family: nudges gone, facts in.
-	known := FamilyState{Child: &Child{Name: "Maya", Grade: "6", Board: "CBSE"}, ParentLabel: "mom", WatchSites: []string{"https://school.example"}, Schedule: []ScheduleEntry{{Day: "Monday", Start: "08:00", End: "14:00", Label: "School"}}}
+	known := FamilyState{Child: &Child{Name: "Maya", Grade: "6", Board: "CBSE"}, ParentLabel: "mom", WatchSites: []string{"https://school.example"}}
 	rendered, err = agentprofiles.RenderPrompt(parent, agentprofiles.PromptContext{ProjectTitle: "SparkQuill", LocalDateTime: "Monday", Product: ParentPromptVariables(known)})
 	if err != nil {
 		t.Fatal(err)

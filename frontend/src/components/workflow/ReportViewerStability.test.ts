@@ -47,11 +47,11 @@ describe('open report stability', () => {
     expect(viewer).not.toContain('onScroll={handleReportScroll}')
   })
 
-  it('keeps decision-status polling visually silent when nothing changed', () => {
+  it('keeps decision-status refreshes visually silent when nothing changed', () => {
     const panel = readFileSync('src/components/workflow/ReportHumanInputPanel.tsx', 'utf8')
 
     expect(panel).toContain('keepPreviousInputsWhenUnchanged')
-    expect(panel).toContain('loadInputs(undefined, false)')
+    expect(panel).toContain('const onRefresh = () => { void loadInputs(undefined, false) }')
     expect(panel).toContain('if (showLoading) setLoading(true)')
   })
 

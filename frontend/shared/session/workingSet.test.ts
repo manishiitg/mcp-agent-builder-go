@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import type { PollingEvent } from '../services/api-types'
+import type { PollingEvent } from './types'
 import {
   eventBelongsToSession,
   retainEventInSessionWorkingSet,
   sessionOwnsGlobalChatIndicators,
-} from './sessionEventWorkingSet'
+} from './workingSet'
 
 const sessionId = 'session-1'
 

@@ -1,7 +1,7 @@
 // Shared types used across LearningApp.tsx and the Zustand stores.
 
 export type Screen = 'engine' | 'child' | 'pin' | 'parent' | 'tutor'
-export type DrawerTab = 'assets' | 'map' | 'progress' | 'files' | 'allfiles' | 'uploaded' | 'week'
+export type DrawerTab = 'assets' | 'progress' | 'files' | 'allfiles' | 'uploaded' | `pin:${string}`
 
 export type ApiEngine = {
   id: string
@@ -89,3 +89,9 @@ export type Activity = {
 export function toParentMsg(m: StoredMsg): ParentMsg {
   return { role: m.role as ParentMsg['role'], text: m.text, tool: m.tool, stars: m.stars, reason: m.reason, source: m.source, html: m.html, path: m.path }
 }
+
+/** One entry of the composer's quick menu: the label shown, the message sent as if typed. */
+export type QuickCommand = { label: string; message: string }
+
+/** A page the parent keeps one tap away as a tab at the top (state key "pins"). */
+export type PinnedPage = { path: string; title: string }

@@ -247,4 +247,15 @@ func TestChangeOwnPassword(t *testing.T) {
 	if validateDirectoryCredentials("bob", "newpassword1") == nil {
 		t.Fatal("new password does not verify")
 	}
+	// The account menu does not ask for the current password: a signed-in
+	// session is the proof of identity, so an empty current password is fine.
+	rec = httptest.NewRecorder()
+	api.handleChangeOwnPassword(rec, adminRequest(http.MethodPost, "/api/auth/password", `{"new_password":"newpassword2"}`, bob, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("change without current password: %d %s", rec.Code, rec.Body.String())
+	}
+	invalidateUserDirectoryCache()
+	if validateDirectoryCredentials("bob", "newpassword2") == nil {
+		t.Fatal("password set without the current one does not verify")
+	}
 }

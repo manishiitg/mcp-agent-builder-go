@@ -1,0 +1,88 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  IAM role + instance profile for the Video Studio / AgentWorks EC2 box, so
+  workflows that shell out to the AWS CLI get short-lived credentials from IMDS
+  instead of a key file. Kept OUT of template.yaml on purpose: that stack has
+  drifted from the live instance (UserData/KeyName), so any update to it would
+  replace the instance. This stack only creates IAM objects; attach-instance-role.sh
+  associates the profile with the running instance without interruption.
+Parameters:
+  StackPrefix:
+    Type: String
+    Default: video-studio
+Resources:
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      # Read-only, scoped to what the ops workflows (rtslatency) call. Widen
+      # here -- or swap in arn:aws:iam::aws:policy/ReadOnlyAccess under
+      # ManagedPolicyArns for blanket read-only -- never by copying user keys.
+      # SSM is the box's root-level admin channel (no sudo, SSH is deploy-only):
+      # system tool installs go through `aws ssm send-command`, see
+      # install-system-tools.sh.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: workflow-readonly-observability
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Identity
+                Effect: Allow
+                Action: [sts:GetCallerIdentity]
+                Resource: '*'
+              - Sid: CloudWatchMetricsAndLogs
+                Effect: Allow
+                Action:
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:ListMetrics
+                  - cloudwatch:DescribeAlarms
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:FilterLogEvents
+                  - logs:GetLogEvents
+                  - logs:StartQuery
+                  - logs:GetQueryResults
+                  - logs:StopQuery
+                Resource: '*'
+              - Sid: CostExplorer
+                Effect: Allow
+                Action:
+                  - ce:GetCostAndUsage
+                  - ce:GetCostForecast
+                  - ce:GetRightsizingRecommendation
+                  - ce:GetDimensionValues
+                  - ce:GetTags
+                Resource: '*'
+              - Sid: InventoryDescribes
+                Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
+                  - ec2:DescribeVolumes
+                  - elasticloadbalancing:Describe*
+                  - elasticbeanstalk:Describe*
+                  - rds:DescribeDBInstances
+                Resource: '*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackPrefix}-instance'
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub '${StackPrefix}-instance-profile'
+      Roles: [!Ref InstanceRole]
+Outputs:
+  InstanceProfileName:
+    Value: !Ref InstanceProfile
+  InstanceProfileArn:
+    Value: !GetAtt InstanceProfile.Arn
+  RoleArn:
+    Value: !GetAtt InstanceRole.Arn

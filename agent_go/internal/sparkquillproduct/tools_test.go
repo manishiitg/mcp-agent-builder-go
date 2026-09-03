@@ -108,28 +108,17 @@ func TestFamilyStateToolsWriteFamilyJSONAndMirrors(t *testing.T) {
 	if _, err := label.Execute(ctx, map[string]interface{}{"label": "mom"}); err != nil {
 		t.Fatal(err)
 	}
-	schedule := build(t, setChildScheduleFactory(url), rt)
-	entry := map[string]interface{}{"day": "Monday", "start": "08:00", "end": "14:00", "label": "School"}
-	out, err := schedule.Execute(ctx, map[string]interface{}{"entries": []interface{}{entry, entry}})
-	if err != nil || !strings.Contains(out, `"added":1`) {
-		t.Fatalf("schedule = %s err = %v", out, err)
-	}
-	out, _ = schedule.Execute(ctx, map[string]interface{}{"entries": []interface{}{entry}})
-	if !strings.Contains(out, `"added":0`) || !strings.Contains(out, `"total_entries":1`) {
-		t.Fatalf("duplicate entry must be skipped: %s", out)
-	}
-
 	var state FamilyState
 	if err := json.Unmarshal([]byte(fake.files["_users/u1/Chats/SparkQuill/family.json"]), &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.Child == nil || state.Child.Name != "Maya" || state.Child.Grade != "6" || state.Child.Board != "CBSE" || state.ParentLabel != "mom" || len(state.Schedule) != 1 {
+	if state.Child == nil || state.Child.Name != "Maya" || state.Child.Grade != "6" || state.Child.Board != "CBSE" || state.ParentLabel != "mom" {
 		t.Fatalf("family.json = %+v", state)
 	}
-	if !strings.Contains(fake.files["_users/u1/Chats/SparkQuill/memory/child-profile.json"], `"Maya"`) || !strings.Contains(fake.files["_users/u1/Chats/SparkQuill/memory/child-schedule.json"], `"School"`) {
+	if !strings.Contains(fake.files["_users/u1/Chats/SparkQuill/memory/child-profile.json"], `"Maya"`) {
 		t.Fatalf("memory mirrors missing: %v", fake.files)
 	}
-	if k := sink.kinds(); len(k) != 5 || k[0] != "family_updated" {
+	if k := sink.kinds(); len(k) != 3 || k[0] != "family_updated" {
 		t.Fatalf("events = %v", k)
 	}
 	if vars := ParentPromptVariables(state); vars["CHILD_WHO"] != "Maya, Grade 6 (CBSE)" || vars["CHILD_INFO_NUDGE"] != "" {
@@ -172,6 +161,28 @@ func TestCreateLearningActivityWritesManifestAndProject(t *testing.T) {
 	if project.Product != ChildProfileID || project.ID != "2026-09-03-fractions" || !strings.HasPrefix(project.SessionID, "product-") {
 		t.Fatalf("product.json must bind the folder to the child profile: %+v", project)
 	}
+
+	// A page written in the activity vocabulary is rendered into the finished
+	// page, listed under its rendered name, and its section map is recorded.
+	fake.files["_users/u1/Chats/SparkQuill/family.json"] = `{"child":{"name":"Maya","grade":"6","board":"CBSE"}}`
+	fake.files["_users/u1/Chats/SparkQuill/activities/2026-09-03-fractions/notes.sq.html"] = `<h1>Fractions</h1><section data-role="learn"><h2>Idea</h2><p>Pieces must match.</p></section><section data-role="check"><h2>Check</h2><div class="q" data-marks="2"><p>1/2+1/3</p></div><input></section>`
+	out, err = create.Execute(ctx, map[string]interface{}{"dir": "activities/2026-09-03-fractions", "title": "Fractions", "items": []interface{}{"notes.sq.html"}, "goal": "learn then check"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := fake.files["_users/u1/Chats/SparkQuill/activities/2026-09-03-fractions/notes.html"]
+	if !strings.Contains(rendered, `id="q1"`) || !strings.Contains(rendered, `data-role="check"`) || !strings.Contains(rendered, "SQ.choose") {
+		t.Fatalf("rendered page wrong:\n%s", rendered)
+	}
+	if !strings.Contains(out, `"notes.html"`) || !strings.Contains(out, `"dropped":["<input>"]`) || !strings.Contains(out, `"marks":2`) {
+		t.Fatalf("result = %s", out)
+	}
+	if err := json.Unmarshal([]byte(fake.files["_users/u1/Chats/SparkQuill/activities/2026-09-03-fractions/activity.json"]), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Sections) != 2 || manifest.Sections[1].Role != RoleCheck || manifest.Sections[1].Questions[0] != "q1" || manifest.Items[0] != "notes.html" {
+		t.Fatalf("manifest = %+v", manifest)
+	}
 	// Re-finalizing keeps the child's conversation.
 	if _, err := create.Execute(ctx, map[string]interface{}{"dir": "activities/2026-09-03-fractions", "title": "Fractions — Quick Check v2", "goal": "same"}); err != nil {
 		t.Fatal(err)
@@ -181,7 +192,7 @@ func TestCreateLearningActivityWritesManifestAndProject(t *testing.T) {
 	if again.SessionID != project.SessionID || again.Title != "Fractions — Quick Check v2" {
 		t.Fatalf("session id must survive re-finalizing: %+v vs %+v", again, project)
 	}
-	if k := sink.kinds(); len(k) != 2 || k[0] != "activity_created" {
+	if k := sink.kinds(); len(k) != 3 || k[0] != "activity_created" {
 		t.Fatalf("events = %v", k)
 	}
 }
@@ -234,5 +245,69 @@ func TestOpenToolsRefuseMissingTargetsAndUndeclaredPresentation(t *testing.T) {
 	}
 	if _, err := openActivity.Execute(ctx, map[string]interface{}{"dir": "activities/nope"}); err == nil || !strings.Contains(err.Error(), "no activity") {
 		t.Fatalf("missing activity must be reported: %v", err)
+	}
+}
+
+func TestInboxNoteNamesTheUnfiledUploads(t *testing.T) {
+	if got := InboxNote(nil); got != "" {
+		t.Fatalf("empty inbox produced a note: %q", got)
+	}
+	got := InboxNote([]string{"_users/u1/Chats/SparkQuill/inbox/worksheet.pdf", "_users/u1/Chats/SparkQuill/inbox/photo.jpg"})
+	for _, want := range []string{"2 file(s)", "worksheet.pdf", "photo.jpg", "process-file"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("inbox note %q lacks %q", got, want)
+		}
+	}
+}
+
+func TestParseFolderListingAcceptsTheDocumentsAPIShapes(t *testing.T) {
+	cases := map[string]string{
+		"bare array":     `[{"filepath":"inbox/a.pdf","type":"file"}]`,
+		"data wrapper":   `{"success":true,"data":[{"filepath":"inbox/a.pdf","type":"file"}]}`,
+		"single folder":  `{"filepath":"inbox","type":"folder","children":[{"filepath":"inbox/a.pdf","type":"file"}]}`,
+		"wrapped folder": `{"data":{"filepath":"inbox","type":"folder","children":[{"filepath":"inbox/a.pdf","type":"file"}]}}`,
+	}
+	for name, raw := range cases {
+		got := parseFolderListing([]byte(raw))
+		if len(got) != 1 || got[0].FilePath != "inbox/a.pdf" {
+			t.Fatalf("%s: parsed %+v", name, got)
+		}
+	}
+}
+
+func TestPinAndUnpinPageKeepTheAppsStateFile(t *testing.T) {
+	fake, sink, rt, url := newToolHarness(t)
+	ctx := context.Background()
+	pin := build(t, pinPageFactory(url), rt)
+	unpin := build(t, unpinPageFactory(url), rt)
+	if _, err := pin.Execute(ctx, map[string]interface{}{"path": "pages/exams.html", "title": "Exams"}); err == nil {
+		t.Fatal("pinning a page that does not exist must fail")
+	}
+	fake.files["_users/u1/Chats/SparkQuill/pages/exams.html"] = "<h1>Exams</h1>"
+	if _, err := pin.Execute(ctx, map[string]interface{}{"path": "_users/u1/Chats/SparkQuill/pages/exams.html", "title": "Exams"}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := pin.Execute(ctx, map[string]interface{}{"path": "pages/exams.html", "title": "Term exams"})
+	if err != nil || !strings.Contains(out, `"pins":1`) {
+		t.Fatalf("re-pinning must rename, not duplicate: %s %v", out, err)
+	}
+	var st pinsState
+	if err := json.Unmarshal([]byte(fake.files["_users/u1/Chats/SparkQuill/state/pins.json"]), &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Key != "pins" || len(st.Data.Pins) != 1 || st.Data.Pins[0].Path != "pages/exams.html" || st.Data.Pins[0].Title != "Term exams" {
+		t.Fatalf("pins state = %+v", st)
+	}
+	if _, err := unpin.Execute(ctx, map[string]interface{}{"path": "pages/other.html"}); err == nil {
+		t.Fatal("unpinning something not pinned must fail")
+	}
+	if _, err := unpin.Execute(ctx, map[string]interface{}{"path": "pages/exams.html"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(fake.files["_users/u1/Chats/SparkQuill/state/pins.json"]), &st); err != nil || len(st.Data.Pins) != 0 {
+		t.Fatalf("pins after unpin = %+v err=%v", st, err)
+	}
+	if k := sink.kinds(); len(k) != 3 || k[0] != "pins_updated" {
+		t.Fatalf("events = %v", k)
 	}
 }

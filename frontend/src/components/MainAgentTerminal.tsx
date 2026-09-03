@@ -6,12 +6,18 @@ import { LiveAttachXtermPane, RAW_XTERM_THEMES, StaticXtermPane } from './Termin
 
 type MainAgentTerminalProps = {
   sessionId: string
+  /** Called when the session has no live pane to show (structured-transport
+   * providers such as Cursor never have one); the host returns the tab to
+   * the conversation instead of leaving a placeholder on screen. */
+  onUnavailable?: () => void
 }
 
 // Product raw view for the one main coding-agent terminal. This intentionally
 // reuses the mature xterm renderer/live tmux attach rather than maintaining a
 // second preformatted-text terminal. Child terminal rails stay diagnostics-only.
-export function MainAgentTerminal({ sessionId }: MainAgentTerminalProps) {
+export function MainAgentTerminal({ sessionId, onUnavailable }: MainAgentTerminalProps) {
+  const onUnavailableRef = useRef(onUnavailable)
+  useEffect(() => { onUnavailableRef.current = onUnavailable }, [onUnavailable])
   const { theme } = useTheme()
   const [snapshot, setSnapshot] = useState<TerminalSnapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -32,8 +38,9 @@ export function MainAgentTerminal({ sessionId }: MainAgentTerminalProps) {
       if (cause?.response?.status === 404) {
         setSnapshot(null)
         setError(null)
+        onUnavailableRef.current?.()
       } else {
-        setError(cause?.message || 'Could not load the main terminal.')
+        setError(cause?.message || 'Could not load the live view.')
       }
     } finally {
       setLoading(false)
@@ -59,7 +66,9 @@ export function MainAgentTerminal({ sessionId }: MainAgentTerminalProps) {
           <div className="p-4 text-sm text-red-300">{error}</div>
         ) : !snapshot ? (
           <div className="flex h-full items-center justify-center text-sm text-neutral-500">
-            {loading ? 'Loading main terminal…' : 'The main terminal is not available yet.'}
+            {/* Users are not told about terminals or tmux: while the live session has
+                not come up yet this simply reads as the agent starting. */}
+            {loading ? 'Starting…' : 'Starting…'}
           </div>
         ) : isLive ? (
           <LiveAttachXtermPane

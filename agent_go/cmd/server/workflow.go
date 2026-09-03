@@ -38,7 +38,7 @@ func (api *StreamingAPI) resolveWorkflowLLMConfigForWorkspace(
 	// Try to load manifest from workspace
 	manifest, exists, err := ReadWorkflowManifest(ctx, workspacePath)
 	if err == nil && exists && manifest.Capabilities.LLMConfig != nil {
-		llmCfg := manifest.Capabilities.LLMConfig
+		llmCfg := lockedPresetLLMConfig(manifest.Capabilities.LLMConfig)
 		phaseLLM, tieredConfig := workshopResolveLLMConfig(llmCfg)
 		return phaseLLM, tieredConfig, manifest.ID, nil
 	}

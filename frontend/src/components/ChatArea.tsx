@@ -1,3 +1,4 @@
+import { isForegroundSessionEvent } from '../../shared/session/foreground'
 import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo, useState, type ComponentType, type ForwardedRef, type ReactNode } from 'react'
 import { normalizeEventViewMode } from '../stores/useChatStore'
 import { useRenderLogger, useMemoLogger } from '../utils/renderLogger'
@@ -146,34 +147,6 @@ function getOwnedTerminalStreamKeys(
   return []
 }
 
-function isForegroundSessionEvent(
-  event: PollingEvent,
-  component: unknown,
-  correlationId: unknown,
-): boolean {
-  const componentText = typeof component === 'string' ? component : ''
-  const correlationText = typeof correlationId === 'string' ? correlationId : ''
-  if (
-    componentText.startsWith('delegation-') ||
-    componentText.startsWith('workshop-') ||
-    correlationText.startsWith('delegation-') ||
-    correlationText.startsWith('workshop-')
-  ) {
-    return false
-  }
-
-  const kind = (event.execution_kind || '').trim().toLowerCase()
-  if (kind && kind !== 'main_agent') {
-    return false
-  }
-
-  const executionId = (event.execution_id || '').trim().toLowerCase()
-  if (!executionId || executionId.startsWith('main:')) {
-    return true
-  }
-
-  return false
-}
 
 function isStaleAutoNotificationEvent(event: PollingEvent): boolean {
   const ts = getEventTimestampMs(event)
@@ -441,6 +414,8 @@ export interface ChatContentRendererProps {
   onLoadOlder?: () => void
   landingContent?: ReactNode
   onRetryLastMessage?: () => void | Promise<void>
+  /** Submit a message on the user's behalf (a suggestion pill, a button in the transcript). */
+  onSubmitQuery?: (query: string) => void
 }
 
 interface ChatAreaProps {
@@ -489,6 +464,8 @@ interface ChatAreaProps {
   hideRuntimeStatus?: boolean
   // Product chats otherwise have no generic header in which to start fresh.
   showNewChatAction?: boolean
+  /** Product-specific composer placeholder (the product variant otherwise says "Describe what you want to create…"). */
+  composerPlaceholder?: string
 }
 
 // Ref interface for ChatArea component
@@ -508,7 +485,7 @@ let globalHasRestored = false
 
 // Inner component for chat area
 const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAreaRef>) => {
-  const { onNewChat, hideInput = false, compact = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel, landingContent, contentRenderer: ContentRenderer, inputVariant = 'default', fullTurnStreaming = false, showConversationUsage = false, hideRuntimeStatus = false, showNewChatAction = false } = props
+  const { onNewChat, hideInput = false, compact = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel, landingContent, contentRenderer: ContentRenderer, inputVariant = 'default', fullTurnStreaming = false, showConversationUsage = false, hideRuntimeStatus = false, showNewChatAction = false , composerPlaceholder} = props
   // Product mode is a complete shared surface, not just a simplified composer.
   // Products may still supply a renderer for domain-specific presentation, but
   // every new product gets the durable transcript and normalized error UI by
@@ -3583,6 +3560,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             onLoadOlder={historyPagination?.hasMore ? loadOlderConversationPage : undefined}
             landingContent={landingContent}
             onRetryLastMessage={retryLastProductMessage}
+            onSubmitQuery={(query) => submitQueryWithQuery(query)}
           />
         ) : selectedModeCategory === 'workflow' ? (
           <WorkflowModeHandler
@@ -3621,7 +3599,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
                 in explicitly enabled runtime diagnostics. */}
             {visibleWorkflowSurface === 'active' && activeTab?.sessionId && (
               showMainTerminal
-                ? <MainAgentTerminal sessionId={activeTab.sessionId} />
+                ? <MainAgentTerminal sessionId={activeTab.sessionId} onUnavailable={() => useChatStore.getState().setTabViewMode(activeTab.tabId, 'formatted')} />
                 : <TerminalEventTranscript
                     events={transcriptEvents}
                     terminal={null}
@@ -3675,7 +3653,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
                 is available only through the explicit developer flag. */}
             {multiAgentSurface === 'active' && activeTab?.sessionId && (
               showMainTerminal
-                ? <MainAgentTerminal sessionId={activeTab.sessionId} />
+                ? <MainAgentTerminal sessionId={activeTab.sessionId} onUnavailable={() => useChatStore.getState().setTabViewMode(activeTab.tabId, 'formatted')} />
                 : <TerminalEventTranscript
                     events={transcriptEvents}
                     terminal={null}
@@ -3704,6 +3682,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           surfaceVariant={inputVariant}
           hideRuntimeStatus={hideRuntimeStatus}
           showNewChatAction={showNewChatAction}
+          placeholderOverride={composerPlaceholder}
         />
       )}
 

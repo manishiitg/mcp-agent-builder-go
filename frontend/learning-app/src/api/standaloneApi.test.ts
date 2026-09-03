@@ -39,7 +39,6 @@ describe('standaloneApi', () => {
   it('keeps the setup, state and settings endpoints byte for byte', async () => {
     await api.setup(); await api.engines(); await api.validateEngine('codex-cli'); await api.selectEngine('codex-cli')
     await api.saveChild({ name: 'Maya', grade: '6', board: 'CBSE' }); await api.setPin('1234'); await api.verifyPin('1234')
-    await api.saveSchedule([{ day: 'Monday', start: '08:00', end: '14:00', label: 'School' }]); await api.week(1)
     await api.saveModel('m'); await api.saveFastMode({ enabled: true, child_enabled: false })
     await api.saveSecret('n', 'v'); await api.deleteSecret('n'); await api.savePulseConfig({ enabled: true }); await api.runPulse()
     await api.whatsappUnpair('919999'); await api.whatsappVoice(true); await api.handoff('activities/a', true)
@@ -48,7 +47,6 @@ describe('standaloneApi', () => {
     expect(seen).toEqual([
       'GET /api/setup', 'GET /api/engines', 'POST /api/engines/validate', 'POST /api/engine/selection',
       'POST /api/child', 'POST /api/parent/pin', 'POST /api/parent/pin/verify',
-      'POST /api/child-schedule', 'GET /api/week?offset=1',
       'POST /api/models', 'POST /api/fast-mode',
       'POST /api/secrets', 'DELETE /api/secrets', 'POST /api/pulse/config', 'POST /api/pulse/run',
       'POST /api/whatsapp/unpair', 'POST /api/whatsapp/voice', 'POST /api/parent/handoff',
@@ -56,10 +54,9 @@ describe('standaloneApi', () => {
     ])
     expect(body(calls[2])).toEqual({ provider: 'codex-cli', model_id: '' })
     expect(body(calls[4])).toEqual({ name: 'Maya', grade: '6', board: 'CBSE' })
-    expect(body(calls[7])).toEqual({ entries: [{ day: 'Monday', start: '08:00', end: '14:00', label: 'School' }] })
-    expect(body(calls[9])).toEqual({ model_id: 'm' })
-    expect(body(calls[18])).toEqual({ conversation_id: 'c1', message: 'msg' })
-    expect(body(calls[20])).toEqual({ key: 'k', data: { s: 1 } })
+    expect(body(calls[7])).toEqual({ model_id: 'm' })
+    expect(body(calls[16])).toEqual({ conversation_id: 'c1', message: 'msg' })
+    expect(body(calls[18])).toEqual({ key: 'k', data: { s: 1 } })
   })
 
   it('reads files and conversations through the workspace endpoints', async () => {

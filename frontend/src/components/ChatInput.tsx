@@ -36,6 +36,7 @@ import { hasActiveSessionWork } from '../utils/activitySessions'
 import { headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
 import { shouldClearAcceptedChatDraft } from '../utils/chatSubmissionDraft'
 import { liveTerminalControlKey } from '../utils/liveTerminalKeys'
+import { effectiveLLMUnderLock } from '../utils/effectiveLLM'
 import { normalizeEventViewMode } from '../stores/useChatStore'
 
 const removePasteMarkersFromText = (text: string, markers: string[]) => {
@@ -264,6 +265,7 @@ interface ChatInputProps {
   // Product surfaces keep the shared transport but hide developer/provider
   // controls and render a simple customer-facing composer.
   surfaceVariant?: 'default' | 'product'
+  placeholderOverride?: string
   showNewChatAction?: boolean
   hideRuntimeStatus?: boolean
 }
@@ -497,6 +499,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   tabId: scopedTabId,
   restoredConversationPending = true,
   surfaceVariant = 'default',
+  placeholderOverride,
   showNewChatAction = false,
   hideRuntimeStatus = false,
   onNewChat,
@@ -621,11 +624,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     providerManifestLoaded,
     loadProviderManifest,
     primaryConfig,
+    llmConfigLocked,
+    publishedLLMs,
   } = useLLMStore(useShallow(state => ({
     providerManifest: state.providerManifest,
     providerManifestLoaded: state.providerManifestLoaded,
     loadProviderManifest: state.loadProviderManifest,
     primaryConfig: state.primaryConfig,
+    llmConfigLocked: state.llmConfigLocked,
+    publishedLLMs: state.savedLLMs,
   })))
   
   // Note: activeTab may be undefined during initial render before tabs are created
@@ -750,8 +757,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     multiAgentEffectiveLLMConfig?.provider,
     tabConfig?.llmConfig?.provider,
     workflowPhasePreset?.llmConfig?.builder_llm?.provider,
-    workflowPhasePreset?.llmConfig?.provider,
-  ])
+    workflowPhasePreset?.llmConfig?.provider])
   useEffect(() => {
     if (!providerManifestLoaded) {
       void loadProviderManifest()
@@ -1335,8 +1341,19 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // keeping its process alive must never make this spinner claim the agent is
   // still working.
   const mainAgentRuntimeStatus = useMemo(() => {
-    const provider = activeSession?.runtime?.provider?.trim() || primaryLLM?.provider?.trim() || ''
-    const model = activeSession?.runtime?.model_id?.trim() || primaryLLM?.model?.trim() || ''
+    // Under a locked deployment the next turn runs on the published default
+    // whatever this workflow saved or a past session reported, so that is
+    // what the composer shows (server: resolveLockedLLM).
+    const effective = effectiveLLMUnderLock(
+      {
+        provider: activeSession?.runtime?.provider?.trim() || primaryLLM?.provider?.trim() || '',
+        model_id: activeSession?.runtime?.model_id?.trim() || primaryLLM?.model?.trim() || '',
+      },
+      llmConfigLocked,
+      publishedLLMs,
+    )
+    const provider = effective?.provider || ''
+    const model = effective?.model_id || ''
     if (!provider) return null
 
     // A durable foreground completion settles the turn even when the periodic
@@ -1370,6 +1387,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     isTurnInFlight,
     primaryLLM?.model,
     primaryLLM?.provider,
+    llmConfigLocked,
+    publishedLLMs,
   ])
 
   // mainAgentRuntimeStatus reads activeSession from activeSessionsCache, a
@@ -3319,7 +3338,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // Memoized placeholder
   const placeholder = useMemo(() => {
     if (isViewOnly) return "View only — cannot continue this conversation"
-    if (isProductSurface) return isStreaming ? 'Add a message…' : 'Describe what you want to create…'
+    if (isProductSurface) return isStreaming ? 'Add a message…' : (placeholderOverride || 'Describe what you want to create…')
     if (agentProfileWorkspace) return 'Describe the video you want to make… (@ files, / commands)'
     if (isWorkflowPhaseChat) {
       return 'Chat with the automation builder... (@ files, / commands, # automations)'
@@ -3366,7 +3385,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
   // Product chats use the roomier project layout; workflow mode keeps the
   // existing toolbar alignment.
-  const inputPadX = isProductSurface ? 'px-4 sm:px-6' : isMultiAgentMode ? 'px-3' : 'px-4'
+  const inputPadX = isProductSurface ? 'px-3' : isMultiAgentMode ? 'px-3' : 'px-4'
 
   // For view-only (restored) tabs, show a minimal indicator instead of the full input form
   if (isViewOnly) {
@@ -3375,7 +3394,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const jobName = activeTab?.metadata?.scheduledJobName
     const botPlatform = activeTab?.metadata?.botPlatform
     return (
-      <div data-tour="chat-input-area" data-testid="tour-chat-input-area" className={`${inputPadX} py-2`}>
+      <div data-tour="chat-input-area" data-testid="tour-chat-input-area" className={`${inputPadX} ${isProductSurface ? 'py-1' : 'py-2'}`}>
         <div className="relative flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground">
           <History className="w-3.5 h-3.5" />
           <span>
@@ -3395,8 +3414,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 terminalViewSelected ? 'formatted' : 'terminal',
               )}
               className="absolute right-0 h-7 w-7 p-0"
-              aria-label={terminalViewSelected ? 'Return to conversation' : 'Open tmux terminal'}
-              title={terminalViewSelected ? 'Return to conversation' : 'Open tmux terminal'}
+              aria-label={terminalViewSelected ? 'Return to conversation' : 'Open live view'}
+              title={terminalViewSelected ? 'Return to conversation' : 'Open live view'}
             >
               <Terminal className="h-3.5 w-3.5" />
             </Button>
@@ -3408,7 +3427,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
   return (
     <TooltipProvider>
-      <div className={isProductSurface ? 'border-t border-slate-800 bg-slate-950 py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.12)]' : 'space-y-2'} data-product-chat-input={isProductSurface || undefined}>
+      <div className={isProductSurface ? 'border-t border-border bg-background py-1.5 shadow-[0_-8px_24px_rgba(15,23,42,0.08)]' : 'space-y-2'} data-product-chat-input={isProductSurface || undefined}>
       {/* Pasted-text Attachments */}
       {chatPastedAttachments.length > 0 && (
         <div className={inputPadX}>
@@ -3573,7 +3592,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
       {/* Input Form */}
       <div data-tour="chat-input-area" data-testid="tour-chat-input-area" className={`${inputPadX} ${isProductSurface ? 'py-2' : 'py-2'}`}>
-        <form onSubmit={handleSubmit} className="relative space-y-2">
+        <form onSubmit={handleSubmit} className={isProductSurface ? 'relative' : 'relative space-y-2'}>
           {/* The mic's banner (download progress, "Listening" with the live
               transcript) portals here, in normal flow directly above the
               composer box, so it can never be clipped by a container. */}
@@ -3582,7 +3601,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             // Keep the customer composer visually steady while events stream.
             // The former ring-4 plus catch-all `transition` made a harmless
             // focus hand-off look like a pulsing purple border on redraws.
-            ? 'space-y-1 rounded-2xl border border-slate-700 bg-slate-900 p-2 shadow-sm transition-colors duration-150 focus-within:border-violet-400'
+            ? 'space-y-0.5 rounded-2xl border border-border bg-card px-1.5 py-1 shadow-sm transition-colors duration-150 focus-within:border-ring'
             : 'space-y-1 rounded-xl border border-slate-700/80 bg-[#101513] p-1.5 shadow-sm transition focus-within:border-slate-500'}>
             {showLiveDelivery && liveMessageDelivery && (
               <div className={`flex min-w-0 items-center gap-1.5 text-[11px] ${liveDeliveryClass}`}>
@@ -3659,7 +3678,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
               onDrop={handleTextareaDrop}
               rows={isProductSurface ? 1 : undefined}
               placeholder={placeholder}
-              className={`${isProductSurface ? '!min-h-[36px] max-h-[100px] !border-0 !bg-transparent !px-2 !py-1.5 text-sm text-slate-100 !shadow-none focus-visible:!ring-0 placeholder:text-sm placeholder:text-slate-400' : '!min-h-[36px] max-h-[100px] !border-0 !bg-transparent !py-1.5 !px-2 text-xs !shadow-none focus-visible:!ring-0 placeholder:text-xs'} resize-none overflow-y-auto leading-[1.3] ${
+              className={`${isProductSurface ? '!min-h-[32px] max-h-[100px] !border-0 !bg-transparent !px-1.5 !py-1 text-sm text-foreground !shadow-none focus-visible:!ring-0 placeholder:text-sm placeholder:text-muted-foreground' : '!min-h-[36px] max-h-[100px] !border-0 !bg-transparent !py-1.5 !px-2 text-xs !shadow-none focus-visible:!ring-0 placeholder:text-xs'} resize-none overflow-y-auto leading-[1.3] ${
                 isDraggingFiles ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50/30 dark:bg-blue-900/10' : ''
               }`}
               disabled={inputDisabled}
@@ -3739,13 +3758,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                           terminalViewSelected ? 'formatted' : 'terminal',
                         )}
                         className="h-7 w-7 p-0"
-                        aria-label={terminalViewSelected ? 'Return to conversation' : 'Open tmux terminal'}
+                        aria-label={terminalViewSelected ? 'Return to conversation' : 'Open live view'}
                       >
                         <Terminal className="w-3.5 h-3.5" />
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>
-                      <p>{terminalViewSelected ? 'Return to conversation' : 'Open tmux terminal'}</p>
+                      <p>{terminalViewSelected ? 'Return to conversation' : 'Open live view'}</p>
                     </TooltipContent>
                   </Tooltip>
                 )}

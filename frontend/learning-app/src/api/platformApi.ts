@@ -4,13 +4,15 @@
 // shapes the UI already understands. Slice 2 covers conversations; the
 // workspace, setup and connector methods land in the next slices and say so
 // loudly until then.
-import type { ApiEngine, VoiceStatus } from '../stores/types'
+import type { ApiEngine, QuickCommand, VoiceStatus } from '../stores/types'
 import type {
   FamilyApi, FastMode, ModelInfo, PulseConfig, PulseConfigPatch, SetupState,
   StoredConversation, TurnMessage, TurnResult, TurnStreamEvent,
   WhatsAppStatus, WhatsAppVoiceTranscription,
 } from './familyApi'
-import { type EventBatch, type PlatformEvent, TurnCollector, isMainEvent, payloadOf, readSSE } from './platform/events'
+import { TurnCollector, type EventBatch, messagesFromEvents, type PlatformEvent } from './platform/events'
+import { quickCommandsFromProfile } from './platform/commands'
+import { fetchSessionEvents, followSession, conversationToRestoredEvents, type RestorableConversation } from '../../../shared/session'
 import { FamilyWorkspace, documentsURL } from './platform/workspace'
 
 export const PARENT_PROFILE = 'sparkquill'
@@ -51,8 +53,13 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     return data.token
   }
 
+  let loginInFlight: Promise<string> | null = null
   async function token(): Promise<string> {
-    return store.get() ?? login()
+    const saved = store.get()
+    if (saved) return saved
+    // Several requests start together on boot; log in once, not once each.
+    if (!loginInFlight) loginInFlight = login().finally(() => { loginInFlight = null })
+    return loginInFlight
   }
 
   async function request<T>(method: string, path: string, body?: unknown, retry = true): Promise<T> {
@@ -84,12 +91,14 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     return slug
   }
 
+  const sessionClient = { baseUrl: base, token }
+
   async function conversation(profile: string, key: string): Promise<Conversation> {
     const cacheKey = `${profile}/${key}`
     const cached = conversations.get(cacheKey)
     if (cached) return cached
     const resolved = await request<{ session_id: string }>('POST', `/api/agent-profiles/${profile}/conversation`, key ? { conversation_key: key } : {})
-    const batch = await request<EventBatch>('GET', `/api/sessions/${encodeURIComponent(resolved.session_id)}/events?since=0&working_set=session`).catch(() => null)
+    const batch = await fetchSessionEvents(sessionClient, resolved.session_id, 0).catch(() => null)
     const cursor = batch && typeof batch.last_processed_index === 'number' && batch.last_processed_index >= 0 ? batch.last_processed_index : 0
     const conv = { sessionID: resolved.session_id, cursor }
     conversations.set(cacheKey, conv)
@@ -97,32 +106,14 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
   }
 
   /** Follows a session's stream from its cursor; the returned function stops it. */
-  function follow(conv: Conversation, onBatch: (batch: EventBatch) => void, onEnd?: (err?: Error) => void): () => void {
-    const controller = new AbortController()
-    let stopped = false
-    const run = async () => {
-      let attempts = 0
-      while (!stopped) {
-        try {
-          const auth = await token()
-          await readSSE(`${base}/api/sessions/${encodeURIComponent(conv.sessionID)}/events/stream?working_set=session&since=${conv.cursor}`,
-            { Authorization: `Bearer ${auth}` }, controller.signal, (batch, lastID) => {
-              if (lastID >= 0) conv.cursor = lastID
-              else if (typeof batch.last_processed_index === 'number' && batch.last_processed_index >= 0) conv.cursor = batch.last_processed_index
-              onBatch(batch)
-            })
-          attempts = 0
-        } catch (err) {
-          if (stopped) break
-          attempts += 1
-          if (attempts > 5) { onEnd?.(err instanceof Error ? err : new Error(String(err))); return }
-          await new Promise((r) => setTimeout(r, 1000 * attempts))
-        }
-      }
-      onEnd?.()
-    }
-    void run()
-    return () => { stopped = true; controller.abort() }
+  function follow(conv: Conversation, onBatch: (batch: EventBatch, frameID: number) => void, onEnd?: (err?: Error) => void): () => void {
+    return followSession(sessionClient, conv.sessionID, conv.cursor, {
+      onBatch: (batch, frameIndex) => {
+        if (frameIndex >= 0) conv.cursor = Math.max(conv.cursor, frameIndex)
+        onBatch(batch, frameIndex)
+      },
+      onEnd,
+    })
   }
 
   async function sendTurn(profile: string, key: string, text: string, onEvent: (e: TurnStreamEvent) => void): Promise<TurnResult> {
@@ -145,27 +136,47 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
         timer = setTimeout(() => finish(new Error('the turn went quiet for too long')), inactivity)
       }
       arm()
-      stop = follow(conv, (batch) => {
+
+      // The stream replays history when the server's store is cold, and a
+      // replayed completion must never pass for this turn's reply. So: open
+      // the stream first, let its opening batch settle to learn where the
+      // conversation currently ends, and only then send the query; events
+      // at or before that mark belong to earlier turns.
+      // Frames carry the store's index as their SSE id (the per-event
+      // event_index field is not that index); the opening frame is the
+      // backfill and its id is where history ends.
+      let baseline = -1
+      let anchored = false
+      let resolveAnchor: () => void = () => {}
+      const anchor = new Promise<void>((r) => { resolveAnchor = r })
+      const onBatch = (batch: EventBatch, frameID: number) => {
+        if (!anchored) {
+          baseline = Math.max(frameID, typeof batch.last_processed_index === 'number' ? batch.last_processed_index : -1)
+          anchored = true
+          resolveAnchor()
+          return
+        }
+        if (frameID >= 0 && frameID <= baseline) return
         for (const e of batch.events ?? []) {
           collector.feed(e)
           arm()
           if (collector.done) { finish(); return }
         }
-      }, (err) => { if (err) finish(err) })
-      request<{ session_id?: string; status?: string; error?: string }>('POST', `/api/agent-profiles/${profile}/query`, key ? { message: text, conversation_key: key } : { message: text })
+      }
+      stop = follow(conv, onBatch, (err) => { if (err) finish(err) })
+      Promise.race([anchor, new Promise<void>((r) => setTimeout(r, 3000))])
+        .then(() => {
+          if (!anchored) { anchored = true; baseline = conv.cursor }
+          return request<{ session_id?: string; status?: string; error?: string }>('POST', `/api/agent-profiles/${profile}/query`, key ? { message: text, conversation_key: key } : { message: text })
+        })
         .then((resp) => {
           if (resp.session_id && resp.session_id !== conv.sessionID) {
             // The server rebound the conversation; follow the session it chose.
             stop()
             conv.sessionID = resp.session_id
             conv.cursor = 0
-            stop = follow(conv, (batch) => {
-              for (const e of batch.events ?? []) {
-                collector.feed(e)
-                arm()
-                if (collector.done) { finish(); return }
-              }
-            }, (err) => { if (err) finish(err) })
+            baseline = -1
+            stop = follow(conv, onBatch, (err) => { if (err) finish(err) })
           }
         })
         .catch((err: Error) => finish(err))
@@ -197,25 +208,21 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
   }
 
   /** Rebuilds a transcript from the session's event history. */
+  // The persisted chat history is the durable record (the live event store is
+  // in memory and empty after a server restart); it is rebuilt into events by
+  // the platform's own restore converter and then read like a live turn.
   async function history(profile: string, key: string): Promise<StoredConversation | null> {
     const conv = await conversation(profile, key)
-    const batch = await request<EventBatch>('GET', `/api/sessions/${encodeURIComponent(conv.sessionID)}/events?since=0&working_set=session`)
-    const messages: NonNullable<StoredConversation['messages']> = []
-    for (const e of batch.events ?? []) {
-      const type = e.type ?? e.data?.type
-      const p = payloadOf(e)
-      if (type === 'user_message' && typeof p.content === 'string') { messages.push({ role: 'user', text: p.content }); continue }
-      if (type === 'product_interaction') {
-        const payload = (p.payload ?? {}) as Record<string, unknown>
-        if (p.kind === 'celebrate') messages.push({ role: 'tool', tool: 'celebrate', stars: Number(payload.stars ?? 1), reason: String(payload.reason ?? '') })
-        if (p.kind === 'scene' && typeof payload.html === 'string') messages.push({ role: 'tool', tool: 'scene', html: payload.html })
-        continue
-      }
-      if (type === 'unified_completion' && isMainEvent(e, conv.sessionID) && typeof p.final_result === 'string' && p.final_result.trim()) {
-        messages.push({ role: 'assistant', text: p.final_result })
-      }
+    let stored: RestorableConversation | null = null
+    try {
+      stored = await request<RestorableConversation>('GET', `/api/chat-history/sessions/${encodeURIComponent(conv.sessionID)}`)
+    } catch (err) {
+      if (!/HTTP 404/.test(String(err))) throw err
     }
-    return { messages }
+    const events: PlatformEvent[] = stored?.conversation_history?.length
+      ? (conversationToRestoredEvents({ ...stored, session_id: conv.sessionID }) as PlatformEvent[])
+      : (await fetchSessionEvents(sessionClient, conv.sessionID, 0)).events ?? []
+    return { messages: messagesFromEvents(events, conv.sessionID) }
   }
 
   // ---- workspace -----------------------------------------------------------
@@ -236,6 +243,14 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     }
   }
 
+  async function commands(): Promise<{ parent: QuickCommand[]; child: QuickCommand[] }> {
+    const [parent, child] = await Promise.all([
+      request<{ commands?: Array<Record<string, unknown>> }>('GET', `/api/agent-profiles/${PARENT_PROFILE}`),
+      request<{ commands?: Array<Record<string, unknown>> }>('GET', `/api/agent-profiles/${CHILD_PROFILE}`),
+    ])
+    return { parent: quickCommandsFromProfile(parent), child: quickCommandsFromProfile(child) }
+  }
+
   async function engines(): Promise<ApiEngine[]> {
     const profile = await request<{ runtime?: { provider_options?: { id: string; label: string; default?: boolean }[] } }>('GET', `/api/agent-profiles/${PARENT_PROFILE}`)
     return (profile.runtime?.provider_options ?? []).map((o) => ({ id: o.id, name: o.label, runtime_command: '', runtime_available: true, auth_configured: true, usable: true } as ApiEngine))
@@ -246,6 +261,10 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
 
     setup,
     engines,
+    commands,
+    // Re-store even an existing token so every place that mirrors it (the
+    // shared chat's own auth key) sees it, not only a fresh login.
+    ensureSession: async () => { store.set(await token()) },
     validateEngine: async () => ({ valid: true, message: 'The platform manages the model.' }),
     selectEngine: async () => {},
     saveChild: notYet('saving the child profile from the setup screen'),
@@ -284,8 +303,6 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     saveState: (key, data) => ws.writeJSON(ws.stateFile(key), { key, data }),
     loadState: async (key) => (await ws.readJSON<{ data?: unknown }>(ws.stateFile(key)))?.data ?? null,
     activities: () => ws.activities(),
-    week: (offset) => ws.week(offset),
-    saveSchedule: (entries) => ws.saveSchedule(entries),
 
     models: async () => null as ModelInfo | null,
     saveModel: async () => {},
@@ -322,5 +339,3 @@ function browserTokenStore() {
   }
 }
 
-/** Unused-import guard for types only referenced in the FamilyApi shape. */
-export type { PlatformEvent }

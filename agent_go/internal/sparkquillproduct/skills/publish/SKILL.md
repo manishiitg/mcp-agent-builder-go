@@ -1,11 +1,11 @@
 ---
 name: publish
-description: Publish a family artifact (a progress report or the academic map) to a shareable destination — a shared folder, a static host, Google Drive, or GitHub Pages — tracking config vs status in files.
+description: Publish a family artifact (usually the progress page) to a shareable destination — a shared folder, a static host, Google Drive, or GitHub Pages — tracking config vs status in files.
 ---
 
 # Publish an artifact
 
-Share a finished HTML artifact (usually a progress report or the academic map) so
+Share a finished HTML artifact (usually the progress page) so
 another adult in the child's life — a co-parent, a tutor — can view it. Same
 config vs status contract as AgentWorks:
 

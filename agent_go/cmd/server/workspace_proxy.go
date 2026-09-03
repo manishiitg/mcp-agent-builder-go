@@ -27,6 +27,18 @@ func workspaceProxyHandler() http.Handler {
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	// The agent server's own CORS middleware answers the browser; the
+	// workspace server adds its own permissive headers too, and a response
+	// carrying two Access-Control-Allow-Origin values is rejected by every
+	// browser. Strip the upstream's so only ours remain.
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		for name := range resp.Header {
+			if strings.HasPrefix(strings.ToLower(name), "access-control-") {
+				resp.Header.Del(name)
+			}
+		}
+		return nil
+	}
 	log.Printf("[WORKSPACE PROXY] Proxying /api/wp/* → %s", wsURL)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

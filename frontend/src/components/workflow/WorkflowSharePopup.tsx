@@ -9,6 +9,8 @@ interface WorkflowSharePopupProps {
   isOpen: boolean
   onClose: () => void
   workspacePath: string
+  /** Render only the body, for a host (AccessCenter) that supplies the modal shell and header. */
+  embedded?: boolean
 }
 
 /**
@@ -17,7 +19,7 @@ interface WorkflowSharePopupProps {
  * server refuses anything else and never lets the last owner go.
  * docs/design/user_accounts_and_workflow_sharing.md, phase 3.
  */
-const WorkflowSharePopup: React.FC<WorkflowSharePopupProps> = ({ isOpen, onClose, workspacePath }) => {
+const WorkflowSharePopup: React.FC<WorkflowSharePopupProps> = ({ isOpen, onClose, workspacePath, embedded = false }) => {
   const me = useAuthStore((s) => s.user)
   const refreshWorkflows = useWorkflowManifestStore((s) => s.refreshWorkflows)
   const [info, setInfo] = useState<WorkflowAccessInfo | null>(null)
@@ -80,17 +82,8 @@ const WorkflowSharePopup: React.FC<WorkflowSharePopupProps> = ({ isOpen, onClose
   if (!isOpen) return null
   const label = (u: WorkflowAccessUser) => (u.id === me?.id ? `${u.username} (you)` : u.username)
 
-  return (
-    <ModalPortal>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
-        <div className="bg-background border border-border rounded-lg shadow-xl w-full max-w-xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center justify-between p-4 border-b border-border">
-            <div className="flex items-center gap-2">
-              <Share2 className="w-5 h-5 text-muted-foreground" />
-              <h2 className="text-lg font-semibold">Share this workflow</h2>
-            </div>
-            <button onClick={onClose} className="p-1 rounded hover:bg-accent" aria-label="Close"><X className="w-4 h-4" /></button>
-          </div>
+  const body = (
+    <>
           <div className="px-4 pt-3 pb-2 text-xs text-muted-foreground">
             <span className="font-mono">{workspacePath}</span>. Owners edit, run, share and delete. Read-only people can chat, run and watch, but change nothing.
             {info?.legacy && <span className="block mt-1 text-amber-600">Nothing recorded yet: every member can edit this workflow until you save a first grant.</span>}
@@ -147,6 +140,22 @@ const WorkflowSharePopup: React.FC<WorkflowSharePopupProps> = ({ isOpen, onClose
               </>
             )}
           </div>
+    </>
+  )
+  if (embedded) return body
+
+  return (
+    <ModalPortal>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+        <div className="bg-background border border-border rounded-lg shadow-xl w-full max-w-xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-between p-4 border-b border-border">
+            <div className="flex items-center gap-2">
+              <Share2 className="w-5 h-5 text-muted-foreground" />
+              <h2 className="text-lg font-semibold">Share this workflow</h2>
+            </div>
+            <button onClick={onClose} className="p-1 rounded hover:bg-accent" aria-label="Close"><X className="w-4 h-4" /></button>
+          </div>
+          {body}
         </div>
       </div>
     </ModalPortal>

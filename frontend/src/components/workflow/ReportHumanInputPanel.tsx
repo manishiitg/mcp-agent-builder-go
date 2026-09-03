@@ -169,7 +169,9 @@ export function ReportHumanInputPanel({
 
 	useEffect(() => {
 		if (externallyManaged) return
-		const onRefresh = () => { void loadInputs() }
+		// Event-driven refreshes keep the previous inputs on screen and never
+		// flash the loading state: nothing visible changes unless the data did.
+		const onRefresh = () => { void loadInputs(undefined, false) }
     window.addEventListener(WORKFLOW_LOG_REFRESH_EVENT, onRefresh)
     return () => window.removeEventListener(WORKFLOW_LOG_REFRESH_EVENT, onRefresh)
 	}, [externallyManaged, loadInputs])
@@ -685,7 +687,9 @@ export function ReportHumanInputCollection({
 	}, [loadInputs, refreshNonce])
 
 	useEffect(() => {
-		const onRefresh = () => { void loadInputs() }
+		// Event-driven refreshes keep the previous inputs on screen and never
+		// flash the loading state: nothing visible changes unless the data did.
+		const onRefresh = () => { void loadInputs(undefined, false) }
 		window.addEventListener(WORKFLOW_LOG_REFRESH_EVENT, onRefresh)
 		return () => window.removeEventListener(WORKFLOW_LOG_REFRESH_EVENT, onRefresh)
 	}, [loadInputs])

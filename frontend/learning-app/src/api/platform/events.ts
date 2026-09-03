@@ -1,64 +1,84 @@
-// The platform's session event stream, read the way the AgentWorks frontend
-// reads it (frontend/src/services/sse.ts, polling.go) but without React:
-// a fetch-based SSE reader, the envelope shapes, main-agent filtering, and
-// a pure collector that turns a stream of platform events into the
-// preview events and the final TurnResult the SparkQuill UI expects.
+// SparkQuill's view of the platform's session events: the shared session
+// client (frontend/shared/session) does the transport, the foreground
+// filter and the presentation parsing; what lives here is the product's
+// own mapping from platform events to the preview events and TurnResult
+// the SparkQuill UI expects.
 import type { ToolCallRecord } from '../../stores/types'
 import type { ToolEvent, TurnResult, TurnStreamEvent } from '../familyApi'
+import type { StoredMsg } from '../../stores/types'
+import { appendStreamingText, eventBelongsToSession, isForegroundSessionEvent, looksLikeTerminalScreenText, mcpToolDisplayName, parsePresentationUpdatedEvent, splitStreamingStatusAndText } from '../../../../shared/session'
+import type { PollingEvent, SSEEventMessage } from '../../../../shared/session'
 
-/** One event as the agent server delivers it (polling and SSE alike). */
-export type PlatformEvent = {
-  id?: string
-  type?: string
-  timestamp?: string
-  session_id?: string
-  execution_id?: string
-  execution_kind?: string
-  sequence?: number
-  error?: string
-  data?: {
-    type?: string
-    event_index?: number
-    hierarchy_level?: number | string
-    component?: string
-    correlation_id?: string
-    turn_id?: string
-    session_id?: string
-    data?: Record<string, unknown>
-  }
+/** The shapes the UI code below reads; aliases of the shared contract. */
+export type PlatformEvent = PollingEvent
+export type EventBatch = SSEEventMessage
+
+/**
+ * A coding-agent turn's whole assistant text (narration before tool calls
+ * included), recorded by the provider in the generation metadata. The
+ * conversation shows this; `final_result` stays the last message only, the
+ * way workflows consume it.
+ */
+export function assistantTurnText(p: Record<string, unknown>): string {
+  const meta = p.metadata as Record<string, unknown> | undefined
+  const turn = meta?.assistant_turn_text
+  return typeof turn === 'string' ? turn.trim() : ''
 }
 
-/** The envelope both the polling route and each SSE `event` frame carry. */
-export type EventBatch = {
-  events?: PlatformEvent[]
-  has_more?: boolean
-  session_status?: string
-  display_status?: string
-  last_processed_index?: number
-  can_steer?: boolean
-  runtime_state?: { foreground_turn?: { busy?: boolean; can_steer?: boolean }; phase?: string }
+/**
+ * The stored conversation a restored event stream describes: user turns, one
+ * assistant message per turn (the recorded turn text, else every restored
+ * assistant update joined, else final_result), and the product cards that
+ * survive a reload. Used for history after a reload or a server restart, so
+ * it must agree with what the live turn showed.
+ */
+export function messagesFromEvents(events: PlatformEvent[], sessionID: string): StoredMsg[] {
+  const messages: StoredMsg[] = []
+  let turnText = ''
+  let pieces: string[] = []
+  for (const e of events) {
+    const type = e.type ?? e.data?.type
+    const p = payloadOf(e)
+    if (type === 'user_message' && typeof p.content === 'string') {
+      messages.push({ role: 'user', text: p.content })
+      turnText = ''; pieces = []
+      continue
+    }
+    if (type === 'product_interaction') {
+      const payload = (p.payload ?? {}) as Record<string, unknown>
+      if (p.kind === 'celebrate') messages.push({ role: 'tool', tool: 'celebrate', stars: Number(payload.stars ?? 1), reason: String(payload.reason ?? '') })
+      if (p.kind === 'scene' && typeof payload.html === 'string') messages.push({ role: 'tool', tool: 'scene', html: payload.html })
+      continue
+    }
+    if (!isMainEvent(e, sessionID)) continue
+    if (type === 'llm_generation_end') {
+      turnText = assistantTurnText(p) || turnText
+      if (typeof p.content === 'string' && p.content.trim()) pieces.push(p.content.trim())
+      continue
+    }
+    if (type === 'unified_completion' && typeof p.final_result === 'string' && p.final_result.trim()) {
+      messages.push({ role: 'assistant', text: turnText || pieces.join('\n\n') || p.final_result })
+      turnText = ''; pieces = []
+    }
+  }
+  return messages
 }
 
 export function payloadOf(e: PlatformEvent): Record<string, unknown> {
-  return (e.data?.data ?? {}) as Record<string, unknown>
+  return ((e.data as { data?: Record<string, unknown> } | undefined)?.data ?? {}) as Record<string, unknown>
 }
 
-/** Mirrors isForegroundSessionEvent in the AgentWorks frontend. */
+/** Foreground-agent events of this session only, the way AgentWorks decides it. */
 export function isMainEvent(e: PlatformEvent, sessionID: string): boolean {
-  if (e.session_id && sessionID && e.session_id !== sessionID) return false
-  const component = e.data?.component ?? ''
-  const correlation = e.data?.correlation_id ?? ''
-  if (/^(delegation|workshop)-/.test(component) || /^(delegation|workshop)-/.test(correlation)) return false
-  if (e.execution_kind && e.execution_kind !== 'main_agent') return false
-  if (e.execution_id && !e.execution_id.startsWith('main:')) return false
-  return true
+  if (sessionID && !eventBelongsToSession(sessionID, e)) return false
+  const data = e.data as { component?: unknown; correlation_id?: unknown } | undefined
+  return isForegroundSessionEvent(e, data?.component, data?.correlation_id)
 }
 
 /** Platform tool names carry an MCP server prefix; the UI shows bare names. */
 export function bareToolName(name: string): string {
-  return name.replace(/^mcp__[^_]+(?:-[^_]+)*__/, '')
+  return mcpToolDisplayName(name).name
 }
-
 const statusLabels: Record<string, string> = {
   execute_shell_command: 'Working in the workspace',
   diff_patch_workspace_file: 'Editing a page',
@@ -88,7 +108,10 @@ export class TurnCollector {
   private suggestions: TurnResult['suggestions']
   private scene: string | undefined
   private reply = ''
+  private preview = ''
+  private lastChunkIndex = -1
   private lastText = ''
+  private turnText = ''
   private error: string | undefined
   done = false
 
@@ -102,17 +125,17 @@ export class TurnCollector {
       case 'product_interaction':
         this.interaction(String(p.kind ?? ''), (p.payload ?? {}) as Record<string, unknown>)
         return
-      case 'presentation_updated':
-        this.presentation(String(p.kind ?? ''), (p.payload ?? {}) as Record<string, unknown>)
+      case 'presentation_updated': {
+        const parsed = parsePresentationUpdatedEvent(e)
+        if (parsed) this.presentation(parsed.kind, parsed.payload)
         return
+      }
     }
     if (!isMainEvent(e, this.sessionID)) return
     switch (type) {
-      case 'streaming_chunk': {
-        const content = typeof p.content === 'string' ? p.content : ''
-        if (content && p.is_delta !== false && !p.is_tool_call) this.onEvent({ type: 'delta', text: content })
+      case 'streaming_chunk':
+        this.chunk(p)
         return
-      }
       case 'tool_call_start': {
         const name = bareToolName(String(p.tool_name ?? ''))
         const id = String(p.tool_call_id ?? `${name}-${this.toolCalls.size}`)
@@ -142,6 +165,8 @@ export class TurnCollector {
       }
       case 'llm_generation_end': {
         if (typeof p.content === 'string' && p.content.trim()) this.lastText = p.content
+        const turn = assistantTurnText(p)
+        if (turn) this.turnText = turn
         return
       }
       case 'agent_error':
@@ -154,11 +179,47 @@ export class TurnCollector {
       case 'unified_completion': {
         const status = String(p.status ?? '')
         if (status === 'error') this.error = String(p.error ?? 'the turn failed')
-        else this.reply = typeof p.final_result === 'string' ? p.final_result : this.lastText
+        else this.reply = this.turnText || (typeof p.final_result === 'string' ? p.final_result : this.lastText)
         this.done = true
         return
       }
     }
+  }
+
+  // Mirrors AgentWorks' appendStreamingChunk (stores/useChatStore.ts): the
+  // backend's `source` is authoritative, so a raw tmux pane frame (source
+  // "terminal", the "⏺ … ✻ Churned for 3s" capture) is never shown as prose;
+  // heartbeat/tool markers become a status line; chunk 0/1 starts a new
+  // generation; is_delta picks verbatim vs block joining.
+  private chunk(p: Record<string, unknown>) {
+    const content = typeof p.content === 'string' ? p.content : ''
+    if (!content || p.is_tool_call) return
+    const chunkIndex = typeof p.chunk_index === 'number' ? p.chunk_index : -1
+    if (chunkIndex === 0 || chunkIndex === 1) {
+      this.lastChunkIndex = -1
+      this.preview = ''
+    }
+    if (chunkIndex >= 0 && chunkIndex <= this.lastChunkIndex) return
+    this.lastChunkIndex = chunkIndex
+    const source = typeof p.source === 'string' ? p.source.trim().toLowerCase() : ''
+    const { statusText, text } = splitStreamingStatusAndText(content)
+    const terminal = source === 'terminal' || looksLikeTerminalScreenText(text || content)
+    const safeText = terminal ? '' : text
+    const status = statusText || (terminal ? 'Working' : null)
+    if (status) this.chunkStatus(status)
+    if (!safeText) return
+    if (!status) this.chunkStatus('')
+    const next = appendStreamingText(this.preview, safeText, p.is_delta === true ? true : p.is_delta === false ? false : undefined)
+    if (next === this.preview) return
+    this.preview = next
+    this.onEvent({ type: 'replace', text: next })
+  }
+
+  private lastChunkStatus = ''
+  private chunkStatus(text: string) {
+    if (text === this.lastChunkStatus) return
+    this.lastChunkStatus = text
+    this.onEvent({ type: 'status', text })
   }
 
   private interaction(kind: string, payload: Record<string, unknown>) {
@@ -170,6 +231,9 @@ export class TurnCollector {
         if (payload.schedule) this.toolEvents.push({ tool: 'set_child_schedule' })
         return
       }
+      case 'pins_updated':
+        this.toolEvents.push({ tool: 'pins_updated' })
+        return
       case 'activity_created':
         this.toolEvents.push({ tool: 'create_learning_activity', path: familyRelativePath(String(payload.dir ?? '')), package: String(payload.title ?? '') })
         return
@@ -213,45 +277,4 @@ function argumentsOf(p: Record<string, unknown>): string {
   if (typeof args === 'string') return args
   if (args === undefined) return ''
   try { return JSON.stringify(args) } catch { return '' }
-}
-
-/**
- * readSSE opens the session stream with fetch (so the token rides in a
- * header and the same code runs under node) and hands each `event` frame's
- * batch to onBatch. Resolves when the stream ends or the signal aborts.
- */
-export async function readSSE(url: string, headers: Record<string, string>, signal: AbortSignal, onBatch: (batch: EventBatch, lastID: number) => void): Promise<void> {
-  const res = await fetch(url, { headers: { ...headers, Accept: 'text/event-stream' }, signal })
-  if (!res.ok || !res.body) throw new Error(`event stream HTTP ${res.status}`)
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let eventName = ''
-  let dataLines: string[] = []
-  let lastID = -1
-  const flush = () => {
-    if (dataLines.length > 0 && (eventName === 'event' || eventName === '')) {
-      try {
-        onBatch(JSON.parse(dataLines.join('\n')) as EventBatch, lastID)
-      } catch { /* malformed frame: skip */ }
-    }
-    eventName = ''
-    dataLines = []
-  }
-  for (;;) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    let nl: number
-    while ((nl = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, nl).replace(/\r$/, '')
-      buffer = buffer.slice(nl + 1)
-      if (line === '') { flush(); continue }
-      if (line.startsWith(':')) continue
-      if (line.startsWith('id:')) { const n = Number(line.slice(3).trim()); if (!Number.isNaN(n)) lastID = n; continue }
-      if (line.startsWith('event:')) { eventName = line.slice(6).trim(); continue }
-      if (line.startsWith('data:')) { dataLines.push(line.slice(5).replace(/^ /, '')); continue }
-    }
-  }
-  flush()
 }

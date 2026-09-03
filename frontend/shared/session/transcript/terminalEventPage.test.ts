@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { PollingEvent } from '../services/api-types'
+import type { PollingEvent } from '../types'
 import { mergeNewerTerminalEventPage, mergeTerminalEventPages, terminalEventSequenceBounds } from './terminalEventPage'
 
 function event(id: string, sequence: number): PollingEvent {

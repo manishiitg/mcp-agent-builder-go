@@ -36,6 +36,8 @@ import {
   Star,
   Sun,
   Zap,
+  Pin,
+  PinOff,
 } from 'lucide-react'
 import './learning-app.css'
 import {
@@ -50,13 +52,16 @@ import {
   type Screen,
   type ApiEngine,
   type ParentMsg,
+  type PinnedPage,
+  type QuickCommand,
   type ToolCallRecord,
   type TreeNode,
   type WsFile,
   type Activity,
   type VoiceStatus,
 } from './stores'
-import { api } from './api'
+import PlatformChat, { type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
+import { api, backend } from './api'
 import { VoiceSettings } from './voice/VoiceSettings'
 import { readReminderSoundPref, persistReminderSoundPref, playReminderChime } from './notifySound'
 import { MicButton, type MicButtonHandle } from './voice/MicButton'
@@ -154,21 +159,6 @@ function dateOnlyLabel(iso?: string): string {
   return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })
 }
 
-// formatDuration renders an activity-log entry's accumulated turn time for
-// the "This Week" grid, e.g. "12m", "1h 5m". This is approximate (server
-// round-trip time per turn, not real reading/thinking time between turns —
-// see recordActivityLogEntry's own comment) — deliberately NOT precise to
-// the second, and callers should present it as "~Xm" rather than an exact
-// duration. Empty string when there's nothing meaningful to show.
-function formatDuration(seconds?: number): string {
-  if (!seconds || seconds < 60) return ''
-  const totalMinutes = Math.round(seconds / 60)
-  const hours = Math.floor(totalMinutes / 60)
-  const minutes = totalMinutes % 60
-  if (hours === 0) return `${minutes}m`
-  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`
-}
-
 // Which side of the handoff the browser should land on after a refresh.
 // Without this, a refresh always falls back to Parent Mode — letting a child
 // bypass the PIN gate entirely just by reloading the page. Persisted in
@@ -220,7 +210,7 @@ function persistChildSideWidth(px: number) {
 // Parent Mode's own drag-to-resize for the workspace drawer — same mechanism
 // as the child's worksheet, but capped at HALF the window rather than nearly
 // all of it: the drawer here is a reference panel beside the conversation
-// (Academics/Progress/Files), not the primary thing being read, so the chat
+// (Progress/Files), not the primary thing being read, so the chat
 // should never be squeezed to a sliver the way the child's worksheet is
 // allowed to claim most of the screen.
 const PARENT_SIDE_WIDTH_KEY = 'sparkquill.parent-side-width'
@@ -277,13 +267,6 @@ function persistChildChatZoom(z: number) {
 type Theme = 'light' | 'dark'
 const THEME_KEY = 'sparkquill.theme'
 
-// "This Week" tab types — mirror week.go's ScheduleEntry/ActivityLogEntry/
-// SchoolDeadline/weekResponse Go structs exactly (JSON field names match).
-type ScheduleEntry = { day: string; start: string; end: string; label: string }
-type WeekActivityEntry = { date: string; activity_dir: string; title: string; duration_seconds?: number }
-type WeekDeadline = { title: string; subject?: string; due_date?: string; kind?: string }
-type WeekDay = { date: string; weekday: string; schedule?: ScheduleEntry[]; activities?: WeekActivityEntry[]; deadlines?: WeekDeadline[] }
-type WeekResponse = { week_start: string; week_end: string; days: WeekDay[]; upcoming_deadlines?: WeekDeadline[] }
 function readTheme(): Theme {
   try {
     const stored = localStorage.getItem(THEME_KEY)
@@ -458,6 +441,11 @@ function withViewerPositionScript(html: string, focusId?: string, savedY = 0, zo
   }, { passive: true });
 })();</script>
 <style>
+  /* The frame is the page's only window, so the last thing on it must never
+     sit flush against the bottom edge; a page written with no bottom margin
+     (its author never sees the frame) ended with its final button touching
+     the border. Room at the end, whatever the page's own styles say. */
+  body{padding-bottom:40px !important}
   /* A brief, calm pulse so she can see WHERE the page landed when the tutor
      pointed at a specific question. Respects reduced-motion. */
   .q.is-current{animation:sqFocus 2.6s ease-out both}
@@ -693,94 +681,7 @@ function Markdown({ text }: { text: string }) {
   return <SharedChatMarkdown text={text} theme={readTheme() === 'dark' ? 'dark' : 'light'} linkComponent={ChatLink} />
 }
 
-// QUICK_SKILLS are one-click shortcuts in the composer menu; each sends a message
-// that triggers the matching agent skill.
-const QUICK_SKILLS = [
-  { label: 'Create study material', message: 'Create study material for my child — follow your create-study-material skill and make it a designed, static (view-only) HTML page.' },
-  { label: 'Create a practice test', message: 'Create a practice test for my child — follow your create-test skill: an interactive HTML page that records my child’s typed answers, plus a separate answer key for me.' },
-  { label: 'Update progress report', message: 'Build an updated progress report — follow your create-progress-report skill, make it a designed HTML page, and give me a short coach-style read of the evidence here in chat too.' },
-  { label: 'Update academic map', message: 'Update the academic map — follow your create-academic-map skill (designed HTML at reports/academic-map.html).' },
-  { label: 'Back up workspace', message: 'Back up my workspace now — follow your backup skill.' },
-]
 
-// PARENT_WAIT_HINTS / CHILD_WAIT_HINTS cycle in the "thinking" indicator while
-// waiting for a reply with no live tool-status yet — real, usable tips on how
-// to use the chat, shown instead of a bare "thinking…" so the wait is at
-// least a little useful. Live tool status (e.g. "Opening the file…") always
-// takes priority over these when it's available.
-// Tips are onboarding, and onboarding ends. They rotate every 7s in the
-// thinking indicator, which is genuinely useful for the first handful of turns
-// and pure noise afterwards — this family had seen 747 replies when the
-// distraction was reported. Count turns and stop once the UI is obviously
-// learned, falling back to a calm static line. Live tool status ("Quill is:
-// Reading the image…") still takes priority over both: that is real
-// information, not a tip.
-const HINT_FADE_AFTER_TURNS = 8
-
-function readTurnsSeen(key: string): number {
-  try {
-    return Number(window.localStorage.getItem(key) || '0') || 0
-  } catch {
-    return 0
-  }
-}
-
-function noteTurnSeen(key: string) {
-  try {
-    const n = readTurnsSeen(key)
-    // Stop writing once past the threshold — the answer cannot change back.
-    if (n <= HINT_FADE_AFTER_TURNS) window.localStorage.setItem(key, String(n + 1))
-  } catch { /* private mode / disabled storage must not break the chat */ }
-}
-
-const PARENT_HINTS_SEEN_KEY = 'sq-parent-turns-seen'
-const CHILD_HINTS_SEEN_KEY = 'sq-child-turns-seen'
-
-const PARENT_WAIT_HINTS = [
-  'Tip: ask "How is my child doing so far?" anytime for an evidence-based read of their progress.',
-  'Tip: once a test or guide is ready, use the "Give to child" button to hand it over.',
-  'Tip: tell Quill how you want tutoring handled — e.g. "give one hint before the answer" — and it remembers.',
-  'Tip: ask for several things at once — "make a guide, a quick test, and an advanced one" — bundled as one activity.',
-  'Tip: Quill can look up board-specific tips and exam strategies — just ask.',
-  'Tip: you can ask Quill to explain a topic to you, not just make material for your child.',
-  'Tip: link WhatsApp in Connectors to chat with Quill from your phone, and get check-ins there.',
-  'Tip: set up the Browser connector and Quill can peek at your school portal for new assignments.',
-  'Tip: turn on Pulse (top bar) and Quill checks in on its own — reviewing progress and the school portal.',
-  'Tip: just mention things in passing — "her exam is next Friday", "she gets anxious with timers" — Quill remembers and applies them later.',
-]
-const CHILD_WAIT_HINTS = [
-  'Tip: stuck? Just say "give me a hint!"',
-  'Tip: you can ask Quill to explain it a different way.',
-  'Tip: tell Quill your answer — it will tell you if you got it right.',
-  'Tip: ask for an example if a question feels tricky.',
-  'Tip: you can ask Quill anything about what you\'re learning, not just the current question.',
-  'Tip: ask a parent to set up WhatsApp so you can practice with Quill on the phone too!',
-  'Tip: ask a parent to turn on Pulse so Quill keeps track of how you\'re doing.',
-  'Tip: ask a parent to connect the school portal so Quill can help with your assignments.',
-]
-
-// CHILD_QUICK_ACTIONS: fixed one-tap shortcuts for the handful of requests that
-// come up constantly but aren't worth typing out — same Sparkles-icon popover
-// pattern as QUICK_SKILLS in Parent Mode. Unlike suggest_actions (removed from
-// Child Mode entirely), these are deliberately NOT model-generated: a static
-// list of common asks, always the same, always available. Tapping one just
-// sends its message exactly as if she'd typed it — the tutor's own judgment
-// (already covered by its existing prompt) decides what to actually do, same
-// as if she'd typed the words herself. Add more here freely; nothing else
-// needs to change.
-const CHILD_QUICK_ACTIONS: { label: string; message: string }[] = [
-  { label: 'Update answers for print', message: "Please update all my answered questions on this page so it's ready to print." },
-  { label: 'No more hints', message: "Don't give me any more hints — just tell me if I'm right or wrong." },
-  { label: 'Be stricter', message: "Grade my answers more strictly from now on — don't count a partial or close answer as correct, and tell me exactly what's wrong." },
-  { label: 'Harder question', message: 'Can you give me a harder question?' },
-  { label: 'Easier question', message: 'Can you give me an easier question?' },
-  { label: 'Give me a hint', message: 'Can you give me a hint?' },
-  { label: 'Keep quizzing me, harder each time', message: 'Keep asking me progressively harder questions on this until I fully understand it.' },
-  { label: 'One section at a time', message: "Let's go one section at a time — keep quizzing me on this section until I really understand it before moving to the next." },
-  { label: 'Explain it a different way', message: "Can you explain this in a completely different way — not just the same explanation again?" },
-  { label: 'Give me a real example', message: 'Can you give me a real-world example of this, not just the definition?' },
-  { label: 'Check my full working', message: "Please check my full working step by step, not just whether my final answer is right." },
-]
 
 // formatBytes renders a byte count the way a person reads it. Sizes here are
 // for keeping an eye on how the workspace grows, so one decimal past KB is
@@ -1009,6 +910,14 @@ export default function LearningApp() {
   const testMessage = useSetupStore((s) => s.testMessage)
   const setTestMessage = useSetupStore((s) => s.setTestMessage)
 
+  // The composer's quick menus come from the product (product.yaml
+  // `commands:`); the standalone backend serves its own fixed list.
+  const [quickCommands, setQuickCommands] = useState<{ parent: QuickCommand[]; child: QuickCommand[] }>({ parent: [], child: [] })
+  useEffect(() => {
+    let alive = true
+    api.commands().then((c) => { if (alive) setQuickCommands(c) }).catch(() => {})
+    return () => { alive = false }
+  }, [])
   useEffect(() => {
     let cancelled = false
     setEnginesState('loading')
@@ -1139,16 +1048,6 @@ export default function LearningApp() {
   const [browserCopied, setBrowserCopied] = useState(false)
   const [pulseConfig, setPulseConfig] = useState<{ enabled: boolean; cadence_hours: number; last_run_at?: string; watch_sites?: string[]; preferred_hour: number; preferred_hour_set: boolean } | null>(null)
   const [savingPulse, setSavingPulse] = useState(false)
-  // "This Week" tab — offset 0 is the current week, -1/+1 step a week at a
-  // time. weekData is the combined schedule+activity-log+deadlines response
-  // (see week.go); scheduleDraft mirrors it into an editable row list for the
-  // mini-editor, only diverging from weekData.schedule while the parent has
-  // unsaved edits open.
-  const [weekOffset, setWeekOffset] = useState(0)
-  const [weekData, setWeekData] = useState<WeekResponse | null>(null)
-  const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false)
-  const [scheduleDraft, setScheduleDraft] = useState<ScheduleEntry[]>([])
-  const [savingSchedule, setSavingSchedule] = useState(false)
   const [watchSitesDraft, setWatchSitesDraft] = useState('')
   const [pulseSaved, setPulseSaved] = useState(false)
   const [pulsePopoverOpen, setPulsePopoverOpen] = useState(false)
@@ -1454,8 +1353,6 @@ export default function LearningApp() {
   // back to the default top-level-only view. Absent from this map = use the
   // component's own default (top level open, everything nested closed).
   const [treeExpanded, setTreeExpanded] = useState<Record<string, boolean>>({})
-  const mapHtml = useWorkspaceStore((s) => s.mapHtml)
-  const setMapHtml = useWorkspaceStore((s) => s.setMapHtml)
   const mapRefreshKey = useWorkspaceStore((s) => s.mapRefreshKey)
   const setMapRefreshKey = useWorkspaceStore((s) => s.setMapRefreshKey)
   const progressHtml = useWorkspaceStore((s) => s.progressHtml)
@@ -1480,17 +1377,69 @@ export default function LearningApp() {
   const gateError = usePinGateStore((s) => s.gateError)
   const setGateError = usePinGateStore((s) => s.setGateError)
 
-  // Load the real, agent-generated reports/academic-map.html for the Subjects
-  // tab — refetches whenever the tab is opened or a turn just completed (the
-  // agent may have rebuilt the map during that turn).
+  // Pages the parent pinned as tabs (an exam tracker, a date sheet…). Kept
+  // in the workspace's per-key state, the same file Quill's pin_page writes,
+  // so both sides see one list. Reloaded after every turn (Quill may have
+  // pinned or unpinned) and whenever the parent toggles a pin here.
+  const [pins, setPins] = useState<PinnedPage[]>([])
+  const loadPins = useCallback(() => {
+    api.loadState('pins')
+      .then((raw) => {
+        const list = (raw as { pins?: unknown } | null)?.pins
+        setPins(Array.isArray(list) ? list.filter((p): p is PinnedPage => !!p && typeof (p as PinnedPage).path === 'string' && typeof (p as PinnedPage).title === 'string') : [])
+      })
+      .catch(() => {})
+  }, [])
+  const savePins = useCallback((next: PinnedPage[]) => {
+    setPins(next)
+    api.saveState('pins', { pins: next }).catch(() => {})
+  }, [])
+  const togglePin = useCallback((path: string) => {
+    const already = pins.some((p) => p.path === path)
+    if (already) {
+      savePins(pins.filter((p) => p.path !== path))
+      if (drawerTab === `pin:${path}`) setDrawerTab('progress')
+      return
+    }
+    const name = path.split('/').pop() ?? path
+    const title = name.replace(/\.html?$/i, '').replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    savePins([...pins, { path, title }])
+  }, [pins, savePins, drawerTab, setDrawerTab])
+  // What the shared chat hands back in platform mode: the product events the
+  // workspace panel reacts to. Same reactions as the turn result path below.
+  const onPlatformInteraction = useCallback((e: ProductInteraction) => {
+    if (e.kind === 'family_updated') {
+      const child = e.payload.child as { name?: string; grade?: string; board?: string } | undefined
+      if (child?.name) setChildName(child.name)
+      if (child?.grade) setGrade(child.grade)
+      if (child?.board) setBoard(child.board)
+      if (typeof e.payload.parent_label === 'string') setParentLabel(e.payload.parent_label)
+    }
+    if (e.kind === 'pins_updated') loadPins()
+    if (e.kind === 'activity_created' || e.kind === 'family_updated') setMapRefreshKey((k) => k + 1)
+  }, [loadPins, setMapRefreshKey])
+  const onPlatformPresentation = useCallback((p: ProductPresentation) => {
+    const rel = (raw: unknown) => String(raw ?? '').replace(/^.*?Chats\/SparkQuill\//, '')
+    if (p.kind === 'document.file' && typeof p.payload.path === 'string') {
+      setDrawerTab('files'); setViewerImageList([]); setViewerActivityDir(null); setViewerPath(rel(p.payload.path)); setViewerRefreshKey((k) => k + 1)
+    } else if (p.kind === 'sparkquill.activity' && typeof p.payload.dir === 'string') {
+      const dir = rel(p.payload.dir)
+      setDrawerTab('files'); setViewerPath(null); setViewerActivityDir(dir); setExpandedActivity(dir); setMapRefreshKey((k) => k + 1)
+    }
+  }, [setDrawerTab, setMapRefreshKey])
+  useEffect(() => { loadPins() }, [loadPins, mapRefreshKey])
+  // The pinned page on screen, loaded when its tab is opened or a turn ends.
+  const pinnedPath = drawerTab.startsWith('pin:') ? drawerTab.slice(4) : ''
+  const [pinnedHtml, setPinnedHtml] = useState<string | null>(null)
   useEffect(() => {
-    if (drawerTab !== 'map') return
+    if (!pinnedPath) return
     let cancelled = false
-    api.readFile('reports/academic-map.html')
-      .then((d) => { if (!cancelled) setMapHtml(d.content ?? '') })
-      .catch(() => { if (!cancelled) setMapHtml('') })
+    setPinnedHtml(null)
+    api.readFile(pinnedPath)
+      .then((d) => { if (!cancelled) setPinnedHtml(d.content ?? '') })
+      .catch(() => { if (!cancelled) setPinnedHtml('') })
     return () => { cancelled = true }
-  }, [drawerTab, mapRefreshKey, setMapHtml])
+  }, [pinnedPath, mapRefreshKey])
 
   // Load the real, agent-generated reports/progress.html for the Progress tab
   // — a single living document, rendered directly (not a link the parent has
@@ -1503,19 +1452,6 @@ export default function LearningApp() {
       .catch(() => { if (!cancelled) setProgressHtml('') })
     return () => { cancelled = true }
   }, [drawerTab, mapRefreshKey, setProgressHtml])
-
-  // "This Week" tab — combined schedule/activity-log/deadlines view (see
-  // week.go). Re-fetches whenever the tab is open, the week being viewed
-  // changes, or a turn just completed (mapRefreshKey — same signal Progress
-  // uses, since a turn can add an activity-log entry or update the schedule).
-  useEffect(() => {
-    if (drawerTab !== 'week') return
-    let cancelled = false
-    api.week(weekOffset)
-      .then((d) => { if (!cancelled) setWeekData(d) })
-      .catch(() => { if (!cancelled) setWeekData(null) })
-    return () => { cancelled = true }
-  }, [drawerTab, weekOffset, mapRefreshKey])
 
   // Every activity, structured — refetched whenever the Files/Uploaded tab is
   // open or a turn just completed (Quill may have created or added to one).
@@ -1926,37 +1862,6 @@ export default function LearningApp() {
       .finally(() => setSavingPulse(false))
   }
 
-  // Opens the schedule mini-editor, seeding the draft from whatever the week
-  // view currently knows the schedule to be — de-duplicated across days since
-  // weekData.days each carry their own matching entries (one recurring entry
-  // appears on every matching weekday in the response).
-  const openScheduleEditor = () => {
-    const seen = new Set<string>()
-    const entries: ScheduleEntry[] = []
-    for (const day of weekData?.days ?? []) {
-      for (const e of day.schedule ?? []) {
-        const key = `${e.day}|${e.start}|${e.end}|${e.label}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        entries.push(e)
-      }
-    }
-    setScheduleDraft(entries)
-    setScheduleEditorOpen(true)
-  }
-
-  // Wholesale replace — the mini-editor always sends its whole edited list
-  // (conversational capture goes through set_child_schedule instead, which
-  // ADDS rather than replaces — see parent_tools.go).
-  const saveSchedule = () => {
-    setSavingSchedule(true)
-    api.saveSchedule(scheduleDraft)
-      .then(() => api.week(weekOffset))
-      .then((d) => { setWeekData(d); setScheduleEditorOpen(false) })
-      .catch(() => {})
-      .finally(() => setSavingSchedule(false))
-  }
-
   // Runs Pulse right now (regardless of the recurring toggle) — used to test
   // it without waiting for the ticker. Fires the request, then polls config
   // and watches last_run_at change to know when the real turn (which can
@@ -2155,28 +2060,6 @@ export default function LearningApp() {
     return () => cancelAnimationFrame(id)
   }, [childMessages, childSending, screen, childStreamingReply, childQueue, childRemoteStatus, childRemoteToolCalls])
 
-  // Cycle a usable "how to use the chat" tip in the thinking indicator instead
-  // of a bare "thinking…" — resets and restarts each time a new turn begins,
-  // and only matters while there's no real live tool status to show instead.
-  // Read once at mount: flipping mid-session would swap the text under the
-  // parent while they are watching it.
-  const [showParentHints] = useState(() => readTurnsSeen(PARENT_HINTS_SEEN_KEY) < HINT_FADE_AFTER_TURNS)
-  useEffect(() => { if (sending) noteTurnSeen(PARENT_HINTS_SEEN_KEY) }, [sending])
-  const [parentHintIndex, setParentHintIndex] = useState(0)
-  useEffect(() => {
-    if (!sending) { setParentHintIndex(0); return }
-    const id = window.setInterval(() => setParentHintIndex((i) => (i + 1) % PARENT_WAIT_HINTS.length), 7000)
-    return () => window.clearInterval(id)
-  }, [sending])
-  const [showChildHints] = useState(() => readTurnsSeen(CHILD_HINTS_SEEN_KEY) < HINT_FADE_AFTER_TURNS)
-  useEffect(() => { if (childSending) noteTurnSeen(CHILD_HINTS_SEEN_KEY) }, [childSending])
-  const [childHintIndex, setChildHintIndex] = useState(0)
-  useEffect(() => {
-    if (!childSending) { setChildHintIndex(0); return }
-    const id = window.setInterval(() => setChildHintIndex((i) => (i + 1) % CHILD_WAIT_HINTS.length), 7000)
-    return () => window.clearInterval(id)
-  }, [childSending])
-
   // Bridge for interactive HTML: the sandboxed viewer iframe posts SQ.save/load
   // messages; the app persists them to a workspace file (child/attempts) so the
   // child's answers survive reloads and Quill can read them later. 'choose' is
@@ -2333,6 +2216,7 @@ export default function LearningApp() {
     // of truth regardless of what streamed in.
     const onStream = (parsed: { type?: string; text?: string; tool_call?: ToolCallRecord }) => {
       if (parsed.type === 'delta') setStreamingReply((cur) => cur + (parsed.text ?? ''))
+      else if (parsed.type === 'replace') setStreamingReply(parsed.text ?? '')
       else if (parsed.type === 'status') setLiveStatus(parsed.text ?? '')
       // Live tool-call visibility as each call happens (not batched at the
       // end). No result yet; the final response
@@ -2355,6 +2239,7 @@ export default function LearningApp() {
         const cp = events.find((e) => e.tool === 'set_child_profile')
         if (cp) { if (cp.name) setChildName(cp.name); if (cp.grade) setGrade(cp.grade); if (cp.board) setBoard(cp.board) }
         const pl = events.find((e) => e.tool === 'set_parent_label' && e.parent_label)
+        if (events.some((e) => e.tool === 'pins_updated')) loadPins()
         if (pl?.parent_label) setParentLabel(pl.parent_label)
         const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
         if (of?.path) { setDrawerTab('files'); setViewerImageList([]); setViewerActivityDir(null); setViewerPath(of.path); setViewerRefreshKey((k) => k + 1) }
@@ -2443,6 +2328,7 @@ export default function LearningApp() {
     // Same JSON envelope as the parent stream ({type:"status"|"delta"|"tool_call",text,tool,args}).
     const onStream = (parsed: { type?: string; text?: string; tool_call?: ToolCallRecord }) => {
       if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
+      else if (parsed.type === 'replace') setChildStreamingReply(parsed.text ?? '')
       else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
       else if (parsed.type === 'tool_call' && parsed.tool_call) {
         setChildLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
@@ -2501,6 +2387,7 @@ export default function LearningApp() {
     setChildLiveToolCalls([])
     const onStream = (parsed: { type?: string; text?: string; tool_call?: ToolCallRecord }) => {
       if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
+      else if (parsed.type === 'replace') setChildStreamingReply(parsed.text ?? '')
       else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
       else if (parsed.type === 'tool_call' && parsed.tool_call) {
         setChildLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
@@ -2881,7 +2768,7 @@ export default function LearningApp() {
                       </div>
                       <div className="fl-pulse-body">
                         <div className="fl-pulse-col">
-                          <p className="fl-pulse-popover-desc">Quill checks in on its own now and then — reviewing recent activity, keeping the progress report and academic map current.</p>
+                          <p className="fl-pulse-popover-desc">Quill checks in on its own now and then — reviewing recent activity, keeping the progress report and progress page current.</p>
                           <button
                             type="button"
                             className="fl-pulse-toggle"
@@ -3000,6 +2887,25 @@ export default function LearningApp() {
               </div>
             </div>
 
+            {backend === 'platform' ? (
+              <PlatformChat
+                title="SparkQuill"
+                childName={childName}
+                theme={theme === 'dark' ? 'dark' : 'light'}
+                commands={quickCommands.parent}
+                landing={(
+                  <div className="fl-thread">
+                    <div className="fl-msg is-agent">
+                      <span className="fl-msg-avatar is-sun"><Sun size={18} /></span>
+                      <div className="fl-msg-col"><div className="fl-bubble">Hi! I’m Quill, {childName || 'your child'}’s learning guide. Tell me what {childName || 'your child'} is working on, or ask me to explain progress, make study material, or create a test.</div></div>
+                    </div>
+                  </div>
+                )}
+                onInteraction={onPlatformInteraction}
+                onPresentation={onPlatformPresentation}
+              />
+            ) : (
+              <>
             {newBelow && (
               // The message is already applied — this only says it landed
               // below the fold, so tapping scrolls rather than fetching.
@@ -3054,7 +2960,9 @@ export default function LearningApp() {
                 }
                 const { msg: m, index: i } = g
                 if (m.role === 'tool') {
-                  if (m.tool === 'debug_summary') {
+                  // 'tool_summary' is what turns persist today; 'debug_summary'
+                  // is the older name still present in saved conversations.
+                  if (m.tool === 'debug_summary' || m.tool === 'tool_summary') {
                     return <ToolCallSummary key={i} calls={m.toolCalls ?? []} />
                   }
                   if (m.tool === 'video' && m.path) {
@@ -3164,7 +3072,7 @@ export default function LearningApp() {
                     )}
                     <div className="fl-thinking">
                       {!streamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
-                      <span>{liveStatus ? `Quill is: ${liveStatus}…` : showParentHints ? PARENT_WAIT_HINTS[parentHintIndex] : 'Working on it…'}</span>
+                      <span>{liveStatus ? `Quill is: ${liveStatus}…` : 'Working on it…'}</span>
                     </div>
                     <ToolCallSummary calls={liveToolCalls} />
                   </div>
@@ -3219,7 +3127,7 @@ export default function LearningApp() {
                 <button type="button" className="composer-icon" aria-label="Quick actions" aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)}><Sparkles size={19} /></button>
                 {menuOpen && (
                   <div className="fl-menu" role="menu">
-                    {QUICK_SKILLS.map((s) => (
+                    {quickCommands.parent.map((s) => (
                       <button key={s.label} type="button" role="menuitem" onClick={() => { setMenuOpen(false); sendParentText(s.message) }}>{s.label}</button>
                     ))}
                   </div>
@@ -3255,7 +3163,8 @@ export default function LearningApp() {
               />
               <button className="composer-send" type="submit" aria-label="Send message" disabled={!focusInput.trim()}><Send size={18} /></button>
             </form>
-            <p className="fl-disclaimer">SparkQuill can make mistakes. Please review important content before sharing it with {childName || 'your child'}.</p>
+              </>
+            )}
           </section>
           <div
             className="fl-parent-resizer"
@@ -3280,9 +3189,10 @@ export default function LearningApp() {
           <aside className="fl-drawer" aria-label="Learning workspace">
             {!((drawerTab === 'files' || drawerTab === 'allfiles' || drawerTab === 'uploaded') && viewerPath) && (
               <div className="fl-drawer-tabs" role="tablist" aria-label="Workspace views">
-                <button role="tab" aria-selected={drawerTab === 'map'} className={drawerTab === 'map' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('map')}>Academics</button>
                 <button role="tab" aria-selected={drawerTab === 'progress'} className={drawerTab === 'progress' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('progress')}>Progress</button>
-                <button role="tab" aria-selected={drawerTab === 'week'} className={drawerTab === 'week' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('week')}>This Week</button>
+                {pins.map((p) => (
+                  <button key={p.path} role="tab" aria-selected={drawerTab === `pin:${p.path}`} className={drawerTab === `pin:${p.path}` ? 'is-active' : ''} type="button" title={p.path} onClick={() => setDrawerTab(`pin:${p.path}`)}>{p.title}</button>
+                ))}
                 <button role="tab" aria-selected={drawerTab === 'files'} className={drawerTab === 'files' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('files')}>Workspace</button>
                 <button role="tab" aria-selected={drawerTab === 'uploaded'} className={drawerTab === 'uploaded' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('uploaded')}>Uploaded</button>
                 {/* Browsing every raw file is a power-user escape hatch, not a
@@ -3335,116 +3245,32 @@ export default function LearningApp() {
                 </>
               )}
 
-              {drawerTab === 'map' && (
-                mapHtml === null ? (
-                  <p className="fl-note">Loading the academic map…</p>
-                ) : mapHtml.includes('living view grows as') ? (
-                  // Still the startup placeholder seedWorkspace() writes before the
-                  // agent has ever run create-academic-map — an honest empty state
-                  // rather than a blank iframe.
-                  <p className="fl-note">The academic map hasn't been built yet — ask Quill to "update the academic map" once there's some material to show.</p>
-                ) : (
-                  <iframe className="fl-map-frame" title="Academic map" sandbox="allow-scripts" srcDoc={withDiagramLib(mapHtml)} />
-                )
+              {pinnedPath && (
+                <>
+                  <div className="fl-viewer-bar">
+                    <span className="fl-viewer-name">{pins.find((p) => p.path === pinnedPath)?.title ?? pinnedPath}</span>
+                    <button className="fl-viewer-back" type="button" title="Remove this tab (the page stays in the workspace)" onClick={() => togglePin(pinnedPath)}><PinOff size={15} /> Unpin</button>
+                  </div>
+                  {pinnedHtml === null ? (
+                    <p className="fl-note">Loading…</p>
+                  ) : pinnedHtml === '' ? (
+                    <p className="fl-note">This page is missing from the workspace. Unpin it, or ask Quill to make it again.</p>
+                  ) : (
+                    <iframe className="fl-map-frame" title={pinnedPath} sandbox="allow-scripts" srcDoc={withDiagramLib(pinnedHtml)} />
+                  )}
+                </>
               )}
 
               {drawerTab === 'progress' && (
                 <>
                   {progressHtml === null ? (
                     <p className="fl-note">Loading the progress report…</p>
-                  ) : progressHtml.includes('living report grows as') ? (
+                  ) : progressHtml === '' || progressHtml.includes('living report grows as') ? (
                     <p className="fl-note">The progress report hasn't been built yet — ask Quill to "update the progress report" once there's some real activity to show.</p>
                   ) : (
                     <iframe className="fl-map-frame" title="Progress report" sandbox="allow-scripts" srcDoc={withDiagramLib(progressHtml)} />
                   )}
                 </>
-              )}
-
-              {drawerTab === 'week' && (
-                <div className="fl-week">
-                  <div className="fl-week-nav">
-                    <button type="button" className="fl-week-nav-btn" onClick={() => setWeekOffset((o) => o - 1)} aria-label="Previous week">← Previous</button>
-                    <span className="fl-week-range">
-                      {weekData ? `${new Date(weekData.week_start).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${new Date(weekData.week_end).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : 'Loading…'}
-                      {weekOffset === 0 && <span className="fl-week-badge">This week</span>}
-                    </span>
-                    <button type="button" className="fl-week-nav-btn" onClick={() => setWeekOffset((o) => o + 1)} aria-label="Next week">Next →</button>
-                  </div>
-
-                  {weekData && weekData.upcoming_deadlines && weekData.upcoming_deadlines.length > 0 && (
-                    <div className="fl-week-deadlines">
-                      <p className="fl-drawer-label">Coming up</p>
-                      {weekData.upcoming_deadlines.map((d, i) => (
-                        <div key={i} className="fl-week-deadline-row">
-                          <span className={`fl-week-deadline-kind is-${d.kind || 'assignment'}`}>{d.kind === 'test' ? 'Test' : 'Due'}</span>
-                          <span className="fl-week-deadline-title">{d.title}</span>
-                          {d.subject && <span className="fl-week-deadline-subject">{d.subject}</span>}
-                          <span className="fl-week-deadline-date">{d.due_date ? new Date(d.due_date).toLocaleDateString(undefined, { weekday: 'short' }) : ''}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {weekData ? (
-                    <div className="fl-week-grid">
-                      {weekData.days.map((day) => {
-                        const isToday = day.date === new Date().toLocaleDateString('en-CA')
-                        return (
-                          <div key={day.date} className={`fl-week-day${isToday ? ' is-today' : ''}`}>
-                            <div className="fl-week-day-head">
-                              <strong>{day.weekday.slice(0, 3)}</strong>
-                              <span>{new Date(day.date).getDate()}</span>
-                            </div>
-                            {(day.schedule ?? []).map((s, i) => (
-                              <div key={i} className="fl-week-block is-busy" title={`${s.start}–${s.end}`}>{s.label}</div>
-                            ))}
-                            {(day.activities ?? []).map((a, i) => {
-                              const dur = formatDuration(a.duration_seconds)
-                              return (
-                                <div key={i} className="fl-week-block is-activity" title={dur ? `${a.title} — ~${dur}` : a.title}>
-                                  {a.title}{dur && <span className="fl-week-block-time"> · ~{dur}</span>}
-                                </div>
-                              )
-                            })}
-                            {(day.deadlines ?? []).map((d, i) => (
-                              <div key={i} className={`fl-week-block is-deadline is-${d.kind || 'assignment'}`} title={d.title}>{d.kind === 'test' ? '📝 ' : '📌 '}{d.title}</div>
-                            ))}
-                            {(day.schedule ?? []).length === 0 && (day.activities ?? []).length === 0 && (day.deadlines ?? []).length === 0 && (
-                              <p className="fl-week-day-free">Free</p>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  ) : (
-                    <p className="fl-note">Loading this week…</p>
-                  )}
-
-                  {!scheduleEditorOpen ? (
-                    <button type="button" className="fl-week-edit-schedule" onClick={openScheduleEditor}>Edit recurring schedule</button>
-                  ) : (
-                    <div className="fl-week-editor">
-                      <p className="fl-drawer-label">Recurring weekly schedule</p>
-                      {scheduleDraft.map((e, i) => (
-                        <div key={i} className="fl-week-editor-row">
-                          <select value={e.day} onChange={(ev) => setScheduleDraft((rows) => rows.map((r, j) => j === i ? { ...r, day: ev.target.value } : r))}>
-                            {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((d) => <option key={d} value={d}>{d}</option>)}
-                          </select>
-                          <input type="time" value={e.start} onChange={(ev) => setScheduleDraft((rows) => rows.map((r, j) => j === i ? { ...r, start: ev.target.value } : r))} />
-                          <input type="time" value={e.end} onChange={(ev) => setScheduleDraft((rows) => rows.map((r, j) => j === i ? { ...r, end: ev.target.value } : r))} />
-                          <input type="text" placeholder="Label, e.g. School" value={e.label} onChange={(ev) => setScheduleDraft((rows) => rows.map((r, j) => j === i ? { ...r, label: ev.target.value } : r))} />
-                          <button type="button" className="fl-icon-btn" aria-label="Remove" onClick={() => setScheduleDraft((rows) => rows.filter((_, j) => j !== i))}>×</button>
-                        </div>
-                      ))}
-                      <div className="fl-week-editor-actions">
-                        <button type="button" onClick={() => setScheduleDraft((rows) => [...rows, { day: 'Monday', start: '08:00', end: '14:30', label: '' }])}>+ Add a commitment</button>
-                        <span className="fl-week-editor-spacer" />
-                        <button type="button" onClick={() => setScheduleEditorOpen(false)} disabled={savingSchedule}>Cancel</button>
-                        <button type="button" className="fl-week-editor-save" onClick={saveSchedule} disabled={savingSchedule}>{savingSchedule ? 'Saving…' : 'Save'}</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
               )}
 
               {(drawerTab === 'files' || drawerTab === 'allfiles' || drawerTab === 'uploaded') && viewerPath ? (
@@ -3460,6 +3286,11 @@ export default function LearningApp() {
                         that list, unchanged. */}
                     <button className="fl-viewer-back" type="button" onClick={() => setViewerPath(null)}><ArrowLeft size={15} /> Files</button>
                     <span className="fl-viewer-name">{viewerPath.split('/').pop()}</span>
+                    {/\.html?$/i.test(viewerPath) && (
+                      <button className="fl-viewer-back" type="button" title={pins.some((p) => p.path === viewerPath) ? 'Remove from the tabs at the top' : 'Keep this page as a tab at the top'} onClick={() => togglePin(viewerPath)}>
+                        {pins.some((p) => p.path === viewerPath) ? <><PinOff size={15} /> Unpin</> : <><Pin size={15} /> Pin</>}
+                      </button>
+                    )}
                     {viewerActivityDir && (() => {
                       const act = activities.find((a) => a.dir === viewerActivityDir)
                       return act ? (
@@ -3618,7 +3449,7 @@ export default function LearningApp() {
                     // Hierarchy: subject -> topic -> activity -> item. Every piece of
                     // generated content IS an activity now, so this groups the
                     // structured /api/activities objects directly — no path-parsing.
-                    // Raw uploads have their own "Uploaded" tab; the academic map/
+                    // Raw uploads have their own "Uploaded" tab; the progress page/
                     // progress report have their own dedicated tabs, so they're not
                     // duplicated here.
                     const subjectsList = Array.from(new Set(activities.filter((a) => a.subject).map((a) => a.subject!))).sort()
@@ -4214,7 +4045,7 @@ export default function LearningApp() {
                     </div>
                   ) : (() => {
                     const { msg: m, index: i } = g
-                    return m.role === 'tool' && m.tool === 'debug_summary' ? (
+                    return m.role === 'tool' && (m.tool === 'debug_summary' || m.tool === 'tool_summary') ? (
                     <ToolCallSummary key={i} calls={m.toolCalls ?? []} />
                   ) : m.role === 'tool' && m.tool === 'video' && m.path ? (
                     <div key={i} className="fl-tmsg is-tutor">
@@ -4301,7 +4132,7 @@ export default function LearningApp() {
                       )}
                       <div className="fl-thinking">
                         {!childStreamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
-                        <span>{childLiveStatus ? `Quill is: ${childLiveStatus}…` : showChildHints ? CHILD_WAIT_HINTS[childHintIndex] : 'Working on it…'}</span>
+                        <span>{childLiveStatus ? `Quill is: ${childLiveStatus}…` : 'Working on it…'}</span>
                       </div>
                       <ToolCallSummary calls={childLiveToolCalls} />
                     </div>
@@ -4339,7 +4170,7 @@ export default function LearningApp() {
                   <button type="button" className="composer-icon" aria-label="Quick requests" aria-expanded={childQuickMenuOpen} onClick={() => setChildQuickMenuOpen((v) => !v)}><Sparkles size={19} /></button>
                   {childQuickMenuOpen && (
                     <div className="fl-menu" role="menu">
-                      {CHILD_QUICK_ACTIONS.map((qa) => (
+                      {quickCommands.child.map((qa) => (
                         <button key={qa.label} type="button" role="menuitem" onClick={() => { setChildQuickMenuOpen(false); sendChildText(qa.message) }}>{qa.label}</button>
                       ))}
                     </div>

@@ -5,8 +5,8 @@ description: Back up the family's learning workspace to the parent's own private
 
 # Back up the workspace
 
-Protect the family's data — materials, generated study/tests/reports, the academic
-map, and conversations — by pushing it to the parent's OWN **private Hugging Face
+Protect the family's data — materials, generated study/tests/reports, the progress
+page, and conversations — by pushing it to the parent's OWN **private Hugging Face
 Hub dataset repo**, via the `hf` CLI (already installed). This is the ONLY
 destination this family uses — never suggest GitHub, Drive, S3, or anything else,
 and never suggest a different destination "for images" — `hf upload` handles
@@ -51,8 +51,8 @@ Never write status fields into `backup.json`.
 5. **Upload — one command does it all**, including creating the repo the first
    time:
    `hf upload <repo_id> . . --repo-type dataset --private --exclude "archive/*" --token "$SECRET_HF_TOKEN" --commit-message "backup <date>"`
-   **Always exclude `archive/`** — retired/archived activities (see `archive.go`)
-   don't need to ride along on every backup; the parent can back those up
+   **Always exclude `archive/`** — activities the parent put away don't need
+   to ride along on every backup; the parent can back those up
    separately if they ever want to. Never upload secrets — the secrets store and
    the parent PIN hash live outside the workspace already; keep it that way.
 

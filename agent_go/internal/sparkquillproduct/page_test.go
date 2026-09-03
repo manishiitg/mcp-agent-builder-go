@@ -1,0 +1,100 @@
+package sparkquillproduct
+
+import (
+	"strings"
+	"testing"
+)
+
+// A page the way Quill might write it: its own look, a whole document, and
+// the four conventions the tutor relies on.
+const samplePage = `<!doctype html>
+<html><head><title>Fractions, Maya's way</title>
+<style>body{font-family:Georgia;background:#fff8e1}.spin{animation:spin 2s linear infinite}@keyframes spin{to{transform:rotate(1turn)}}</style>
+<link rel="stylesheet" href="https://fonts.example/x.css">
+</head><body>
+<header class="hero"><h1>Adding fractions with different denominators</h1><p>Hi Maya!</p></header>
+<section data-role="learn" class="lesson">
+  <h2>Why the pieces must match</h2>
+  <p>You can only add pieces that are the <strong>same size</strong>.</p>
+  <div class="my-callout">The denominator tells you how big each piece is.</div>
+  <figure><div class="jxgbox" style="width:300px;height:200px"></div><script>JXG.JSXGraph.initBoard('fig', {})</script><figcaption>Two thirds</figcaption></figure>
+  <div class="spin">✦</div>
+</section>
+<section data-role="practice">
+  <h2>Try it</h2>
+  <div class="q"><p>1/2 + 1/3</p></div>
+  <details><summary>Reveal</summary><p>5/6</p></details>
+  <input type="text" placeholder="type here">
+</section>
+<section data-role="check">
+  <h2>Quick check</h2>
+  <div class="q card" data-marks="2"><p>3/5 + 1/4</p></div>
+  <div class="q" data-marks="3"><p>Riya ate 2/5 of a cake and Aarav 1/3. How much is left?</p></div>
+  <button data-choose="I need a hint">Hint please</button>
+  <a href="https://example.com">a link</a>
+  <img src="https://evil.example/x.png"><img src="pizza.png" alt="a pizza">
+  <script src="https://cdn.example/lib.js"></script>
+</section>
+<section data-role="explore"><h2>Wonder</h2><div class="q"><p>Design your own fraction puzzle.</p></div></section>
+<section data-role="bogus"><p>after</p></section>
+</body></html>`
+
+func TestRenderActivityPageAddsOnlyTheMachinery(t *testing.T) {
+	page, report, err := RenderActivityPage(samplePage, PageMeta{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`<title>Fractions, Maya&#39;s way</title>`,
+		`<style>body{font-family:Georgia;background:#fff8e1}.spin{animation:spin 2s linear infinite}`, // Quill's look, untouched
+		`<header class="hero"><h1>Adding fractions with different denominators</h1>`,
+		`<section id="s1" data-role="learn" class="lesson">`,
+		`<section id="s2" data-role="practice">`,
+		`<section id="s3" data-role="check">`,
+		`<section id="s4" data-role="explore">`,
+		`<section id="s5" data-role="learn">`, // unknown role falls back to learn
+		`<div class="my-callout">`,            // Quill's own blocks pass through
+		`<figure id="fig1">`, `JXG.JSXGraph.initBoard`,
+		`<div id="q1" class="q"><p>1/2 + 1/3</p><div class="answer-space"></div></div>`,
+		`<div id="q2" class="q card" data-marks="2">`, `<div id="q3" class="q" data-marks="3">`, `<div id="q4" class="q">`,
+		`<button data-choose="I need a hint">Hint please</button>`,
+		`button[data-choose]`, `window.SQ={choose:`, `op==='print'`,
+		`<img src="pizza.png" alt="a pizza">`,
+		`<p>5/6</p>`, // click-to-reveal is unwrapped, its content stays visible
+		`a link`,     // links become plain text
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("page lacks %q\n%s", want, page)
+		}
+	}
+	for _, bad := range []string{`<input`, `<details`, `<summary`, `href="http`, `evil.example`, `cdn.example`, `fonts.example`, `placeholder`} {
+		if strings.Contains(page, bad) {
+			t.Fatalf("page still carries %q", bad)
+		}
+	}
+	if report.Title != "Fractions, Maya's way" || report.Questions != 4 || report.Marks != 5 || len(report.Sections) != 5 {
+		t.Fatalf("report = %+v", report)
+	}
+	if report.Sections[2].Role != RoleCheck || strings.Join(report.Sections[2].Questions, ",") != "q2,q3" || report.Sections[1].Questions[0] != "q1" || report.Sections[3].Role != RoleExplore {
+		t.Fatalf("section map = %+v", report.Sections)
+	}
+	joined := strings.Join(report.Dropped, " | ")
+	for _, want := range []string{"<input>", "<details>", `<img src="https://evil.example/x.png"> (remote`, `<script src="https://cdn.example/lib.js">`, "<link> in <head>"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("dropped = %v, want %q", report.Dropped, want)
+		}
+	}
+	if !strings.Contains(strings.Join(report.Warnings, " | "), `unknown section role "bogus"`) {
+		t.Fatalf("warnings = %v", report.Warnings)
+	}
+}
+
+func TestRenderActivityPageAcceptsAFragmentAndRejectsEmpty(t *testing.T) {
+	page, _, err := RenderActivityPage(`<h1>Notes</h1><p>Just a paragraph.</p><div class="q"><p>2+2</p></div>`, PageMeta{})
+	if err != nil || !strings.Contains(page, `<title>Notes</title>`) || !strings.Contains(page, `<div id="q1" class="q">`) {
+		t.Fatalf("fragment: err=%v\n%s", err, page)
+	}
+	if _, _, err := RenderActivityPage(`<input type="text">   `, PageMeta{}); err == nil {
+		t.Fatal("an empty page must be an error")
+	}
+}

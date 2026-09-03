@@ -14,7 +14,7 @@ import { OAuthStatusBadge } from '../OAuthStatusBadge'
 import { isSelectedServer } from '../../utils/mcpServerAlias'
 import ConnectionIcon from './ConnectionIcon'
 import { brandSlugFor } from './brandSlug'
-import { descriptionFor } from './catalog'
+import { CATEGORY_ORDER, categoryFor, descriptionFor } from './catalog'
 import { useMCPStore } from '../../stores'
 import { READ_ONLY_TITLE, useCanWriteWorkflow } from '../../hooks/useCanWriteWorkflow'
 import { useToolSelectionStore } from '../../stores/useToolSelectionStore'
@@ -173,6 +173,31 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
       })
   }, [groups, query, filter])
 
+  // Group into directory sections, keeping the connected-first order inside
+  // each one. Only sections holding a visible connector are rendered, so a
+  // search matching two services does not leave four empty headings behind.
+  const sections = useMemo(() => {
+    const byCategory = new Map<string, typeof visible>()
+    visible.forEach((entry) => {
+      const category = categoryFor(entry[0])
+      const bucket = byCategory.get(category)
+      if (bucket) {
+        bucket.push(entry)
+      } else {
+        byCategory.set(category, [entry])
+      }
+    })
+
+    const rank = (category: string) => {
+      const i = CATEGORY_ORDER.indexOf(category)
+      return i === -1 ? CATEGORY_ORDER.length : i
+    }
+
+    return [...byCategory.entries()].sort(
+      ([a], [b]) => rank(a) - rank(b) || a.localeCompare(b)
+    )
+  }, [visible])
+
   const total = Object.keys(groups).length
   const cardPadding = compact ? 'p-3' : 'p-4'
   const gridGap = compact ? 'gap-2' : 'gap-3'
@@ -254,18 +279,28 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
 
         {!isLoadingTools && visible.length === 0 && !toolsError && (
           <p className="py-8 text-center text-sm text-gray-500 dark:text-gray-400">
-            {query
-              ? `No connectors match "${query}".`
-              : filter === 'connected'
-                ? 'No connectors yet. Pick one from Available and press Connect.'
-                : filter === 'available'
-                  ? 'Every connector is already connected.'
-                  : 'No connectors configured.'}
+            {total === 0
+              // An empty catalog is a deployment fact, not a filter result:
+              // this server's MCP config lists no connectors at all, so
+              // neither "all connected" nor "pick one" would be true.
+              ? 'No connectors are configured on this server. The deployment’s MCP server config lists none.'
+              : query
+                ? `No connectors match "${query}".`
+                : filter === 'connected'
+                  ? 'No connectors yet. Pick one from Available and press Connect.'
+                  : filter === 'available'
+                    ? 'Every connector is already connected.'
+                    : 'No connectors configured.'}
           </p>
         )}
 
-        <div className={`grid grid-cols-1 ${gridGap} md:grid-cols-2`}>
-          {visible.map(([serverName, tools]) => {
+        {sections.map(([category, entries]) => (
+          <section key={category} className={compact ? 'mb-4 last:mb-0' : 'mb-6 last:mb-0'}>
+            <h4 className="mb-3 border-b border-gray-200 pb-2 text-sm font-semibold text-gray-900 dark:border-gray-800 dark:text-gray-100">
+              {category}
+            </h4>
+            <div className={`grid grid-cols-1 ${gridGap} md:grid-cols-2`}>
+              {entries.map(([serverName, tools]) => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const requiresOAuth = (tools[0] as any).requires_oauth as boolean | undefined
             const status = tools[0]?.status
@@ -458,9 +493,11 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
                   )
                 })()}
               </div>
-            )
-          })}
-        </div>
+              )
+              })}
+            </div>
+          </section>
+        ))}
       </div>
 
       {showJsonConfig && (

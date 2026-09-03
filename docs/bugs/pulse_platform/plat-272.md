@@ -1,152 +1,96 @@
-[← Pulse platform issue index](../pulse_platform_issue_register.md)
+[← Pulse platform index](../pulse_platform_issue_register.md)
 
-# PLAT-272 — Pi CLI live input was reported failed (409) while Pi had accepted it, and every retry layer then re-sent the message
+# PLAT-272 — Workflow secrets were per-user, so anyone but the person who typed them ran with empty values
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `fixed` — build/test verified with fail-before/pass-after tests in `multi-llm-provider-go`; needs a server rebuild+restart to reach the running dev server |
+| Ticket state | `implemented; RTS live reverify pending` |
 | Last synchronized | `2026-09-03` |
 
-- **Priority:** P1 — a chat message sent into a long Pi session is shown to the
-  operator as `Conversation Error / Request failed with status code 409`, is
-  not recorded in the chat, and Pi's reply is never surfaced — while Pi
-  actually received the message **four times** and answered. Repeats on
-  every send once a session is large enough.
-- **Owner:** `multi-llm-provider-go/pkg/adapters/picli/picli_interactive_adapter.go`
-  (`ensurePiInputSubmitted`, now `ensurePiInputSubmittedWith`).
-- **Origin:** live, confida-login workflow-builder chat on pi-cli
-  (`session 7d849018-2a54-44e7-a392-b8b824eccd09`, 2026-09-03 13:21 and
-  13:24 IST). Not a Pulse finding; reported directly by the operator.
+- **Priority:** secrets/authorization, severity high — with per-workflow
+  sharing (PLAT-262 read-only accounts, user-accounts phase 3
+  owners/readers) now live, every user other than the one who stored a
+  secret — a read-only reviewer running the workflow, a co-owner, a
+  scheduled run started under any other identity — resolved nothing and
+  every `$SECRET_<NAME>` was silently empty.
+- **Origin:** raised by the user while moving the `rtslatency` workflow to
+  the RTS server: "if i am using a read only login.. i should be able to
+  access secrets … these are workflow secrets, should be accessible across
+  users". PLAT-267 had just papered over one instance of the same root cause
+  (scheduled runs resolving against the placeholder `default` user) by
+  routing the scheduler to the creator; this ticket fixes the model.
 
-## What the operator saw
+## Problem
 
-Two sends, `what does the step validate browser eviance nad api satefy do`
-(13:21:27) and `what the validate browser evidance do?` (13:24:03). Both
-returned `409` from `POST /api/sessions/{id}/live-input` and again from the
-`POST /api/query` fallback (75-byte `Live input unavailable: …` body). The UI
-rendered a Conversation Error. The chat showed neither the message nor an
-answer.
+"Workflow" secrets were stored **per user**:
+`_users/<uid>/workflow_secrets/<sha256(path)>.json`, with the ciphertext
+AES-GCM bound to that user's ID as additional data. `loadSelectedSecrets`
+(the single runtime funnel for chat, workshop, scheduled and bot runs)
+read the *requesting* user's document and decrypted with the *requesting*
+user's ID. A second identity therefore found an empty document, and even
+a copied blob would have failed authentication. The three
+`/api/secrets/workflow/*` routes also had **no per-workflow gate at all** —
+any authenticated user could write to their own copy; nothing consulted
+the manifest's owners/readers.
 
-## What actually happened (from the logs)
+## Resolution
 
-`server_debug.log`:
-
-```
-13:21:29 [LIVE INPUT] Durable session delivery failed …: failed to submit live input to pi-cli:
-         Pi input remained in the prompt after submit retry; trying retained-terminal recovery before rebuilding
-13:21:31 <-- POST /api/sessions/…/live-input status=409
-13:21:33 [QUERY->LIVE] Durable session delivery failed …: (same)
-13:21:34 <-- POST /api/query status=409
-```
-
-Pi's own marker stream for the same session (`markers.jsonl`, the bundled
-extension's `message_end{role:"user"}` events):
-
-```
-13:21:28 agent_start
-13:21:28 message_end user  what does the step validate browser eviance nad api satefy do
-13:21:40 message_end user  what does the step validate browser eviance nad api satefy do
-13:21:52 message_end user  what does the step validate browser eviance nad api satefy do
-13:22:01 message_end user  what does the step validate browser eviance nad api satefy do
-13:22:09 agent_end
-13:24:03 agent_start   (second attempt: same shape, 4 copies, agent_end 13:25:40)
-```
-
-Pi's session file holds the reply (`2026-09-03T07:55:40Z`, "**Validate
-Browser Evidence** checks the browser test results to make sure…", 735,872
-tokens of context, 732K cache-read). So: Pi took the message on the first
-keystroke, the adapter said it hadn't, and the four delivery layers above
-(durable `Session.Send`, retained-terminal recovery, `/api/query`'s
-`QUERY->LIVE` durable send, its retained-terminal recovery) each typed it
-again. Four user messages per attempt now sit in that session's context.
-
-## Root cause
-
-`ensurePiInputSubmitted` decided "submitted" purely from the tmux pane, with
-a 1.5 s budget:
-
-- submitted if the status line is present and not `idle`, **or** if the
-  draft is no longer visible in the 24 lines above the status line;
-- otherwise one recovery `Enter` at 250 ms, then `Pi input remained in the
-  prompt after submit retry` at the deadline.
-
-On a ~735K-token session both signals are wrong for longer than 1.5 s:
-
-1. Pi's status line keeps saying `💤 idle` until the first model event. At
-   that context size the first event takes several seconds (the earlier
-   successful sends on the same session, 12:49–13:08, confirmed in ~300 ms
-   because the pane flipped fast enough).
-2. Pi echoes the submitted message into the transcript directly above the
-   editor; `piPromptEditorRegion` treats the 24 lines above the status line
-   as "the editor", so the echo matched the draft and `piPaneShowsPromptDraft`
-   stayed true.
-
-Idle + draft-visible for 1.5 s → false negative. The error is returned as a
-plain failure, so `handleLiveInputMessage` / `tryDeliverQueryAsLiveInput`
-fall through to the cold-restart recovery path and re-send via tmux, and the
-frontend's `/api/query` fallback repeats the whole chain.
-
-## Fix (`multi-llm-provider-go`)
-
-The bundled marker extension already reports every message Pi accepts
-(`message_end{role:"user",text}`), whether it starts a turn or is queued /
-steered into a running one. That is authoritative, so it is now checked
-first:
-
-- `sendPiInputToTmuxUnserialized` snapshots the marker file offset **before**
-  typing, and passes `markerPath`/offset through to the confirmation. Only an
-  acknowledgement written after this send counts — an identical earlier
-  message in the stream cannot confirm a new one.
-- `ensurePiInputSubmittedWith` polls the marker stream every 50 ms alongside
-  the existing pane heuristics; a matching `message_end` (whitespace-
-  insensitive; prefix match for ≥64-rune messages) returns success
-  immediately. With a marker file the settle budget is 6 s
-  (`piPromptSubmitMarkerWait`); without one, behaviour is exactly as before
-  (1.5 s, pane-only), so panes with no marker file are unaffected.
-- The recovery `Enter` is unchanged (harmless on an already-empty editor).
-- Public surface unchanged: `SendPiInteractiveInput` now passes the live
-  session's marker path; the initial-prompt send does too.
+- **Shared store** (`cmd/server/workflow_shared_secrets.go`,
+  `pkg/chathistory/shared_secrets.go`): one document per workflow at
+  `_users/_shared/workflow_secrets/<hash>.json`, ciphertext bound to
+  `"workflow:" + canonical path`. `_shared` is a reserved pseudo-user no
+  real ID can collide with (directory IDs are sha256 hex, OAuth/bot IDs are
+  lowercase slugs). Reusing the `_users/` layout means every guard that
+  already hides that tree from agents — root-listing filter, DB-query
+  rejection, folder-guard read allowlists, the git-push
+  `workflow_secrets/` check — covers the new location by construction; no
+  store-interface signature changed.
+- **Access gating** (`secrets_routes.go`): store/delete require
+  `requireWorkflowOwner`; list requires the workflow to be visible and
+  returns ciphertext only to owners; `/api/secrets/decrypt` accepts
+  `workspace_path` and treats it as a reveal that only owners may perform.
+  The client still encrypts against itself via `/api/secrets/encrypt`; the
+  store handler re-binds the value to the workflow.
+- **Runtime** (`server.go` `loadSelectedSecrets`): reads the shared
+  document, so the value is identical whoever starts the run. Precedence
+  unchanged: workflow > reusable user secret > `GLOBAL_SECRET_*`.
+- **Lazy one-shot migration** (`ensureSharedWorkflowSecrets`): when the
+  shared document is empty, the requesting user's, the creator's and the
+  listed owners' legacy per-user entries are decrypted, re-bound to the
+  workflow, written to the shared document and removed from the per-user
+  ones. An entry that cannot be decrypted (different `AUTH_SECRET`) is left
+  in place and logged. Nothing to run by hand on any deployment.
+- **Builder tools** (`secrets_tools.go`): `set_workflow_secret`,
+  `delete_workflow_secret`, `list_secrets` use the shared store; the
+  mutating tools were already withheld from read-only sessions (PLAT-262).
+- **Frontend** (`SecretSelectionSection.tsx`, `api/secrets.ts`): add /
+  delete / reveal disable for read-only users via
+  `useCanWriteWorkflow(workflowPath)` (names remain visible); reveal sends
+  `workspace_path`; the "Private" badge became "Shared".
+- **Unchanged on purpose:** reusable user secrets (`_users/<uid>/secrets.json`)
+  stay personal; per-user provider credentials (Claude Code / Cursor / Pi
+  keys) stay personal; global secrets untouched.
 
 ## Verification
 
-`pkg/adapters/picli/picli_submit_confirmation_test.go`:
-
-- `TestIdlePaneWithDraftFixtureReadsAsUnsubmitted` pins the exact pane state
-  from the incident (idle status line, draft echoed with a cursor cell) as
-  something the pane heuristics alone call "not submitted".
-- `TestEnsurePiInputSubmittedTrustsMarkerAcknowledgement` — that pane, plus a
-  `message_end user` marker arriving 200 ms after the send → confirmed in
-  0.20 s (fail-before: 1.5 s then `remained in the prompt`).
-- `TestEnsurePiInputSubmittedIgnoresAcknowledgementsBeforeTheSend` — an
-  identical message acknowledged before the offset must not confirm; still
-  errors, exactly one recovery Enter.
-- `TestEnsurePiInputSubmittedWithoutMarkersKeepsPaneVerdict` — busy status
-  line still accepted; idle+draft with no marker file still rejected.
-- `TestPiMarkersAcknowledgeUserMessage` — matching rules.
-- Existing real-tmux `TestEnsurePiInputSubmittedSendsRecoveryEnter` and the
-  full `picli` suite pass; `golangci-lint` 0 issues.
-
-## Rollout note
-
-The fix lives in `multi-llm-provider-go`, consumed by `agent_go` through the
-local `replace`. The running dev server (a `go run` build from 08:29 on
-2026-09-03) still has the old check; it needs a rebuild and restart. The Pi
-tmux pane survives a server restart (cold-restart compatibility in
-`deliverRetainedMainTerminalInput`), so restarting does not lose the session.
-
-## Follow-ups (not changed here)
-
-- The 4× duplicate delivery is a property of the retry ladder in
-  `cmd/server` (durable send → retained-terminal recovery → `/api/query` →
-  same again). With the false negative gone it only fires on genuine
-  failures, but a genuine "unconfirmed" send is still re-typed by each layer.
-  A distinct unconfirmed error kind that the upper layers treat as
-  "check the marker stream before re-sending" would close that.
-- `piPromptEditorRegion`'s 24-line window includes transcript echo; a
-  tighter editor boundary (Pi's user-message block is rendered with the
-  `userMessageBg` style and OSC-133 zone markers) would let the pane
-  heuristic stand on its own for panes without a marker file.
-- The confida-login session now carries four copies of each of those two
-  messages in Pi's context; harmless but wasteful (~735K tokens, most of it
-  cache-read).
+- `TestSharedWorkflowSecretsAreGatedByWorkflowAccess` — owner stores; the
+  document lands under `_users/_shared/` and not under the owner; reader
+  lists names without ciphertext; unrelated member gets 403 on every route;
+  reader reveal 403, owner reveal returns the value; the caller-bound
+  decrypt path cannot open a workflow-bound blob even for the owner;
+  reader delete 403, owner delete succeeds.
+- `TestLoadSelectedSecretsResolvesSharedWorkflowSecretsForEveryUserAndMigratesLegacy`
+  — a pre-PLAT-272 per-user value stored by the owner resolves for a
+  reader on first touch, is migrated into the shared document (workflow-
+  bound) and removed from the owner's document; owner, reader and an
+  identity with no record all resolve the same value; a workflow secret
+  still beats a same-named reusable user secret.
+- Both fail to compile with the shared-store helpers removed; the existing
+  secrets / workflow-access / provider-credential tests and the
+  `chathistory` package suite pass; `tsc` and `eslint` clean.
+- Live reverify on RTS (Video Studio + AgentWorks box) after its next
+  deploy: log in as a read-only account, confirm the `rtslatency` Secrets
+  pane lists names with disabled controls, run a step that reads
+  `$SECRET_*`, and confirm the agent log shows the one-shot
+  `[SECRETS] migrated N workflow secret(s)` line — pending.

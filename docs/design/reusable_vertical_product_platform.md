@@ -1077,3 +1077,129 @@ slice, not after.
 - Putting product-specific rules into `mcpagent`.
 - Sharing code merely because two functions currently look similar.
 - Copying a dedicated server and allowing the copies to drift.
+
+### 2026-09-03: chat parity fixes found by driving the SparkQuill demo
+
+- **Whole-turn text.** Coding-agent providers commit only the last assistant
+  message as `final_result` (workflow semantics). The claude-code adapters now
+  also emit `assistant_turn_text` (every assistant text block of the turn, in
+  order) in the generation metadata; the agent server persists it on
+  `llm_generation_end`. Chat surfaces show that; `final_result` is unchanged.
+- **Restore from the persisted chat history.** The live event store is in
+  memory, so a product app must rebuild history from
+  `GET /api/chat-history/sessions/{id}`. The converter that AgentWorks used
+  for this (`conversationToRestoredEvents`) moved to
+  `frontend/shared/session/restore.ts`; SparkQuill's history goes through it
+  and then through the same event→message mapping as a live turn.
+- **Streaming chunks.** The chunk rules (`source: terminal` never prose, tool
+  markers → status, chunk 0/1 restart, delta vs block join) live in
+  `frontend/shared/session/streamingStatus.ts` for every surface.
+- Open: suggestion pills and product cards emitted as `product_interaction`
+  are not in the persisted history, so they do not survive a reload; product
+  schedule turns restore as plain user bubbles (no `source: pulse` marker).
+
+### 2026-09-03: activities are open pages with a four-line contract
+
+Feedback: activities came out as tests, and the design guide (2,500 words)
+was being skimmed and ignored. Decisions (user):
+- No activity skill. Quill decides sequence, depth and style from the request
+  and the child's evidence; the prompt gives only the mechanics.
+- No imposed look. The page is Quill's own HTML (fragment or whole document,
+  own styles, animations, demos). `create_learning_activity` finishes a
+  `<name>.sq.html` into `<name>.html` (`agent_go/internal/sparkquillproduct/page.go`):
+  ids on sections/questions/figures, an answer space per question, the print
+  hook and `SQ.choose` script, and it removes only form controls, `<details>`,
+  links and remote resources. It reports what it dropped.
+- The prompt tells Quill two things only (user: "just how to use SQ"):
+  `<div class="q">` around each question so the tutor can scroll her to it
+  (open_file focus) and note her answer there, and `<button data-choose>` for a
+  choice she taps. Section roles are accepted by the finisher when present
+  but not asked for; the child prompt is goal-steered as before.
+- create-study-material and create-test skills deleted, activity-page.md too;
+  html-design.md remains for the two reports only.
+- Viewer: the injected page script now pads the body bottom so the last
+  element never sits flush against the frame.
+Verified live: "explain, practice, short check" on fractions produced a real
+guide (hook, steps, worked examples with CSS fraction bars, hint buttons,
+4-question check) in 13 tool calls.
+
+### 2026-09-03: pinned pages, one progress page, guides skill
+
+- **Pinned pages.** Any HTML page can be a tab at the top of the parent's
+  screen: `pin_page(path, title)` / `unpin_page(path)` tools write the app's
+  own per-key state file (`state/pins.json`, key `pins`), the same one the
+  app's Pin/Unpin buttons write (file viewer for any .html, Unpin on the tab),
+  so both sides see one list. `pins_updated` product event refreshes the app.
+- **One progress page.** Academic map + progress report merged into
+  `reports/progress.html` (what she has, how she is doing, what next, how the
+  parent can help); one tab, one skill, one menu entry.
+- **Guides are a skill.** `skills/_shared` was invisible to `read_skill`
+  (not a skill), which cost every page-building turn two or three failed
+  lookups. It is `skills/guides` now (SKILL.md + html-design.md + diagrams.md),
+  attached to both profiles.
+- **Chat UI reuse, current state.** AgentWorks and Video Studio render the
+  transcript with `components/ChatArea` + `TerminalEventTranscript`; the
+  learning app renders with `frontend/shared/chat` (ChatRenderer,
+  ToolCallSummary), used by nothing else. Same events, different renderer.
+  Moving SparkQuill onto ChatArea the way Video Studio did is the next
+  consistency step and is not started.
+
+### 2026-09-03: SparkQuill's parent chat is AgentWorks' ChatArea
+
+User: "I want to have the same [chat UI] so we can fix and debug the same
+issues." In platform mode the learning app now hosts `components/ChatArea`
+exactly as Video Studio does (`frontend/learning-app/src/platform/PlatformChat.tsx`):
+tab priming (mode stores, `resolveAgentProfileConversation`, `createChatTab`,
+`restoreSession`, `hydrateTabEvents`), the product composer, SSE/polling,
+streaming, submission and `TerminalEventTranscript` rendering are the shared
+code. SparkQuill adds a content renderer (transcript + suggestion pills via
+the new `onSubmitQuery` renderer prop), product commands as slash commands,
+and a selector over `useChatStore.tabEvents` that hands `product_interaction`
+and `presentation_updated` events to the workspace panel.
+
+Host requirements learned the hard way:
+- The AgentWorks service layer snapshots its base URL when its modules are
+  evaluated; a dependency-free `runtimeConfig.ts` imported first in
+  `main.tsx` sets `window.__APP_RUNTIME_CONFIG__` before that happens.
+  (Symptom otherwise: provider-manifest fetch hits the preview origin, gets
+  the SPA's HTML, the store held `providerManifest: undefined`, and the
+  composer crashed on `.find`. The store now guards that too.)
+- Login token mirrored into `auth_token` (the shared services' key), also
+  when an existing token is reused.
+- `lucide-react` aliased to AgentWorks' copy by FILE (a directory alias
+  bypasses the package `exports` map); `zustand`/react deduped.
+- Tailwind pipeline with AgentWorks' theme and preflight OFF; `index.css`
+  imported for the shadcn variables; `html.light|dark` kept in step.
+- Open the tab once per page load (module-level promise); re-running the
+  Video Studio sequence on a remount re-hydrates from history and discards
+  the live turn.
+- Shared components were dark-only; `TerminalEventTranscript` text now
+  carries `dark:` variants so it reads on a light surface.
+Standalone mode keeps the old renderer until the family-server is retired.
+Child mode (keyed activity conversations) is not moved yet.
+
+### 2026-09-03: product features declared in product.yaml, styling owned by the product
+
+- **Styling.** The shared composer and transcript paint with the shadcn tokens
+  only; a product sets the token values on its wrapper (SparkQuill:
+  `.fl-platform-chat` in learning-app.css, light + dark). A host without
+  Tailwind preflight gives the hosted chat a `:where(button…)` baseline.
+- **Suggestion pills are a platform feature.** Contract in
+  `frontend/shared/session/interactions.ts` (`product_interaction` kind
+  `suggestions`, payload `{actions:[{label,message}]}`), selector
+  `src/platform/interactions/useProductInteractions.ts` (twin of
+  `usePresentationEvents`), component `src/platform/chat/ProductSuggestions.tsx`.
+  A product opts in with `ui_panels.suggestions: true`; the surface reads the
+  profile (`agentApi.getAgentProfile`) instead of hardcoding it. The
+  `suggest_actions` tool itself still lives in the SparkQuill package; moving
+  it to a platform factory is the remaining step.
+- **Presentations.** The surface derives the kinds it reacts to from the
+  profile's tool bindings (`tools[].presentation.kind`) and uses the platform's
+  `usePresentationEvents`.
+- Product tool events are stamped with a real timestamp at emission
+  (`stampEventData`): a zero inner timestamp sorted them to year 0001 in a
+  restored trace, which is why pills vanished after a reload.
+- Restore keeps only the last `maxPersistedChatHistoryUIEvents` (200) trace
+  events, so tool chips of older turns do not survive a reload in any product;
+  the durable conversation has the tool messages, so the converter could
+  synthesize chips from them (not done).

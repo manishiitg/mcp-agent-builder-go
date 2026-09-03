@@ -3,7 +3,7 @@
 // Paths on this side are family-root-relative ("reports/progress.html");
 // the proxy stamps the user, and "Chats/…" resolves to that user's tree.
 import type { Activity, TreeNode } from '../../stores/types'
-import type { FileContent, ScheduleEntry, TreeResponse, UploadResult, WeekResponse } from '../familyApi'
+import type { FileContent, TreeResponse, UploadResult } from '../familyApi'
 
 export const FAMILY_ROOT = 'Chats/SparkQuill'
 export const ACTIVITIES = 'activities'
@@ -121,50 +121,4 @@ export class FamilyWorkspace {
     return this.activity(pointer.dir)
   }
 
-  async week(offset: number, now = new Date()): Promise<WeekResponse> {
-    const family = (await this.readJSON<{ schedule?: ScheduleEntry[] }>('family.json')) ?? {}
-    const log = (await this.readJSON<{ date: string; activity_dir: string; title: string; duration_seconds?: number }[]>('memory/activity-log.json')) ?? []
-    const deadlines = (await this.readJSON<{ title: string; subject?: string; due_date?: string; kind?: string }[]>('memory/school-deadlines.json')) ?? []
-    return computeWeek(offset, now, family.schedule ?? [], Array.isArray(log) ? log : [], Array.isArray(deadlines) ? deadlines : [])
-  }
-
-  async saveSchedule(entries: ScheduleEntry[]): Promise<void> {
-    const family = (await this.readJSON<Record<string, unknown>>('family.json')) ?? {}
-    family.schedule = entries
-    await this.writeJSON('family.json', family)
-    await this.writeJSON('memory/child-schedule.json', { entries })
-  }
-}
-
-const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-
-function isoDate(d: Date): string {
-  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
-/** Mirrors the standalone server's week view: Monday-based, local time. */
-export function computeWeek(offset: number, now: Date, schedule: ScheduleEntry[], log: { date: string; activity_dir: string; title: string; duration_seconds?: number }[], deadlines: { title: string; subject?: string; due_date?: string; kind?: string }[]): WeekResponse {
-  let weekday = now.getDay()
-  if (weekday === 0) weekday = 7
-  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (weekday - 1) + 7 * offset)
-  const days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i)
-    const name = WEEKDAYS[d.getDay()]
-    return { date: isoDate(d), weekday: name, schedule: schedule.filter((s) => s.day === name), activities: [] as WeekResponse['days'][number]['activities'], deadlines: [] as WeekResponse['days'][number]['deadlines'] }
-  })
-  const index = new Map(days.map((d, i) => [d.date, i]))
-  for (const e of log) {
-    const i = index.get(e.date)
-    if (i !== undefined) days[i].activities!.push(e)
-  }
-  const upcoming: WeekResponse['upcoming_deadlines'] = []
-  for (const dl of deadlines) {
-    if (!dl.due_date) continue
-    const i = index.get(dl.due_date)
-    if (i !== undefined) days[i].deadlines!.push(dl)
-    if (dl.due_date >= days[0].date && dl.due_date <= days[6].date) upcoming.push(dl)
-  }
-  upcoming.sort((a, b) => (a.due_date ?? '').localeCompare(b.due_date ?? ''))
-  return { week_start: days[0].date, week_end: days[6].date, days, upcoming_deadlines: upcoming }
 }

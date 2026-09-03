@@ -24,21 +24,36 @@ type Child struct {
 	Language string `json:"language,omitempty"`
 }
 
-// ScheduleEntry is one recurring weekly commitment.
-type ScheduleEntry struct {
-	Day   string `json:"day"`
-	Start string `json:"start"`
-	End   string `json:"end"`
-	Label string `json:"label"`
-}
-
 // FamilyState is family.json.
 type FamilyState struct {
-	Child       *Child          `json:"child,omitempty"`
-	ParentLabel string          `json:"parent_label,omitempty"`
-	PinHash     string          `json:"pin_hash,omitempty"`
-	WatchSites  []string        `json:"watch_sites,omitempty"`
-	Schedule    []ScheduleEntry `json:"schedule,omitempty"`
+	Child       *Child   `json:"child,omitempty"`
+	ParentLabel string   `json:"parent_label,omitempty"`
+	PinHash     string   `json:"pin_hash,omitempty"`
+	WatchSites  []string `json:"watch_sites,omitempty"`
+}
+
+// The family workspace layout. Tools, the inbox note and the prompt all read
+// these names from here, so the prompt cannot describe folders that the code
+// no longer uses.
+const (
+	MaterialsFolder = "materials"
+	MemoryFolder    = "memory"
+	ReportsFolder   = "reports"
+	ArchiveFolder   = "archive"
+	InboxFolder     = "inbox"
+)
+
+// WorkspaceLayout renders the "YOUR WORKSPACE" bullets of the parent prompt.
+func WorkspaceLayout() string {
+	return strings.Join([]string{
+		"- " + ActivitiesFolder + "/<yyyy-mm-dd>-<slug>/ — every piece of child-facing content lives in its own activity folder: the content files, its activity.json manifest, any <name>-KEY.md answer key, and (once she starts) her own conversation and attempts/.",
+		"- " + MaterialsFolder + "/<subject>/<topic>/ — school material the family uploaded; each file has a .meta.json alongside whose extracted_text already holds the full content.",
+		"- " + MemoryFolder + "/preferences.md, " + MemoryFolder + "/interests.md, " + MemoryFolder + "/child-profile.json — durable context about the parent and child, kept current by the check-in. Read them when a preference or interest would change what you do; never write them by hand.",
+		"- " + MemoryFolder + "/browser-notes.md — your own short cheat sheet for sites you browse with agent_browser; read it before a familiar site, keep it current, edit in place.",
+		"- " + ReportsFolder + "/progress.html — the one living progress page: what she has, how she is doing, what to do next.",
+		"- " + ArchiveFolder + "/ — activities the parent asked you to put away: move the whole folder here when they say so, never on your own. Still real evidence for reports; never handed to her again. Nothing is ever deleted unless the parent explicitly asks.",
+		"- " + InboxFolder + "/ — uploads waiting to be filed (you are told above when there are any).",
+	}, "\n") + "\n"
 }
 
 // ParentPromptVariables computes the parent prompt's Product variables:
@@ -70,8 +85,9 @@ func ParentPromptVariables(s FamilyState) map[string]string {
 		"CHILD_WHO":          who,
 		"CHILD_INFO_NUDGE":   "",
 		"PARENT_LABEL_NUDGE": "",
-		"SCHEDULE_NUDGE":     "",
 		"CONNECTOR_NOTE":     "",
+		"INBOX_NOTE":         "",
+		"WORKSPACE_LAYOUT":   WorkspaceLayout(),
 	}
 	if len(missing) > 0 {
 		vars["CHILD_INFO_NUDGE"] = "IMPORTANT — you do not yet know the child's " + strings.Join(missing, ", ") +
@@ -80,11 +96,6 @@ func ParentPromptVariables(s FamilyState) map[string]string {
 	if strings.TrimSpace(s.ParentLabel) == "" {
 		vars["PARENT_LABEL_NUDGE"] = "IMPORTANT — you don't yet know what to call the parent when you talk ABOUT them to " + name +
 			" (\"your mom\" vs \"your dad\" vs a name). Early on, warmly ask once and save the answer with set_parent_label. Don't block other work on this.\n"
-	}
-	if len(s.Schedule) == 0 {
-		vars["SCHEDULE_NUDGE"] = "You don't yet know " + name + "'s recurring weekly schedule (school hours, tuition, sports practice). If the conversation is about planning, study time, or when she's free, ask about her class schedule and save what you learn with set_child_schedule. Not urgent otherwise.\n"
-	} else {
-		vars["SCHEDULE_NUDGE"] = "You already have some of " + name + "'s recurring weekly schedule saved. If the parent mentions a NEW recurring commitment in conversation, capture it with set_child_schedule right then — an exact duplicate is silently skipped. Don't proactively ask for more.\n"
 	}
 	if sites := cleanSites(s.WatchSites); len(sites) > 0 {
 		vars["CONNECTOR_NOTE"] = "The parent has asked you to keep an eye on these website(s): " + strings.Join(sites, ", ") +
@@ -148,8 +159,9 @@ func cleanSites(sites []string) []string {
 func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIURL string) error {
 	factories := map[string]agentprofiles.ToolFactory{
 		"sparkquill.set-child-profile":        setChildProfileFactory(workspaceAPIURL),
-		"sparkquill.set-child-schedule":       setChildScheduleFactory(workspaceAPIURL),
 		"sparkquill.set-parent-label":         setParentLabelFactory(workspaceAPIURL),
+		"sparkquill.pin-page":                 pinPageFactory(workspaceAPIURL),
+		"sparkquill.unpin-page":               unpinPageFactory(workspaceAPIURL),
 		"sparkquill.create-learning-activity": createLearningActivityFactory(workspaceAPIURL),
 		"sparkquill.open-file":                openFileFactory(workspaceAPIURL, false),
 		"sparkquill.open-activity-file":       openFileFactory(workspaceAPIURL, true),
@@ -180,11 +192,14 @@ func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIU
 	}
 	loader := familyLoader{workspaceAPIURL: workspaceAPIURL}
 	if err := registry.RegisterPromptVariables(ParentProfileID, func(ctx context.Context, rt agentprofiles.RuntimeContext) (map[string]string, error) {
-		state, err := loader.load(ctx, rt.UserID, runtimeRoot(rt.UserID, rt.WorkspacePath))
+		familyRoot := runtimeRoot(rt.UserID, rt.WorkspacePath)
+		state, err := loader.load(ctx, rt.UserID, familyRoot)
 		if err != nil {
 			return nil, err
 		}
-		return ParentPromptVariables(state), nil
+		vars := ParentPromptVariables(state)
+		vars["INBOX_NOTE"] = InboxNote(loader.listInbox(ctx, rt.UserID, familyRoot))
+		return vars, nil
 	}); err != nil {
 		return err
 	}
@@ -197,9 +212,28 @@ func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIU
 		if err != nil {
 			return nil, err
 		}
-		interests := loader.read(ctx, rt.UserID, path.Join(familyRoot, "memory", "interests.md"))
+		interests := loader.read(ctx, rt.UserID, path.Join(familyRoot, MemoryFolder, "interests.md"))
 		return ChildPromptVariables(state, activityRoot, interests), nil
 	})
+}
+
+// InboxNote turns the unfiled uploads into one turn-context line. The prompt
+// used to make the model run `ls inbox/` before every reply; the platform
+// renders the prompt per turn, so it can just say what is there.
+func InboxNote(files []string) string {
+	if len(files) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(files))
+	for _, f := range files {
+		if n := strings.TrimSpace(path.Base(f)); n != "" && n != "." && n != "/" {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("INBOX — %d file(s) the parent uploaded are not filed yet: %s. File them with the process-file skill as a quiet background step this turn, then answer what the parent actually asked.\n", len(names), strings.Join(names, ", "))
 }
 
 // familyRootFromActivity maps ".../Chats/SparkQuill/activities/<activity>"
@@ -230,6 +264,61 @@ func (l familyLoader) read(ctx context.Context, userID, filePath string) string 
 		return ""
 	}
 	return result.Content
+}
+
+// listInbox returns the files waiting in <familyRoot>/inbox, or nothing when
+// the folder is missing or the workspace cannot be reached (the note is a
+// convenience, never a reason to fail a turn).
+func (l familyLoader) listInbox(ctx context.Context, userID, familyRoot string) []string {
+	if strings.TrimSpace(l.workspaceAPIURL) == "" {
+		return nil
+	}
+	depth := 1
+	result, err := l.client(userID).ListWorkspaceFiles(ctx, workspace.ListWorkspaceFilesParams{Folder: path.Join(strings.Trim(familyRoot, "/"), InboxFolder), MaxDepth: &depth})
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, e := range parseFolderListing(result.Raw) {
+		if e.Type == "folder" || strings.TrimSpace(e.FilePath) == "" || strings.HasSuffix(e.FilePath, ".meta.json") {
+			continue
+		}
+		files = append(files, e.FilePath)
+	}
+	return files
+}
+
+type folderEntry struct {
+	FilePath string        `json:"filepath"`
+	Type     string        `json:"type"`
+	Children []folderEntry `json:"children,omitempty"`
+}
+
+// parseFolderListing reads the documents API's folder listing in the shapes
+// it is known to use: a bare array, {data: [...]}, or a single folder object
+// whose children are the listing.
+func parseFolderListing(raw json.RawMessage) []folderEntry {
+	var list []folderEntry
+	if json.Unmarshal(raw, &list) == nil {
+		return list
+	}
+	var wrapped struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if json.Unmarshal(raw, &wrapped) == nil && len(wrapped.Data) > 0 {
+		if json.Unmarshal(wrapped.Data, &list) == nil {
+			return list
+		}
+		var one folderEntry
+		if json.Unmarshal(wrapped.Data, &one) == nil {
+			return one.Children
+		}
+	}
+	var one folderEntry
+	if json.Unmarshal(raw, &one) == nil {
+		return one.Children
+	}
+	return nil
 }
 
 // load reads family.json from the product root; a missing file is a new

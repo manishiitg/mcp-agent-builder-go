@@ -12,7 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 	"github.com/manishiitg/mcpagent/llm"
+	llmproviders "github.com/manishiitg/multi-llm-provider-go"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	"github.com/manishiitg/multi-llm-provider-go/pkg/adapters/azure"
 )
@@ -182,6 +185,30 @@ func isAllowedDefaultLLM(provider, modelID string) bool {
 		return true
 	}
 
+	// An explicitly published list is the whole menu: when the operator set
+	// DEFAULT_PUBLISHED_LLMS (or its _PATH), a locked provider may only run
+	// what that list names. Without one, the historical behaviour stands and
+	// any model the platform knows for a locked provider is accepted -- which
+	// let a workflow's saved config keep a provider the UI no longer offered
+	// (found on RTS 2026-09-03 while fixing AgentWorks to one Cursor model).
+	if publishedLLMListConfigured() {
+		if publishedLLMListContains(provider, modelID, defaults.PrimaryConfig) {
+			return true
+		}
+		// A published coding-agent provider brings its role profile with it
+		// (see lockedPresetLLMConfig), so those models are published too.
+		if publishedLLMProviderListed(provider, defaults.PrimaryConfig) {
+			if tiers, ok := llmproviders.GetCodingAgentDefaultTierModels(llmproviders.Provider(provider)); ok {
+				for _, ref := range []llmproviders.CodingAgentTierModelRef{tiers.Builder, tiers.High, tiers.Medium, tiers.Low, tiers.Pulse} {
+					if strings.EqualFold(strings.TrimSpace(ref.ModelID), modelID) {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+
 	// Allow any model listed in AvailableModels for this provider. Dynamic CLI
 	// providers can come from the curated discovery options when the provider
 	// library does not expose them through static defaults.
@@ -195,8 +222,26 @@ func isAllowedDefaultLLM(provider, modelID string) bool {
 		}
 	}
 
-	list := getDefaultPublishedLLMs(true, defaults.PrimaryConfig)
-	for _, entry := range list {
+	return publishedLLMListContains(provider, modelID, defaults.PrimaryConfig)
+}
+
+// publishedLLMListConfigured reports whether the operator explicitly published
+// an LLM list (as opposed to the auto-generated one built from known models).
+func publishedLLMListConfigured() bool {
+	return strings.TrimSpace(os.Getenv("DEFAULT_PUBLISHED_LLMS")) != "" || strings.TrimSpace(os.Getenv("DEFAULT_PUBLISHED_LLMS_PATH")) != ""
+}
+
+func publishedLLMProviderListed(provider string, primaryConfig interface{}) bool {
+	for _, entry := range getDefaultPublishedLLMs(true, primaryConfig) {
+		if p, _ := entry["provider"].(string); strings.EqualFold(strings.TrimSpace(p), provider) {
+			return true
+		}
+	}
+	return false
+}
+
+func publishedLLMListContains(provider, modelID string, primaryConfig interface{}) bool {
+	for _, entry := range getDefaultPublishedLLMs(true, primaryConfig) {
 		p, _ := entry["provider"].(string)
 		m, _ := entry["model_id"].(string)
 		if p == provider && m == modelID {
@@ -204,6 +249,23 @@ func isAllowedDefaultLLM(provider, modelID string) bool {
 		}
 	}
 	return false
+}
+
+// resolveLockedLLM is the provider/model a request runs with while
+// LLM_CONFIG_LOCKED is on. A binding owned by a product profile (Video
+// Studio pins claude-code in its product.yaml) is operator configuration
+// too, so it always wins; anything else must be on the published list, or
+// the server default applies.
+func resolveLockedLLM(cfg *orchestrator.LLMConfig, source string) (string, string) {
+	if cfg != nil {
+		p, m := strings.TrimSpace(cfg.Primary.Provider), strings.TrimSpace(cfg.Primary.ModelID)
+		if p != "" && m != "" {
+			if source == llmConfigSourceAgentProfile || isAllowedDefaultLLM(p, m) {
+				return p, m
+			}
+		}
+	}
+	return getPrimaryProviderAndModelFromDefaults()
 }
 
 func buildProviderCapabilities(ctx context.Context) map[string][]string {
@@ -1394,4 +1456,73 @@ func (api *StreamingAPI) handleGetAzureDeployedModels(w http.ResponseWriter, r *
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 		return
 	}
+}
+
+// lockedPresetLLMConfig is a workflow's saved LLM config as it actually runs
+// under LLM_CONFIG_LOCKED with an explicitly published list: every role --
+// Builder, Pulse and the three execution tiers -- runs the published default
+// unless the saved role is itself on the published list, and fallbacks are
+// dropped. Without the lock (or without a published list) the config is
+// returned untouched. The result is runtime-only; nothing writes it back to
+// workflow.json, so lifting the lock restores the workflow's own choices.
+//
+// Why here and not in handleQuery's primary-config check: the Builder chat,
+// scheduled runs and step execution take their models from the manifest's
+// llm_config, not from the request's primary config, so a locked deployment
+// still ran a synced workflow on claude-sonnet-5 (RTS, 2026-09-03).
+func lockedPresetLLMConfig(cfg *workflowtypes.PresetLLMConfig) *workflowtypes.PresetLLMConfig {
+	if !isGlobalLLMConfigLocked() || !publishedLLMListConfigured() {
+		return cfg
+	}
+	defaults := llm.GetLLMDefaults()
+	published := getDefaultPublishedLLMs(true, defaults.PrimaryConfig)
+	if len(published) == 0 {
+		return cfg
+	}
+	defProvider, _ := published[0]["provider"].(string)
+	defModel, _ := published[0]["model_id"].(string)
+	defProvider, defModel = strings.TrimSpace(defProvider), strings.TrimSpace(defModel)
+	if defProvider == "" || defModel == "" {
+		return cfg
+	}
+	out := &workflowtypes.PresetLLMConfig{SchemaVersion: 2}
+	if cfg != nil {
+		copied := *cfg
+		out = &copied
+	}
+	// A coding-agent provider (Cursor, Claude Code, Codex, Pi) carries its own
+	// role profile -- Builder/High, Medium, Low and Pulse models chosen for
+	// that provider. Locking to such a provider means locking to that
+	// profile, not flattening every role onto one model: Cursor's High
+	// reasoning is grok-4.6, Medium composer-2.5, Low auto, and the tiers
+	// keep meaning something.
+	if _, ok := llmproviders.GetCodingAgentDefaultTierModels(llmproviders.Provider(defProvider)); ok {
+		out.Mode = workflowtypes.LLMConfigModeProviderProfile
+		out.Provider = defProvider
+		out.BuilderLLM, out.PulseLLM, out.TieredConfig = nil, nil, nil
+		return out
+	}
+	// Any other published provider has no role profile: every role runs the
+	// published model unless the saved role is itself on the published list.
+	role := func(saved *workflowtypes.AgentLLMConfig) *workflowtypes.AgentLLMConfig {
+		if saved != nil && publishedLLMListContains(strings.TrimSpace(saved.Provider), strings.TrimSpace(saved.ModelID), defaults.PrimaryConfig) {
+			kept := *saved
+			kept.Fallbacks = nil
+			return &kept
+		}
+		return &workflowtypes.AgentLLMConfig{Provider: defProvider, ModelID: defModel}
+	}
+	var savedBuilder, savedPulse, t1, t2, t3 *workflowtypes.AgentLLMConfig
+	if cfg != nil {
+		savedBuilder, savedPulse = cfg.BuilderLLM, cfg.PulseLLM
+		if cfg.TieredConfig != nil {
+			t1, t2, t3 = cfg.TieredConfig.Tier1, cfg.TieredConfig.Tier2, cfg.TieredConfig.Tier3
+		}
+	}
+	out.Mode = workflowtypes.LLMConfigModeExplicit
+	out.Provider = ""
+	out.BuilderLLM = role(savedBuilder)
+	out.PulseLLM = role(savedPulse)
+	out.TieredConfig = &workflowtypes.TieredLLMConfig{Tier1: role(t1), Tier2: role(t2), Tier3: role(t3)}
+	return out
 }

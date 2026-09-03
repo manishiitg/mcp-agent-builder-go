@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -375,6 +376,7 @@ func (api *StreamingAPI) emitAgentProfileEvent(sessionID string, event any) {
 
 	var data unifiedevents.EventData
 	if typed, ok := event.(unifiedevents.EventData); ok {
+		stampEventData(typed, now)
 		data = typed
 	} else {
 		payload := map[string]interface{}{"event": event}
@@ -394,6 +396,30 @@ func (api *StreamingAPI) emitAgentProfileEvent(sessionID string, event any) {
 			Data: data,
 		},
 	})
+}
+
+// stampEventData gives a product tool's event a real timestamp when its
+// embedded BaseEventData was left at zero. A zero inner timestamp sorted the
+// event to the year 0001 when a persisted trace was merged back into a
+// restored conversation, so a product's suggestion pills vanished after a
+// reload because the event landed before the user's message instead of after
+// its reply.
+func stampEventData(data unifiedevents.EventData, now time.Time) {
+	v := reflect.ValueOf(data)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return
+	}
+	base := v.Elem().FieldByName("BaseEventData")
+	if !base.IsValid() {
+		return
+	}
+	ts := base.FieldByName("Timestamp")
+	if !ts.IsValid() || !ts.CanSet() {
+		return
+	}
+	if current, ok := ts.Interface().(time.Time); ok && current.IsZero() {
+		ts.Set(reflect.ValueOf(now))
+	}
 }
 
 func (api *StreamingAPI) registerAgentProfileTools(registrar definitionToolRegistrar, resolved *resolvedAgentProfile, userID, sessionID, workspacePath string) error {

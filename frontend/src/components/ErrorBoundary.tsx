@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { isStaleChunkError, reloadOnceForStaleChunk } from '../utils/staleChunkReload'
 
 interface Props {
   children: ReactNode
@@ -23,6 +24,9 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
+    // A lazy chunk from a previous build is not a crash: reload once so the tab
+    // picks up the current release instead of showing a dead-end fallback.
+    if (reloadOnceForStaleChunk(error)) return
     this.props.onError?.(error, info)
   }
 
@@ -50,7 +54,9 @@ export default class ErrorBoundary extends Component<Props, State> {
           textAlign: 'center',
         }}
       >
-        <div style={{ fontSize: 18, fontWeight: 600 }}>Something went wrong</div>
+        <div style={{ fontSize: 18, fontWeight: 600 }}>
+          {isStaleChunkError(error) ? 'A new version is available' : 'Something went wrong'}
+        </div>
         <div style={{ fontSize: 13, opacity: 0.85, maxWidth: 600, whiteSpace: 'pre-wrap' }}>
           {error.message}
         </div>

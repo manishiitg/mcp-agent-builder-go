@@ -10,6 +10,7 @@ import { llmConfigService, type ModelMetadata, type ProviderManifestEntry } from
 import { LibraryTab } from './llm/LibraryTab'
 import ModalPortal from './ui/ModalPortal'
 import { useCanWriteWorkflow } from '../hooks/useCanWriteWorkflow'
+import { effectiveLLMUnderLock } from '../utils/effectiveLLM'
 
 interface LLMConfigurationModalProps {
   isOpen: boolean
@@ -85,6 +86,7 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
     providerManifest,
     providerManifestLoaded,
     loadProviderManifest,
+    savedLLMs: publishedLLMs,
   } = useLLMStore()
 
   // Same read-only gate the workflow panel applies to these sections, so a
@@ -392,14 +394,36 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
                 <X className="w-4 h-4" />
               </Button>
             </div>
-            <p className="text-muted-foreground">
-              LLM settings are locked by admin. Contact your administrator to enable new LLMs or models.
-            </p>
-            {modePrimaryConfig?.provider && modePrimaryConfig?.model_id && (
-              <p className="text-sm text-muted-foreground mt-3">
-                Current: {modePrimaryConfig.provider} — {modePrimaryConfig.model_id}
-              </p>
-            )}
+            {(() => {
+              const effective = effectiveLLMUnderLock(modePrimaryConfig, true, publishedLLMs)
+              const name = effective ? (providerManifest.find(p => p.id === effective.provider)?.display_name ?? effective.provider) : null
+              const others = providerManifest
+                .filter(p => !p.deprecated && p.id !== effective?.provider)
+                .map(p => p.display_name)
+                .sort((a, b) => a.localeCompare(b))
+              return (
+                <>
+                  <p className="text-foreground">
+                    {name ? <>This deployment runs on <span className="font-medium">{name}</span>{effective?.model_id && effective.model_id !== effective.provider ? <> <span className="font-mono text-sm text-muted-foreground">{effective.model_id}</span></> : null}.</> : 'This deployment runs on the model published by your administrator.'}
+                  </p>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Set by your administrator for every workflow and chat here; it cannot be changed from this screen.
+                  </p>
+                  {others.length > 0 && (
+                    <div className="mt-3 text-xs text-muted-foreground">
+                      <div className="mb-1 font-medium text-foreground/80">Other providers on this platform</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {others.map(o => (
+                          <span key={o} className="inline-flex items-center gap-1 rounded-md border border-dashed border-border px-2 py-0.5 opacity-60" title="Locked on this deployment">
+                            <Lock className="w-3 h-3" /> {o}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )
+            })()}
           </div>
         </div>
       </TooltipProvider>

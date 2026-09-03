@@ -1,6 +1,7 @@
 package sparkquillproduct
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -104,8 +105,6 @@ func (w familyWorkspace) saveFamily(ctx context.Context, state FamilyState) erro
 		profile, _ := encodeJSON(state.Child)
 		_ = w.write(ctx, "memory/child-profile.json", profile)
 	}
-	schedule, _ := encodeJSON(map[string]interface{}{"entries": state.Schedule})
-	_ = w.write(ctx, "memory/child-schedule.json", schedule)
 	return nil
 }
 
@@ -123,12 +122,16 @@ func stringArg(args map[string]interface{}, key string) string {
 	return ""
 }
 
+// jsonResult is what a tool hands back to the model; angle brackets stay
+// readable so a report like dropped: ["<input>"] says what it means.
 func jsonResult(v interface{}) (string, error) {
-	data, err := json.Marshal(v)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
 		return "", err
 	}
-	return string(data), nil
+	return strings.TrimRight(buf.String(), "\n"), nil
 }
 
 // ---- family state --------------------------------------------------------
@@ -175,65 +178,6 @@ func setChildProfileFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 	}
 }
 
-func setChildScheduleFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
-	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
-		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
-		return agentprofiles.ToolSpec{
-			Name: "set_child_schedule", Category: toolCategory,
-			Description: "Save one or more recurring weekly commitments to the child's schedule — school hours, tuition, sports practice — once the parent tells you, or you notice one from context. ADDS to the existing schedule (never replaces it); an entry that exactly matches one already saved is silently skipped, so it is safe to call even if you are not sure it is new.",
-			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-				"entries": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-					"day":   map[string]interface{}{"type": "string", "description": "e.g. Monday"},
-					"start": map[string]interface{}{"type": "string", "description": "24h local time, e.g. 08:00"},
-					"end":   map[string]interface{}{"type": "string", "description": "24h local time, e.g. 14:30"},
-					"label": map[string]interface{}{"type": "string", "description": "e.g. School, Football practice"},
-				}, "required": []string{"day", "start", "end", "label"}}},
-			}, "required": []string{"entries"}},
-			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-				raw, _ := args["entries"].([]interface{})
-				var added []ScheduleEntry
-				for _, item := range raw {
-					m, ok := item.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					e := ScheduleEntry{Day: stringArg(m, "day"), Start: stringArg(m, "start"), End: stringArg(m, "end"), Label: stringArg(m, "label")}
-					if e.Day == "" || e.Start == "" || e.End == "" || e.Label == "" {
-						continue
-					}
-					added = append(added, e)
-				}
-				if len(added) == 0 {
-					return "", fmt.Errorf("no valid entries provided — each needs day, start, end, and label")
-				}
-				state, err := ws.loadFamily(ctx)
-				if err != nil {
-					return "", err
-				}
-				newCount := 0
-				for _, e := range added {
-					dup := false
-					for _, ex := range state.Schedule {
-						if ex == e {
-							dup = true
-							break
-						}
-					}
-					if !dup {
-						state.Schedule = append(state.Schedule, e)
-						newCount++
-					}
-				}
-				if err := ws.saveFamily(ctx, state); err != nil {
-					return "", err
-				}
-				emitInteraction(runtime, "family_updated", map[string]interface{}{"schedule": state.Schedule})
-				return jsonResult(map[string]interface{}{"status": "ok", "added": newCount, "total_entries": len(state.Schedule)})
-			},
-		}, nil
-	}
-}
-
 func setParentLabelFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
 		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
@@ -270,7 +214,7 @@ func createLearningActivityFactory(workspaceAPIURL string) agentprofiles.ToolFac
 		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
 		return agentprofiles.ToolSpec{
 			Name: "create_learning_activity", Category: toolCategory,
-			Description: "Finalize an activity you've already built. First create the folder " + ActivitiesFolder + "/<yyyy-mm-dd>-<slug>/ and write its content files into it (the study material / test HTML, and any answer key as <name>-KEY.md), then call this with that folder as `dir` to write its activity.json manifest. `items` are the bare filenames inside the folder, in the order the child works through them (do NOT include the answer key). For an instruction-only activity (the tutor generates questions live), leave `items` empty and put the full description in `goal`. `goal` is WHAT this activity is for, in the parent's own words — what finishing looks like and anything the parent genuinely cares about; not a turn-by-turn script. `persona` is the tutor's tone. After this, call open_activity(dir) so the parent sees it on the right. Neither this nor open_activity hands anything to the child — only the parent does.",
+			Description: "Finalize an activity you've already built. First create the folder " + ActivitiesFolder + "/<yyyy-mm-dd>-<slug>/ and write its page into it as <name>" + FragmentSuffix + " written however you like (your own styles, pictures, demos; <button data-choose=…> is a choice she taps that reaches the tutor). This tool finishes every " + FragmentSuffix + " item into <name>.html (wires the buttons and the print hook, numbers any <div class=q> questions), writes activity.json and product.json, and reports anything it removed (form controls, click-to-reveal, links, remote resources). Then call open_activity(dir) so the parent sees it. A plain .html item is accepted as-is only for hand-built interactive pages (coding demos)",
 			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
 				"dir":     map[string]interface{}{"type": "string", "description": "the activity folder you created: " + ActivitiesFolder + "/<yyyy-mm-dd>-<slug>"},
 				"title":   map[string]interface{}{"type": "string", "description": "short human title, e.g. \"Fractions — Quick Check\""},
@@ -290,14 +234,31 @@ func createLearningActivityFactory(workspaceAPIURL string) agentprofiles.ToolFac
 					return "", fmt.Errorf("title is required")
 				}
 				var items []string
+				var sections []SectionInfo
+				var reports []RenderReport
+				marks := 0
 				if raw, ok := args["items"].([]interface{}); ok {
 					for _, it := range raw {
 						name := path.Base(strings.TrimSpace(fmt.Sprint(it)))
 						if name == "" || name == "." || it == nil || isAnswerKey(name) {
 							continue
 						}
-						if _, found := ws.read(ctx, path.Join(rel, name)); !found {
+						content, found := ws.read(ctx, path.Join(rel, name))
+						if !found {
 							return "", fmt.Errorf("item %q not found in the activity folder — write it first", name)
+						}
+						if strings.HasSuffix(strings.ToLower(name), FragmentSuffix) {
+							page, report, err := RenderActivityPage(content, PageMeta{Title: title})
+							if err != nil {
+								return "", fmt.Errorf("render %s: %w", name, err)
+							}
+							name = renderedName(name)
+							if err := ws.write(ctx, path.Join(rel, name), page); err != nil {
+								return "", fmt.Errorf("write %s: %w", name, err)
+							}
+							sections = append(sections, report.Sections...)
+							marks += report.Marks
+							reports = append(reports, report)
 						}
 						items = append(items, name)
 					}
@@ -306,7 +267,7 @@ func createLearningActivityFactory(workspaceAPIURL string) agentprofiles.ToolFac
 				if len(items) == 0 && goal == "" {
 					return "", fmt.Errorf("either items (files in the folder) or goal (for an instruction-only activity) is required")
 				}
-				manifest := ActivityManifest{Title: title, Subject: stringArg(args, "subject"), Topic: stringArg(args, "topic"), Items: items, Goal: goal, Persona: stringArg(args, "persona"), CreatedAt: nowStamp()}
+				manifest := ActivityManifest{Title: title, Subject: stringArg(args, "subject"), Topic: stringArg(args, "topic"), Items: items, Goal: goal, Persona: stringArg(args, "persona"), CreatedAt: nowStamp(), Sections: sections, Marks: marks}
 				content, err := encodeJSON(manifest)
 				if err != nil {
 					return "", err
@@ -329,7 +290,164 @@ func createLearningActivityFactory(workspaceAPIURL string) agentprofiles.ToolFac
 					return "", fmt.Errorf("write product.json: %w", err)
 				}
 				emitInteraction(runtime, "activity_created", map[string]interface{}{"dir": rel, "title": title, "items": len(items)})
-				return jsonResult(map[string]interface{}{"status": "ok", "dir": rel, "title": title, "items": len(items)})
+				result := map[string]interface{}{"status": "ok", "dir": rel, "title": title, "items": len(items)}
+				if len(reports) > 0 {
+					var dropped, warnings []string
+					for _, r := range reports {
+						dropped = append(dropped, r.Dropped...)
+						warnings = append(warnings, r.Warnings...)
+					}
+					result["pages"] = items
+					result["sections"] = sections
+					result["questions"] = func() int {
+						n := 0
+						for _, r := range reports {
+							n += r.Questions
+						}
+						return n
+					}()
+					result["marks"] = marks
+					if len(dropped) > 0 {
+						result["dropped"] = dropped
+					}
+					if len(warnings) > 0 {
+						result["warnings"] = warnings
+					}
+				}
+				return jsonResult(result)
+			},
+		}, nil
+	}
+}
+
+// ---- pinned pages ---------------------------------------------------------
+
+// PinsStateFile is where the parent's pinned pages live: the app's own
+// per-key state file (the same one its Pin button writes), so the tool and
+// the UI never disagree.
+const PinsStateFile = "state/pins.json"
+
+// PinnedPage is one tab at the top of the parent's screen.
+type PinnedPage struct {
+	Path  string `json:"path"`
+	Title string `json:"title"`
+}
+
+type pinsState struct {
+	Key  string `json:"key"`
+	Data struct {
+		Pins []PinnedPage `json:"pins"`
+	} `json:"data"`
+}
+
+func (w familyWorkspace) loadPins(ctx context.Context) []PinnedPage {
+	raw, ok := w.read(ctx, PinsStateFile)
+	if !ok {
+		return nil
+	}
+	var st pinsState
+	if json.Unmarshal([]byte(raw), &st) != nil {
+		return nil
+	}
+	return st.Data.Pins
+}
+
+func (w familyWorkspace) savePins(ctx context.Context, pins []PinnedPage) error {
+	var st pinsState
+	st.Key = "pins"
+	st.Data.Pins = pins
+	if st.Data.Pins == nil {
+		st.Data.Pins = []PinnedPage{}
+	}
+	content, err := encodeJSON(st)
+	if err != nil {
+		return err
+	}
+	return w.write(ctx, PinsStateFile, content)
+}
+
+// familyRelative normalises a path the model passed (bare, family-relative,
+// or prefixed with the runtime root) to family-relative form.
+func familyRelative(root, raw string) string {
+	clean := strings.Trim(strings.TrimSpace(strings.ReplaceAll(raw, "\\", "/")), "/")
+	if r := strings.Trim(root, "/"); r != "" && strings.HasPrefix(clean, r+"/") {
+		clean = strings.TrimPrefix(clean, r+"/")
+	}
+	return clean
+}
+
+func pinPageFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
+		return agentprofiles.ToolSpec{
+			Name: "pin_page", Category: toolCategory,
+			Description: "Pin any HTML page you made for the parent (an exam tracker, a date sheet, a revision plan, anything) as a tab at the top of their screen. Write the page first (e.g. pages/<slug>.html, your own design, no form controls), then call this with its path and a short tab title. Pinning again with the same path just renames the tab. The parent can also pin or unpin from the page itself.",
+			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"path":  map[string]interface{}{"type": "string", "description": "the page's path relative to the workspace, e.g. pages/exam-tracker.html"},
+				"title": map[string]interface{}{"type": "string", "description": "short tab title, e.g. Exam tracker"},
+			}, "required": []string{"path", "title"}},
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				rel := familyRelative(ws.root, stringArg(args, "path"))
+				title := strings.TrimSpace(stringArg(args, "title"))
+				if rel == "" || title == "" {
+					return "", fmt.Errorf("path and title are required")
+				}
+				if !strings.HasSuffix(strings.ToLower(rel), ".html") && !strings.HasSuffix(strings.ToLower(rel), ".htm") {
+					return "", fmt.Errorf("only an HTML page can be pinned as a tab: %s", rel)
+				}
+				if _, found := ws.read(ctx, rel); !found {
+					return "", fmt.Errorf("%s does not exist — write the page first", rel)
+				}
+				pins := ws.loadPins(ctx)
+				replaced := false
+				for i := range pins {
+					if pins[i].Path == rel {
+						pins[i].Title = title
+						replaced = true
+					}
+				}
+				if !replaced {
+					pins = append(pins, PinnedPage{Path: rel, Title: title})
+				}
+				if err := ws.savePins(ctx, pins); err != nil {
+					return "", err
+				}
+				emitInteraction(runtime, "pins_updated", map[string]interface{}{"pins": pins})
+				return jsonResult(map[string]interface{}{"status": "ok", "pinned": rel, "title": title, "pins": len(pins)})
+			},
+		}, nil
+	}
+}
+
+func unpinPageFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
+		return agentprofiles.ToolSpec{
+			Name: "unpin_page", Category: toolCategory,
+			Description: "Remove a pinned page's tab from the top of the parent's screen. The file itself stays where it is.",
+			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"path": map[string]interface{}{"type": "string", "description": "the pinned page's path, e.g. pages/exam-tracker.html"},
+			}, "required": []string{"path"}},
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				rel := familyRelative(ws.root, stringArg(args, "path"))
+				pins := ws.loadPins(ctx)
+				kept := pins[:0]
+				removed := false
+				for _, p := range pins {
+					if p.Path == rel {
+						removed = true
+						continue
+					}
+					kept = append(kept, p)
+				}
+				if !removed {
+					return "", fmt.Errorf("%s is not pinned", rel)
+				}
+				if err := ws.savePins(ctx, kept); err != nil {
+					return "", err
+				}
+				emitInteraction(runtime, "pins_updated", map[string]interface{}{"pins": kept})
+				return jsonResult(map[string]interface{}{"status": "ok", "unpinned": rel, "pins": len(kept)})
 			},
 		}, nil
 	}
@@ -350,11 +468,11 @@ func presentationActivity(binding *agentprofiles.PresentationBinding) *orchestra
 func openFileFactory(workspaceAPIURL string, conversationOnly bool) agentprofiles.ToolFactory {
 	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
 		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
-		description := "Show a workspace file to the parent on the right side of the screen. Call this right after you create or update a file the parent should see (study material, a test, a progress report, the academic map). Pass the path relative to the workspace."
+		description := "Show a workspace file to the parent on the right side of the screen. Call this right after you create or update a file the parent should see (study material, a test, the progress page). Pass the path relative to the workspace."
 		params := map[string]interface{}{"path": map[string]interface{}{"type": "string", "description": "workspace-relative path to the file to display"}}
 		if conversationOnly {
 			description = "Show a lesson, worksheet, or one of her own saved pages on the right side of her screen. Pass the path relative to the activity folder. PASS focus WHENEVER you are talking about one specific question or section — that is what actually scrolls the page to it; omit it to keep her current position (for example right after recording an answer)."
-			params["focus"] = map[string]interface{}{"type": "string", "description": "id of the element to scroll to — a question (\"q4\"), a section (\"s2\"), a worked example (\"s2-1\"), or a figure (\"fig1\"); see skills/_shared/html-design.md. Ignored if no such id exists."}
+			params["focus"] = map[string]interface{}{"type": "string", "description": "id of the element to scroll to — a question (\"q4\"), a section (\"s2\"), a worked example (\"s2-1\"), or a figure (\"fig1\"); see skills/guides/html-design.md. Ignored if no such id exists."}
 		}
 		return agentprofiles.ToolSpec{
 			Name: "open_file", Category: toolCategory, Description: description,
@@ -510,7 +628,7 @@ func showSceneFactory() agentprofiles.ToolFactory {
 	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
 		return agentprofiles.ToolSpec{
 			Name: "show_scene", Category: toolCategory,
-			Description: "Show a small, self-contained HTML visual INLINE in this reply — a story beat, a diagram, a 'guess before you peek' moment, a mini interactive scene. Real CSS animation AND real JavaScript are available, so build actual interactivity when it fits. Keep it SMALL and self-contained (inline CSS/JS only, no external assets or network calls, follow skills/_shared/html-design.md). Any timer loop must have a natural stopping point. IF THE SCENE ASKS HER ANYTHING, IT MUST CARRY THE ANSWERS AS BUTTONS — two to four of them, each calling `SQ.choose(text, this)`. Call this when a visual moment genuinely helps, not every turn.",
+			Description: "Show a small, self-contained HTML visual INLINE in this reply — a story beat, a diagram, a 'guess before you peek' moment, a mini interactive scene. Real CSS animation AND real JavaScript are available, so build actual interactivity when it fits. Keep it SMALL and self-contained (inline CSS/JS only, no external assets or network calls, follow skills/guides/html-design.md). Any timer loop must have a natural stopping point. IF THE SCENE ASKS HER ANYTHING, IT MUST CARRY THE ANSWERS AS BUTTONS — two to four of them, each calling `SQ.choose(text, this)`. Call this when a visual moment genuinely helps, not every turn.",
 			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
 				"html": map[string]interface{}{"type": "string", "description": "the small, self-contained HTML snippet to show inline"},
 			}, "required": []string{"html"}},

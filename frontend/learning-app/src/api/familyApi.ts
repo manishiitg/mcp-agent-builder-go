@@ -6,7 +6,7 @@
 // so the 4,900-line component never has to know which one it is talking to.
 //
 // Shapes mirror the family server's JSON exactly (see cmd/family-server).
-import type { ApiEngine, Activity, StoredMsg, ToolCallRecord, TreeNode, VoiceStatus } from '../stores/types'
+import type { ApiEngine, Activity, QuickCommand, StoredMsg, ToolCallRecord, TreeNode, VoiceStatus } from '../stores/types'
 
 export type SetupState = {
   engine?: string
@@ -17,7 +17,12 @@ export type SetupState = {
   parent_label?: string
 }
 
-export type TurnStreamEvent = { type?: string; text?: string; tool_call?: ToolCallRecord }
+/**
+ * `replace` carries the whole live preview so far (the platform joins chunks
+ * per provider: verbatim for fragment streams, block-wise for claude-code);
+ * `delta` is only used by the standalone backend which streams raw text.
+ */
+export type TurnStreamEvent = { type?: 'delta' | 'replace' | 'status' | 'tool_call' | string; text?: string; tool_call?: ToolCallRecord }
 
 /** Side-effect signals a turn produced; the same struct for parent and child. */
 export type ToolEvent = {
@@ -52,11 +57,6 @@ export type FileContent = { path?: string; is_text?: boolean; content?: string; 
 export type TreeResponse = TreeNode[] | { nodes?: TreeNode[]; total_size?: number }
 export type UploadResult = { name?: string; path?: string; error?: string }
 
-export type ScheduleEntry = { day: string; start: string; end: string; label: string }
-export type WeekActivityEntry = { date: string; activity_dir: string; title: string; duration_seconds?: number }
-export type WeekDeadline = { title: string; subject?: string; due_date?: string; kind?: string }
-export type WeekDay = { date: string; weekday: string; schedule?: ScheduleEntry[]; activities?: WeekActivityEntry[]; deadlines?: WeekDeadline[] }
-export type WeekResponse = { week_start: string; week_end: string; days: WeekDay[]; upcoming_deadlines?: WeekDeadline[] }
 
 export type ModelInfo = { provider: string; selected: string; default: string; models: { id: string; label: string }[] }
 export type FastMode = { enabled: boolean; child_enabled: boolean }
@@ -116,8 +116,12 @@ export interface FamilyApi {
   saveState(key: string, data: unknown): Promise<void>
   loadState(key: string): Promise<unknown>
   activities(): Promise<Activity[]>
-  week(offset: number): Promise<WeekResponse>
-  saveSchedule(entries: ScheduleEntry[]): Promise<void>
+
+  /** Make sure this app is logged in (platform); a no-op on the standalone server. */
+  ensureSession(): Promise<void>
+
+  /** The composer's quick menus for both modes (the product's `commands:`). */
+  commands(): Promise<{ parent: QuickCommand[]; child: QuickCommand[] }>
 
   // ---- settings ------------------------------------------------------------
   models(): Promise<ModelInfo | null>
