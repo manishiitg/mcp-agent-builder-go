@@ -2483,7 +2483,9 @@ export default function LearningApp() {
       : undefined
     if (newSession) {
       if (backend === 'platform') {
-        setChildKickoff({ id: Date.now(), dir, text: modelExtra ? `${greeting}\n\n${modelExtra}` : greeting })
+        // Shown in the chat like any message, so only the greeting goes: the
+        // goal is already in activity.json, which the tutor reads first.
+        setChildKickoff({ id: Date.now(), dir, text: greeting })
       } else {
         setChildMessages([])
         sendChildKickoff(greeting, [], modelExtra)

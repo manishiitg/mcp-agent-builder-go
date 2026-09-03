@@ -1270,10 +1270,13 @@ transcript, the way the parent's pills do:
   `productRows` — product interactions of the declared kinds are kept as rows
   inside the agent's turn and rendered by the product (star row, sandboxed
   scene iframe); every other interaction kind stays on the side channel.
-- The handoff kickoff is sent with `HIDDEN_USER_MESSAGE_PREFIX` (an invisible
-  separator): the model reads it, the transcript never shows it, live or on
-  restore. `submitToChildChat` lets the activity page's `SQ.choose` buttons
-  speak into the chat.
+- The handoff kickoff is an ordinary message in the child's voice and shows
+  like any other (decision 2026-09-03: no hiding machinery; the goal note is
+  not appended since activity.json carries it). `submitToChildChat` lets the
+  activity page's `SQ.choose` buttons speak into the chat.
+- Setup on the platform backend (`saveChild`, `setPin`, `verifyPin`) is
+  `family.json` through the workspace API, with the family server's hex
+  SHA-256 PIN hashing, so the Parent Mode PIN gate works.
 - Presentations (`document.file`) land in the child's viewer through the same
   selector the parent uses. The old per-activity polling, WhatsApp watch and
   fast-mode toggle are family-server only and skipped on the platform backend.

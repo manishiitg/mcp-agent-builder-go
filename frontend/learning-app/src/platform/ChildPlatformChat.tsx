@@ -1,8 +1,8 @@
 // Child Mode on the platform backend: the same AgentWorks ChatArea the parent
 // side hosts, opened on the child's own conversation for one activity. Streaming,
 // tool chips, restore and scrolling are the shared code; what is the child's
-// own — the celebration row, the inline scene, the hidden kickoff after a
-// handoff — is added around it here, the way the parent adds its pills.
+// own — the celebration row, the inline scene, the kickoff after a handoff —
+// is added around it here, the way the parent adds its pills.
 import '../../../src/index.css'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -18,7 +18,6 @@ import { hydrateTabEvents, restoreSession } from '../../../src/utils/sessionRest
 import { setProductCommands } from '../../../src/commands/registry'
 import { usePresentationEvents } from '../../../src/platform/presentations/usePresentationEvents'
 import { ProductSuggestions } from '../../../src/platform/chat/ProductSuggestions'
-import { HIDDEN_USER_MESSAGE_PREFIX } from '../../../shared/session/transcript/terminalEventTranscript'
 import type { ProductInteraction as TranscriptInteraction } from '../../../shared/session/interactions'
 import type { QuickCommand } from '../stores/types'
 import { api } from '../api'
@@ -119,7 +118,7 @@ type Props = {
   childName: string
   theme: 'light' | 'dark'
   commands: QuickCommand[]
-  /** A handoff's opening message: sent to Quill once this activity's chat is open, never shown. */
+  /** A handoff's opening message, sent in the child's voice once this activity's chat is open. It shows like any message. */
   kickoff: ChildKickoff | null
   onKickoffSent: (id: number) => void
   onPresentation: (p: ProductPresentation) => void
@@ -194,15 +193,15 @@ export default function ChildPlatformChat({ activityDir, title, childName, theme
   }, [activityDir, title])
 
   // The kickoff waits for this activity's chat to be open and its renderer
-  // mounted, then goes out hidden: Quill needs a message to answer, the
-  // child does not need to see a line she never wrote.
+  // mounted, then goes out as an ordinary message: the first turn is shown
+  // like every other one.
   useEffect(() => {
     if (!kickoff || !ready || ready.dir !== kickoff.dir) return
     let tries = 0
     const timer = window.setInterval(() => {
       if (activeSubmit) {
         window.clearInterval(timer)
-        activeSubmit(HIDDEN_USER_MESSAGE_PREFIX + kickoff.text)
+        activeSubmit(kickoff.text)
         onKickoffSent(kickoff.id)
       } else if (++tries > 100) {
         window.clearInterval(timer)

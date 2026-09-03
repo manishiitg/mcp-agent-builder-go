@@ -230,7 +230,7 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
   const readFile = (path: string) => ws.readFile(path)
 
   async function setup(): Promise<SetupState> {
-    const state = (await ws.readJSON<{ child?: { name?: string; grade?: string; board?: string } | null; parent_label?: string; pin_hash?: string }>('family.json')) ?? {}
+    const state = await ws.readFamily()
     const childDone = !!(state.child && state.child.name)
     const pinSet = !!state.pin_hash
     return {
@@ -267,9 +267,9 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     ensureSession: async () => { store.set(await token()) },
     validateEngine: async () => ({ valid: true, message: 'The platform manages the model.' }),
     selectEngine: async () => {},
-    saveChild: notYet('saving the child profile from the setup screen'),
-    setPin: notYet('setting the PIN'),
-    verifyPin: notYet('verifying the PIN'),
+    saveChild: (child) => ws.saveChild(child),
+    setPin: (pin) => ws.setPin(pin),
+    verifyPin: (pin) => ws.verifyPin(pin),
 
     sendParentTurn: ({ messages, conversationId: _conversationId }, onEvent) => sendTurn(PARENT_PROFILE, '', lastUserText(messages), onEvent),
     steerParent: (_conversationId, message) => steer(PARENT_PROFILE, '', message),

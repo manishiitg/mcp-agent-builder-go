@@ -53,19 +53,6 @@ import { compareTerminalEvents } from './terminalEventPage'
 // footer. They are not part of the conversation, so keep them out of Clear
 // View. A long reviewer can emit dozens of status_line updates; rendering each
 // one as a card pushes the actual finding off screen.
-/**
- * A user message that starts with this is sent to the model but never shown:
- * a product's own kickoff after a handoff, for example. The prefix is an
- * invisible separator so the model reads the text unchanged.
- */
-export const HIDDEN_USER_MESSAGE_PREFIX = '\u2063'
-
-export function isHiddenUserMessage(event: PollingEvent): boolean {
-  if (event.type !== 'user_message') return false
-  const content = eventFields(event).content
-  return typeof content === 'string' && content.startsWith(HIDDEN_USER_MESSAGE_PREFIX)
-}
-
 // A product_interaction the surface asked the transcript to show in place
 // (a celebration, an inline scene) instead of leaving to the side channel.
 function isKeptInteraction(event: PollingEvent, keep?: ReadonlySet<string>): boolean {
@@ -511,7 +498,6 @@ function dropDuplicateExecutionPromptMessages(events: PollingEvent[]): PollingEv
 
 function isTranscriptEvent(event: PollingEvent): boolean {
   if (NON_TRANSCRIPT_TYPES.has(event.type || '')) return false
-  if (isHiddenUserMessage(event)) return false
   if (isContainerTranscriptNoise(event)) return false
   if (isMessageSequenceWrapperEvent(event)) return false
   if (event.type === 'agent_end' || event.type === 'unified_completion') {

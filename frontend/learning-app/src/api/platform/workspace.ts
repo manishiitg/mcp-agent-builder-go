@@ -10,6 +10,13 @@ export const ACTIVITIES = 'activities'
 
 export type Requester = <T>(method: string, path: string, body?: unknown) => Promise<T>
 
+export type FamilyFile = { child?: { name?: string; grade?: string; board?: string } | null; parent_label?: string; pin_hash?: string; watch_sites?: string[] }
+
+export async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 type Document = { filepath: string; type?: string; children?: Document[]; size?: number; content?: string; is_binary?: boolean; is_image?: boolean; mime_type?: string }
 type APIResponse<T> = { success?: boolean; data?: T; error?: string }
 
@@ -119,6 +126,34 @@ export class FamilyWorkspace {
     const pointer = await this.readJSON<{ dir?: string }>('current-activity.json')
     if (!pointer?.dir) return null
     return this.activity(pointer.dir)
+  }
+
+  // ---- family.json: the setup screen's state ------------------------------
+  // Same file and same PIN hashing (hex SHA-256 of the digits) the family
+  // server used, so a family set up there keeps working here.
+
+  async readFamily(): Promise<FamilyFile> {
+    return (await this.readJSON<FamilyFile>('family.json')) ?? {}
+  }
+
+  async saveChild(child: { name: string; grade: string; board: string }): Promise<void> {
+    const current = await this.readFamily()
+    await this.writeJSON('family.json', { ...current, child: { ...(current.child ?? {}), name: child.name.trim(), grade: child.grade.trim(), board: child.board.trim() } })
+  }
+
+  async setPin(pin: string): Promise<{ error?: string }> {
+    const digits = pin.trim()
+    if (!/^\d{4,8}$/.test(digits)) return { error: 'PIN must be 4–8 digits' }
+    const current = await this.readFamily()
+    await this.writeJSON('family.json', { ...current, pin_hash: await sha256Hex(digits) })
+    return {}
+  }
+
+  /** True when the PIN matches, or when no PIN has been set yet. */
+  async verifyPin(pin: string): Promise<{ ok: boolean }> {
+    const current = await this.readFamily()
+    if (!current.pin_hash) return { ok: true }
+    return { ok: (await sha256Hex(pin.trim())) === current.pin_hash }
   }
 
   /**
