@@ -179,10 +179,12 @@ export default function WorkflowNotificationView({
                     <div className={rowClass}>
                       <span className={labelClass} title="Gmail account channel (inherited from the account)"><Mail className="h-3.5 w-3.5 text-muted-foreground" />Gmail</span>
                       {gmailSender ? <span className={`${chip} font-mono`} title="Sends from">{gmailSender}</span> : <span className={chipMuted}>No sending account</span>}
-                      {gmailDefault && <span className={chipMuted} title="Default recipients">→ {gmailDefault}</span>}
+                      {gmailDefault
+                        ? <span className={chipMuted} title="Default recipients">→ {gmailDefault}</span>
+                        : gmailReady && <span className={chipMuted} title="Mail that names no recipient has nowhere to go until one is set (Bots panel → Default recipients)">no default recipient</span>}
                       {!gmailReady && !gmailChecking && info.gmail?.summary && <span className={chipWarn}>{info.gmail.summary}</span>}
                       <span className={`ml-auto rounded-full border px-2 py-0.5 text-xs ${gmailReady ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-border bg-background text-muted-foreground'}`}>
-                        {gmailChecking ? 'Checking…' : gmailReady ? 'Ready' : 'Not ready'}
+                        {gmailChecking ? 'Checking…' : gmailReady ? 'Connected' : 'Not connected'}
                       </span>
                     </div>
                     {overrides.length > 0 && (

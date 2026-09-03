@@ -18,7 +18,6 @@ func TestGmailNotReadyReasonNamesTheMissingPiece(t *testing.T) {
 		{"not signed in", &services.GmailConfig{Enabled: true, DefaultTo: "a@b.c"}, services.GmailAuthStatus{GwsInstalled: true}, "No Gmail account is signed in."},
 		{"no scope", &services.GmailConfig{Enabled: true, DefaultTo: "a@b.c"}, services.GmailAuthStatus{GwsInstalled: true, Authenticated: true}, "The signed-in account has no Gmail send scope."},
 		{"switched off", &services.GmailConfig{DefaultTo: "a@b.c"}, ok, "The Gmail channel is switched off."},
-		{"no default recipient", &services.GmailConfig{Enabled: true}, ok, "No default recipient is set."},
 	}
 	for _, tc := range cases {
 		if got := gmailNotReadyReason(tc.cfg, tc.auth); got != tc.want {

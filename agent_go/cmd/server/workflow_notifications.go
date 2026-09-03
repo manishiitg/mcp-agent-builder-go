@@ -153,9 +153,13 @@ func notificationAccountChannels(ctx context.Context) []WorkflowNotificationAcco
 		case auth.Checking:
 			gmailState = "checking"
 			gmailSummary = "Checking Gmail authorization…"
-		case config.Enabled && strings.TrimSpace(config.DefaultTo) != "" && auth.Authenticated && auth.HasGmailScope:
+		// Same definition as the Bots panel (user decision 2026-09-03): a
+		// signed-in account with the Gmail send scope is Connected. Whether a
+		// default recipient exists is a recipients question, shown beside the
+		// "to" address, not a reason to call the channel not ready.
+		case config.Enabled && auth.Authenticated && auth.HasGmailScope:
 			gmailState = "ready"
-			gmailSummary = "Available as an inherited account-level channel."
+			gmailSummary = "Connected with the Gmail send scope."
 		}
 		// Which account sends. With no connections configured this is the
 		// legacy singleton, whose address comes from the same cached auth the
@@ -295,8 +299,6 @@ func gmailNotReadyReason(config *services.GmailConfig, auth services.GmailAuthSt
 		return "The signed-in account has no Gmail send scope."
 	case config == nil || !config.Enabled:
 		return "The Gmail channel is switched off."
-	case strings.TrimSpace(config.DefaultTo) == "":
-		return "No default recipient is set."
 	}
 	return "Gmail is not ready at account level."
 }
