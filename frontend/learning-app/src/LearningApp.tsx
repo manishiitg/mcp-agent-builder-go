@@ -437,6 +437,11 @@ function withViewerPositionScript(html: string, focusId?: string, savedY = 0, zo
   }, { passive: true });
 })();</script>
 <style>
+  /* The frame is the page's only window, so the last thing on it must never
+     sit flush against the bottom edge; a page written with no bottom margin
+     (its author never sees the frame) ended with its final button touching
+     the border. Room at the end, whatever the page's own styles say. */
+  body{padding-bottom:40px !important}
   /* A brief, calm pulse so she can see WHERE the page landed when the tutor
      pointed at a specific question. Respects reduced-motion. */
   .q.is-current{animation:sqFocus 2.6s ease-out both}

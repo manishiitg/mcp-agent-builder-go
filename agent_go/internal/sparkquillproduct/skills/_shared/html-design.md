@@ -1,10 +1,7 @@
 # SparkQuill HTML design system
 
-> Activity pages (study material, tests, practice) are NOT written this way any
-> more: write them in the vocabulary in `activity-page.md` and let
-> `create_learning_activity` render the design. This guide is for the pages
-> that are still written whole: the progress report, the academic map, and
-> hand-built interactive pages (coding demos, discovery cover pages).
+> Activity pages are Quill's own design now (see the parent prompt); this
+> guide is for the progress report and the academic map.
 
 Every HTML file the app generates (progress reports, academic map, study material,
 tests, and anything else) shares this look so they feel like one product. Build a

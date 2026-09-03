@@ -1110,13 +1110,15 @@ was being skimmed and ignored. Decisions (user):
   ids on sections/questions/figures, an answer space per question, the print
   hook and `SQ.choose` script, and it removes only form controls, `<details>`,
   links and remote resources. It reports what it dropped.
-- Four conventions the tutor relies on: `<section data-role=learn|practice|check|explore>`,
-  `<div class="q">` per question (`data-marks` optional), `<button data-choose>`
-  for a real choice, nothing loaded from the internet. The section map (role +
-  question ids) goes into activity.json; the child prompt follows the section
-  she is in instead of parsing goal prose.
-- create-study-material and create-test skills deleted; `_shared/activity-page.md`
-  is a 190-word reference; html-design.md remains for reports only.
+- The prompt tells Quill two things only (user: "just how to use SQ"):
+  `<div class="q">` around each question so the tutor can scroll her to it
+  (open_file focus) and note her answer there, and `<button data-choose>` for a
+  choice she taps. Section roles are accepted by the finisher when present
+  but not asked for; the child prompt is goal-steered as before.
+- create-study-material and create-test skills deleted, activity-page.md too;
+  html-design.md remains for the two reports only.
+- Viewer: the injected page script now pads the body bottom so the last
+  element never sits flush against the frame.
 Verified live: "explain, practice, short check" on fractions produced a real
 guide (hook, steps, worked examples with CSS fraction bars, hint buttons,
 4-question check) in 13 tool calls.

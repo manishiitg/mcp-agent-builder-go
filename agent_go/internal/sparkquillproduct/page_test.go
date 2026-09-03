@@ -90,12 +90,9 @@ func TestRenderActivityPageAddsOnlyTheMachinery(t *testing.T) {
 }
 
 func TestRenderActivityPageAcceptsAFragmentAndRejectsEmpty(t *testing.T) {
-	page, report, err := RenderActivityPage(`<h1>Notes</h1><p>Just a paragraph.</p><div class="q"><p>2+2</p></div>`, PageMeta{})
+	page, _, err := RenderActivityPage(`<h1>Notes</h1><p>Just a paragraph.</p><div class="q"><p>2+2</p></div>`, PageMeta{})
 	if err != nil || !strings.Contains(page, `<title>Notes</title>`) || !strings.Contains(page, `<div id="q1" class="q">`) {
 		t.Fatalf("fragment: err=%v\n%s", err, page)
-	}
-	if !strings.Contains(strings.Join(report.Warnings, " | "), "no <section data-role>") || !strings.Contains(strings.Join(report.Warnings, " | "), "q1 is outside any section") {
-		t.Fatalf("warnings = %v", report.Warnings)
 	}
 	if _, _, err := RenderActivityPage(`<input type="text">   `, PageMeta{}); err == nil {
 		t.Fatal("an empty page must be an error")

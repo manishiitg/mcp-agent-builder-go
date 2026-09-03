@@ -148,9 +148,6 @@ func RenderActivityPage(source string, meta PageMeta) (string, RenderReport, err
 		r.title = "Activity"
 		r.report.Warnings = append(r.report.Warnings, "no title: add an <h1> (or <title>)")
 	}
-	if len(r.report.Sections) == 0 {
-		r.report.Warnings = append(r.report.Warnings, "no <section data-role> on the page: the tutor cannot tell where to explain and where to hold back")
-	}
 	r.report.Title = r.title
 	return r.page(), r.report, nil
 }
@@ -284,8 +281,6 @@ func (r *renderer) question(n *xhtml.Node, out *bytes.Buffer) {
 	id := fmt.Sprintf("q%d", r.nextQ)
 	if r.current != nil {
 		r.current.Questions = append(r.current.Questions, id)
-	} else {
-		r.report.Warnings = append(r.report.Warnings, id+" is outside any section")
 	}
 	r.report.Questions++
 	marks, _ := strconv.Atoi(strings.TrimSpace(attr(n, "data-marks")))
