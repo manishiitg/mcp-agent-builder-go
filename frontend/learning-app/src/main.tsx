@@ -1,3 +1,4 @@
+import './platform/runtimeConfig'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import LearningApp from './LearningApp.tsx'

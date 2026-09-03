@@ -117,6 +117,9 @@ export interface FamilyApi {
   loadState(key: string): Promise<unknown>
   activities(): Promise<Activity[]>
 
+  /** Make sure this app is logged in (platform); a no-op on the standalone server. */
+  ensureSession(): Promise<void>
+
   /** The composer's quick menus for both modes (the product's `commands:`). */
   commands(): Promise<{ parent: QuickCommand[]; child: QuickCommand[] }>
 

@@ -1143,3 +1143,37 @@ guide (hook, steps, worked examples with CSS fraction bars, hint buttons,
   ToolCallSummary), used by nothing else. Same events, different renderer.
   Moving SparkQuill onto ChatArea the way Video Studio did is the next
   consistency step and is not started.
+
+### 2026-09-03: SparkQuill's parent chat is AgentWorks' ChatArea
+
+User: "I want to have the same [chat UI] so we can fix and debug the same
+issues." In platform mode the learning app now hosts `components/ChatArea`
+exactly as Video Studio does (`frontend/learning-app/src/platform/PlatformChat.tsx`):
+tab priming (mode stores, `resolveAgentProfileConversation`, `createChatTab`,
+`restoreSession`, `hydrateTabEvents`), the product composer, SSE/polling,
+streaming, submission and `TerminalEventTranscript` rendering are the shared
+code. SparkQuill adds a content renderer (transcript + suggestion pills via
+the new `onSubmitQuery` renderer prop), product commands as slash commands,
+and a selector over `useChatStore.tabEvents` that hands `product_interaction`
+and `presentation_updated` events to the workspace panel.
+
+Host requirements learned the hard way:
+- The AgentWorks service layer snapshots its base URL when its modules are
+  evaluated; a dependency-free `runtimeConfig.ts` imported first in
+  `main.tsx` sets `window.__APP_RUNTIME_CONFIG__` before that happens.
+  (Symptom otherwise: provider-manifest fetch hits the preview origin, gets
+  the SPA's HTML, the store held `providerManifest: undefined`, and the
+  composer crashed on `.find`. The store now guards that too.)
+- Login token mirrored into `auth_token` (the shared services' key), also
+  when an existing token is reused.
+- `lucide-react` aliased to AgentWorks' copy by FILE (a directory alias
+  bypasses the package `exports` map); `zustand`/react deduped.
+- Tailwind pipeline with AgentWorks' theme and preflight OFF; `index.css`
+  imported for the shadcn variables; `html.light|dark` kept in step.
+- Open the tab once per page load (module-level promise); re-running the
+  Video Studio sequence on a remount re-hydrates from history and discards
+  the live turn.
+- Shared components were dark-only; `TerminalEventTranscript` text now
+  carries `dark:` variants so it reads on a light surface.
+Standalone mode keeps the old renderer until the family-server is retired.
+Child mode (keyed activity conversations) is not moved yet.

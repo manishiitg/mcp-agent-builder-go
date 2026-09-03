@@ -265,6 +265,7 @@ interface ChatInputProps {
   // Product surfaces keep the shared transport but hide developer/provider
   // controls and render a simple customer-facing composer.
   surfaceVariant?: 'default' | 'product'
+  placeholderOverride?: string
   showNewChatAction?: boolean
   hideRuntimeStatus?: boolean
 }
@@ -498,6 +499,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   tabId: scopedTabId,
   restoredConversationPending = true,
   surfaceVariant = 'default',
+  placeholderOverride,
   showNewChatAction = false,
   hideRuntimeStatus = false,
   onNewChat,
@@ -755,8 +757,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     multiAgentEffectiveLLMConfig?.provider,
     tabConfig?.llmConfig?.provider,
     workflowPhasePreset?.llmConfig?.builder_llm?.provider,
-    workflowPhasePreset?.llmConfig?.provider,
-  ])
+    workflowPhasePreset?.llmConfig?.provider])
   useEffect(() => {
     if (!providerManifestLoaded) {
       void loadProviderManifest()
@@ -3337,7 +3338,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // Memoized placeholder
   const placeholder = useMemo(() => {
     if (isViewOnly) return "View only — cannot continue this conversation"
-    if (isProductSurface) return isStreaming ? 'Add a message…' : 'Describe what you want to create…'
+    if (isProductSurface) return isStreaming ? 'Add a message…' : (placeholderOverride || 'Describe what you want to create…')
     if (agentProfileWorkspace) return 'Describe the video you want to make… (@ files, / commands)'
     if (isWorkflowPhaseChat) {
       return 'Chat with the automation builder... (@ files, / commands, # automations)'

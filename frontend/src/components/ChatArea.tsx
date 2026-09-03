@@ -414,6 +414,8 @@ export interface ChatContentRendererProps {
   onLoadOlder?: () => void
   landingContent?: ReactNode
   onRetryLastMessage?: () => void | Promise<void>
+  /** Submit a message on the user's behalf (a suggestion pill, a button in the transcript). */
+  onSubmitQuery?: (query: string) => void
 }
 
 interface ChatAreaProps {
@@ -462,6 +464,8 @@ interface ChatAreaProps {
   hideRuntimeStatus?: boolean
   // Product chats otherwise have no generic header in which to start fresh.
   showNewChatAction?: boolean
+  /** Product-specific composer placeholder (the product variant otherwise says "Describe what you want to create…"). */
+  composerPlaceholder?: string
 }
 
 // Ref interface for ChatArea component
@@ -481,7 +485,7 @@ let globalHasRestored = false
 
 // Inner component for chat area
 const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAreaRef>) => {
-  const { onNewChat, hideInput = false, compact = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel, landingContent, contentRenderer: ContentRenderer, inputVariant = 'default', fullTurnStreaming = false, showConversationUsage = false, hideRuntimeStatus = false, showNewChatAction = false } = props
+  const { onNewChat, hideInput = false, compact = false, tabId, previousChatsCompact = false, workflowPreviousChatsPanel, landingContent, contentRenderer: ContentRenderer, inputVariant = 'default', fullTurnStreaming = false, showConversationUsage = false, hideRuntimeStatus = false, showNewChatAction = false , composerPlaceholder} = props
   // Product mode is a complete shared surface, not just a simplified composer.
   // Products may still supply a renderer for domain-specific presentation, but
   // every new product gets the durable transcript and normalized error UI by
@@ -3556,6 +3560,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             onLoadOlder={historyPagination?.hasMore ? loadOlderConversationPage : undefined}
             landingContent={landingContent}
             onRetryLastMessage={retryLastProductMessage}
+            onSubmitQuery={(query) => submitQueryWithQuery(query)}
           />
         ) : selectedModeCategory === 'workflow' ? (
           <WorkflowModeHandler
@@ -3677,6 +3682,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
           surfaceVariant={inputVariant}
           hideRuntimeStatus={hideRuntimeStatus}
           showNewChatAction={showNewChatAction}
+          placeholderOverride={composerPlaceholder}
         />
       )}
 

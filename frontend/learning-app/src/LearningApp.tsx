@@ -60,7 +60,8 @@ import {
   type Activity,
   type VoiceStatus,
 } from './stores'
-import { api } from './api'
+import PlatformChat, { type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
+import { api, backend } from './api'
 import { VoiceSettings } from './voice/VoiceSettings'
 import { readReminderSoundPref, persistReminderSoundPref, playReminderChime } from './notifySound'
 import { MicButton, type MicButtonHandle } from './voice/MicButton'
@@ -1404,6 +1405,28 @@ export default function LearningApp() {
     const title = name.replace(/\.html?$/i, '').replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
     savePins([...pins, { path, title }])
   }, [pins, savePins, drawerTab, setDrawerTab])
+  // What the shared chat hands back in platform mode: the product events the
+  // workspace panel reacts to. Same reactions as the turn result path below.
+  const onPlatformInteraction = useCallback((e: ProductInteraction) => {
+    if (e.kind === 'family_updated') {
+      const child = e.payload.child as { name?: string; grade?: string; board?: string } | undefined
+      if (child?.name) setChildName(child.name)
+      if (child?.grade) setGrade(child.grade)
+      if (child?.board) setBoard(child.board)
+      if (typeof e.payload.parent_label === 'string') setParentLabel(e.payload.parent_label)
+    }
+    if (e.kind === 'pins_updated') loadPins()
+    if (e.kind === 'activity_created' || e.kind === 'family_updated') setMapRefreshKey((k) => k + 1)
+  }, [loadPins, setMapRefreshKey])
+  const onPlatformPresentation = useCallback((p: ProductPresentation) => {
+    const rel = (raw: unknown) => String(raw ?? '').replace(/^.*?Chats\/SparkQuill\//, '')
+    if (p.kind === 'document.file' && typeof p.payload.path === 'string') {
+      setDrawerTab('files'); setViewerImageList([]); setViewerActivityDir(null); setViewerPath(rel(p.payload.path)); setViewerRefreshKey((k) => k + 1)
+    } else if (p.kind === 'sparkquill.activity' && typeof p.payload.dir === 'string') {
+      const dir = rel(p.payload.dir)
+      setDrawerTab('files'); setViewerPath(null); setViewerActivityDir(dir); setExpandedActivity(dir); setMapRefreshKey((k) => k + 1)
+    }
+  }, [setDrawerTab, setMapRefreshKey])
   useEffect(() => { loadPins() }, [loadPins, mapRefreshKey])
   // The pinned page on screen, loaded when its tab is opened or a turn ends.
   const pinnedPath = drawerTab.startsWith('pin:') ? drawerTab.slice(4) : ''
@@ -2864,6 +2887,25 @@ export default function LearningApp() {
               </div>
             </div>
 
+            {backend === 'platform' ? (
+              <PlatformChat
+                title="SparkQuill"
+                childName={childName}
+                theme={theme === 'dark' ? 'dark' : 'light'}
+                commands={quickCommands.parent}
+                landing={(
+                  <div className="fl-thread">
+                    <div className="fl-msg is-agent">
+                      <span className="fl-msg-avatar is-sun"><Sun size={18} /></span>
+                      <div className="fl-msg-col"><div className="fl-bubble">Hi! I’m Quill, {childName || 'your child'}’s learning guide. Tell me what {childName || 'your child'} is working on, or ask me to explain progress, make study material, or create a test.</div></div>
+                    </div>
+                  </div>
+                )}
+                onInteraction={onPlatformInteraction}
+                onPresentation={onPlatformPresentation}
+              />
+            ) : (
+              <>
             {newBelow && (
               // The message is already applied — this only says it landed
               // below the fold, so tapping scrolls rather than fetching.
@@ -3121,6 +3163,8 @@ export default function LearningApp() {
               />
               <button className="composer-send" type="submit" aria-label="Send message" disabled={!focusInput.trim()}><Send size={18} /></button>
             </form>
+              </>
+            )}
             <p className="fl-disclaimer">SparkQuill can make mistakes. Please review important content before sharing it with {childName || 'your child'}.</p>
           </section>
           <div

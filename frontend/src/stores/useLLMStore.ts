@@ -459,7 +459,10 @@ export const useLLMStore = create<LLMState>()(
           try {
             const manifest = await llmConfigService.getProviderManifest()
             set({
-              providerManifest: manifest.providers,
+              // A server that answers without a providers list (an older
+              // build, a product-only deployment) must not leave the store
+              // holding undefined: every consumer indexes this array.
+              providerManifest: Array.isArray(manifest?.providers) ? manifest.providers : [],
               providerManifestLoaded: true,
               providerManifestLoading: false,
             })

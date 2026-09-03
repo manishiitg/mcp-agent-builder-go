@@ -262,6 +262,9 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     setup,
     engines,
     commands,
+    // Re-store even an existing token so every place that mirrors it (the
+    // shared chat's own auth key) sees it, not only a fresh login.
+    ensureSession: async () => { store.set(await token()) },
     validateEngine: async () => ({ valid: true, message: 'The platform manages the model.' }),
     selectEngine: async () => {},
     saveChild: notYet('saving the child profile from the setup screen'),

@@ -1212,3 +1212,8 @@ audio.fl-viewer-media { background: var(--surface); }
    7 days into one unreadably narrow row. */
 
 .fl-mic-live-text.is-waiting { font-style: italic; color: #cfd8ea; }
+/* ---- platform mode: the shared AgentWorks chat hosted in the parent column ---- */
+.fl-platform-chat { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.fl-platform-chat > div { min-height: 0; }
+.fl-platform-transcript { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.fl-platform-transcript .fl-suggestions { padding: 6px 16px 10px; }

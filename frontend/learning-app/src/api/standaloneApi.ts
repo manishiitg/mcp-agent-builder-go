@@ -77,6 +77,7 @@ export const standaloneApi: FamilyApi = {
   setup: () => getJSON<SetupState>('/api/setup'),
   engines: () => getJSON<ApiEngine[]>('/api/engines'),
   commands: async () => STANDALONE_COMMANDS,
+  ensureSession: async () => {},
   validateEngine: (provider) => sendJSON('POST', '/api/engines/validate', { provider, model_id: '' }),
   selectEngine: async (engine) => { await fetch(`${FAMILY_API}/api/engine/selection`, { method: 'POST', headers: json, body: JSON.stringify({ engine }) }) },
   saveChild: async (child) => { await fetch(`${FAMILY_API}/api/child`, { method: 'POST', headers: json, body: JSON.stringify(child) }) },
