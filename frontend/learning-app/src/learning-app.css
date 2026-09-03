@@ -365,8 +365,10 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-context-card dt { margin-bottom: 3px; color: #6d5e2d; font-size: var(--text-caption); font-weight: 700; letter-spacing: .03em; }
 .fl-context-card dd { margin: 0; color: var(--heading); font-size: var(--text-body); font-weight: 700; }
 .fl-context-card p { margin: 13px 0 0; color: #554e39; font-size: var(--text-secondary); line-height: 1.5; }
-.fl-drawer-tabs { display: flex; gap: 4px; padding: 16px 12px 10px; border-bottom: 1px solid var(--line); }
-.fl-drawer-tabs button { flex: 1; min-height: 34px; border: 0; border-radius: 9px; background: transparent; color: #5f708d; font: inherit; font-size: var(--text-secondary); font-weight: 650; cursor: pointer; }
+/* Pinned pages add tabs here without limit, so the strip wraps into rows
+   instead of squeezing every tab to nothing; a long title is clipped. */
+.fl-drawer-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 16px 12px 10px; border-bottom: 1px solid var(--line); }
+.fl-drawer-tabs button { flex: 1 1 auto; min-width: 0; max-width: 100%; min-height: 34px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; color: #5f708d; font: inherit; font-size: var(--text-secondary); font-weight: 650; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fl-drawer-tabs button:hover { background: #f1f5fa; color: var(--heading); }
 .fl-drawer-tabs button.is-active { background: var(--navy); color: #fff; }
 .fl-drawer-tabs .fl-refresh-btn,

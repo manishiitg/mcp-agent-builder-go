@@ -55,7 +55,7 @@ export function VoiceSettings({
           <p className="fl-voice-group-label">Talking instead of typing</p>
           <p className="fl-note">Used by the microphone in the message box, and for voice notes on WhatsApp.</p>
           <div className="fl-settings-engines">
-            {status.stt_tiers.map((t) => (
+            {(status.stt_tiers ?? []).map((t) => (
               <VoiceTierCard
                 key={t.id}
                 tier={t}

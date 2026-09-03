@@ -316,7 +316,27 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     secrets: notYet('secrets'),
     saveSecret: notYet('secrets'),
     deleteSecret: notYet('secrets'),
-    voiceStatus: () => request<VoiceStatus>('GET', '/api/voice/status'),
+    // The platform runs one shared speech engine for every product; Settings
+    // shows it as a single tier in the family server's catalog shape.
+    voiceStatus: async () => {
+      const p = await request<{ available?: boolean; installed?: boolean; downloading?: boolean; got_bytes?: number; total_bytes?: number; loading?: boolean; ready?: boolean; size_mb?: number }>('GET', '/api/voice/status')
+      const tier = {
+        id: 'platform',
+        label: 'Built-in voice',
+        description: 'Runs inside SparkQuill’s server, shared by everything you use here. Nothing to install.',
+        size_mb: p.size_mb,
+        languages: 'English',
+        available: p.available !== false,
+        installed: p.installed !== false,
+        warm: p.ready === true,
+        installing: p.downloading === true || p.loading === true,
+        got_bytes: p.got_bytes ?? 0,
+        total_bytes: p.total_bytes ?? 0,
+        can_install: false,
+        can_remove: false,
+      }
+      return { hardware: { arch: '', is_apple_silicon: false, total_ram_bytes: 0 }, stt_tiers: [tier] } as VoiceStatus
+    },
     browserStatus: async () => ({ cli_installed: false }),
 
     whatsappStatus: notYet('WhatsApp status') as () => Promise<WhatsAppStatus>,
