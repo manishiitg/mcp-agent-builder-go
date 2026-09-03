@@ -155,8 +155,11 @@ if [[ "$agentworks_provider" == "cursor-cli" ]]; then
     exit 1
   fi
   # A soft round trip: cursor-agent's non-interactive flags are less stable
-  # than claude's, so a failure here is reported, not fatal.
-  if ! CURSOR_API_KEY="$cursor_key" timeout 90 cursor-agent -p "say OK" >/dev/null 2>"$HOME/.cursor-preflight.err"; then
+  # than claude's, so a failure here is reported, not fatal. XDG_CONFIG_HOME
+  # matches the agent unit ($HOME/.config is root-owned here) and --trust
+  # answers the workspace-trust prompt a headless run cannot.
+  install -d -m 0700 "$HOME/.local/state/xdg-config"
+  if ! XDG_CONFIG_HOME="$HOME/.local/state/xdg-config" CURSOR_API_KEY="$cursor_key" timeout 90 cursor-agent -p --trust "say OK" >/dev/null 2>"$HOME/.cursor-preflight.err"; then
     echo "WARNING: cursor-agent round trip did not succeed: $(head -c 300 "$HOME/.cursor-preflight.err")" >&2
   fi
   rm -f "$HOME/.cursor-preflight.err"
