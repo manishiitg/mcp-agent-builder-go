@@ -4,17 +4,17 @@
 // shapes the UI already understands. Slice 2 covers conversations; the
 // workspace, setup and connector methods land in the next slices and say so
 // loudly until then.
-import type { ApiEngine, Activity, VoiceStatus } from '../stores/types'
+import type { ApiEngine, VoiceStatus } from '../stores/types'
 import type {
-  FamilyApi, FastMode, FileContent, ModelInfo, PulseConfig, PulseConfigPatch, ScheduleEntry, SetupState,
-  StoredConversation, TreeResponse, TurnMessage, TurnResult, TurnStreamEvent, UploadResult, WeekResponse,
+  FamilyApi, FastMode, ModelInfo, PulseConfig, PulseConfigPatch, SetupState,
+  StoredConversation, TurnMessage, TurnResult, TurnStreamEvent,
   WhatsAppStatus, WhatsAppVoiceTranscription,
 } from './familyApi'
 import { type EventBatch, type PlatformEvent, TurnCollector, isMainEvent, payloadOf, readSSE } from './platform/events'
+import { FamilyWorkspace, documentsURL } from './platform/workspace'
 
 export const PARENT_PROFILE = 'sparkquill'
 export const CHILD_PROFILE = 'sparkquill-child'
-const FAMILY_ROOT = 'Chats/SparkQuill'
 const TOKEN_KEY = 'sparkquill.platform.token'
 
 export type PlatformApiOptions = {
@@ -56,10 +56,11 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
   }
 
   async function request<T>(method: string, path: string, body?: unknown, retry = true): Promise<T> {
+    const form = typeof FormData !== 'undefined' && body instanceof FormData
     const res = await fetch(`${base}${path}`, {
       method,
-      headers: { Authorization: `Bearer ${await token()}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: { Authorization: `Bearer ${await token()}`, ...(body === undefined || form ? {} : { 'Content-Type': 'application/json' }) },
+      body: body === undefined ? undefined : form ? (body as FormData) : JSON.stringify(body),
     })
     if (res.status === 401 && retry) {
       store.set(null)
@@ -217,20 +218,12 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     return { messages }
   }
 
-  // ---- files (slice 3 fills this in; readFile is needed for setup now) ----
-  async function readFile(path: string): Promise<FileContent> {
-    const rel = path.replace(/^\/+/, '')
-    const full = rel.startsWith('_users/') || rel.startsWith(FAMILY_ROOT) ? rel : `${FAMILY_ROOT}/${rel}`
-    const encoded = full.split('/').map(encodeURIComponent).join('/')
-    const resp = await request<{ success?: boolean; data?: { content?: string; is_binary?: boolean; size?: number } }>('GET', `/api/wp/api/documents/${encoded}`)
-    const data = resp?.data ?? {}
-    return { path: rel, is_text: !data.is_binary, content: data.content ?? '', size: data.size }
-  }
+  // ---- workspace -----------------------------------------------------------
+  const ws = new FamilyWorkspace(request)
+  const readFile = (path: string) => ws.readFile(path)
 
   async function setup(): Promise<SetupState> {
-    const family = await readFile('family.json').catch(() => null)
-    let state: { child?: { name?: string; grade?: string; board?: string } | null; parent_label?: string; pin_hash?: string } = {}
-    try { state = family?.content ? JSON.parse(family.content) : {} } catch { state = {} }
+    const state = (await ws.readJSON<{ child?: { name?: string; grade?: string; board?: string } | null; parent_label?: string; pin_hash?: string }>('family.json')) ?? {}
     const childDone = !!(state.child && state.child.name)
     const pinSet = !!state.pin_hash
     return {
@@ -264,23 +257,35 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     watchParent: (_conversationId, onEvent) => watch(PARENT_PROFILE, '', onEvent),
     loadParentConversation: () => history(PARENT_PROFILE, ''),
 
-    childActivity: notYet('the current activity') as () => Promise<Activity | null>,
+    childActivity: () => ws.currentActivity(),
     handoff: notYet('the handoff'),
     sendChildTurn: ({ messages, conversationId }, onEvent) => sendTurn(CHILD_PROFILE, conversationKeyFor(CHILD_PROFILE, conversationId), lastUserText(messages), onEvent),
     steerChild: (conversationId, message) => steer(CHILD_PROFILE, conversationKeyFor(CHILD_PROFILE, conversationId), message),
     watchChild: (activityDir, onEvent) => watch(CHILD_PROFILE, conversationKeyFor(CHILD_PROFILE, activityDir), onEvent),
     loadChildConversation: (activityDir) => history(CHILD_PROFILE, conversationKeyFor(CHILD_PROFILE, activityDir)),
 
-    tree: notYet('the workspace tree') as () => Promise<TreeResponse>,
+    tree: () => ws.tree(),
     readFile,
-    rawUrl: (path) => `${base}/api/wp/api/documents/${`${FAMILY_ROOT}/${path.replace(/^\/+/, '')}`.split('/').map(encodeURIComponent).join('/')}?download=true&token=${encodeURIComponent(store.get() ?? '')}`,
-    assetUrl: (relPath) => `${base}/${relPath.replace(/^\/+/, '')}`,
-    upload: notYet('uploads') as (file: File, scope: 'parent' | 'child') => Promise<UploadResult>,
-    saveState: notYet('scene state'),
-    loadState: notYet('scene state'),
-    activities: notYet('the activity list') as () => Promise<Activity[]>,
-    week: notYet('the week view') as (offset: number) => Promise<WeekResponse>,
-    saveSchedule: notYet('saving the schedule') as (entries: ScheduleEntry[]) => Promise<void>,
+    // Browser elements cannot send headers, so the token rides in the URL
+    // (the server accepts ?token= everywhere). /raw serves inline bytes with
+    // range support, which is what <img>, <video> and the PDF frame need.
+    rawUrl: (path, opts) => `${base}${documentsURL(path, '/raw')}?${opts?.download ? 'download=true&' : ''}token=${encodeURIComponent(store.get() ?? '')}`,
+    // The app ships its own static assets (public/lib); they live on the app's origin.
+    assetUrl: (relPath) => (typeof window !== 'undefined' ? `${window.location.origin}/${relPath.replace(/^\/+/, '')}` : `/${relPath.replace(/^\/+/, '')}`),
+    upload: async (file, scope) => {
+      let folder = 'inbox'
+      if (scope === 'child') {
+        const current = await ws.currentActivity()
+        if (!current) return { name: file.name, error: 'no activity is currently active' }
+        folder = current.dir
+      }
+      return ws.upload(file, folder)
+    },
+    saveState: (key, data) => ws.writeJSON(ws.stateFile(key), { key, data }),
+    loadState: async (key) => (await ws.readJSON<{ data?: unknown }>(ws.stateFile(key)))?.data ?? null,
+    activities: () => ws.activities(),
+    week: (offset) => ws.week(offset),
+    saveSchedule: (entries) => ws.saveSchedule(entries),
 
     models: async () => null as ModelInfo | null,
     saveModel: async () => {},
