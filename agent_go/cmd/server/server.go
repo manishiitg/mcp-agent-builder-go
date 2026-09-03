@@ -30,6 +30,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/financeproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/inspector"
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/sparkquillproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/videoproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 	agent "github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentwrapper"
@@ -1726,6 +1727,20 @@ func runServer(cmd *cobra.Command, args []string) {
 		}
 	}
 
+	if productEnabled("sparkquill") {
+		if err := sparkquillproduct.RegisterProductSkills(); err != nil {
+			log.Fatalf("Failed to register SparkQuill skills: %v", err)
+		}
+		for _, profile := range sparkquillproduct.BuiltinAgentProfiles() {
+			profile.Product = sparkquillproduct.ProductName
+			if err := profileRegistry.RegisterProfile(profile); err != nil {
+				log.Fatalf("Failed to register SparkQuill agent profile: %v", err)
+			}
+		}
+		if err := sparkquillproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
+			log.Fatalf("Failed to register SparkQuill agent profile runtime: %v", err)
+		}
+	}
 	if productEnabled("dominion") {
 		if err := dominionproduct.RegisterProductSkills(); err != nil {
 			log.Fatalf("Failed to register Dominion skills: %v", err)

@@ -1,6 +1,6 @@
 ---
 name: minimax-h3-video
-description: "Plan and generate Video Studio's MiniMax H3 Max routes through fal.ai: Text-to-Video for prompt-only shots, Image-to-Video for approved first/last-frame control, and Reference-to-Video for identity and continuity. Read with video-provider-capabilities and fal-ai before any paid H3 Max call."
+description: "Plan Video Studio's MiniMax H3 Max generation through fal.ai, including H3 Max Turbo for an initial image-controlled anchor and H3 Max Reference-to-Video for continuity. Read with video-provider-capabilities and fal-ai before any paid H3 call."
 ---
 
 # Use MiniMax H3 Max deliberately
@@ -12,12 +12,14 @@ live machine-readable guide for the selected route before every paid call:
 - `https://fal.ai/models/minimax/h3-max/text-to-video/llms.txt`;
 - `https://fal.ai/models/minimax/h3-max/image-to-video/llms.txt`;
 - `https://fal.ai/models/minimax/h3-max/reference-to-video/llms.txt`.
+- `https://fal.ai/models/minimax/h3-max-turbo/image-to-video/llms.txt` for an initial Turbo anchor.
 
 ## Use the guarded H3 runner
 
 For every paid H3 Max request, use `scripts/h3-max-runner.mjs`; do not write a
 new inline Fal client call or use `fal.subscribe()`. The runner permits only
-the three approved H3 Max endpoints, validates route-specific inputs before a
+the approved H3 Max endpoints plus the narrowly allowed Turbo anchor endpoint,
+validates route-specific inputs before a
 paid submit, saves the request ID and resolved non-secret input immediately,
 and emits JSON-lines console progress plus a sibling `*.log.jsonl` file.
 
@@ -185,17 +187,22 @@ splitting it mid-sentence, or inventing new words.
    `minimax/h3-max/text-to-video` only when no approved visual, motion, audio,
    identity, or continuity reference needs to control the result. Set the
    delivery `aspect_ratio` explicitly (21:9, 16:9, 4:3, 1:1, 3:4, or 9:16).
-2. **Opening/closing-frame control:** use
-   `minimax/h3-max/image-to-video` when an approved `image_url` must define
-   the first frame; add `end_image_url` only when a specific ending frame must
-   be reached. Output follows the supplied start image's aspect ratio. Do not
-   use this route to fabricate a bridge between two generated clips.
+2. **Initial image-controlled anchor:** prefer
+   `minimax/h3-max-turbo/image-to-video` when an approved `image_url` defines
+   the first shot's first frame. It is an economical launch/anchor option, not
+   a continuity route: do not supply reference images/video/audio, a predecessor
+   tail, or `aspect_ratio`; output follows `image_url`. Read its live rate as
+   promotional prices can change. Use `minimax/h3-max/image-to-video` when the
+   full H3 Max route's control is specifically required. Add `end_image_url`
+   only when a specific ending frame must be reached. Never use either route to
+   fabricate a bridge between generated clips.
 3. **Identity, motion, voice, or continuation:** use
    `minimax/h3-max/reference-to-video` whenever a shot needs subject/style
    locking, a predecessor's motion or performance, reference audio, or any
-   multi-asset conditioning. For a continuation, send the accepted immediate
-   predecessor in `reference_video_urls` as Video 1 and describe the exact
-   handoff from its final stable motion. Reference each asset in prompt order:
+   multi-asset conditioning. For a continuation, send the runner-extracted
+   2- or 3-second tail of the accepted immediate predecessor in
+   `reference_video_urls` as Video 1 and describe the exact handoff from its
+   final stable motion. Reference each asset in prompt order:
    Image 1, Video 1, Audio 1 — never arbitrary JSON labels.
 
 Reference-to-Video accepts at most 9 images, 3 videos, and 3 audio clips, with

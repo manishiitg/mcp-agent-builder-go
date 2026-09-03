@@ -73,6 +73,10 @@ const (
 	// PresentationUpdated announces a product tool showing or re-showing
 	// something in ui_presentations. See PresentationUpdatedEvent.
 	PresentationUpdated events.EventType = "presentation_updated"
+	// ProductInteraction is a product tool talking to its own surface in
+	// the course of a turn -- suggested follow-ups, a celebration, an inline
+	// scene -- without a durable presentation row. See ProductInteractionEvent.
+	ProductInteraction events.EventType = "product_interaction"
 
 	// Parallel execution events
 	IndependentStepsSelected events.EventType = "independent_steps_selected"

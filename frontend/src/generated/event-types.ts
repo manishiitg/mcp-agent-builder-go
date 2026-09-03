@@ -131,6 +131,7 @@ import type {
   AutoNotificationSteeredEvent,
   // Presentation Events
   PresentationUpdatedEvent,
+  ProductInteractionEvent,
 } from './events-bridge';
 
 // =============================================================================
@@ -297,7 +298,9 @@ export type EventTypeString =
   | 'synthetic_turn_ready'
   | 'auto_notification_steered'
   // Presentation Events
-  | 'presentation_updated';
+  | 'presentation_updated'
+  // Product surface interactions (suggestions, celebrate, scene, ...)
+  | 'product_interaction';
 
 // =============================================================================
 // EVENT TYPE TO DATA TYPE MAPPING
@@ -423,6 +426,7 @@ export interface EventTypeToDataMap {
   'auto_notification_steered': AutoNotificationSteeredEvent;
   // Presentation Events
   'presentation_updated': PresentationUpdatedEvent;
+  'product_interaction': ProductInteractionEvent;
 }
 
 // Todo Task event data types (not in generated schema)
@@ -832,6 +836,7 @@ export type {
   AutoNotificationSteeredEvent,
   // Presentation Events
   PresentationUpdatedEvent,
+  ProductInteractionEvent,
 } from './events-bridge';
 
 // Export nested types from events.ts (used by event types but not in events-bridge.ts)

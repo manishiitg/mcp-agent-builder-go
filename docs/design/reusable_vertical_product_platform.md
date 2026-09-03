@@ -234,6 +234,54 @@ sandbox-exec run: a socket connect is refused by the kernel under
 strict/no-network and reaches the port under strict/network. Nothing on the
 SparkQuill side moved yet; step 4 writes its product.yaml against this.
 
+Step 4's first slice followed the same night: `internal/sparkquillproduct`
+holds SparkQuill's product.yaml (parent profile `sparkquill`: singleton
+conversation at `Chats/SparkQuill`, strict sandbox with network, the
+check-in as a declared schedule; child profile `sparkquill-child`: one keyed
+conversation per activity under `Chats/SparkQuill/activities`, strict
+sandbox without network, secrets disabled, allowlisted tools), both prompts
+as files with `{{.Product.*}}` variables, and a runtime that computes those
+variables per turn from the family's `family.json` (and `memory/interests.md`
+for the child) through a new `PromptVariablesProvider` hook on the profile
+registry. The family's thirteen skills moved into that package and the
+standalone family server embeds them from there, so there is one copy.
+Registered behind `AGENT_PRODUCTS` like every product. Verified on a
+throwaway platform build: both profiles list with the right policies, the
+check-in appears as a product schedule, and triggering it ran real turns
+through the product conversation. What is still hand-wired in family-server
+and not yet on the platform: the family tools (set_child_profile,
+create_learning_activity, open_activity, suggest_actions, celebrate,
+show_scene, send_whatsapp_file, the secrets tools), the learning-app surface,
+the PIN handoff, WhatsApp routing, and the data migration. One finding: with
+a single product enabled the server treats itself as a locked-down
+deployment and requires `CLAUDE_CODE_OAUTH_TOKEN`, refusing the machine's
+ambient Claude login; that is existing policy, not a SparkQuill issue.
+
+The family tools followed as product tool factories
+(`internal/sparkquillproduct/tools.go`): the three state setters write
+`family.json` and the `memory/` mirrors the skills read; `create_learning_activity`
+writes `activity.json` plus a `product.json` that makes the activity folder
+the child's own keyed conversation (activities are now flat under
+`activities/<slug>/`, subject and topic live in the manifest); `open_file` and
+`open_activity` are presentations (`document.file`, `sparkquill.activity`)
+in the workspace's `ui_presentations` table, which the parent profile's
+initializer creates; `suggest_actions`, `celebrate` and `show_scene` emit one
+new generic event, `product_interaction`, that any product surface can
+render; `find_image` uses the Wikimedia search now shared in
+`pkg/commonsimages` with the family server. Secrets and `notify_user` were
+already platform tools and are simply allowlisted. The parent profile moved
+to project scope with a fixed root so the folder guard, the strict sandbox
+and workspace secrets apply to it (global scope gets none of those). Not yet
+ported: `send_whatsapp_file` (waits for the WhatsApp route table) and the
+desktop notification channel. Verified with a real parent turn on the
+throwaway build: "my daughter is Maya, grade 6, CBSE, call me mom" produced
+set_child_profile and set_parent_label calls, `family.json` with exactly
+that, two `family_updated` and one `suggestions` event in the session
+stream, and a reply addressed to mom. The first attempt exposed a real bug:
+the tools wrote to the profile's unexpanded workspace path and the folder
+guard, keyed on the per-user path, denied it; the product now resolves the
+per-user root the way Video Studio does.
+
 Decisions taken the same day, which fix the shape of steps 3-5:
 
 - **SparkQuill stays a standalone app.** The cutover target is a
@@ -243,6 +291,10 @@ Decisions taken the same day, which fix the shape of steps 3-5:
   their own. The child profile is therefore a second profile of the same
   product under the parent's user folder, gated by the existing PIN handoff;
   the sharing model does not need to cover it.
+- **The PIN handoff stays SparkQuill's own.** The platform gets no generic
+  "switch profile behind a PIN" concept; the PIN hash lives in the family's
+  `family.json`, the verify step in the product's runtime, and the mode
+  switch in the SparkQuill surface.
 - **The RTS box is redeployed only at the end.** It keeps its pre-migration
   build until the cutover; that deploy carries the shared WhatsApp connector,
   the whatsmeow upgrade and product schedules together.

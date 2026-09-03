@@ -50,6 +50,7 @@ export interface UnifiedEventsComplete {
   orchestrator_start?: OrchestratorStartEvent;
   pre_validation_completed?: PreValidationCompletedEvent;
   presentation_updated?: PresentationUpdatedEvent;
+  product_interaction?: ProductInteractionEvent;
   request_human_feedback?: RequestHumanFeedbackEvent;
   step_progress_updated?: StepProgressUpdatedEvent;
   step_token_usage?: StepTokenUsageEvent;
@@ -1123,6 +1124,26 @@ export interface PresentationActivity {
   destination?: string;
   detail?: string;
   label?: string;
+}
+export interface ProductInteractionEvent {
+  component?: string;
+  correlation_id?: string;
+  event_id?: string;
+  hierarchy_level?: number;
+  is_end_event?: boolean;
+  kind?: string;
+  metadata?: {
+    [k: string]: unknown;
+  };
+  parent_id?: string;
+  payload?: {
+    [k: string]: unknown;
+  };
+  product?: string;
+  session_id?: string;
+  span_id?: string;
+  timestamp?: string;
+  trace_id?: string;
 }
 export interface RequestHumanFeedbackEvent {
   action_description?: string;

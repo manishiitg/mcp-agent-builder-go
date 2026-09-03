@@ -2741,6 +2741,55 @@
       },
       "type": "object"
     },
+    "ProductInteractionEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "type": "string"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "hierarchy_level": {
+          "type": "integer"
+        },
+        "is_end_event": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "object"
+        },
+        "product": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "trace_id": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "RequestHumanFeedbackEvent": {
       "additionalProperties": false,
       "properties": {
@@ -4263,6 +4312,9 @@
     },
     "presentation_updated": {
       "$ref": "#/$defs/PresentationUpdatedEvent"
+    },
+    "product_interaction": {
+      "$ref": "#/$defs/ProductInteractionEvent"
     },
     "request_human_feedback": {
       "$ref": "#/$defs/RequestHumanFeedbackEvent"

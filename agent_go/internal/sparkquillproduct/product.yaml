@@ -1,0 +1,208 @@
+schema_version: 2
+
+# SparkQuill: a parent and their child, on one account, with one guide
+# ("Quill"). The parent profile is the product's conversation; the child
+# profile runs inside one activity folder at a time, behind the parent's PIN,
+# and never sees the rest of the workspace.
+#
+# This manifest is the target shape for the family app's cutover onto the
+# platform. The standalone family server (cmd/family-server) still runs its
+# own hand-wired copy of both roles; the skills and the Commons picture
+# search are already shared from here. The family tools are product tool
+# factories (tools.go). Still standalone-only: send_whatsapp_file (comes with
+# the WhatsApp route table) and the desktop notification channel.
+#
+# Layout under the family root (Chats/SparkQuill): activities/<slug>/ holds
+# every activity (activity.json + product.json, which makes the folder the
+# child's own conversation), plus materials/, memory/, reports/, inbox/,
+# archive/.
+dependencies: {}
+
+prompt:
+  file: prompts/parent.md
+  variables: {}
+
+profile:
+  id: sparkquill
+  name: SparkQuill
+  version: 1
+  # project scope with a fixed root: the folder guard and the strict sandbox
+  # apply to a project-scoped profile, and workspace secrets are attached;
+  # global scope gets neither.
+  scope: project
+  skills:
+    - read-file
+    - process-file
+    - create-study-material
+    - create-test
+    - teach-coding
+    - discover-something-new
+    - create-progress-report
+    - create-academic-map
+    - publish
+    - notify
+    - backup
+    - update-preferences
+    - update-child-interests
+  tools:
+    - id: sparkquill.set-child-profile
+    - id: sparkquill.set-child-schedule
+    - id: sparkquill.set-parent-label
+    - id: sparkquill.create-learning-activity
+    - id: sparkquill.open-file
+      presentation:
+        kind: document.file
+        activity: {label: File opened, destination: Viewer, detail: Shown on the right}
+    - id: sparkquill.open-activity
+      presentation:
+        kind: sparkquill.activity
+        activity: {label: Activity ready, destination: Viewer, detail: Ready to hand over}
+    - id: sparkquill.suggest-actions
+    - id: sparkquill.find-image
+  tool_policy:
+    mode: allowlist
+    enabled:
+      - execute_shell_command
+      - diff_patch_workspace_file
+      - read_image
+      - web_search
+      - notify_user
+      - agent_browser
+      - list_secrets
+      - set_user_secret
+      - delete_user_secret
+      - set_child_profile
+      - set_child_schedule
+      - set_parent_label
+      - create_learning_activity
+      - open_file
+      - open_activity
+      - suggest_actions
+      - find_image
+  runtime:
+    transport: auto
+    provider_options:
+      - id: claude-code
+        label: Claude Code
+        provider: claude-code
+        model_id: claude-sonnet-5
+        default: true
+      - id: codex-cli
+        label: Codex
+        provider: codex-cli
+        model_id: gpt-5.4
+    agent_tools:
+      mode: mcp_only
+    capabilities:
+      live_input: preferred
+      raw_terminal: disabled
+      warm_session: preferred
+      browser: preferred
+      voice: preferred
+    workspace:
+      mode: fixed
+      root: Chats/SparkQuill
+    conversation:
+      mode: singleton
+    sandbox:
+      mode: strict
+      network: allowed
+      read_only: [Downloads]
+  ui_panels:
+    schedules: true
+    files: true
+  schedules:
+    - id: pulse
+      name: Check-in
+      description: Quill reviews recent learning, watched sites and upcoming deadlines, then sends the parent a summary.
+      enabled: false
+      cadence_hours: 24
+      quiet_minutes: 10
+      max_deferral_hours: 4
+      messages:
+        - "This is an automated Pulse check-in. Review the learning activity of the last few days from real evidence in the workspace (activities, attempts, materials) and note what genuinely changed. If nothing meaningfully changed since your last check-in visible earlier in this conversation, say so briefly and warmly. Write ONE short, warm message as your reply (the parent is not technical; no files, paths or JSON)."
+        - "This is an automated Pulse check-in focused on the weekly schedule: compare what is saved with what the recent conversation and activity suggest, and mention only real gaps or changes. One short, warm message."
+        - "This is an automated Pulse check-in: update memory/preferences.md with anything durable you learned about how this parent likes things done (follow skills/update-preferences/SKILL.md). Reply with one short line saying whether anything changed."
+        - "This is an automated Pulse check-in: update memory/interests.md with anything new about what the child genuinely likes (follow skills/update-child-interests/SKILL.md). Reply with one short line saying whether anything changed."
+        - "This automated Pulse cycle is done. Decide what is ACTUALLY worth telling the parent, lead with what matters most, and call notify_user EXACTLY ONCE with a short title and a brief plain message (1-3 sentences). If truly nothing meaningful happened, still send one honest line so the parent knows the check-in ran."
+  built_in: true
+
+profiles:
+  - id: sparkquill-child
+    name: SparkQuill Child
+    version: 1
+    scope: project
+    prompt:
+      file: prompts/child.md
+      variables: {}
+    tools:
+      - id: sparkquill.open-activity-file
+        presentation:
+          kind: document.file
+          activity: {label: Page opened, destination: Viewer, detail: Shown on the right}
+      - id: sparkquill.celebrate
+      - id: sparkquill.show-scene
+      - id: sparkquill.find-activity-image
+    tool_policy:
+      mode: allowlist
+      enabled:
+        - execute_shell_command
+        - diff_patch_workspace_file
+        - read_image
+        - notify_user
+        - open_file
+        - celebrate
+        - show_scene
+        - find_image
+    runtime:
+      transport: auto
+      provider_options:
+        - id: claude-code
+          label: Claude Code
+          provider: claude-code
+          model_id: claude-sonnet-5
+          default: true
+        - id: codex-cli
+          label: Codex
+          provider: codex-cli
+          model_id: gpt-5.4
+      agent_tools:
+        mode: mcp_only
+      capabilities:
+        live_input: preferred
+        raw_terminal: disabled
+        warm_session: preferred
+        browser: disabled
+        secrets: disabled
+        voice: preferred
+      workspace:
+        # One conversation per activity: the activity folder is the project.
+        mode: project
+        projects_root: Chats/SparkQuill/activities
+      conversation:
+        mode: keyed
+        key_type: project
+      sandbox:
+        # Deny-by-default: the activity folder only, no network, no secrets
+        # in the environment. This is the boundary cmd/family-server's
+        # childShellTool hand-builds today.
+        mode: strict
+        network: disabled
+        read_only: [Downloads]
+    built_in: true
+
+branding:
+  icon: sparkles
+  favicon: sparkles
+
+ui:
+  surface: sparkquill
+  files_panel: true
+  workflow_panel: false
+  secrets: true
+  streaming: structured
+
+workflows:
+  enabled: []
+  selected_skills: []
+  browser_mode: ""

@@ -409,7 +409,17 @@ type PromptContext struct {
 	ProjectTitle         string `json:"project_title"`
 	LocalDateTime        string `json:"local_date_time,omitempty"`
 	WorkspaceDescription string `json:"workspace_description,omitempty"`
+	// Product carries per-turn variables a product computes server-side for
+	// its own prompt (a child's name, what is still unknown, the current
+	// activity folder). Set from the profile's PromptVariablesProvider; a
+	// value sent by the client is discarded. Templates read it as
+	// {{.Product.NAME}}.
+	Product map[string]string `json:"product,omitempty"`
 }
+
+// PromptVariablesProvider computes a profile's Product prompt variables for
+// one turn from trusted, server-resolved state.
+type PromptVariablesProvider func(context.Context, RuntimeContext) (map[string]string, error)
 
 type ToolRuntimeContext struct {
 	UserID        string

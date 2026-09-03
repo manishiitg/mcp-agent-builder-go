@@ -1,25 +1,17 @@
 package main
 
 import (
-	"embed"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/sparkquillproduct"
 )
 
-// seededSkillsFS holds the app-provided SKILL.md files, embedded into the binary.
-//
-// "all:" is required, not just "skills": Go's embed silently EXCLUDES any file
-// or directory whose name starts with "_" or "." unless the pattern has the
-// "all:" prefix. skills/_shared/ (the shared design system every generated
-// HTML file is supposed to inline) starts with "_" — without "all:" it was
-// silently never embedded, so seedSkills() never wrote it and the agent
-// correctly (if confusingly) reported the file as missing and improvised its
-// own version instead.
-//
-//go:embed all:skills
-var seededSkillsFS embed.FS
+// seededSkillsFS holds the app-provided SKILL.md files, embedded once in the
+// SparkQuill product package and shared with the platform build.
+var seededSkillsFS = sparkquillproduct.SkillFiles
 
 // seedSkills copies the embedded SKILL.md files into the family workspace under
 // skills/, so the agent can read them on demand via the shell (e.g.
