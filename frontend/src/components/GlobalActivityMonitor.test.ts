@@ -158,19 +158,18 @@ describe('visibleActivitySessions', () => {
       'chat-tab-session',
     )
 
-    // The current session is included: the workflow selector no longer carries
-    // a status indicator, so the monitor is the only place a running workflow
-    // you are looking at can be seen at all.
-    expect(visible.map(s => s.session_id)).toEqual(['chat-tab-session', 'pulse-schedule-session', 'other-session'])
+    // The current session is the selector's job (its dot and tooltip); the
+    // monitor shows everything else, including a schedule of the same workflow.
+    expect(visible.map(s => s.session_id)).toEqual(['pulse-schedule-session', 'other-session'])
   })
 
-  it('includes the current session by id when no workflow key is known', () => {
+  it('excludes the current session by id even when no workflow key is known', () => {
     const currentTabSession = minimalSession({ session_id: 'chat-tab-session' })
     const other = minimalSession({ session_id: 'other-session', workflow_name: 'upwork' })
 
     const visible = visibleActivitySessions([currentTabSession, other], 'chat-tab-session')
 
-    expect(visible.map(s => s.session_id)).toEqual(['chat-tab-session', 'other-session'])
+    expect(visible.map(s => s.session_id)).toEqual(['other-session'])
   })
 
   it('does not drop a same-named non-workflow session by accident', () => {
@@ -181,7 +180,7 @@ describe('visibleActivitySessions', () => {
 
     const visible = visibleActivitySessions([currentTabSession, other], 'chat-tab-session')
 
-    expect(visible.map(s => s.session_id)).toEqual(['chat-tab-session', 'other-session'])
+    expect(visible.map(s => s.session_id)).toEqual(['other-session'])
   })
 
   it('keeps independent sessions for the same non-current workflow', () => {
