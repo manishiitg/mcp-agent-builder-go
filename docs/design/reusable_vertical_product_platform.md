@@ -1438,3 +1438,19 @@ builder/run system prompt, `PhaseChatSystemPrompt` in
 reloads an on-screen view (`refreshWorkspaceView`: the report re-reads its
 HTML via its refresh event, every other view remounts on a token) and opens
 a view that is not on screen. `open_workspace_view` never refreshes.
+
+### 2026-09-03 — Daily Action tab defaults to the run summaries, not a bespoke step
+
+Every `notify_user(notification_kind="run_summary")` call (required at the
+end of a Pulse cycle, normal after an ordinary run) already writes a
+structured row into `org_dashboard_notifications` in the workflow's own
+`db/db.sqlite` — the same file its report queries. The required activity/
+actions report tab (`Daily Action`/`Recent Activity`, decided 2026-08-24)
+now defaults to reading that table (`notification_kind='run_summary'`)
+instead of asking every builder to author "what happened" from scratch,
+which had builders adding a step or table whose only job was feeding this
+tab. A custom activity view is now something the parent explicitly asks
+for, not the agent's default judgment call. Updated: reporting-policy.md,
+design-reporting-ui.md, improve-report.md (item 8 now also flags a
+report-only step/table as unnecessary complexity when it duplicates
+run_summary data).

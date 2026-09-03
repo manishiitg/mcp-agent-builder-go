@@ -28,8 +28,17 @@ generation step.
   each) — named for the workflow's real run cadence (e.g. `Daily Action`
   for a daily workflow, `Recent Activity` for hourly/weekly/on-demand ones).
   A report with no other tabs still needs this one; the rest of its content
-  becomes a second tab. See the `design-reporting-ui` skill for the full
-  authoring requirement.
+  becomes a second tab.
+  **Default source, no extra step needed:** every `notify_user(notification_kind="run_summary")`
+  call (required at the end of a Pulse cycle, and normal after an ordinary
+  run) already writes a row — title, status, message, structured fields,
+  timestamp — into `org_dashboard_notifications` in this same `db.sqlite`.
+  Query `notification_kind = 'run_summary'` from it for this tab; that is
+  the default and needs no new step, table, or column. Build something
+  custom only if the parent explicitly asks for a different or richer
+  activity view than the run summaries already give them — never invent a
+  step or table whose sole purpose is feeding this tab. See the
+  `design-reporting-ui` skill for the full authoring requirement.
 
 ### Data lifecycle: always gate on `window.report.ready(fn)`
 

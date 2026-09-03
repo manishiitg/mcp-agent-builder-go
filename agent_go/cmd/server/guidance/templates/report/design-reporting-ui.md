@@ -15,11 +15,21 @@ actions taken in each, in the order a non-technical reader would want
 them, with no raw JSON, internal IDs, or state codes. Name it for
 the workflow's real run cadence: `Daily Action` (or `Today's Actions`) for a
 workflow that genuinely runs daily, `Recent Activity` or `Latest Run` for
-one that runs hourly, weekly, or on demand. This is a content requirement,
-not a widget — build it the same way as any other section, reading from
-`db/db.sqlite` via `window.report.query`. Even a report with no other
+one that runs hourly, weekly, or on demand. Even a report with no other
 distinct views needs this one top-level tab; the rest of the report's
 content becomes a second tab rather than the whole page staying tab-less.
+
+**Build it from the run summaries you already send, by default.**
+`notify_user(notification_kind="run_summary")` already writes a structured
+row (title, status, message, fields, timestamp) into
+`org_dashboard_notifications` in the same `db/db.sqlite`, for every run.
+Query `notification_kind = 'run_summary'` ordered by `created_at desc` for
+this tab — that is the default, and it needs no new step, table, or
+column. Show "no runs recorded yet" when the table has no rows rather
+than treating it as an error. Only design something custom — a bespoke
+table, richer per-run detail — when the parent has explicitly asked for a
+different or more detailed activity view than the run summaries give
+them; never add a step or table whose only purpose is feeding this tab.
 
 1. Decide the reader's questions and the durable DB/asset evidence that answers
    them. Design one coherent reporting experience; use internal views only for
