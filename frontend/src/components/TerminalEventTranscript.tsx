@@ -137,9 +137,9 @@ const TranscriptEvent: React.FC<{
   event: PollingEvent
   onSendMessage?: (msg: string) => void
   compactUserBottom?: boolean
-  /** The tool batch just above already drew this turn's header. */
-  hideAssistantHeader?: boolean
-}> = ({ event, onSendMessage, compactUserBottom = false, hideAssistantHeader = false }) => {
+  /** Rendered inside a turn block that already draws the border and header. */
+  inTurn?: boolean
+}> = ({ event, onSendMessage, compactUserBottom = false, inTurn = false }) => {
   const payload = transcriptEventPayload(event)
   const content = typeof payload.content === 'string' ? payload.content.trim() : ''
   const timestamp = transcriptTimestamp(event)
@@ -160,7 +160,7 @@ const TranscriptEvent: React.FC<{
   const result = typeof payload.result === 'string' ? payload.result.trim() : ''
   const responseContent = content || finalResult || result
   if (AGENT_RESPONSE_EVENT_TYPES.has(event.type || '') && responseContent) {
-    return <AssistantTranscriptMessage event={event} content={responseContent} timestamp={timestamp} hideHeader={hideAssistantHeader} />
+    return <AssistantTranscriptMessage event={event} content={responseContent} timestamp={timestamp} framed={!inTurn} />
   }
 
   if (isExecutionPromptTranscriptMessage(event)) {
@@ -232,10 +232,49 @@ const AssistantTurnHeader: React.FC<{ event: PollingEvent; timestamp: string; la
 
 const AGENT_BLOCK_CLASS = 'border-l border-emerald-400/55 pl-4 pr-2'
 
-const AssistantTranscriptMessage: React.FC<{ event: PollingEvent; content: string; timestamp: string; label?: string; hideHeader?: boolean }> = ({ event, content, timestamp, label = 'Agent', hideHeader = false }) => {
+// Where an item sits in its agent turn. A turn is everything between two user
+// messages: tool batches, thoughts, replies, presentation and activity rows.
+type TurnSlot = { agent: boolean; first: boolean; last: boolean; header?: PollingEvent }
+
+function isUserItem(item: TranscriptRenderItem | undefined): boolean {
+  return item?.kind === 'event' && item.event.type === 'user_message'
+}
+
+function buildTurnSlots(data: TranscriptRenderItem[]): TurnSlot[] {
+  const slots: TurnSlot[] = []
+  let inTurn = false
+  data.forEach((item, index) => {
+    if (item.kind === 'live' || isUserItem(item)) {
+      inTurn = false
+      slots.push({ agent: false, first: false, last: false })
+      return
+    }
+    const first = !inTurn
+    inTurn = true
+    const next = data[index + 1]
+    slots.push({ agent: true, first, last: !next || next.kind === 'live' || isUserItem(next) })
+  })
+  // The header carries the turn's reply metadata (turn, duration, time): the
+  // turn's first reply, or its first event while there is no reply yet.
+  slots.forEach((slot, index) => {
+    if (!slot.first) return
+    for (let j = index; j < data.length && slots[j]?.agent; j++) {
+      const item = data[j]
+      if (item.kind === 'event' && isAgentResponseEvent(item.event)) {
+        slot.header = item.event
+        return
+      }
+    }
+    const item = data[index]
+    slot.header = item.kind === 'event' ? item.event : item.kind === 'live' ? undefined : item.events[0]
+  })
+  return slots
+}
+
+const AssistantTranscriptMessage: React.FC<{ event: PollingEvent; content: string; timestamp: string; label?: string; framed?: boolean }> = ({ event, content, timestamp, label = 'Agent', framed = true }) => {
   return (
-    <article data-testid="terminal-clear-assistant-message" className={`${hideHeader ? 'mb-4' : 'my-4'} ${AGENT_BLOCK_CLASS}`}>
-      {!hideHeader && <AssistantTurnHeader event={event} timestamp={timestamp} label={label} />}
+    <article data-testid="terminal-clear-assistant-message" className={framed ? `my-4 ${AGENT_BLOCK_CLASS}` : 'py-1'}>
+      {framed && <AssistantTurnHeader event={event} timestamp={timestamp} label={label} />}
       <div className="[&_li]:!text-[14px] [&_p]:!text-[14px]">
         <ConversationMarkdownRenderer content={content} framed={false} maxHeight="none" />
       </div>
@@ -596,6 +635,14 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     onLoadOlder?.()
   }, [hasOlder, onLoadOlder])
 
+  const listData = useMemo<TranscriptRenderItem[]>(
+    () => (streamingText || streamingStatus
+      ? [...items, { kind: 'live' as const, key: '__live-stream__', text: streamingText, status: streamingStatus }]
+      : items),
+    [items, streamingStatus, streamingText],
+  )
+  const turnSlots = useMemo(() => buildTurnSlots(listData), [listData])
+
   // initialTopMostItemIndex is a mount-time prop: Virtuoso keeps the list
   // invisible until it has scrolled there. Keep it fixed for the life of the
   // list and settle a late first fill (history hydrating after an empty
@@ -904,9 +951,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
           that rendered every event would regress long sessions badly. */}
       <Virtuoso
         ref={virtuosoRef}
-        data={streamingText || streamingStatus
-          ? [...items, { kind: 'live' as const, key: '__live-stream__', text: streamingText, status: streamingStatus }]
-          : items}
+        data={listData}
         className="custom-scrollbar min-h-0 flex-1"
         scrollerRef={ref => { scrollerRef.current = ref }}
         rangeChanged={({ startIndex }) => {
@@ -915,41 +960,36 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
         followOutput={autoScrollMode === 'follow-turn' ? 'smooth' : false}
         initialTopMostItemIndex={initialTopMostItemIndex}
         computeItemKey={(_, item) => item.key}
-        itemContent={(index, item) =>
-          item.kind === 'live' ? (
-            <LiveAssistantTranscript text={item.text} status={item.status} />
-          ) : item.kind === 'tools' ? (
-            (() => {
-              const next = items[index + 1]
-              const reply = next?.kind === 'event' && isAgentResponseEvent(next.event) ? next.event : null
-              return (
-                <div className="px-5">
-                  {reply ? (
-                    <div className={`mt-4 ${AGENT_BLOCK_CLASS}`}>
-                      <AssistantTurnHeader event={reply} timestamp={transcriptTimestamp(reply)} />
-                      <ToolBatch item={item} />
-                    </div>
-                  ) : (
-                    <ToolBatch item={item} />
-                  )}
-                </div>
+        itemContent={(index, item) => {
+          if (item.kind === 'live') return <LiveAssistantTranscript text={item.text} status={item.status} />
+          const slot = turnSlots[index]
+          const testId = item.kind === 'event' ? `terminal-clear-event-${item.event.id || item.key}` : undefined
+          const body = item.kind === 'tools'
+            ? <ToolBatch item={item} />
+            : item.kind === 'thinking'
+              ? <ThinkingBatch item={item} open={index === items.length - 1 && !streamingText.trim()} />
+              : (
+                <TranscriptEvent
+                  event={item.event}
+                  onSendMessage={onSendMessage}
+                  compactUserBottom={listData[index + 1]?.kind === 'tools'}
+                  inTurn={Boolean(slot?.agent)}
+                />
               )
-            })()
-          ) : item.kind === 'thinking' ? (
-            <div className="px-5">
-              <ThinkingBatch item={item} open={index === items.length - 1 && !streamingText.trim()} />
-            </div>
-          ) : (
-            <div data-testid={`terminal-clear-event-${item.event.id || item.key}`} className="px-5 py-0.5">
-              <TranscriptEvent
-                event={item.event}
-                onSendMessage={onSendMessage}
-                compactUserBottom={items[index + 1]?.kind === 'tools'}
-                hideAssistantHeader={items[index - 1]?.kind === 'tools'}
-              />
+          if (!slot?.agent) {
+            return <div data-testid={testId} className="px-5 py-0.5">{body}</div>
+          }
+          // One block per agent turn: the header once at the top, then every
+          // tool batch, thought and reply of that turn on the same rail.
+          return (
+            <div data-testid={testId} className="px-5">
+              <div className={`${AGENT_BLOCK_CLASS} ${slot.first ? 'mt-4' : ''} ${slot.last ? 'mb-4' : ''}`}>
+                {slot.first && slot.header && <AssistantTurnHeader event={slot.header} timestamp={transcriptTimestamp(slot.header)} />}
+                {body}
+              </div>
             </div>
           )
-        }
+        }}
       />
     </div>
   )
