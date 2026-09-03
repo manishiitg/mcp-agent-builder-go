@@ -626,7 +626,7 @@ func celebrateFactory() agentprofiles.ToolFactory {
 				if reason == "" {
 					return "", fmt.Errorf("reason is required")
 				}
-				emitInteraction(runtime, "celebrate", map[string]interface{}{"stars": stars, "reason": reason})
+				emitInteraction(runtime, interactionKind(runtime, "celebrate"), map[string]interface{}{"stars": stars, "reason": reason})
 				return jsonResult(map[string]interface{}{"status": "ok", "stars_awarded": stars})
 			},
 		}, nil
@@ -646,7 +646,7 @@ func showSceneFactory() agentprofiles.ToolFactory {
 				if html == "" {
 					return "", fmt.Errorf("html is required")
 				}
-				emitInteraction(runtime, "scene", map[string]interface{}{"html": html})
+				emitInteraction(runtime, interactionKind(runtime, "scene"), map[string]interface{}{"html": html})
 				return `{"status":"ok"}`, nil
 			},
 		}, nil

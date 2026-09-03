@@ -22,6 +22,20 @@ func TestManifestDeclaresParentAndChild(t *testing.T) {
 	if suggest == nil || suggest.Interaction == nil || suggest.Interaction.Kind != "suggestions" || suggest.Interaction.Render != "chat.suggestions" {
 		t.Fatalf("suggest_actions must declare its in-chat rendering: %+v", suggest)
 	}
+	renders := map[string]string{}
+	for _, child := range profiles {
+		if child.ID != "sparkquill-child" {
+			continue
+		}
+		for _, tool := range child.Tools {
+			if tool.Interaction != nil {
+				renders[tool.Interaction.Kind] = tool.Interaction.Render
+			}
+		}
+	}
+	if renders["celebrate"] != "chat.celebration" || renders["scene"] != "chat.scene" {
+		t.Fatalf("child tools must declare their in-chat renderings: %v", renders)
+	}
 	if parent.Runtime.Conversation.Mode != agentprofiles.ConversationModeSingleton || len(parent.Schedules) != 1 || parent.Schedules[0].ID != "pulse" {
 		t.Fatalf("parent shape wrong: %+v", parent.Runtime.Conversation)
 	}

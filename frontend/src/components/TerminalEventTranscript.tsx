@@ -17,6 +17,7 @@ import {
 import { formatDurationCompact } from '../utils/duration'
 import { formatToolCallArguments, formatToolCallResult } from '../utils/toolCallFormatting'
 import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
+import { parseProductInteraction, type ProductInteraction } from '../../shared/session/interactions'
 
 type TranscriptRenderItem = TranscriptItem | {
   kind: 'live'
@@ -139,7 +140,12 @@ const TranscriptEvent: React.FC<{
   compactUserBottom?: boolean
   /** Rendered inside a turn block that already draws the border and header. */
   inTurn?: boolean
-}> = ({ event, onSendMessage, compactUserBottom = false, inTurn = false }) => {
+  renderInteraction?: (interaction: ProductInteraction, event: PollingEvent) => React.ReactNode
+}> = ({ event, onSendMessage, compactUserBottom = false, inTurn = false, renderInteraction }) => {
+  if (event.type === 'product_interaction') {
+    const interaction = parseProductInteraction(event)
+    return interaction && renderInteraction ? <>{renderInteraction(interaction, event)}</> : null
+  }
   const payload = transcriptEventPayload(event)
   const content = typeof payload.content === 'string' ? payload.content.trim() : ''
   const timestamp = transcriptTimestamp(event)
@@ -535,6 +541,10 @@ interface TerminalEventTranscriptProps {
   /** Whether a product should follow an entire turn, or reveal meaningful
    * turn boundaries (send, tool, first stream, final answer) only. */
   autoScrollMode?: 'follow-turn' | 'reveal-first-response'
+  /** Product interactions to show in place, inside the agent's turn, with the
+   * product's own rendering (a celebration, an inline scene). Other
+   * interaction kinds stay on the side channel. */
+  productRows?: { kinds: string[]; render: (interaction: ProductInteraction, event: PollingEvent) => React.ReactNode }
 }
 
 const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
@@ -552,12 +562,16 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   streamingStatus = '',
   surfaceClassName,
   autoScrollMode = 'reveal-first-response',
+  productRows,
 }) => {
   const scrollerRef = useRef<HTMLElement | Window | null>(null)
   const virtuosoRef = useRef<VirtuosoHandle | null>(null)
+  const keptKinds = productRows?.kinds.join('\u0000') ?? ''
+  const keepInteractionKinds = useMemo(() => new Set(keptKinds ? keptKinds.split('\u0000') : []), [keptKinds])
+  const renderInteraction = productRows?.render
   const scoped = useMemo(
-    () => selectTerminalEvents(events, terminal, siblingTerminals),
-    [events, terminal, siblingTerminals],
+    () => selectTerminalEvents(events, terminal, siblingTerminals, keepInteractionKinds),
+    [events, terminal, siblingTerminals, keepInteractionKinds],
   )
   const items = useMemo<TranscriptRenderItem[]>(
     () => removeAdjacentDuplicateAssistantResponses(buildTranscriptItems(scoped)),
@@ -996,6 +1010,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
                   onSendMessage={onSendMessage}
                   compactUserBottom={listData[index + 1]?.kind === 'tools'}
                   inTurn={Boolean(slot?.agent)}
+                  renderInteraction={renderInteraction}
                 />
               )
           if (!slot?.agent) {

@@ -1257,3 +1257,24 @@ different activity than the current one". The app then enters child mode and
 kicks off the child conversation (conversation key = activity slug) exactly
 as before. Until now `platformApi.handoff` was a `notYet` stub, so the button
 rejected silently on the platform backend.
+
+### 2026-09-03 — Child Mode hosts the shared chat too
+
+`ChildPlatformChat` opens AgentWorks' `ChatArea` on the child profile's
+conversation for one activity (conversation key = activity slug, one tab per
+activity per page load). The child's own pieces sit around the shared
+transcript, the way the parent's pills do:
+
+- Tool bindings declare their in-chat rendering: `celebrate` →
+  `chat.celebration`, `show_scene` → `chat.scene`. The transcript gained
+  `productRows` — product interactions of the declared kinds are kept as rows
+  inside the agent's turn and rendered by the product (star row, sandboxed
+  scene iframe); every other interaction kind stays on the side channel.
+- The handoff kickoff is sent with `HIDDEN_USER_MESSAGE_PREFIX` (an invisible
+  separator): the model reads it, the transcript never shows it, live or on
+  restore. `submitToChildChat` lets the activity page's `SQ.choose` buttons
+  speak into the chat.
+- Presentations (`document.file`) land in the child's viewer through the same
+  selector the parent uses. The old per-activity polling, WhatsApp watch and
+  fast-mode toggle are family-server only and skipped on the platform backend.
+- The worksheet/chat split now defaults to half the window.

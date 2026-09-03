@@ -157,7 +157,13 @@ profiles:
           kind: document.file
           activity: {label: Page opened, destination: Viewer, detail: Shown on the right}
       - id: sparkquill.celebrate
+        interaction:
+          kind: celebrate
+          render: chat.celebration
       - id: sparkquill.show-scene
+        interaction:
+          kind: scene
+          render: chat.scene
       - id: sparkquill.find-activity-image
     commands:
       - name: update-answers-for-print

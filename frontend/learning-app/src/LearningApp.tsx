@@ -61,6 +61,7 @@ import {
   type VoiceStatus,
 } from './stores'
 import PlatformChat, { type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
+import ChildPlatformChat, { submitToChildChat, type ChildKickoff } from './platform/ChildPlatformChat'
 import { api, backend } from './api'
 import { VoiceSettings } from './voice/VoiceSettings'
 import { readReminderSoundPref, persistReminderSoundPref, playReminderChime } from './notifySound'
@@ -182,7 +183,11 @@ function readHandoffSide(): 'tutor' | 'parent' {
 // back once the handle is off-screen.
 const CHILD_SIDE_WIDTH_KEY = 'sparkquill.child-side-width'
 const CHILD_SIDE_MIN = 320
-const CHILD_SIDE_DEFAULT = 592 // the previous fixed width (348 + 244)
+// Half the window: the worksheet and the chat start as equals.
+function childSideDefault(): number {
+  const width = typeof window !== 'undefined' ? window.innerWidth : 1200
+  return Math.max(CHILD_SIDE_MIN, Math.round(width / 2))
+}
 // The chat's floor is a PIXEL minimum, not a fraction of the window. A fraction
 // looks fine on a large display and collapses on a small one — 20% of 1100px is
 // 220px, which cannot hold a readable message bubble plus the composer. This is
@@ -200,8 +205,8 @@ function childSideMax(windowWidth: number): number {
 function readChildSideWidth(): number {
   try {
     const n = Number(localStorage.getItem(CHILD_SIDE_WIDTH_KEY))
-    return Number.isFinite(n) && n >= CHILD_SIDE_MIN ? n : CHILD_SIDE_DEFAULT
-  } catch { return CHILD_SIDE_DEFAULT }
+    return Number.isFinite(n) && n >= CHILD_SIDE_MIN ? n : childSideDefault()
+  } catch { return childSideDefault() }
 }
 function persistChildSideWidth(px: number) {
   try { localStorage.setItem(CHILD_SIDE_WIDTH_KEY, String(Math.round(px))) } catch { /* best-effort */ }
@@ -1265,7 +1270,7 @@ export default function LearningApp() {
   }
   // "Wide" once past the midpoint between default and max, so the button's icon
   // always shows which way the next tap will move it.
-  const childSideWide = childSideWidth > (CHILD_SIDE_DEFAULT + childSideMax(windowWidth)) / 2
+  const childSideWide = childSideWidth > (childSideDefault() + childSideMax(windowWidth)) / 2
   const drawerTab = useWorkspaceStore((s) => s.drawerTab)
   const setDrawerTab = useWorkspaceStore((s) => s.setDrawerTab)
   // The ONE activity the child is currently bound to (/api/child/activity) —
@@ -1278,6 +1283,9 @@ export default function LearningApp() {
   // the child's own active/ copy after editing it to add a progress note, and
   // a same-string setChildViewerPath wouldn't otherwise trigger a refetch.
   const [childViewerRefreshKey, setChildViewerRefreshKey] = useState(0)
+  // A handoff's opening message for the platform child chat, until it is sent.
+  const [childKickoff, setChildKickoff] = useState<ChildKickoff | null>(null)
+  const onChildKickoffSent = useCallback((id: number) => setChildKickoff((cur) => (cur?.id === id ? null : cur)), [])
   // Optional element id the tutor asked us to scroll to inside the opened page
   // (open_file's `focus`). Empty = let the viewer pick the first unanswered question.
   const [childViewerFocus, setChildViewerFocus] = useState('')
@@ -1427,6 +1435,16 @@ export default function LearningApp() {
       setDrawerTab('files'); setViewerPath(null); setViewerActivityDir(dir); setExpandedActivity(dir); setMapRefreshKey((k) => k + 1)
     }
   }, [setDrawerTab, setMapRefreshKey])
+  // Child Mode: a page Quill opens lands in the child's viewer.
+  const onChildPresentation = useCallback((p: ProductPresentation) => {
+    if (p.kind !== 'document.file' || typeof p.payload.path !== 'string') return
+    const path = String(p.payload.path).replace(/^.*?Chats\/SparkQuill\//, '')
+    setChildViewerFocus(typeof p.payload.focus === 'string' ? p.payload.focus : '')
+    setChildViewerPath(path)
+    setChildViewerRefreshKey((k) => k + 1)
+  }, [])
+  const childSceneDir = childActivity?.dir ?? ''
+  const renderChildScene = useCallback((html: string) => <SceneFrame html={html} activityDir={childSceneDir} />, [childSceneDir])
   useEffect(() => { loadPins() }, [loadPins, mapRefreshKey])
   // The pinned page on screen, loaded when its tab is opened or a turn ends.
   const pinnedPath = drawerTab.startsWith('pin:') ? drawerTab.slice(4) : ''
@@ -1746,7 +1764,7 @@ export default function LearningApp() {
   // see it; the auto-scroll effect above already brings it into view.
   useEffect(() => {
     const dir = childActivity?.dir
-    if (screen !== 'tutor' || !dir) return
+    if (backend === 'platform' || screen !== 'tutor' || !dir) return
     const id = window.setInterval(() => {
       if (childSending) return
       api.loadChildConversation(dir)
@@ -1788,7 +1806,7 @@ export default function LearningApp() {
   // screen is showing this activity, not just around this tab's own send.
   useEffect(() => {
     const dir = childActivity?.dir
-    if (screen !== 'tutor' || !dir) return
+    if (backend === 'platform' || screen !== 'tutor' || !dir) return
     let idleTimer: number | undefined
     const armIdleReset = () => {
       if (idleTimer) window.clearTimeout(idleTimer)
@@ -1910,6 +1928,8 @@ export default function LearningApp() {
         if (loadedActivityDirRef.current === act.dir) return
         if (useChildChatStore.getState().childSending) return
         loadedActivityDirRef.current = act.dir
+        // The platform child chat keeps its own conversation per activity.
+        if (backend === 'platform') return
         api.loadChildConversation(act.dir)
           .then((c) => {
             // A newer activity may have been bound while this was in flight;
@@ -2078,7 +2098,7 @@ export default function LearningApp() {
           .then((data) => iframeRef.current?.contentWindow?.postMessage({ __sq: 1, op: 'loaded', id: msg.id, data: data ?? null }, '*'))
           .catch(() => iframeRef.current?.contentWindow?.postMessage({ __sq: 1, op: 'loaded', id: msg.id, data: null }, '*'))
       } else if (msg.op === 'choose' && typeof msg.text === 'string') {
-        sendChildTextRef.current(msg.text)
+        if (backend !== 'platform' || !submitToChildChat(msg.text)) sendChildTextRef.current(msg.text)
       }
     }
     window.addEventListener('message', onMsg)
@@ -2439,7 +2459,7 @@ export default function LearningApp() {
   // (if any) is opened automatically by the auto-open effect above once
   // childActivity reflects this handoff — no need to thread a file path
   // through the handoff call itself.
-  const enterChildModeAfterHandoff = (newSession: boolean, greeting: string, goal?: string) => {
+  const enterChildModeAfterHandoff = (newSession: boolean, greeting: string, goal: string | undefined, dir: string) => {
     persistHandoffSide('tutor')
     setScreen('tutor')
     setChildTreeRefreshKey((k) => k + 1)
@@ -2462,8 +2482,12 @@ export default function LearningApp() {
         `stated plan; just start naturally, the same as always.)`
       : undefined
     if (newSession) {
-      setChildMessages([])
-      sendChildKickoff(greeting, [], modelExtra)
+      if (backend === 'platform') {
+        setChildKickoff({ id: Date.now(), dir, text: modelExtra ? `${greeting}\n\n${modelExtra}` : greeting })
+      } else {
+        setChildMessages([])
+        sendChildKickoff(greeting, [], modelExtra)
+      }
     }
   }
 
@@ -2487,7 +2511,7 @@ export default function LearningApp() {
         // will apply instead, so bail out here rather than starting a chat
         // for an activity the parent already navigated away from.
         if (myGeneration !== handoffGenerationRef.current) return
-        enterChildModeAfterHandoff(!!data.new_session, handoffGreeting(greetingText), data.goal)
+        enterChildModeAfterHandoff(!!data.new_session, handoffGreeting(greetingText), data.goal, data.dir)
       })
       .catch(() => {})
   }
@@ -4024,6 +4048,24 @@ export default function LearningApp() {
                   <button className="fl-parent-return" type="button" title="Parent Mode" onClick={() => { setGateValue(''); setGateError(''); setPinGate(true) }}><LockKeyhole size={16} /><span>Parent Mode</span></button>
                 </div>
               </header>
+              {backend === 'platform' ? (
+                childActivity?.dir ? (
+                  <ChildPlatformChat
+                    activityDir={childActivity.dir}
+                    title={childActivity.title || 'Activity'}
+                    childName={childName}
+                    theme={theme === 'dark' ? 'dark' : 'light'}
+                    commands={quickCommands.child}
+                    kickoff={childKickoff}
+                    onKickoffSent={onChildKickoffSent}
+                    onPresentation={onChildPresentation}
+                    renderScene={renderChildScene}
+                  />
+                ) : (
+                  <p className="fl-note" style={{ padding: 24 }}>No activity yet — ask your {parentLabel || 'parent'} to give you one.</p>
+                )
+              ) : (
+              <>
               <div className="fl-child-thread" aria-label="Tutor conversation" ref={childThreadScrollRef}>
                 {childRenderGroups.map((g, gi) => (
                   g.kind === 'photos' ? (
@@ -4206,6 +4248,8 @@ export default function LearningApp() {
                 />
                 <button className="composer-send" type="submit" aria-label="Send message" disabled={!childInput.trim()}><Send size={18} /></button>
               </form>
+              </>
+              )}
             </section>
             <div
               className="fl-child-resizer"
@@ -4224,7 +4268,7 @@ export default function LearningApp() {
                 const step = e.shiftKey ? 80 : 24
                 if (e.key === 'ArrowLeft') { e.preventDefault(); commitChildSideWidth(childSideWidth + step) }
                 else if (e.key === 'ArrowRight') { e.preventDefault(); commitChildSideWidth(childSideWidth - step) }
-                else if (e.key === 'Home') { e.preventDefault(); commitChildSideWidth(CHILD_SIDE_DEFAULT) }
+                else if (e.key === 'Home') { e.preventDefault(); commitChildSideWidth(childSideDefault()) }
               }}
             >
               <span className="fl-child-resizer-grip" aria-hidden="true" />
@@ -4261,7 +4305,7 @@ export default function LearningApp() {
                       title={childSideWide ? 'Give the chat more room' : 'Give the worksheet more room'}
                       aria-pressed={childSideWide}
                       onClick={() => {
-                        commitChildSideWidth(childSideWide ? CHILD_SIDE_DEFAULT : childSideMax(windowWidth))
+                        commitChildSideWidth(childSideWide ? childSideDefault() : childSideMax(windowWidth))
                       }}
                     >
                       {childSideWide ? <Minimize2 size={15} /> : <Maximize2 size={15} />}

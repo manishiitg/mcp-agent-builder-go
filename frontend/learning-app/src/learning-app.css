@@ -1273,3 +1273,9 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-platform-chat :where(textarea, input) { font: inherit; color: inherit; }
 .fl-platform-chat :where(pre, code) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .fl-platform-chat :where(p, ul, ol) { margin: 0; }
+
+/* Child Mode on the platform chat: the shared chat fills the section under the
+   header; its rows reuse the child's celebration and scene styling. */
+.fl-child-chat .fl-platform-chat { flex: 1; min-height: 0; }
+.fl-platform-chat .fl-celebration { margin: 8px 0; }
+.fl-platform-scene { margin: 8px 0; max-width: min(94%, 760px); }

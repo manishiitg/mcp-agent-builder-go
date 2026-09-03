@@ -1,4 +1,5 @@
 import { getOwnedTerminalOwnerKeys, getTerminalOwnerPayload } from './eventOwnership'
+import { parseProductInteraction } from '../interactions'
 import { isMainAgentTerminal } from './terminalIdentity'
 import type { PollingEvent, TerminalSnapshot } from '../types'
 import { compareTerminalEvents } from './terminalEventPage'
@@ -52,6 +53,27 @@ import { compareTerminalEvents } from './terminalEventPage'
 // footer. They are not part of the conversation, so keep them out of Clear
 // View. A long reviewer can emit dozens of status_line updates; rendering each
 // one as a card pushes the actual finding off screen.
+/**
+ * A user message that starts with this is sent to the model but never shown:
+ * a product's own kickoff after a handoff, for example. The prefix is an
+ * invisible separator so the model reads the text unchanged.
+ */
+export const HIDDEN_USER_MESSAGE_PREFIX = '\u2063'
+
+export function isHiddenUserMessage(event: PollingEvent): boolean {
+  if (event.type !== 'user_message') return false
+  const content = eventFields(event).content
+  return typeof content === 'string' && content.startsWith(HIDDEN_USER_MESSAGE_PREFIX)
+}
+
+// A product_interaction the surface asked the transcript to show in place
+// (a celebration, an inline scene) instead of leaving to the side channel.
+function isKeptInteraction(event: PollingEvent, keep?: ReadonlySet<string>): boolean {
+  if (!keep || keep.size === 0) return false
+  const it = parseProductInteraction(event)
+  return Boolean(it && keep.has(it.kind))
+}
+
 const NON_TRANSCRIPT_TYPES = new Set([
   'token_usage',
   'status_line',
@@ -489,6 +511,7 @@ function dropDuplicateExecutionPromptMessages(events: PollingEvent[]): PollingEv
 
 function isTranscriptEvent(event: PollingEvent): boolean {
   if (NON_TRANSCRIPT_TYPES.has(event.type || '')) return false
+  if (isHiddenUserMessage(event)) return false
   if (isContainerTranscriptNoise(event)) return false
   if (isMessageSequenceWrapperEvent(event)) return false
   if (event.type === 'agent_end' || event.type === 'unified_completion') {
@@ -639,6 +662,7 @@ export function selectTerminalEvents(
   events: PollingEvent[] | undefined,
   terminal: TerminalSnapshot | null | undefined,
   siblingTerminals?: TerminalSnapshot[],
+  keepInteractionKinds?: ReadonlySet<string>,
 ): PollingEvent[] {
   if (!events || events.length === 0) return []
 
@@ -649,7 +673,7 @@ export function selectTerminalEvents(
   // for developer diagnostics.
   if (!terminal) {
     return events
-      .filter(isProductMainConversationEvent)
+      .filter(event => isProductMainConversationEvent(event) || isKeptInteraction(event, keepInteractionKinds))
       .map((event, index) => ({ event, index }))
       .sort((a, b) => {
         const compared = compareTerminalEvents(a.event, b.event)
@@ -707,7 +731,7 @@ export function selectTerminalEvents(
   // reflect their persisted sequence; sorting those timestamp-first made a
   // completion appear above the task work it completed.
   return matched
-    .filter(isTranscriptEvent)
+    .filter(event => isTranscriptEvent(event) || isKeptInteraction(event, keepInteractionKinds))
     .filter(event => !isOwnTerminalLifecycleStart(event, terminal))
     .map((event, index) => ({ event, index }))
     .sort((a, b) => {
