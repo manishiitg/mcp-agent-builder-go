@@ -3444,7 +3444,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
   return (
     <TooltipProvider>
-      <div className={isProductSurface ? 'border-t border-border bg-background py-1.5 shadow-[0_-8px_24px_rgba(15,23,42,0.08)]' : 'space-y-2'} data-product-chat-input={isProductSurface || undefined}>
+      <div className={isProductSurface ? 'border-t border-border bg-background py-1.5 shadow-[0_-8px_24px_rgba(15,23,42,0.08)]' : 'space-y-1'} data-product-chat-input={isProductSurface || undefined}>
       {/* Pasted-text Attachments */}
       {chatPastedAttachments.length > 0 && (
         <div className={inputPadX}>
@@ -3608,8 +3608,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
 
       {/* Input Form */}
-      <div data-tour="chat-input-area" data-testid="tour-chat-input-area" className={`${inputPadX} ${isProductSurface ? 'py-2' : 'py-2'}`}>
-        <form onSubmit={handleSubmit} className={isProductSurface ? 'relative' : 'relative space-y-2'}>
+      {/* The transcript above ends with its own margin; keep the band's top
+          padding small so the last message and the composer read as one column. */}
+      <div data-tour="chat-input-area" data-testid="tour-chat-input-area" className={`${inputPadX} ${isProductSurface ? 'py-2' : 'pt-1 pb-2'}`}>
+        <form onSubmit={handleSubmit} className={isProductSurface ? 'relative' : 'relative space-y-1'}>
           {/* The mic's banner (download progress, "Listening" with the live
               transcript) portals here, in normal flow directly above the
               composer box, so it can never be clipped by a container. */}

@@ -1106,7 +1106,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
           // tool batch, thought and reply of that turn on the same rail.
           return (
             <div data-testid={testId} className="px-3">
-              <div className={`${AGENT_BLOCK_CLASS} ${slot.first ? 'mt-4' : ''} ${slot.last ? 'mb-4' : ''}`}>
+              <div className={`${AGENT_BLOCK_CLASS} ${slot.first ? 'mt-4' : ''} ${slot.last ? 'mb-2' : ''}`}>
                 {slot.first && slot.header && <AssistantTurnHeader event={slot.header} timestamp={slot.showTime ? transcriptTimestamp(slot.header) : ''} label={assistantLabel} icon={assistantIcon} />}
                 {body}
               </div>
@@ -1120,7 +1120,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
 
 const LiveAssistantTranscript: React.FC<{ text: string; status: string }> = ({ text, status }) => (
   text ? (
-    <article data-testid="terminal-clear-live-assistant-message" className="mx-3 my-4 border-l border-emerald-400/55 pl-3 pr-1">
+    <article data-testid="terminal-clear-live-assistant-message" className="mx-3 mt-4 mb-2 border-l border-emerald-400/55 pl-3 pr-1">
       <div className="[&_li]:!text-[length:calc(14px*var(--chat-scale,1))] [&_p]:!text-[length:calc(14px*var(--chat-scale,1))] [&_li]:!leading-[calc(24px*var(--chat-scale,1))] [&_p]:!leading-[calc(24px*var(--chat-scale,1))]">
         <ConversationMarkdownRenderer content={text} framed={false} maxHeight="none" />
       </div>
