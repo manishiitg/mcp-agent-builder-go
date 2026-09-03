@@ -705,6 +705,10 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
         align: 'end',
         behavior: 'auto',
       })
+      // scrollToIndex positions by Virtuoso's size estimate; the real end is
+      // the scroller's own height once the item is measured.
+      const scroller = scrollerRef.current
+      if (scroller instanceof HTMLElement) scroller.scrollTop = scroller.scrollHeight
     }
     const frame = window.requestAnimationFrame(scrollToLatest)
     const settledLayoutTimer = window.setTimeout(scrollToLatest, 180)
@@ -714,25 +718,24 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     }
   }, [autoScrollMode, items.length, latestUserMessageKey, transcriptTailRevision])
 
-  // Chrome outside the list (a product's working indicator, suggestion pills,
-  // delivery status) mounts after the message that triggered it and shrinks
-  // the transcript's viewport without changing its items. Virtuoso does not
-  // re-anchor on that, so the tail of the last message slid under the new
-  // row. While a turn is being followed, any viewport shrink re-scrolls to
-  // the end.
+  // Stick to the end while a turn is being followed. Two things move the end
+  // without a new item: chrome outside the list (a working indicator, pills,
+  // delivery status) shrinks the viewport, and items get their real height
+  // only after Virtuoso's first estimate (a scroll issued on send landed
+  // short by that difference, and nothing corrected it until the next
+  // event). Observing both the viewport and the list content covers both.
   useEffect(() => {
     if (autoScrollMode !== 'follow-turn') return
     const scroller = scrollerRef.current
     if (!(scroller instanceof HTMLElement) || typeof ResizeObserver === 'undefined') return
-    let lastHeight = scroller.clientHeight
-    const observer = new ResizeObserver(() => {
-      const height = scroller.clientHeight
-      const shrank = height < lastHeight
-      lastHeight = height
-      if (!shrank || !followCurrentTurnRef.current) return
-      virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'auto' })
-    })
+    const stick = () => {
+      if (!followCurrentTurnRef.current) return
+      scroller.scrollTop = scroller.scrollHeight
+    }
+    const observer = new ResizeObserver(stick)
     observer.observe(scroller)
+    const list = scroller.querySelector('[data-testid="virtuoso-item-list"]')
+    if (list) observer.observe(list)
     return () => observer.disconnect()
   }, [autoScrollMode])
 
@@ -1003,7 +1006,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
         rangeChanged={({ startIndex }) => {
           setIsAtTranscriptStart(startIndex === 0)
         }}
-        followOutput={autoScrollMode === 'follow-turn' ? 'smooth' : false}
+        followOutput={autoScrollMode === 'follow-turn' ? 'auto' : false}
         initialTopMostItemIndex={initialTopMostItemIndex}
         computeItemKey={(_, item) => item.key}
         itemContent={(index, item) => {
