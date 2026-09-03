@@ -246,6 +246,8 @@ const AssistantTurnHeader: React.FC<{ event: PollingEvent; timestamp: string; la
 
 const AGENT_BLOCK_CLASS = 'border-l border-emerald-400/55 pl-3 pr-1'
 
+const IS_ELECTRON = typeof navigator !== 'undefined' && /Electron/i.test(navigator.userAgent)
+
 // Pins a scroller to its end over a few frames: Virtuoso measures newly
 // rendered items after paint and compensates scrollTop for the difference,
 // so a single assignment can land short. Stops early once it is there.
@@ -780,6 +782,8 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     if (!(scroller instanceof HTMLElement) || typeof ResizeObserver === 'undefined') return
     const onScroll = () => {
       nearEndRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48
+      // Scrolling back to the end resumes following the turn.
+      if (nearEndRef.current) followCurrentTurnRef.current = true
     }
     scroller.addEventListener('scroll', onScroll, { passive: true })
     const stick = () => {
@@ -949,6 +953,11 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     if (event.deltaY < 0) {
       followCurrentTurnRef.current = false
     }
+    // A browser scrolls natively, with the trackpad's own inertia and
+    // smoothing. Applying the wheel delta by hand there replaced that with
+    // one hard step per event, which read as jitter. Only Electron needs the
+    // manual forwarding below.
+    if (!IS_ELECTRON) return
 
     let target = event.target instanceof HTMLElement ? event.target : null
     while (target && target !== event.currentTarget) {
@@ -1061,6 +1070,9 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
           setIsAtTranscriptStart(startIndex === 0)
         }}
         followOutput={autoScrollMode === 'follow-turn' ? 'auto' : false}
+        // Render well beyond the viewport so scrolling reveals rows that are
+        // already there instead of rows popping in as they mount.
+        increaseViewportBy={{ top: 1200, bottom: 600 }}
         initialTopMostItemIndex={initialTopMostItemIndex}
         computeItemKey={(_, item) => item.key}
         itemContent={(index, item) => {
