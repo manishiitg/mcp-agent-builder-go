@@ -230,7 +230,7 @@ const AssistantTurnHeader: React.FC<{ event: PollingEvent; timestamp: string; la
   )
 }
 
-const AGENT_BLOCK_CLASS = 'border-l border-emerald-400/55 pl-4 pr-2'
+const AGENT_BLOCK_CLASS = 'border-l border-emerald-400/55 pl-3 pr-1'
 
 // Where an item sits in its agent turn. A turn is everything between two user
 // messages: tool batches, thoughts, replies, presentation and activity rows.
@@ -977,12 +977,12 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
                 />
               )
           if (!slot?.agent) {
-            return <div data-testid={testId} className="px-5 py-0.5">{body}</div>
+            return <div data-testid={testId} className="px-3 py-0.5">{body}</div>
           }
           // One block per agent turn: the header once at the top, then every
           // tool batch, thought and reply of that turn on the same rail.
           return (
-            <div data-testid={testId} className="px-5">
+            <div data-testid={testId} className="px-3">
               <div className={`${AGENT_BLOCK_CLASS} ${slot.first ? 'mt-4' : ''} ${slot.last ? 'mb-4' : ''}`}>
                 {slot.first && slot.header && <AssistantTurnHeader event={slot.header} timestamp={transcriptTimestamp(slot.header)} />}
                 {body}
@@ -997,7 +997,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
 
 const LiveAssistantTranscript: React.FC<{ text: string; status: string }> = ({ text, status }) => (
   text ? (
-    <article data-testid="terminal-clear-live-assistant-message" className="mx-5 my-4 border-l-2 border-cyan-400/55 pl-4 pr-2">
+    <article data-testid="terminal-clear-live-assistant-message" className="mx-3 my-4 border-l border-emerald-400/55 pl-3 pr-1">
       <div className="[&_li]:!text-[14px] [&_p]:!text-[14px]">
         <ConversationMarkdownRenderer content={text} framed={false} maxHeight="none" />
       </div>
