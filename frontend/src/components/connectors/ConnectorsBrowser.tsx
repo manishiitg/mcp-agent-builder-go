@@ -254,13 +254,18 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
 
         {!isLoadingTools && visible.length === 0 && !toolsError && (
           <p className="py-8 text-center text-sm text-gray-500 dark:text-gray-400">
-            {query
-              ? `No connectors match "${query}".`
-              : filter === 'connected'
-                ? 'No connectors yet. Pick one from Available and press Connect.'
-                : filter === 'available'
-                  ? 'Every connector is already connected.'
-                  : 'No connectors configured.'}
+            {total === 0
+              // An empty catalog is a deployment fact, not a filter result:
+              // this server's MCP config lists no connectors at all, so
+              // neither "all connected" nor "pick one" would be true.
+              ? 'No connectors are configured on this server. The deployment’s MCP server config lists none.'
+              : query
+                ? `No connectors match "${query}".`
+                : filter === 'connected'
+                  ? 'No connectors yet. Pick one from Available and press Connect.'
+                  : filter === 'available'
+                    ? 'Every connector is already connected.'
+                    : 'No connectors configured.'}
           </p>
         )}
 
