@@ -62,6 +62,7 @@ import {
 } from './stores'
 import PlatformChat, { type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
 import ChildPlatformChat, { forgetChildChat, submitToChildChat, type ChildKickoff } from './platform/ChildPlatformChat'
+import { BuildUpdateNotice } from './platform/BuildUpdateNotice'
 import { api, backend } from './api'
 import { VoiceSettings } from './voice/VoiceSettings'
 import { readReminderSoundPref, persistReminderSoundPref, playReminderChime } from './notifySound'
@@ -4013,6 +4014,7 @@ export default function LearningApp() {
   if (screen === 'tutor') {
     return (
       <main className="learning-app" data-theme={theme}>
+        <BuildUpdateNotice />
         <div className="fl-child">
           <div
             ref={childBodyRef}
@@ -4470,6 +4472,7 @@ export default function LearningApp() {
 
   return (
     <main className="learning-app" data-theme={theme}>
+      <BuildUpdateNotice />
       <header className="learning-header">
         <div className="learning-brand">
           <img className="brand-mark" src="/sparkquill-mark.svg" alt="" width={30} height={30} />

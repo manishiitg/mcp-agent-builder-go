@@ -1292,3 +1292,7 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-child-chat .fl-platform-chat { flex: 1; min-height: 0; }
 .fl-platform-chat .fl-celebration { margin: 8px 0; }
 .fl-platform-scene { margin: 8px 0; max-width: min(94%, 760px); }
+
+/* "New build available" — a small pill at the top of the screen. */
+.fl-update-notice { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 90; display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border: 1px solid #bcd8f5; border-radius: 999px; background: #eaf5ff; color: #2f6db0; font: inherit; font-weight: 700; font-size: var(--text-secondary); box-shadow: 0 6px 18px rgba(13, 35, 76, .12); cursor: pointer; }
+.fl-update-notice:hover { background: #dcedfc; }
