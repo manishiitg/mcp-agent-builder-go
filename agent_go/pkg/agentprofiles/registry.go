@@ -10,10 +10,11 @@ import (
 )
 
 type Registry struct {
-	mu           sync.RWMutex
-	profiles     map[string]map[int]Profile
-	factories    map[string]ToolFactory
-	initializers map[string]RuntimeInitializer
+	mu              sync.RWMutex
+	profiles        map[string]map[int]Profile
+	factories       map[string]ToolFactory
+	initializers    map[string]RuntimeInitializer
+	promptVariables map[string]PromptVariablesProvider
 }
 
 func NewRegistry() *Registry {
@@ -121,6 +122,46 @@ func (r *Registry) RegisterToolFactory(id string, factory ToolFactory) error {
 	}
 	r.factories[id] = factory
 	return nil
+}
+
+// RegisterPromptVariables attaches a per-turn prompt variable provider to a
+// profile (see PromptContext.Product).
+func (r *Registry) RegisterPromptVariables(profileID string, provider PromptVariablesProvider) error {
+	if r == nil {
+		return fmt.Errorf("profile registry is nil")
+	}
+	profileID = strings.TrimSpace(profileID)
+	if !profileIDPattern.MatchString(profileID) {
+		return fmt.Errorf("invalid profile id %q", profileID)
+	}
+	if provider == nil {
+		return fmt.Errorf("prompt variables provider %q is nil", profileID)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.promptVariables == nil {
+		r.promptVariables = map[string]PromptVariablesProvider{}
+	}
+	if _, exists := r.promptVariables[profileID]; exists {
+		return fmt.Errorf("prompt variables provider %q is already registered", profileID)
+	}
+	r.promptVariables[profileID] = provider
+	return nil
+}
+
+// PromptVariables runs the profile's provider, or returns nil when none is
+// registered.
+func (r *Registry) PromptVariables(ctx context.Context, profileID string, runtime RuntimeContext) (map[string]string, error) {
+	if r == nil {
+		return nil, fmt.Errorf("profile registry is nil")
+	}
+	r.mu.RLock()
+	provider := r.promptVariables[strings.TrimSpace(profileID)]
+	r.mu.RUnlock()
+	if provider == nil {
+		return nil, nil
+	}
+	return provider(ctx, runtime)
 }
 
 func (r *Registry) RegisterInitializer(profileID string, initializer RuntimeInitializer) error {

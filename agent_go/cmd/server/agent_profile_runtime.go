@@ -219,6 +219,16 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 		}
 		promptContext.LocalDateTime = fmt.Sprintf("%s (UTC%s%02d:%02d)", now.Format("Monday, 2 January 2006 at 3:04 PM MST"), offsetSign, offsetSeconds/3600, (offsetSeconds%3600)/60)
 	}
+	// Product prompt variables are computed here from trusted state; never
+	// from the request body.
+	promptContext.Product = nil
+	if productVars, err := api.agentProfiles.PromptVariables(ctx, profile.ID, agentprofiles.RuntimeContext{
+		UserID: userID, SessionID: sessionID, WorkspacePath: workspacePath,
+	}); err != nil {
+		return nil, fmt.Errorf("agent profile %q prompt variables: %w", profile.ID, err)
+	} else if len(productVars) > 0 {
+		promptContext.Product = productVars
+	}
 	rendered, err := agentprofiles.RenderPrompt(profile, promptContext)
 	if err != nil {
 		return nil, err
