@@ -593,7 +593,7 @@ func buildScheduleContext(workspacePath string, manifest *WorkflowManifest, sche
 		WorkflowID:    manifest.ID,
 		WorkflowLabel: manifest.Label,
 		Schedule:      sched,
-		Capabilities:  manifest.Capabilities,
+		Capabilities:  lockedScheduleCapabilities(manifest.Capabilities),
 		OwnerUserID:   manifest.CreatedBy,
 	}
 	if sched.PulseReviewOnly {
@@ -4662,4 +4662,14 @@ func ValidateCronExpression(expr string) error {
 		return fmt.Errorf("invalid cron expression: %w", err)
 	}
 	return nil
+}
+
+// lockedScheduleCapabilities is the manifest's capabilities as a scheduled run
+// (and Pulse, and the capacity wait) must see them: the LLM config rewritten
+// to the published default under LLM_CONFIG_LOCKED (lockedPresetLLMConfig),
+// everything else untouched. Applied once where the ScheduleContext is built
+// so every scheduler consumer of Capabilities.LLMConfig agrees.
+func lockedScheduleCapabilities(caps WorkflowCapabilities) WorkflowCapabilities {
+	caps.LLMConfig = lockedPresetLLMConfig(caps.LLMConfig)
+	return caps
 }

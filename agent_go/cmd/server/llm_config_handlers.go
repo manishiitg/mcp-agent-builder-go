@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 	"github.com/manishiitg/mcpagent/llm"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	"github.com/manishiitg/multi-llm-provider-go/pkg/adapters/azure"
@@ -1431,4 +1432,58 @@ func (api *StreamingAPI) handleGetAzureDeployedModels(w http.ResponseWriter, r *
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 		return
 	}
+}
+
+// lockedPresetLLMConfig is a workflow's saved LLM config as it actually runs
+// under LLM_CONFIG_LOCKED with an explicitly published list: every role --
+// Builder, Pulse and the three execution tiers -- runs the published default
+// unless the saved role is itself on the published list, and fallbacks are
+// dropped. Without the lock (or without a published list) the config is
+// returned untouched. The result is runtime-only; nothing writes it back to
+// workflow.json, so lifting the lock restores the workflow's own choices.
+//
+// Why here and not in handleQuery's primary-config check: the Builder chat,
+// scheduled runs and step execution take their models from the manifest's
+// llm_config, not from the request's primary config, so a locked deployment
+// still ran a synced workflow on claude-sonnet-5 (RTS, 2026-09-03).
+func lockedPresetLLMConfig(cfg *workflowtypes.PresetLLMConfig) *workflowtypes.PresetLLMConfig {
+	if !isGlobalLLMConfigLocked() || !publishedLLMListConfigured() {
+		return cfg
+	}
+	defaults := llm.GetLLMDefaults()
+	published := getDefaultPublishedLLMs(true, defaults.PrimaryConfig)
+	if len(published) == 0 {
+		return cfg
+	}
+	defProvider, _ := published[0]["provider"].(string)
+	defModel, _ := published[0]["model_id"].(string)
+	if strings.TrimSpace(defProvider) == "" || strings.TrimSpace(defModel) == "" {
+		return cfg
+	}
+	role := func(saved *workflowtypes.AgentLLMConfig) *workflowtypes.AgentLLMConfig {
+		if saved != nil && publishedLLMListContains(strings.TrimSpace(saved.Provider), strings.TrimSpace(saved.ModelID), defaults.PrimaryConfig) {
+			kept := *saved
+			kept.Fallbacks = nil
+			return &kept
+		}
+		return &workflowtypes.AgentLLMConfig{Provider: defProvider, ModelID: defModel}
+	}
+	out := &workflowtypes.PresetLLMConfig{SchemaVersion: 2, Mode: workflowtypes.LLMConfigModeExplicit}
+	if cfg != nil {
+		copied := *cfg
+		out = &copied
+		out.Mode = workflowtypes.LLMConfigModeExplicit
+		out.Provider = ""
+	}
+	var savedBuilder, savedPulse, t1, t2, t3 *workflowtypes.AgentLLMConfig
+	if cfg != nil {
+		savedBuilder, savedPulse = cfg.BuilderLLM, cfg.PulseLLM
+		if cfg.TieredConfig != nil {
+			t1, t2, t3 = cfg.TieredConfig.Tier1, cfg.TieredConfig.Tier2, cfg.TieredConfig.Tier3
+		}
+	}
+	out.BuilderLLM = role(savedBuilder)
+	out.PulseLLM = role(savedPulse)
+	out.TieredConfig = &workflowtypes.TieredLLMConfig{Tier1: role(t1), Tier2: role(t2), Tier3: role(t3)}
+	return out
 }

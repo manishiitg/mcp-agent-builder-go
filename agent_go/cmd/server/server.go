@@ -1129,7 +1129,7 @@ func applyMultiAgentCapabilitiesToRequest(req *QueryRequest, caps WorkflowCapabi
 		copied := append([]string(nil), (*caps.SelectedGlobalSecretNames)...)
 		req.SelectedGlobalSecrets = &copied
 	}
-	if cfg := queryLLMConfigFromPreset(caps.LLMConfig); cfg != nil {
+	if cfg := queryLLMConfigFromPreset(lockedPresetLLMConfig(caps.LLMConfig)); cfg != nil {
 		req.LLMConfig = cfg
 	}
 }
@@ -3496,6 +3496,11 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// Locked mode: use server env for API keys; the request's choice only
 		// counts if a product profile owns it or the published list names it.
 		finalProvider, finalModelID = resolveLockedLLM(req.LLMConfig, req.LLMConfigSource)
+		// Everything downstream that reads req.LLMConfig directly (the workflow
+		// orchestrator's base config, run metadata) must see the locked answer
+		// too, not the request's original choice.
+		req.LLMConfig = &orchestrator.LLMConfig{Primary: orchestrator.LLMModel{Provider: finalProvider, ModelID: finalModelID}}
+		req.LLMConfigSource = ""
 		supported := getSupportedProviders()
 		if len(supported) > 0 {
 			allowed := make(map[string]bool)
@@ -3765,7 +3770,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[MANIFEST] Loaded workflow config from manifest at %s", manifestWorkspacePath)
 				selectedTools = caps.SelectedTools
 				selectedSkills = caps.SelectedSkills
-				presetLLMConfig = caps.LLMConfig
+				presetLLMConfig = lockedPresetLLMConfig(caps.LLMConfig)
 
 				if len(caps.SelectedServers) > 0 {
 					selectedServers = caps.SelectedServers
@@ -9287,7 +9292,7 @@ func (api *StreamingAPI) buildWorkshopConfig(
 			// LLM config from manifest
 			log.Printf("[WORKSHOP] LLMConfig from manifest: isNil=%v", caps.LLMConfig == nil)
 			if caps.LLMConfig != nil {
-				llmCfg := caps.LLMConfig
+				llmCfg := lockedPresetLLMConfig(caps.LLMConfig)
 				log.Printf("[WORKSHOP] LLMConfig details: mode=%q tieredConfig=%v providerProfile=%q",
 					llmCfg.Mode, llmCfg.TieredConfig != nil, llmCfg.Provider)
 				cfg.PresetPhaseLLM, cfg.TieredConfig = workshopResolveLLMConfig(llmCfg)
