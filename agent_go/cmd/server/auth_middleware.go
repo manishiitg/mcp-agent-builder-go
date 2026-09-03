@@ -207,6 +207,16 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			http.Error(w, `{"error": "This account is disabled"}`, http.StatusForbidden)
 			return
 		}
+		// A token for an identity the directory does not know (a session
+		// minted before the directory existed or before a migration renamed
+		// its users) is refused so the browser signs in again, instead of
+		// silently browsing as a ghost user with an empty workspace. The
+		// wording contains "expired" on purpose: that is what the frontend
+		// keys on to drop the stale token and show the login screen.
+		if directoryUserIsUnknown(claims) {
+			http.Error(w, `{"error": "Session expired: this sign-in predates the current user directory, please sign in again"}`, http.StatusUnauthorized)
+			return
+		}
 		// Token is valid, add claims to context
 		ctx := context.WithValue(r.Context(), UserContextKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
