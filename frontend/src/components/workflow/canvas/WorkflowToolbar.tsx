@@ -838,7 +838,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
             label="Setup"
             open={openGroups.setup}
             onToggle={() => toggleGroup('setup')}
-            title={openGroups.setup ? 'Hide setup' : 'Show setup: skills, secrets, MCP servers, browser, LLM, bots, folders'}
+            title={openGroups.setup ? 'Hide setup' : 'Show setup: skills, secrets, MCP servers, browser, LLM, bots, folders, sharing, users'}
           >
           <div className="inline-flex items-center gap-0.5">
             {capabilityViewDefinitions.map(({ id, icon: Icon, label }) => {
@@ -854,41 +854,47 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 </Tooltip>
               )
             })}
+            {/* Access lives with the rest of setup. Share = who may see or
+                edit THIS workflow (owners and readers); Users & access =
+                the deployment's accounts, roles and products (admins). */}
+            {(canShareWorkflow || canManageAccess) && (
+              <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
+            )}
+            {canShareWorkflow && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => setShowSharePopup(true)}
+                    className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
+                    aria-label="Share workflow"
+                  >
+                    <Share2 className="w-3.5 h-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom"><p>Share this workflow: who can see or edit it</p></TooltipContent>
+              </Tooltip>
+            )}
+            {canManageAccess && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => setShowAccessPopup(true)}
+                    className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
+                    aria-label="Users and access"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom"><p>Users &amp; access: accounts, roles and products (admins)</p></TooltipContent>
+              </Tooltip>
+            )}
           </div>
           </ToolbarGroup>
         )}
           </div>
           )}
-
-        {/* Share this workflow (owners and admins, multi-user mode only) */}
-        {canShareWorkflow && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => setShowSharePopup(true)}
-                className="p-1.5 rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
-                aria-label="Share workflow"
-              >
-                <Share2 className="w-3.5 h-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom"><p>Share this workflow</p></TooltipContent>
-          </Tooltip>
-        )}
-        {/* Users & access (multi-user mode only, admins only) */}
-        {canManageAccess && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => setShowAccessPopup(true)}
-                className="p-1.5 rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom"><p>Users &amp; access</p></TooltipContent>
-          </Tooltip>
-        )}
 
         </TooltipProvider>
       </div>

@@ -9,17 +9,17 @@ interface ChangePasswordDialogProps {
 }
 
 /**
- * ChangePasswordDialog - lets a signed-in user change their own password.
+ * ChangePasswordDialog - lets a signed-in user set a new password.
  *
  * The backend (`POST /api/auth/password`) has existed since the user
  * directory landed, but only admins had a UI (the reset in Users & access);
  * a normal member or read-only account had no way to rotate their own
- * password. The server re-checks the current password and the 8-character
- * minimum; an SSO-only account (no password hash) is told so by the server
- * and the message is shown as-is.
+ * password. The signed-in session is the proof of identity, so the current
+ * password is not asked for (the server accepts an empty one). The server
+ * enforces the 8-character minimum; an SSO-only account (no password hash)
+ * is told so by the server and the message is shown as-is.
  */
 export default function ChangePasswordDialog({ isOpen, onClose }: ChangePasswordDialogProps) {
-  const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -29,7 +29,6 @@ export default function ChangePasswordDialog({ isOpen, onClose }: ChangePassword
   if (!isOpen) return null
 
   const reset = () => {
-    setCurrent('')
     setNext('')
     setConfirm('')
     setError(null)
@@ -41,16 +40,15 @@ export default function ChangePasswordDialog({ isOpen, onClose }: ChangePassword
   }
 
   const mismatch = confirm.length > 0 && next !== confirm
-  const canSubmit = current.length > 0 && next.length >= 8 && next === confirm && !submitting
+  const canSubmit = next.length >= 8 && next === confirm && !submitting
 
   const submit = async () => {
     if (!canSubmit) return
     setSubmitting(true)
     setError(null)
     try {
-      await authApi.changeOwnPassword(current, next)
+      await authApi.changeOwnPassword('', next)
       setDone(true)
-      setCurrent('')
       setNext('')
       setConfirm('')
     } catch (err) {
@@ -95,18 +93,14 @@ export default function ChangePasswordDialog({ isOpen, onClose }: ChangePassword
           ) : (
             <div className="p-4 flex flex-col gap-3">
               <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Current password
-                <input type="password" autoFocus autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} className={inputClass} />
-              </label>
-              <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 New password
-                <input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} placeholder="min 8 characters" className={inputClass} />
+                <input type="password" autoFocus autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} placeholder="min 8 characters" className={inputClass} />
               </label>
               <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Confirm new password
                 <input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className={inputClass} />
               </label>
-              {mismatch && <p className="text-xs text-destructive">The two new passwords do not match.</p>}
+              {mismatch && <p className="text-xs text-destructive">The two passwords do not match.</p>}
               {error && <p className="text-xs text-destructive">{error}</p>}
               <div className="flex justify-end gap-2 pt-1">
                 <button onClick={close} className="px-3 py-1.5 text-sm rounded border border-border hover:bg-accent">Cancel</button>

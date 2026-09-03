@@ -788,7 +788,10 @@ func (api *StreamingAPI) handleChangeOwnPassword(w http.ResponseWriter, r *http.
 		writeUsersError(w, http.StatusBadRequest, "this account does not use a password")
 		return
 	}
-	if !verifyPassword(rec.PasswordHash, req.Current) {
+	// The current password is optional: the signed-in session is the proof of
+	// identity here, and the account menu does not re-prompt for it. A client
+	// that does send one must still get it right.
+	if req.Current != "" && !verifyPassword(rec.PasswordHash, req.Current) {
 		writeUsersError(w, http.StatusForbidden, "current password is incorrect")
 		return
 	}
