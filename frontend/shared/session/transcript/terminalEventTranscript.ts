@@ -568,6 +568,15 @@ export function toolBatchLabel(events: PollingEvent[]): string {
 export type TranscriptItem =
   | { kind: 'event'; key: string; event: PollingEvent }
   | { kind: 'tools'; key: string; events: PollingEvent[]; toolCount: number }
+  /** Consecutive conversation_thinking events: one collapsible block, like tools. */
+  | { kind: 'thinking'; key: string; events: PollingEvent[]; text: string }
+
+function transcriptThinkingText(event: PollingEvent): string {
+  const envelope = event.data as Record<string, unknown> | undefined
+  const inner = envelope?.data as Record<string, unknown> | undefined
+  const raw = inner?.thinking ?? envelope?.thinking
+  return typeof raw === 'string' ? raw.trim() : ''
+}
 
 /**
  * selectTerminalEvents scopes the session's event stream to ONE terminal.
@@ -806,6 +815,21 @@ export function buildTranscriptItems(events: PollingEvent[]): TranscriptItem[] {
     const event = visibleEvents[cursor]
     if (!isTranscriptEvent(event)) {
       cursor += 1
+      continue
+    }
+    if (event.type === 'conversation_thinking') {
+      // The agent's running commentary reads as one block per stretch, opened
+      // while it is the newest thing on screen and minimised once the answer
+      // (or a tool batch) follows -- the same shape tool calls already have.
+      const batch: PollingEvent[] = []
+      while (cursor < visibleEvents.length && visibleEvents[cursor].type === 'conversation_thinking') {
+        batch.push(visibleEvents[cursor])
+        cursor += 1
+      }
+      const text = batch.map(transcriptThinkingText).filter(Boolean).join('\n\n')
+      if (text) {
+        items.push({ kind: 'thinking', key: batch[0].id || `thinking-${items.length}`, events: batch, text })
+      }
       continue
     }
     if (!isToolBatchEvent(event)) {

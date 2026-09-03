@@ -399,6 +399,43 @@ const ToolCallField: React.FC<{ label: string; value: string }> = ({ label, valu
   )
 }
 
+// Thinking behaves like a tool batch with one difference: it is open while it
+// is the newest thing in the transcript (the agent is still reasoning) and
+// minimises on its own once the answer text or a tool batch follows. A manual
+// toggle wins until the next automatic close.
+const ThinkingBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'thinking' }>; open: boolean }> = ({ item, open }) => {
+  const [override, setOverride] = useState<boolean | null>(null)
+  useEffect(() => { setOverride(null) }, [open])
+  const expanded = override ?? open
+  const toggle = useCallback(() => setOverride(prev => !(prev ?? open)), [open])
+
+  return (
+    <div data-testid="terminal-clear-thinking-batch" className="my-1">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={expanded}
+        data-testid="terminal-clear-thinking-batch-toggle"
+        className="flex items-center gap-1 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <span>Thinking</span>
+        {open && <span aria-hidden="true" className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground/70" />}
+        {expanded
+          ? <ChevronDown className="h-3 w-3 shrink-0" />
+          : <ChevronRight className="h-3 w-3 shrink-0" />}
+      </button>
+      {expanded && (
+        <p
+          data-testid="terminal-clear-thinking-batch-content"
+          className="mt-1 whitespace-pre-wrap break-words border-l border-border pl-3 text-sm leading-6 text-muted-foreground"
+        >
+          {item.text}
+        </p>
+      )}
+    </div>
+  )
+}
+
 const ToolBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'tools' }> }> = ({ item }) => {
   const pairs = useMemo(() => pairToolCalls(item.events), [item.events])
   // A conversation should lead with what the agent said, not implementation
@@ -896,6 +933,10 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
                 </div>
               )
             })()
+          ) : item.kind === 'thinking' ? (
+            <div className="px-5">
+              <ThinkingBatch item={item} open={index === items.length - 1 && !streamingText.trim()} />
+            </div>
           ) : (
             <div data-testid={`terminal-clear-event-${item.event.id || item.key}`} className="px-5 py-0.5">
               <TranscriptEvent
