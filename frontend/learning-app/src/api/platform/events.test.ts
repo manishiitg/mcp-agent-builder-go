@@ -3,7 +3,7 @@
 // the preview events and TurnResult the SparkQuill UI consumes.
 import { describe, expect, it } from 'vitest'
 import type { TurnStreamEvent } from '../familyApi'
-import { TurnCollector, bareToolName, familyRelativePath, isMainEvent, readSSE, type PlatformEvent } from './events'
+import { TurnCollector, bareToolName, familyRelativePath, isMainEvent, type PlatformEvent } from './events'
 
 const SID = 'product-379ea1f1'
 const main = (type: string, data: Record<string, unknown>, extra: Partial<PlatformEvent> = {}): PlatformEvent => ({
@@ -22,8 +22,8 @@ describe('TurnCollector', () => {
     c.feed(main('product_interaction', { product: 'sparkquill', kind: 'family_updated', payload: { child: { name: 'Maya', grade: '6', board: 'CBSE' } } }))
     c.feed(main('tool_call_end', { tool_name: 'set_child_profile', tool_call_id: 't2', result: '{"status":"ok"}', duration: 3 }))
     c.feed(main('product_interaction', { product: 'sparkquill', kind: 'family_updated', payload: { parent_label: 'mom' } }))
-    c.feed(main('presentation_updated', { kind: 'document.file', title: 'progress.html', payload: { path: '_users/default/Chats/SparkQuill/reports/progress.html', focus: 'q2' } }))
-    c.feed(main('presentation_updated', { kind: 'sparkquill.activity', title: 'Fractions', payload: { dir: '_users/default/Chats/SparkQuill/activities/2026-09-03-fractions' } }))
+    c.feed(main('presentation_updated', { presentation_id: 'p1', kind: 'document.file', title: 'progress.html', payload: { path: '_users/default/Chats/SparkQuill/reports/progress.html', focus: 'q2' } }))
+    c.feed(main('presentation_updated', { presentation_id: 'p2', kind: 'sparkquill.activity', title: 'Fractions', payload: { dir: '_users/default/Chats/SparkQuill/activities/2026-09-03-fractions' } }))
     c.feed(main('product_interaction', { product: 'sparkquill', kind: 'suggestions', payload: { actions: [{ label: 'How is she doing?', message: 'progress' }, { label: '', message: 'x' }] } }))
     // A delegated sub-agent's completion must not end the turn.
     c.feed(main('unified_completion', { final_result: 'sub-agent done', status: 'completed' }, { execution_kind: 'delegation', execution_id: 'delegation-1' }))
@@ -70,37 +70,10 @@ describe('TurnCollector', () => {
     c.feed(main('unified_completion', { final_result: 'other', status: 'completed' }, { session_id: 'someone-else' }))
     c.feed(main('unified_completion', { final_result: 'w', status: 'completed' }, { data: { type: 'unified_completion', component: 'workshop-step', data: { final_result: 'w', status: 'completed' } } }))
     expect(c.done).toBe(false)
-    expect(isMainEvent({ execution_kind: 'main_agent', execution_id: 'main:x', session_id: 'x' }, 'x')).toBe(true)
+    expect(isMainEvent({ id: 'e1', type: 'agent_end', execution_kind: 'main_agent', execution_id: 'main:x', session_id: 'x' } as PlatformEvent, 'x')).toBe(true)
     expect(bareToolName('mcp__api-bridge__execute_shell_command')).toBe('execute_shell_command')
     expect(bareToolName('celebrate')).toBe('celebrate')
     expect(familyRelativePath('_users/u1/Chats/SparkQuill/activities/a')).toBe('activities/a')
     expect(familyRelativePath('reports/x.html')).toBe('reports/x.html')
-  })
-})
-
-describe('readSSE', () => {
-  it('parses id/event/data frames, ignores heartbeats and status frames, and reports the cursor', async () => {
-    const frames = [
-      ': heartbeat 2026-09-03T00:00:00Z\n\n',
-      'id: 7\nevent: status\ndata: {"session_status":"running"}\n\n',
-      'id: 8\nevent: event\ndata: {"events":[{"type":"streaming_chunk","data":{"type":"streaming_chunk","data":{"content":"hi","is_delta":true}}}],"last_processed_index":8}\n\n',
-      'id: 9\nevent: cursor\ndata: {}\n\n',
-    ]
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        for (const f of frames) controller.enqueue(new TextEncoder().encode(f))
-        controller.close()
-      },
-    })
-    const fetchMock = async () => ({ ok: true, body } as unknown as Response)
-    const original = globalThis.fetch
-    globalThis.fetch = fetchMock as typeof fetch
-    try {
-      const batches: { n: number; last: number }[] = []
-      await readSSE('http://x/stream', {}, new AbortController().signal, (batch, lastID) => batches.push({ n: batch.events?.length ?? 0, last: lastID }))
-      expect(batches).toEqual([{ n: 1, last: 8 }])
-    } finally {
-      globalThis.fetch = original
-    }
   })
 })

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { getOwnedTerminalOwnerKeys, getTerminalOwnerPayload } from './eventOwnership'
-import type { PollingEvent } from '../services/api-types'
+import type { PollingEvent } from '../types'
 
 function evt(partial: Partial<PollingEvent> & { id: string; session_id: string }): PollingEvent {
   return {

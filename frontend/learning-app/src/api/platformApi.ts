@@ -10,7 +10,8 @@ import type {
   StoredConversation, TurnMessage, TurnResult, TurnStreamEvent,
   WhatsAppStatus, WhatsAppVoiceTranscription,
 } from './familyApi'
-import { type EventBatch, TurnCollector, isMainEvent, payloadOf, readSSE } from './platform/events'
+import { type EventBatch, TurnCollector, isMainEvent, payloadOf } from './platform/events'
+import { fetchSessionEvents, followSession } from '../../../shared/session'
 import { FamilyWorkspace, documentsURL } from './platform/workspace'
 
 export const PARENT_PROFILE = 'sparkquill'
@@ -89,12 +90,14 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     return slug
   }
 
+  const sessionClient = { baseUrl: base, token }
+
   async function conversation(profile: string, key: string): Promise<Conversation> {
     const cacheKey = `${profile}/${key}`
     const cached = conversations.get(cacheKey)
     if (cached) return cached
     const resolved = await request<{ session_id: string }>('POST', `/api/agent-profiles/${profile}/conversation`, key ? { conversation_key: key } : {})
-    const batch = await request<EventBatch>('GET', `/api/sessions/${encodeURIComponent(resolved.session_id)}/events?since=0&working_set=session`).catch(() => null)
+    const batch = await fetchSessionEvents(sessionClient, resolved.session_id, 0).catch(() => null)
     const cursor = batch && typeof batch.last_processed_index === 'number' && batch.last_processed_index >= 0 ? batch.last_processed_index : 0
     const conv = { sessionID: resolved.session_id, cursor }
     conversations.set(cacheKey, conv)
@@ -103,31 +106,13 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
 
   /** Follows a session's stream from its cursor; the returned function stops it. */
   function follow(conv: Conversation, onBatch: (batch: EventBatch, frameID: number) => void, onEnd?: (err?: Error) => void): () => void {
-    const controller = new AbortController()
-    let stopped = false
-    const run = async () => {
-      let attempts = 0
-      while (!stopped) {
-        try {
-          const auth = await token()
-          await readSSE(`${base}/api/sessions/${encodeURIComponent(conv.sessionID)}/events/stream?working_set=session&since=${conv.cursor}`,
-            { Authorization: `Bearer ${auth}` }, controller.signal, (batch, lastID) => {
-              if (lastID >= 0) conv.cursor = lastID
-              else if (typeof batch.last_processed_index === 'number' && batch.last_processed_index >= 0) conv.cursor = batch.last_processed_index
-              onBatch(batch, lastID >= 0 ? lastID : (batch.last_processed_index ?? -1))
-            })
-          attempts = 0
-        } catch (err) {
-          if (stopped) break
-          attempts += 1
-          if (attempts > 5) { onEnd?.(err instanceof Error ? err : new Error(String(err))); return }
-          await new Promise((r) => setTimeout(r, 1000 * attempts))
-        }
-      }
-      onEnd?.()
-    }
-    void run()
-    return () => { stopped = true; controller.abort() }
+    return followSession(sessionClient, conv.sessionID, conv.cursor, {
+      onBatch: (batch, frameIndex) => {
+        if (frameIndex >= 0) conv.cursor = Math.max(conv.cursor, frameIndex)
+        onBatch(batch, frameIndex)
+      },
+      onEnd,
+    })
   }
 
   async function sendTurn(profile: string, key: string, text: string, onEvent: (e: TurnStreamEvent) => void): Promise<TurnResult> {
@@ -224,7 +209,7 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
   /** Rebuilds a transcript from the session's event history. */
   async function history(profile: string, key: string): Promise<StoredConversation | null> {
     const conv = await conversation(profile, key)
-    const batch = await request<EventBatch>('GET', `/api/sessions/${encodeURIComponent(conv.sessionID)}/events?since=0&working_set=session`)
+    const batch = await fetchSessionEvents(sessionClient, conv.sessionID, 0)
     const messages: NonNullable<StoredConversation['messages']> = []
     for (const e of batch.events ?? []) {
       const type = e.type ?? e.data?.type

@@ -1,64 +1,32 @@
-// The platform's session event stream, read the way the AgentWorks frontend
-// reads it (frontend/src/services/sse.ts, polling.go) but without React:
-// a fetch-based SSE reader, the envelope shapes, main-agent filtering, and
-// a pure collector that turns a stream of platform events into the
-// preview events and the final TurnResult the SparkQuill UI expects.
+// SparkQuill's view of the platform's session events: the shared session
+// client (frontend/shared/session) does the transport, the foreground
+// filter and the presentation parsing; what lives here is the product's
+// own mapping from platform events to the preview events and TurnResult
+// the SparkQuill UI expects.
 import type { ToolCallRecord } from '../../stores/types'
 import type { ToolEvent, TurnResult, TurnStreamEvent } from '../familyApi'
+import { eventBelongsToSession, isForegroundSessionEvent, mcpToolDisplayName, parsePresentationUpdatedEvent } from '../../../../shared/session'
+import type { PollingEvent, SSEEventMessage } from '../../../../shared/session'
 
-/** One event as the agent server delivers it (polling and SSE alike). */
-export type PlatformEvent = {
-  id?: string
-  type?: string
-  timestamp?: string
-  session_id?: string
-  execution_id?: string
-  execution_kind?: string
-  sequence?: number
-  error?: string
-  data?: {
-    type?: string
-    event_index?: number
-    hierarchy_level?: number | string
-    component?: string
-    correlation_id?: string
-    turn_id?: string
-    session_id?: string
-    data?: Record<string, unknown>
-  }
-}
-
-/** The envelope both the polling route and each SSE `event` frame carry. */
-export type EventBatch = {
-  events?: PlatformEvent[]
-  has_more?: boolean
-  session_status?: string
-  display_status?: string
-  last_processed_index?: number
-  can_steer?: boolean
-  runtime_state?: { foreground_turn?: { busy?: boolean; can_steer?: boolean }; phase?: string }
-}
+/** The shapes the UI code below reads; aliases of the shared contract. */
+export type PlatformEvent = PollingEvent
+export type EventBatch = SSEEventMessage
 
 export function payloadOf(e: PlatformEvent): Record<string, unknown> {
-  return (e.data?.data ?? {}) as Record<string, unknown>
+  return ((e.data as { data?: Record<string, unknown> } | undefined)?.data ?? {}) as Record<string, unknown>
 }
 
-/** Mirrors isForegroundSessionEvent in the AgentWorks frontend. */
+/** Foreground-agent events of this session only, the way AgentWorks decides it. */
 export function isMainEvent(e: PlatformEvent, sessionID: string): boolean {
-  if (e.session_id && sessionID && e.session_id !== sessionID) return false
-  const component = e.data?.component ?? ''
-  const correlation = e.data?.correlation_id ?? ''
-  if (/^(delegation|workshop)-/.test(component) || /^(delegation|workshop)-/.test(correlation)) return false
-  if (e.execution_kind && e.execution_kind !== 'main_agent') return false
-  if (e.execution_id && !e.execution_id.startsWith('main:')) return false
-  return true
+  if (sessionID && !eventBelongsToSession(sessionID, e)) return false
+  const data = e.data as { component?: unknown; correlation_id?: unknown } | undefined
+  return isForegroundSessionEvent(e, data?.component, data?.correlation_id)
 }
 
 /** Platform tool names carry an MCP server prefix; the UI shows bare names. */
 export function bareToolName(name: string): string {
-  return name.replace(/^mcp__[^_]+(?:-[^_]+)*__/, '')
+  return mcpToolDisplayName(name).name
 }
-
 const statusLabels: Record<string, string> = {
   execute_shell_command: 'Working in the workspace',
   diff_patch_workspace_file: 'Editing a page',
@@ -102,9 +70,11 @@ export class TurnCollector {
       case 'product_interaction':
         this.interaction(String(p.kind ?? ''), (p.payload ?? {}) as Record<string, unknown>)
         return
-      case 'presentation_updated':
-        this.presentation(String(p.kind ?? ''), (p.payload ?? {}) as Record<string, unknown>)
+      case 'presentation_updated': {
+        const parsed = parsePresentationUpdatedEvent(e)
+        if (parsed) this.presentation(parsed.kind, parsed.payload)
         return
+      }
     }
     if (!isMainEvent(e, this.sessionID)) return
     switch (type) {
@@ -213,45 +183,4 @@ function argumentsOf(p: Record<string, unknown>): string {
   if (typeof args === 'string') return args
   if (args === undefined) return ''
   try { return JSON.stringify(args) } catch { return '' }
-}
-
-/**
- * readSSE opens the session stream with fetch (so the token rides in a
- * header and the same code runs under node) and hands each `event` frame's
- * batch to onBatch. Resolves when the stream ends or the signal aborts.
- */
-export async function readSSE(url: string, headers: Record<string, string>, signal: AbortSignal, onBatch: (batch: EventBatch, lastID: number) => void): Promise<void> {
-  const res = await fetch(url, { headers: { ...headers, Accept: 'text/event-stream' }, signal })
-  if (!res.ok || !res.body) throw new Error(`event stream HTTP ${res.status}`)
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let eventName = ''
-  let dataLines: string[] = []
-  let lastID = -1
-  const flush = () => {
-    if (dataLines.length > 0 && (eventName === 'event' || eventName === '')) {
-      try {
-        onBatch(JSON.parse(dataLines.join('\n')) as EventBatch, lastID)
-      } catch { /* malformed frame: skip */ }
-    }
-    eventName = ''
-    dataLines = []
-  }
-  for (;;) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    let nl: number
-    while ((nl = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, nl).replace(/\r$/, '')
-      buffer = buffer.slice(nl + 1)
-      if (line === '') { flush(); continue }
-      if (line.startsWith(':')) continue
-      if (line.startsWith('id:')) { const n = Number(line.slice(3).trim()); if (!Number.isNaN(n)) lastID = n; continue }
-      if (line.startsWith('event:')) { eventName = line.slice(6).trim(); continue }
-      if (line.startsWith('data:')) { dataLines.push(line.slice(5).replace(/^ /, '')); continue }
-    }
-  }
-  flush()
 }

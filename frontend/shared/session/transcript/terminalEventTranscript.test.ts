@@ -11,7 +11,7 @@ import {
   shouldCollapseTranscriptUserMessage,
   type TranscriptItem,
 } from './terminalEventTranscript'
-import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
+import type { PollingEvent, TerminalSnapshot } from '../types'
 
 // The rail is the hierarchy: every agent and sub-agent owns its own terminal.
 // selectTerminalEvents is the contract between the rail and the transcript, and

@@ -1,3 +1,4 @@
+import { isForegroundSessionEvent } from '../../shared/session/foreground'
 import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo, useState, type ComponentType, type ForwardedRef, type ReactNode } from 'react'
 import { normalizeEventViewMode } from '../stores/useChatStore'
 import { useRenderLogger, useMemoLogger } from '../utils/renderLogger'
@@ -146,34 +147,6 @@ function getOwnedTerminalStreamKeys(
   return []
 }
 
-function isForegroundSessionEvent(
-  event: PollingEvent,
-  component: unknown,
-  correlationId: unknown,
-): boolean {
-  const componentText = typeof component === 'string' ? component : ''
-  const correlationText = typeof correlationId === 'string' ? correlationId : ''
-  if (
-    componentText.startsWith('delegation-') ||
-    componentText.startsWith('workshop-') ||
-    correlationText.startsWith('delegation-') ||
-    correlationText.startsWith('workshop-')
-  ) {
-    return false
-  }
-
-  const kind = (event.execution_kind || '').trim().toLowerCase()
-  if (kind && kind !== 'main_agent') {
-    return false
-  }
-
-  const executionId = (event.execution_id || '').trim().toLowerCase()
-  if (!executionId || executionId.startsWith('main:')) {
-    return true
-  }
-
-  return false
-}
 
 function isStaleAutoNotificationEvent(event: PollingEvent): boolean {
   const ts = getEventTimestampMs(event)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { TerminalSnapshot } from '../services/api-types'
+import type { TerminalSnapshot } from '../types'
 import { isMainAgentTerminal, preferredTerminalForContext } from './terminalIdentity'
 
 const terminal = (overrides: Partial<TerminalSnapshot>): TerminalSnapshot => ({
