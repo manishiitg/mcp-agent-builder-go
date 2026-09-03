@@ -162,10 +162,20 @@ export function useWorkflowBots(workspacePath: string | null) {
     }
   }, [])
 
-  const loadGmailConnections = useCallback(async () => {
+  const loadGmailConnections = useCallback(async (attempt = 0) => {
     try {
       const data = await agentApi.listGmailConnections()
-      setGmailConnections(data.connections || [])
+      const connections = data.connections || []
+      setGmailConnections(connections)
+      // The server answers the first read with "checking" while it runs each
+      // account's auth check in the background (~5s per gws call) and never
+      // pushes the result, so a row sat on "Checking…" with a "Sign in with
+      // Google" button for an account that was already connected (RTS,
+      // 2026-09-03). Re-read while anything is still checking, bounded so a
+      // check that never settles cannot poll forever.
+      if (attempt < 15 && connections.some(entry => entry.auth?.checking)) {
+        window.setTimeout(() => { void loadGmailConnections(attempt + 1) }, 2000)
+      }
     } catch {
       // A registry that cannot be read must not break the single-account view
       // this panel has always shown.
