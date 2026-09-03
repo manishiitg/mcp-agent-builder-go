@@ -3493,17 +3493,9 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	var fallbacks []agent.FallbackModel
 
 	if isGlobalLLMConfigLocked() {
-		// Locked mode: use server env for API keys; allow provider/model only if in default_published_llms
-		if req.LLMConfig != nil && req.LLMConfig.Primary.Provider != "" && req.LLMConfig.Primary.ModelID != "" {
-			p, m := req.LLMConfig.Primary.Provider, req.LLMConfig.Primary.ModelID
-			if isAllowedDefaultLLM(p, m) {
-				finalProvider, finalModelID = p, m
-			} else {
-				finalProvider, finalModelID = getPrimaryProviderAndModelFromDefaults()
-			}
-		} else {
-			finalProvider, finalModelID = getPrimaryProviderAndModelFromDefaults()
-		}
+		// Locked mode: use server env for API keys; the request's choice only
+		// counts if a product profile owns it or the published list names it.
+		finalProvider, finalModelID = resolveLockedLLM(req.LLMConfig, req.LLMConfigSource)
 		supported := getSupportedProviders()
 		if len(supported) > 0 {
 			allowed := make(map[string]bool)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/mcpagent/llm"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	"github.com/manishiitg/multi-llm-provider-go/pkg/adapters/azure"
@@ -182,6 +183,16 @@ func isAllowedDefaultLLM(provider, modelID string) bool {
 		return true
 	}
 
+	// An explicitly published list is the whole menu: when the operator set
+	// DEFAULT_PUBLISHED_LLMS (or its _PATH), a locked provider may only run
+	// what that list names. Without one, the historical behaviour stands and
+	// any model the platform knows for a locked provider is accepted -- which
+	// let a workflow's saved config keep a provider the UI no longer offered
+	// (found on RTS 2026-09-03 while fixing AgentWorks to one Cursor model).
+	if publishedLLMListConfigured() {
+		return publishedLLMListContains(provider, modelID, defaults.PrimaryConfig)
+	}
+
 	// Allow any model listed in AvailableModels for this provider. Dynamic CLI
 	// providers can come from the curated discovery options when the provider
 	// library does not expose them through static defaults.
@@ -195,8 +206,17 @@ func isAllowedDefaultLLM(provider, modelID string) bool {
 		}
 	}
 
-	list := getDefaultPublishedLLMs(true, defaults.PrimaryConfig)
-	for _, entry := range list {
+	return publishedLLMListContains(provider, modelID, defaults.PrimaryConfig)
+}
+
+// publishedLLMListConfigured reports whether the operator explicitly published
+// an LLM list (as opposed to the auto-generated one built from known models).
+func publishedLLMListConfigured() bool {
+	return strings.TrimSpace(os.Getenv("DEFAULT_PUBLISHED_LLMS")) != "" || strings.TrimSpace(os.Getenv("DEFAULT_PUBLISHED_LLMS_PATH")) != ""
+}
+
+func publishedLLMListContains(provider, modelID string, primaryConfig interface{}) bool {
+	for _, entry := range getDefaultPublishedLLMs(true, primaryConfig) {
 		p, _ := entry["provider"].(string)
 		m, _ := entry["model_id"].(string)
 		if p == provider && m == modelID {
@@ -204,6 +224,23 @@ func isAllowedDefaultLLM(provider, modelID string) bool {
 		}
 	}
 	return false
+}
+
+// resolveLockedLLM is the provider/model a request runs with while
+// LLM_CONFIG_LOCKED is on. A binding owned by a product profile (Video
+// Studio pins claude-code in its product.yaml) is operator configuration
+// too, so it always wins; anything else must be on the published list, or
+// the server default applies.
+func resolveLockedLLM(cfg *orchestrator.LLMConfig, source string) (string, string) {
+	if cfg != nil {
+		p, m := strings.TrimSpace(cfg.Primary.Provider), strings.TrimSpace(cfg.Primary.ModelID)
+		if p != "" && m != "" {
+			if source == llmConfigSourceAgentProfile || isAllowedDefaultLLM(p, m) {
+				return p, m
+			}
+		}
+	}
+	return getPrimaryProviderAndModelFromDefaults()
 }
 
 func buildProviderCapabilities(ctx context.Context) map[string][]string {

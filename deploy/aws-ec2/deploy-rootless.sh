@@ -8,6 +8,13 @@ SSH_KEY_PATH="${SSH_KEY_PATH:-/Users/mipl/.ssh/id_ed25519}"
 GLOBAL_SECRETS_SECRET_ID="${GLOBAL_SECRETS_SECRET_ID:-video-studio/global-secrets}"
 REUSE_CURRENT_AGENT="${REUSE_CURRENT_AGENT:-0}"
 HYPERFRAMES_VERSION="${HYPERFRAMES_VERSION:-0.8.6}"
+# The AgentWorks surface on this host runs one fixed LLM that users cannot
+# change: Cursor CLI with the CURSOR_API_KEY from the global secret. Video
+# Studio is unaffected -- its product profile pins claude-code itself. Both
+# values are written into .env on every deploy (see REMOTE_PREFLIGHT), so the
+# box never drifts from what is checked in here.
+AGENTWORKS_PROVIDER="${AGENTWORKS_PROVIDER:-cursor-cli}"
+AGENTWORKS_MODEL="${AGENTWORKS_MODEL:-cursor-cli}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-$(cd "$REPO_ROOT/.." && pwd)}"
@@ -75,7 +82,7 @@ install -m 0644 "$SCRIPT_DIR/rootless/video-studio-gateway.service" "$BUILD_DIR/
 cp -R "$REPO_ROOT/agent_go/internal/videoproduct/skills/." "$BUILD_DIR/claude-skills/"
 
 aws_rts secretsmanager get-secret-value --secret-id "$GLOBAL_SECRETS_SECRET_ID" --query SecretString --output text \
-  | jq -er 'to_entries[] | select(.key | test("^[A-Z0-9_]+$")) | select(.value | type == "string" and length > 0) | if .key == "CLAUDE_CODE_OAUTH_TOKEN" then "CLAUDE_CODE_OAUTH_TOKEN=\(.value)" else "GLOBAL_SECRET_\(.key)=\(.value)" end' > "$GLOBAL_FILE"
+  | jq -er 'to_entries[] | select(.key | test("^[A-Z0-9_]+$")) | select(.value | type == "string" and length > 0) | if .key == "CLAUDE_CODE_OAUTH_TOKEN" or .key == "CURSOR_API_KEY" then "\(.key)=\(.value)" else "GLOBAL_SECRET_\(.key)=\(.value)" end' > "$GLOBAL_FILE"
 
 SSH=(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i "$SSH_KEY_PATH" "video-studio@$HOST_IP")
 REMOTE_APP="/var/lib/video-studio/video-studio"
@@ -89,12 +96,14 @@ esac
 "${SSH[@]}" "test -x '$REMOTE_BROWSER_PATH'; command -v agent-browser >/dev/null"
 rsync -az -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i $SSH_KEY_PATH" "$BUILD_DIR/" "video-studio@$HOST_IP:$REMOTE_RELEASE/"
 rsync -az --chmod=ugo=,u=rw -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i $SSH_KEY_PATH" "$GLOBAL_FILE" "video-studio@$HOST_IP:/var/lib/video-studio/video-studio/.globals-$RELEASE_ID"
-"${SSH[@]}" bash -s -- "$REMOTE_RELEASE" "$REMOTE_APP" "$REMOTE_TOOLS_DIR" "$RELEASE_ID" <<'REMOTE_PREFLIGHT'
+"${SSH[@]}" bash -s -- "$REMOTE_RELEASE" "$REMOTE_APP" "$REMOTE_TOOLS_DIR" "$RELEASE_ID" "$AGENTWORKS_PROVIDER" "$AGENTWORKS_MODEL" <<'REMOTE_PREFLIGHT'
 set -euo pipefail
 remote_release="$1"
 remote_app="$2"
 tools_dir="$3"
 release_id="$4"
+agentworks_provider="$5"
+agentworks_model="$6"
 env_file="$remote_app/.env"
 global_file="$remote_app/.globals-$release_id"
 
@@ -109,6 +118,19 @@ test -x "$remote_release/bin/video-studio-landlock-runner"
 # idempotent merge instead of trusting an older, Docker-only value.
 awk '!/^MCP_API_URL=/' "$env_file" > "$env_file.next"
 echo 'MCP_API_URL=http://127.0.0.1:8000' >> "$env_file.next"
+# The AgentWorks LLM is fixed by the deploy, not by whoever last edited the
+# box: one provider/model as the default, LLM_CONFIG_LOCKED so the UI shows
+# "locked by admin" and the server ignores any other choice, and a published
+# list with exactly that one entry so nothing else is offered. Video Studio
+# keeps claude-code through its own product profile.
+awk '!/^(AGENT_PROVIDER|AGENT_MODEL|LLM_CONFIG_LOCKED|DEFAULT_PUBLISHED_LLMS)=/' "$env_file.next" > "$env_file.next2"
+mv "$env_file.next2" "$env_file.next"
+{
+  echo "AGENT_PROVIDER=$agentworks_provider"
+  echo "AGENT_MODEL=$agentworks_model"
+  echo "LLM_CONFIG_LOCKED=true"
+  printf "DEFAULT_PUBLISHED_LLMS='[{\"id\":\"agentworks-default\",\"name\":\"%s (%s)\",\"provider\":\"%s\",\"model_id\":\"%s\"}]'\n" "$agentworks_provider" "$agentworks_model" "$agentworks_provider" "$agentworks_model"
+} >> "$env_file.next"
 chmod 600 "$env_file.next"
 mv "$env_file.next" "$env_file"
 
@@ -119,6 +141,26 @@ fi
 PATH="$tools_dir/bin:/usr/local/bin:/usr/bin:/bin"
 export PATH
 test "$(HOME="$HOME" npm config get prefix)" = "$tools_dir"
+if [[ "$agentworks_provider" == "cursor-cli" ]]; then
+  # The AgentWorks LLM shells out to cursor-agent (through tmux); install it
+  # into the same dominion-owned tool prefix as claude. Cursor's installer
+  # writes to $HOME/.local/bin, which is $tools_dir/bin here.
+  if ! test -x "$tools_dir/bin/cursor-agent"; then
+    curl -fsS https://cursor.com/install | bash
+  fi
+  test -x "$tools_dir/bin/cursor-agent"
+  cursor_key="$(sed -n 's/^CURSOR_API_KEY=//p' "$global_file" | head -n 1)"
+  if [[ -z "$cursor_key" ]]; then
+    echo "CURSOR_API_KEY is missing from the global secret; AgentWorks is configured for cursor-cli and would fail on every turn." >&2
+    exit 1
+  fi
+  # A soft round trip: cursor-agent's non-interactive flags are less stable
+  # than claude's, so a failure here is reported, not fatal.
+  if ! CURSOR_API_KEY="$cursor_key" timeout 90 cursor-agent -p "say OK" >/dev/null 2>"$HOME/.cursor-preflight.err"; then
+    echo "WARNING: cursor-agent round trip did not succeed: $(head -c 300 "$HOME/.cursor-preflight.err")" >&2
+  fi
+  rm -f "$HOME/.cursor-preflight.err"
+fi
 token="$(sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' "$global_file" | head -n 1)"
 test -n "$token"
 # The token must be real: `claude auth status` says "logged in" for any
@@ -140,7 +182,7 @@ if ! printf '%s' "$preflight_reply" | jq -e '.is_error == false' >/dev/null 2>&1
   esac
 fi
 REMOTE_PREFLIGHT
-"${SSH[@]}" "set -e; browser_dir='$(dirname "$REMOTE_BROWSER_PATH")'; browser_wrapper=\"\$browser_dir/agentworks-chrome-headless\"; install -m 0755 '$REMOTE_RELEASE/browser/agentworks-chrome-headless' \"\$browser_wrapper\"; env_file='$REMOTE_APP/.env'; global_file='$REMOTE_APP/.globals-$RELEASE_ID'; awk '!/^GLOBAL_SECRET_|^CLAUDE_CODE_OAUTH_TOKEN=|^AGENT_BROWSER_EXECUTABLE_PATH=/' \"\$env_file\" > \"\$env_file.next\"; echo \"AGENT_BROWSER_EXECUTABLE_PATH=\$browser_wrapper\" >> \"\$env_file.next\"; grep -q '^MCP_API_URL=' \"\$env_file.next\" || echo 'MCP_API_URL=http://127.0.0.1:8000' >> \"\$env_file.next\"; cat \"\$global_file\" >> \"\$env_file.next\"; chmod 600 \"\$env_file.next\"; mv \"\$env_file.next\" \"\$env_file\"; rm -f \"\$global_file\"; find /data/video-studio/docs/_users -type d -path '*/Chats/Video Studio/projects' -print0 | while IFS= read -r -d '' projects_root; do find \"\$projects_root\" -mindepth 1 -maxdepth 1 -type d -print0 | while IFS= read -r -d '' project; do install -d -m 0755 \"\$project/.claude/skills\"; rsync -a --delete '$REMOTE_RELEASE/claude-skills/' \"\$project/.claude/skills/\"; rm -rf \"\$project/skills/video-studio\"; done; done; install -d -m 0755 \"\$HOME/.config/systemd/user\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-workspace.service' \"\$HOME/.config/systemd/user/video-studio-workspace.service\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-agent.service' \"\$HOME/.config/systemd/user/video-studio-agent.service\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-gateway.service' \"\$HOME/.config/systemd/user/video-studio-gateway.service\"; systemctl --user daemon-reload; ln -sfn '$REMOTE_RELEASE' '$REMOTE_APP/current'; systemctl --user restart video-studio-workspace video-studio-agent video-studio-gateway; systemctl --user is-active video-studio-agent video-studio-workspace video-studio-gateway; grep -Fq 'apiBaseUrl: \"\",' '$REMOTE_APP/current/frontend/runtime-config.js'; grep -Fq 'workspaceApiBaseUrl: \"/api/wp\",' '$REMOTE_APP/current/frontend/runtime-config.js'"
+"${SSH[@]}" "set -e; browser_dir='$(dirname "$REMOTE_BROWSER_PATH")'; browser_wrapper=\"\$browser_dir/agentworks-chrome-headless\"; install -m 0755 '$REMOTE_RELEASE/browser/agentworks-chrome-headless' \"\$browser_wrapper\"; env_file='$REMOTE_APP/.env'; global_file='$REMOTE_APP/.globals-$RELEASE_ID'; awk '!/^GLOBAL_SECRET_|^CLAUDE_CODE_OAUTH_TOKEN=|^CURSOR_API_KEY=|^AGENT_BROWSER_EXECUTABLE_PATH=/' \"\$env_file\" > \"\$env_file.next\"; echo \"AGENT_BROWSER_EXECUTABLE_PATH=\$browser_wrapper\" >> \"\$env_file.next\"; grep -q '^MCP_API_URL=' \"\$env_file.next\" || echo 'MCP_API_URL=http://127.0.0.1:8000' >> \"\$env_file.next\"; cat \"\$global_file\" >> \"\$env_file.next\"; chmod 600 \"\$env_file.next\"; mv \"\$env_file.next\" \"\$env_file\"; rm -f \"\$global_file\"; find /data/video-studio/docs/_users -type d -path '*/Chats/Video Studio/projects' -print0 | while IFS= read -r -d '' projects_root; do find \"\$projects_root\" -mindepth 1 -maxdepth 1 -type d -print0 | while IFS= read -r -d '' project; do install -d -m 0755 \"\$project/.claude/skills\"; rsync -a --delete '$REMOTE_RELEASE/claude-skills/' \"\$project/.claude/skills/\"; rm -rf \"\$project/skills/video-studio\"; done; done; install -d -m 0755 \"\$HOME/.config/systemd/user\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-workspace.service' \"\$HOME/.config/systemd/user/video-studio-workspace.service\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-agent.service' \"\$HOME/.config/systemd/user/video-studio-agent.service\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-gateway.service' \"\$HOME/.config/systemd/user/video-studio-gateway.service\"; systemctl --user daemon-reload; ln -sfn '$REMOTE_RELEASE' '$REMOTE_APP/current'; systemctl --user restart video-studio-workspace video-studio-agent video-studio-gateway; systemctl --user is-active video-studio-agent video-studio-workspace video-studio-gateway; grep -Fq 'apiBaseUrl: \"\",' '$REMOTE_APP/current/frontend/runtime-config.js'; grep -Fq 'workspaceApiBaseUrl: \"/api/wp\",' '$REMOTE_APP/current/frontend/runtime-config.js'"
 
 "${SSH[@]}" "set -e; test -s '$REMOTE_APP/logs/agent.log'; tail -n 5 '$REMOTE_APP/logs/agent.log'"
 
