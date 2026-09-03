@@ -24,6 +24,20 @@ type ActivityManifest struct {
 	Goal      string   `json:"goal,omitempty"`
 	Persona   string   `json:"persona,omitempty"`
 	CreatedAt string   `json:"created_at,omitempty"`
+	// Sections is the page map the renderer produced: which sections exist,
+	// their role (learn / practice / check) and the questions in each. The
+	// child tutor reads it to know where to explain and where to hold back.
+	Sections []SectionInfo `json:"sections,omitempty"`
+	Marks    int           `json:"marks,omitempty"`
+}
+
+// FragmentSuffix marks a page Quill wrote in the activity vocabulary; the
+// tool renders it into the finished "<name>.html" beside it.
+const FragmentSuffix = ".sq.html"
+
+// renderedName maps "notes.sq.html" to "notes.html".
+func renderedName(name string) string {
+	return strings.TrimSuffix(name, FragmentSuffix) + ".html"
 }
 
 // activityProject is the product.json the platform's keyed-conversation

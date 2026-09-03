@@ -33,8 +33,6 @@ profile:
   skills:
     - read-file
     - process-file
-    - create-study-material
-    - create-test
     - teach-coding
     - discover-something-new
     - create-progress-report
@@ -61,10 +59,10 @@ profile:
   commands:
     - name: create-study-material
       description: "Create study material"
-      prompt: "Create study material for my child \u2014 follow your create-study-material skill and make it a designed, static (view-only) HTML page."
+      prompt: "Create study material for my child on the topic she is working on \u2014 explain it properly first, then a short practice, and a summary she can reread."
     - name: create-a-practice-test
       description: "Create a practice test"
-      prompt: "Create a practice test for my child \u2014 follow your create-test skill: an interactive HTML page that records my child\u2019s typed answers, plus a separate answer key for me."
+      prompt: "Create a practice test for my child \u2014 a short refresher, then a proper check with real tiers, plus the answer key for me."
     - name: update-progress-report
       description: "Update progress report"
       prompt: "Build an updated progress report \u2014 follow your create-progress-report skill, make it a designed HTML page, and give me a short coach-style read of the evidence here in chat too."

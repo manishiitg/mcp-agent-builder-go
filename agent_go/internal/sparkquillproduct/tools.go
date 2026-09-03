@@ -1,6 +1,7 @@
 package sparkquillproduct
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -121,12 +122,16 @@ func stringArg(args map[string]interface{}, key string) string {
 	return ""
 }
 
+// jsonResult is what a tool hands back to the model; angle brackets stay
+// readable so a report like dropped: ["<input>"] says what it means.
 func jsonResult(v interface{}) (string, error) {
-	data, err := json.Marshal(v)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
 		return "", err
 	}
-	return string(data), nil
+	return strings.TrimRight(buf.String(), "\n"), nil
 }
 
 // ---- family state --------------------------------------------------------
@@ -209,7 +214,7 @@ func createLearningActivityFactory(workspaceAPIURL string) agentprofiles.ToolFac
 		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
 		return agentprofiles.ToolSpec{
 			Name: "create_learning_activity", Category: toolCategory,
-			Description: "Finalize an activity you've already built. First create the folder " + ActivitiesFolder + "/<yyyy-mm-dd>-<slug>/ and write its content files into it (the study material / test HTML, and any answer key as <name>-KEY.md), then call this with that folder as `dir` to write its activity.json manifest. `items` are the bare filenames inside the folder, in the order the child works through them (do NOT include the answer key). For an instruction-only activity (the tutor generates questions live), leave `items` empty and put the full description in `goal`. `goal` is WHAT this activity is for, in the parent's own words — what finishing looks like and anything the parent genuinely cares about; not a turn-by-turn script. `persona` is the tutor's tone. After this, call open_activity(dir) so the parent sees it on the right. Neither this nor open_activity hands anything to the child — only the parent does.",
+			Description: "Finalize an activity you've already built. First create the folder " + ActivitiesFolder + "/<yyyy-mm-dd>-<slug>/ and write its page into it as <name>" + FragmentSuffix + " written however you like (your own styles, pictures, demos) with the four SparkQuill conventions: <section data-role=learn|practice|check|explore>, <div class=q> around each question, <button data-choose=…> for a real choice, and nothing loaded from the internet or any form control. This tool finishes every " + FragmentSuffix + " item into <name>.html (ids on sections/questions/figures, answer spaces, the print and button script), writes activity.json (with the section map) and product.json, and returns a report of anything it had to drop. Then call open_activity(dir) so the parent sees it. A plain .html item is accepted as-is only for hand-built interactive pages (coding demos)",
 			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
 				"dir":     map[string]interface{}{"type": "string", "description": "the activity folder you created: " + ActivitiesFolder + "/<yyyy-mm-dd>-<slug>"},
 				"title":   map[string]interface{}{"type": "string", "description": "short human title, e.g. \"Fractions — Quick Check\""},
@@ -229,14 +234,31 @@ func createLearningActivityFactory(workspaceAPIURL string) agentprofiles.ToolFac
 					return "", fmt.Errorf("title is required")
 				}
 				var items []string
+				var sections []SectionInfo
+				var reports []RenderReport
+				marks := 0
 				if raw, ok := args["items"].([]interface{}); ok {
 					for _, it := range raw {
 						name := path.Base(strings.TrimSpace(fmt.Sprint(it)))
 						if name == "" || name == "." || it == nil || isAnswerKey(name) {
 							continue
 						}
-						if _, found := ws.read(ctx, path.Join(rel, name)); !found {
+						content, found := ws.read(ctx, path.Join(rel, name))
+						if !found {
 							return "", fmt.Errorf("item %q not found in the activity folder — write it first", name)
+						}
+						if strings.HasSuffix(strings.ToLower(name), FragmentSuffix) {
+							page, report, err := RenderActivityPage(content, PageMeta{Title: title})
+							if err != nil {
+								return "", fmt.Errorf("render %s: %w", name, err)
+							}
+							name = renderedName(name)
+							if err := ws.write(ctx, path.Join(rel, name), page); err != nil {
+								return "", fmt.Errorf("write %s: %w", name, err)
+							}
+							sections = append(sections, report.Sections...)
+							marks += report.Marks
+							reports = append(reports, report)
 						}
 						items = append(items, name)
 					}
@@ -245,7 +267,7 @@ func createLearningActivityFactory(workspaceAPIURL string) agentprofiles.ToolFac
 				if len(items) == 0 && goal == "" {
 					return "", fmt.Errorf("either items (files in the folder) or goal (for an instruction-only activity) is required")
 				}
-				manifest := ActivityManifest{Title: title, Subject: stringArg(args, "subject"), Topic: stringArg(args, "topic"), Items: items, Goal: goal, Persona: stringArg(args, "persona"), CreatedAt: nowStamp()}
+				manifest := ActivityManifest{Title: title, Subject: stringArg(args, "subject"), Topic: stringArg(args, "topic"), Items: items, Goal: goal, Persona: stringArg(args, "persona"), CreatedAt: nowStamp(), Sections: sections, Marks: marks}
 				content, err := encodeJSON(manifest)
 				if err != nil {
 					return "", err
@@ -268,7 +290,31 @@ func createLearningActivityFactory(workspaceAPIURL string) agentprofiles.ToolFac
 					return "", fmt.Errorf("write product.json: %w", err)
 				}
 				emitInteraction(runtime, "activity_created", map[string]interface{}{"dir": rel, "title": title, "items": len(items)})
-				return jsonResult(map[string]interface{}{"status": "ok", "dir": rel, "title": title, "items": len(items)})
+				result := map[string]interface{}{"status": "ok", "dir": rel, "title": title, "items": len(items)}
+				if len(reports) > 0 {
+					var dropped, warnings []string
+					for _, r := range reports {
+						dropped = append(dropped, r.Dropped...)
+						warnings = append(warnings, r.Warnings...)
+					}
+					result["pages"] = items
+					result["sections"] = sections
+					result["questions"] = func() int {
+						n := 0
+						for _, r := range reports {
+							n += r.Questions
+						}
+						return n
+					}()
+					result["marks"] = marks
+					if len(dropped) > 0 {
+						result["dropped"] = dropped
+					}
+					if len(warnings) > 0 {
+						result["warnings"] = warnings
+					}
+				}
+				return jsonResult(result)
 			},
 		}, nil
 	}

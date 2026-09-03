@@ -1097,3 +1097,26 @@ slice, not after.
 - Open: suggestion pills and product cards emitted as `product_interaction`
   are not in the persisted history, so they do not survive a reload; product
   schedule turns restore as plain user bubbles (no `source: pulse` marker).
+
+### 2026-09-03: activities are open pages with a four-line contract
+
+Feedback: activities came out as tests, and the design guide (2,500 words)
+was being skimmed and ignored. Decisions (user):
+- No activity skill. Quill decides sequence, depth and style from the request
+  and the child's evidence; the prompt gives only the mechanics.
+- No imposed look. The page is Quill's own HTML (fragment or whole document,
+  own styles, animations, demos). `create_learning_activity` finishes a
+  `<name>.sq.html` into `<name>.html` (`agent_go/internal/sparkquillproduct/page.go`):
+  ids on sections/questions/figures, an answer space per question, the print
+  hook and `SQ.choose` script, and it removes only form controls, `<details>`,
+  links and remote resources. It reports what it dropped.
+- Four conventions the tutor relies on: `<section data-role=learn|practice|check|explore>`,
+  `<div class="q">` per question (`data-marks` optional), `<button data-choose>`
+  for a real choice, nothing loaded from the internet. The section map (role +
+  question ids) goes into activity.json; the child prompt follows the section
+  she is in instead of parsing goal prose.
+- create-study-material and create-test skills deleted; `_shared/activity-page.md`
+  is a 190-word reference; html-design.md remains for reports only.
+Verified live: "explain, practice, short check" on fractions produced a real
+guide (hook, steps, worked examples with CSS fraction bars, hint buttons,
+4-question check) in 13 tool calls.

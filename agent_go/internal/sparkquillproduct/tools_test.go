@@ -161,6 +161,28 @@ func TestCreateLearningActivityWritesManifestAndProject(t *testing.T) {
 	if project.Product != ChildProfileID || project.ID != "2026-09-03-fractions" || !strings.HasPrefix(project.SessionID, "product-") {
 		t.Fatalf("product.json must bind the folder to the child profile: %+v", project)
 	}
+
+	// A page written in the activity vocabulary is rendered into the finished
+	// page, listed under its rendered name, and its section map is recorded.
+	fake.files["_users/u1/Chats/SparkQuill/family.json"] = `{"child":{"name":"Maya","grade":"6","board":"CBSE"}}`
+	fake.files["_users/u1/Chats/SparkQuill/activities/2026-09-03-fractions/notes.sq.html"] = `<h1>Fractions</h1><section data-role="learn"><h2>Idea</h2><p>Pieces must match.</p></section><section data-role="check"><h2>Check</h2><div class="q" data-marks="2"><p>1/2+1/3</p></div><input></section>`
+	out, err = create.Execute(ctx, map[string]interface{}{"dir": "activities/2026-09-03-fractions", "title": "Fractions", "items": []interface{}{"notes.sq.html"}, "goal": "learn then check"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := fake.files["_users/u1/Chats/SparkQuill/activities/2026-09-03-fractions/notes.html"]
+	if !strings.Contains(rendered, `id="q1"`) || !strings.Contains(rendered, `data-role="check"`) || !strings.Contains(rendered, "SQ.choose") {
+		t.Fatalf("rendered page wrong:\n%s", rendered)
+	}
+	if !strings.Contains(out, `"notes.html"`) || !strings.Contains(out, `"dropped":["<input>"]`) || !strings.Contains(out, `"marks":2`) {
+		t.Fatalf("result = %s", out)
+	}
+	if err := json.Unmarshal([]byte(fake.files["_users/u1/Chats/SparkQuill/activities/2026-09-03-fractions/activity.json"]), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Sections) != 2 || manifest.Sections[1].Role != RoleCheck || manifest.Sections[1].Questions[0] != "q1" || manifest.Items[0] != "notes.html" {
+		t.Fatalf("manifest = %+v", manifest)
+	}
 	// Re-finalizing keeps the child's conversation.
 	if _, err := create.Execute(ctx, map[string]interface{}{"dir": "activities/2026-09-03-fractions", "title": "Fractions — Quick Check v2", "goal": "same"}); err != nil {
 		t.Fatal(err)
@@ -170,7 +192,7 @@ func TestCreateLearningActivityWritesManifestAndProject(t *testing.T) {
 	if again.SessionID != project.SessionID || again.Title != "Fractions — Quick Check v2" {
 		t.Fatalf("session id must survive re-finalizing: %+v vs %+v", again, project)
 	}
-	if k := sink.kinds(); len(k) != 2 || k[0] != "activity_created" {
+	if k := sink.kinds(); len(k) != 3 || k[0] != "activity_created" {
 		t.Fatalf("events = %v", k)
 	}
 }
