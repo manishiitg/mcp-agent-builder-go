@@ -503,15 +503,12 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
 
   return (
     <ModalPortal>
-    <div 
-      className={`fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm ${effectiveAgentMode === 'workflow' ? 'p-0 sm:p-3' : 'p-2 sm:p-4'}`}
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-2 sm:p-4"
       onClick={handleBackdropClick}
     >
       <Card
-        className={`flex w-full flex-col overflow-hidden p-0 ${effectiveAgentMode === 'workflow'
-          ? 'h-[100dvh] max-h-[100dvh] max-w-none rounded-none sm:h-[calc(100dvh-1.5rem)] sm:max-h-[calc(100dvh-1.5rem)] sm:w-[calc(100vw-1.5rem)] sm:rounded-xl'
-          : 'max-h-[calc(100dvh-1rem)] max-w-6xl sm:max-h-[90vh]'
-        }`}
+        className={`flex w-full flex-col overflow-hidden p-0 max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] ${effectiveAgentMode === 'workflow' ? 'max-w-lg' : 'max-w-6xl'}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex flex-shrink-0 flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:py-4">
