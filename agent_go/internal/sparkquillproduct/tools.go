@@ -320,6 +320,139 @@ func createLearningActivityFactory(workspaceAPIURL string) agentprofiles.ToolFac
 	}
 }
 
+// ---- pinned pages ---------------------------------------------------------
+
+// PinsStateFile is where the parent's pinned pages live: the app's own
+// per-key state file (the same one its Pin button writes), so the tool and
+// the UI never disagree.
+const PinsStateFile = "state/pins.json"
+
+// PinnedPage is one tab at the top of the parent's screen.
+type PinnedPage struct {
+	Path  string `json:"path"`
+	Title string `json:"title"`
+}
+
+type pinsState struct {
+	Key  string `json:"key"`
+	Data struct {
+		Pins []PinnedPage `json:"pins"`
+	} `json:"data"`
+}
+
+func (w familyWorkspace) loadPins(ctx context.Context) []PinnedPage {
+	raw, ok := w.read(ctx, PinsStateFile)
+	if !ok {
+		return nil
+	}
+	var st pinsState
+	if json.Unmarshal([]byte(raw), &st) != nil {
+		return nil
+	}
+	return st.Data.Pins
+}
+
+func (w familyWorkspace) savePins(ctx context.Context, pins []PinnedPage) error {
+	var st pinsState
+	st.Key = "pins"
+	st.Data.Pins = pins
+	if st.Data.Pins == nil {
+		st.Data.Pins = []PinnedPage{}
+	}
+	content, err := encodeJSON(st)
+	if err != nil {
+		return err
+	}
+	return w.write(ctx, PinsStateFile, content)
+}
+
+// familyRelative normalises a path the model passed (bare, family-relative,
+// or prefixed with the runtime root) to family-relative form.
+func familyRelative(root, raw string) string {
+	clean := strings.Trim(strings.TrimSpace(strings.ReplaceAll(raw, "\\", "/")), "/")
+	if r := strings.Trim(root, "/"); r != "" && strings.HasPrefix(clean, r+"/") {
+		clean = strings.TrimPrefix(clean, r+"/")
+	}
+	return clean
+}
+
+func pinPageFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
+		return agentprofiles.ToolSpec{
+			Name: "pin_page", Category: toolCategory,
+			Description: "Pin any HTML page you made for the parent (an exam tracker, a date sheet, a revision plan, anything) as a tab at the top of their screen. Write the page first (e.g. pages/<slug>.html, your own design, no form controls), then call this with its path and a short tab title. Pinning again with the same path just renames the tab. The parent can also pin or unpin from the page itself.",
+			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"path":  map[string]interface{}{"type": "string", "description": "the page's path relative to the workspace, e.g. pages/exam-tracker.html"},
+				"title": map[string]interface{}{"type": "string", "description": "short tab title, e.g. Exam tracker"},
+			}, "required": []string{"path", "title"}},
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				rel := familyRelative(ws.root, stringArg(args, "path"))
+				title := strings.TrimSpace(stringArg(args, "title"))
+				if rel == "" || title == "" {
+					return "", fmt.Errorf("path and title are required")
+				}
+				if !strings.HasSuffix(strings.ToLower(rel), ".html") && !strings.HasSuffix(strings.ToLower(rel), ".htm") {
+					return "", fmt.Errorf("only an HTML page can be pinned as a tab: %s", rel)
+				}
+				if _, found := ws.read(ctx, rel); !found {
+					return "", fmt.Errorf("%s does not exist — write the page first", rel)
+				}
+				pins := ws.loadPins(ctx)
+				replaced := false
+				for i := range pins {
+					if pins[i].Path == rel {
+						pins[i].Title = title
+						replaced = true
+					}
+				}
+				if !replaced {
+					pins = append(pins, PinnedPage{Path: rel, Title: title})
+				}
+				if err := ws.savePins(ctx, pins); err != nil {
+					return "", err
+				}
+				emitInteraction(runtime, "pins_updated", map[string]interface{}{"pins": pins})
+				return jsonResult(map[string]interface{}{"status": "ok", "pinned": rel, "title": title, "pins": len(pins)})
+			},
+		}, nil
+	}
+}
+
+func unpinPageFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
+		return agentprofiles.ToolSpec{
+			Name: "unpin_page", Category: toolCategory,
+			Description: "Remove a pinned page's tab from the top of the parent's screen. The file itself stays where it is.",
+			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"path": map[string]interface{}{"type": "string", "description": "the pinned page's path, e.g. pages/exam-tracker.html"},
+			}, "required": []string{"path"}},
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				rel := familyRelative(ws.root, stringArg(args, "path"))
+				pins := ws.loadPins(ctx)
+				kept := pins[:0]
+				removed := false
+				for _, p := range pins {
+					if p.Path == rel {
+						removed = true
+						continue
+					}
+					kept = append(kept, p)
+				}
+				if !removed {
+					return "", fmt.Errorf("%s is not pinned", rel)
+				}
+				if err := ws.savePins(ctx, kept); err != nil {
+					return "", err
+				}
+				emitInteraction(runtime, "pins_updated", map[string]interface{}{"pins": kept})
+				return jsonResult(map[string]interface{}{"status": "ok", "unpinned": rel, "pins": len(kept)})
+			},
+		}, nil
+	}
+}
+
 // ---- showing things -------------------------------------------------------
 
 func presentationActivity(binding *agentprofiles.PresentationBinding) *orchestratorevents.PresentationActivity {
@@ -339,7 +472,7 @@ func openFileFactory(workspaceAPIURL string, conversationOnly bool) agentprofile
 		params := map[string]interface{}{"path": map[string]interface{}{"type": "string", "description": "workspace-relative path to the file to display"}}
 		if conversationOnly {
 			description = "Show a lesson, worksheet, or one of her own saved pages on the right side of her screen. Pass the path relative to the activity folder. PASS focus WHENEVER you are talking about one specific question or section — that is what actually scrolls the page to it; omit it to keep her current position (for example right after recording an answer)."
-			params["focus"] = map[string]interface{}{"type": "string", "description": "id of the element to scroll to — a question (\"q4\"), a section (\"s2\"), a worked example (\"s2-1\"), or a figure (\"fig1\"); see skills/_shared/html-design.md. Ignored if no such id exists."}
+			params["focus"] = map[string]interface{}{"type": "string", "description": "id of the element to scroll to — a question (\"q4\"), a section (\"s2\"), a worked example (\"s2-1\"), or a figure (\"fig1\"); see skills/guides/html-design.md. Ignored if no such id exists."}
 		}
 		return agentprofiles.ToolSpec{
 			Name: "open_file", Category: toolCategory, Description: description,
@@ -495,7 +628,7 @@ func showSceneFactory() agentprofiles.ToolFactory {
 	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
 		return agentprofiles.ToolSpec{
 			Name: "show_scene", Category: toolCategory,
-			Description: "Show a small, self-contained HTML visual INLINE in this reply — a story beat, a diagram, a 'guess before you peek' moment, a mini interactive scene. Real CSS animation AND real JavaScript are available, so build actual interactivity when it fits. Keep it SMALL and self-contained (inline CSS/JS only, no external assets or network calls, follow skills/_shared/html-design.md). Any timer loop must have a natural stopping point. IF THE SCENE ASKS HER ANYTHING, IT MUST CARRY THE ANSWERS AS BUTTONS — two to four of them, each calling `SQ.choose(text, this)`. Call this when a visual moment genuinely helps, not every turn.",
+			Description: "Show a small, self-contained HTML visual INLINE in this reply — a story beat, a diagram, a 'guess before you peek' moment, a mini interactive scene. Real CSS animation AND real JavaScript are available, so build actual interactivity when it fits. Keep it SMALL and self-contained (inline CSS/JS only, no external assets or network calls, follow skills/guides/html-design.md). Any timer loop must have a natural stopping point. IF THE SCENE ASKS HER ANYTHING, IT MUST CARRY THE ANSWERS AS BUTTONS — two to four of them, each calling `SQ.choose(text, this)`. Call this when a visual moment genuinely helps, not every turn.",
 			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
 				"html": map[string]interface{}{"type": "string", "description": "the small, self-contained HTML snippet to show inline"},
 			}, "required": []string{"html"}},

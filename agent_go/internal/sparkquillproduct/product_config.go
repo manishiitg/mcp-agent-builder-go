@@ -23,7 +23,7 @@ const ProductName = "sparkquill"
 var productConfigFiles embed.FS
 
 // SkillFiles holds the family's SKILL.md bundles (skills/<name>/SKILL.md and
-// skills/_shared/*), embedded once here and read by both the platform and
+// skills/guides/*), embedded once here and read by both the platform and
 // the standalone family server.
 //
 //go:embed skills

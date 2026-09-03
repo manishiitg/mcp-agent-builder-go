@@ -160,6 +160,8 @@ func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIU
 	factories := map[string]agentprofiles.ToolFactory{
 		"sparkquill.set-child-profile":        setChildProfileFactory(workspaceAPIURL),
 		"sparkquill.set-parent-label":         setParentLabelFactory(workspaceAPIURL),
+		"sparkquill.pin-page":                 pinPageFactory(workspaceAPIURL),
+		"sparkquill.unpin-page":               unpinPageFactory(workspaceAPIURL),
 		"sparkquill.create-learning-activity": createLearningActivityFactory(workspaceAPIURL),
 		"sparkquill.open-file":                openFileFactory(workspaceAPIURL, false),
 		"sparkquill.open-activity-file":       openFileFactory(workspaceAPIURL, true),

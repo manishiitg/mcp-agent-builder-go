@@ -274,3 +274,40 @@ func TestParseFolderListingAcceptsTheDocumentsAPIShapes(t *testing.T) {
 		}
 	}
 }
+
+func TestPinAndUnpinPageKeepTheAppsStateFile(t *testing.T) {
+	fake, sink, rt, url := newToolHarness(t)
+	ctx := context.Background()
+	pin := build(t, pinPageFactory(url), rt)
+	unpin := build(t, unpinPageFactory(url), rt)
+	if _, err := pin.Execute(ctx, map[string]interface{}{"path": "pages/exams.html", "title": "Exams"}); err == nil {
+		t.Fatal("pinning a page that does not exist must fail")
+	}
+	fake.files["_users/u1/Chats/SparkQuill/pages/exams.html"] = "<h1>Exams</h1>"
+	if _, err := pin.Execute(ctx, map[string]interface{}{"path": "_users/u1/Chats/SparkQuill/pages/exams.html", "title": "Exams"}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := pin.Execute(ctx, map[string]interface{}{"path": "pages/exams.html", "title": "Term exams"})
+	if err != nil || !strings.Contains(out, `"pins":1`) {
+		t.Fatalf("re-pinning must rename, not duplicate: %s %v", out, err)
+	}
+	var st pinsState
+	if err := json.Unmarshal([]byte(fake.files["_users/u1/Chats/SparkQuill/state/pins.json"]), &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Key != "pins" || len(st.Data.Pins) != 1 || st.Data.Pins[0].Path != "pages/exams.html" || st.Data.Pins[0].Title != "Term exams" {
+		t.Fatalf("pins state = %+v", st)
+	}
+	if _, err := unpin.Execute(ctx, map[string]interface{}{"path": "pages/other.html"}); err == nil {
+		t.Fatal("unpinning something not pinned must fail")
+	}
+	if _, err := unpin.Execute(ctx, map[string]interface{}{"path": "pages/exams.html"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(fake.files["_users/u1/Chats/SparkQuill/state/pins.json"]), &st); err != nil || len(st.Data.Pins) != 0 {
+		t.Fatalf("pins after unpin = %+v err=%v", st, err)
+	}
+	if k := sink.kinds(); len(k) != 3 || k[0] != "pins_updated" {
+		t.Fatalf("events = %v", k)
+	}
+}

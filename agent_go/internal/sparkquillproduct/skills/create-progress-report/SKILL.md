@@ -9,7 +9,7 @@ One self-contained HTML file, `reports/progress.html`, that both parent and chil
 can read. It answers three questions in this order: **what she has**, **how she
 is doing**, and **what to do next**. A snapshot fully regenerated each time, never
 appended to; the "as of" date goes inside the content. Style per
-`skills/_shared/html-design.md`. If in doubt, cut a section rather than pad it.
+`skills/guides/html-design.md`. If in doubt, cut a section rather than pad it.
 
 1. **Gather real evidence — the substance, not just filenames.**
    - `materials/` — every subject and topic the family has uploaded, with each

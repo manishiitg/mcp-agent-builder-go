@@ -36,6 +36,8 @@ import {
   Star,
   Sun,
   Zap,
+  Pin,
+  PinOff,
 } from 'lucide-react'
 import './learning-app.css'
 import {
@@ -50,6 +52,7 @@ import {
   type Screen,
   type ApiEngine,
   type ParentMsg,
+  type PinnedPage,
   type QuickCommand,
   type ToolCallRecord,
   type TreeNode,
@@ -1373,6 +1376,48 @@ export default function LearningApp() {
   const gateError = usePinGateStore((s) => s.gateError)
   const setGateError = usePinGateStore((s) => s.setGateError)
 
+  // Pages the parent pinned as tabs (an exam tracker, a date sheet…). Kept
+  // in the workspace's per-key state, the same file Quill's pin_page writes,
+  // so both sides see one list. Reloaded after every turn (Quill may have
+  // pinned or unpinned) and whenever the parent toggles a pin here.
+  const [pins, setPins] = useState<PinnedPage[]>([])
+  const loadPins = useCallback(() => {
+    api.loadState('pins')
+      .then((raw) => {
+        const list = (raw as { pins?: unknown } | null)?.pins
+        setPins(Array.isArray(list) ? list.filter((p): p is PinnedPage => !!p && typeof (p as PinnedPage).path === 'string' && typeof (p as PinnedPage).title === 'string') : [])
+      })
+      .catch(() => {})
+  }, [])
+  const savePins = useCallback((next: PinnedPage[]) => {
+    setPins(next)
+    api.saveState('pins', { pins: next }).catch(() => {})
+  }, [])
+  const togglePin = useCallback((path: string) => {
+    const already = pins.some((p) => p.path === path)
+    if (already) {
+      savePins(pins.filter((p) => p.path !== path))
+      if (drawerTab === `pin:${path}`) setDrawerTab('progress')
+      return
+    }
+    const name = path.split('/').pop() ?? path
+    const title = name.replace(/\.html?$/i, '').replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    savePins([...pins, { path, title }])
+  }, [pins, savePins, drawerTab, setDrawerTab])
+  useEffect(() => { loadPins() }, [loadPins, mapRefreshKey])
+  // The pinned page on screen, loaded when its tab is opened or a turn ends.
+  const pinnedPath = drawerTab.startsWith('pin:') ? drawerTab.slice(4) : ''
+  const [pinnedHtml, setPinnedHtml] = useState<string | null>(null)
+  useEffect(() => {
+    if (!pinnedPath) return
+    let cancelled = false
+    setPinnedHtml(null)
+    api.readFile(pinnedPath)
+      .then((d) => { if (!cancelled) setPinnedHtml(d.content ?? '') })
+      .catch(() => { if (!cancelled) setPinnedHtml('') })
+    return () => { cancelled = true }
+  }, [pinnedPath, mapRefreshKey])
+
   // Load the real, agent-generated reports/progress.html for the Progress tab
   // — a single living document, rendered directly (not a link the parent has
   // to click through to).
@@ -2171,6 +2216,7 @@ export default function LearningApp() {
         const cp = events.find((e) => e.tool === 'set_child_profile')
         if (cp) { if (cp.name) setChildName(cp.name); if (cp.grade) setGrade(cp.grade); if (cp.board) setBoard(cp.board) }
         const pl = events.find((e) => e.tool === 'set_parent_label' && e.parent_label)
+        if (events.some((e) => e.tool === 'pins_updated')) loadPins()
         if (pl?.parent_label) setParentLabel(pl.parent_label)
         const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
         if (of?.path) { setDrawerTab('files'); setViewerImageList([]); setViewerActivityDir(null); setViewerPath(of.path); setViewerRefreshKey((k) => k + 1) }
@@ -3101,6 +3147,9 @@ export default function LearningApp() {
             {!((drawerTab === 'files' || drawerTab === 'allfiles' || drawerTab === 'uploaded') && viewerPath) && (
               <div className="fl-drawer-tabs" role="tablist" aria-label="Workspace views">
                 <button role="tab" aria-selected={drawerTab === 'progress'} className={drawerTab === 'progress' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('progress')}>Progress</button>
+                {pins.map((p) => (
+                  <button key={p.path} role="tab" aria-selected={drawerTab === `pin:${p.path}`} className={drawerTab === `pin:${p.path}` ? 'is-active' : ''} type="button" title={p.path} onClick={() => setDrawerTab(`pin:${p.path}`)}>{p.title}</button>
+                ))}
                 <button role="tab" aria-selected={drawerTab === 'files'} className={drawerTab === 'files' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('files')}>Workspace</button>
                 <button role="tab" aria-selected={drawerTab === 'uploaded'} className={drawerTab === 'uploaded' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('uploaded')}>Uploaded</button>
                 {/* Browsing every raw file is a power-user escape hatch, not a
@@ -3153,11 +3202,27 @@ export default function LearningApp() {
                 </>
               )}
 
+              {pinnedPath && (
+                <>
+                  <div className="fl-viewer-bar">
+                    <span className="fl-viewer-name">{pins.find((p) => p.path === pinnedPath)?.title ?? pinnedPath}</span>
+                    <button className="fl-viewer-back" type="button" title="Remove this tab (the page stays in the workspace)" onClick={() => togglePin(pinnedPath)}><PinOff size={15} /> Unpin</button>
+                  </div>
+                  {pinnedHtml === null ? (
+                    <p className="fl-note">Loading…</p>
+                  ) : pinnedHtml === '' ? (
+                    <p className="fl-note">This page is missing from the workspace. Unpin it, or ask Quill to make it again.</p>
+                  ) : (
+                    <iframe className="fl-map-frame" title={pinnedPath} sandbox="allow-scripts" srcDoc={withDiagramLib(pinnedHtml)} />
+                  )}
+                </>
+              )}
+
               {drawerTab === 'progress' && (
                 <>
                   {progressHtml === null ? (
                     <p className="fl-note">Loading the progress report…</p>
-                  ) : progressHtml.includes('living report grows as') ? (
+                  ) : progressHtml === '' || progressHtml.includes('living report grows as') ? (
                     <p className="fl-note">The progress report hasn't been built yet — ask Quill to "update the progress report" once there's some real activity to show.</p>
                   ) : (
                     <iframe className="fl-map-frame" title="Progress report" sandbox="allow-scripts" srcDoc={withDiagramLib(progressHtml)} />
@@ -3178,6 +3243,11 @@ export default function LearningApp() {
                         that list, unchanged. */}
                     <button className="fl-viewer-back" type="button" onClick={() => setViewerPath(null)}><ArrowLeft size={15} /> Files</button>
                     <span className="fl-viewer-name">{viewerPath.split('/').pop()}</span>
+                    {/\.html?$/i.test(viewerPath) && (
+                      <button className="fl-viewer-back" type="button" title={pins.some((p) => p.path === viewerPath) ? 'Remove from the tabs at the top' : 'Keep this page as a tab at the top'} onClick={() => togglePin(viewerPath)}>
+                        {pins.some((p) => p.path === viewerPath) ? <><PinOff size={15} /> Unpin</> : <><Pin size={15} /> Pin</>}
+                      </button>
+                    )}
                     {viewerActivityDir && (() => {
                       const act = activities.find((a) => a.dir === viewerActivityDir)
                       return act ? (

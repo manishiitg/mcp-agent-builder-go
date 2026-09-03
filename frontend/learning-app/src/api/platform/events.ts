@@ -231,6 +231,9 @@ export class TurnCollector {
         if (payload.schedule) this.toolEvents.push({ tool: 'set_child_schedule' })
         return
       }
+      case 'pins_updated':
+        this.toolEvents.push({ tool: 'pins_updated' })
+        return
       case 'activity_created':
         this.toolEvents.push({ tool: 'create_learning_activity', path: familyRelativePath(String(payload.dir ?? '')), package: String(payload.title ?? '') })
         return

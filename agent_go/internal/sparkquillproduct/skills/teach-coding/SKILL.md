@@ -43,7 +43,7 @@ Read `memory/child-profile.json` for grade, then match ONE band:
    an actual small task). The "build something that visibly works" instinct from band
    2 still applies, just with more real syntax alongside it.
 
-**Interactivity** follows `skills/_shared/html-design.md` as-is: build clicking and
+**Interactivity** follows `skills/guides/html-design.md` as-is: build clicking and
 branching with plain `<button>`s (never a text input), and any button representing a
 genuine CHOICE must use SQ.choose so you actually see what she picked. Purely
 decorative motion — a counter ticking, a sprite moving — is fine as plain client-side

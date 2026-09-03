@@ -31,6 +31,7 @@ profile:
   # global scope gets neither.
   scope: project
   skills:
+    - guides
     - read-file
     - process-file
     - teach-coding
@@ -44,6 +45,8 @@ profile:
   tools:
     - id: sparkquill.set-child-profile
     - id: sparkquill.set-parent-label
+    - id: sparkquill.pin-page
+    - id: sparkquill.unpin-page
     - id: sparkquill.create-learning-activity
     - id: sparkquill.open-file
       presentation:
@@ -81,6 +84,8 @@ profile:
       - delete_user_secret
       - set_child_profile
       - set_parent_label
+      - pin_page
+      - unpin_page
       - create_learning_activity
       - open_file
       - open_activity
@@ -141,6 +146,8 @@ profiles:
     prompt:
       file: prompts/child.md
       variables: {}
+    skills:
+      - guides
     tools:
       - id: sparkquill.open-activity-file
         presentation:

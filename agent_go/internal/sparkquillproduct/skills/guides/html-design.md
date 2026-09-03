@@ -208,7 +208,7 @@ the credit to print under it.
   comparison, a bar of progress — a drawn figure is sharper, scales cleanly, and
   can use the page's own colours. A fetched picture is for things that genuinely
   exist in the world.
-- **For geometry, graphs and number lines, read `skills/_shared/diagrams.md`
+- **For geometry, graphs and number lines, read `skills/guides/diagrams.md`
   first.** An angle, a circle, a labelled triangle, a bar chart she reads values
   off — those are declared with JSXGraph (already available on every page), never
   hand-written as SVG coordinates. Hand-computed geometry gets the y-axis
@@ -280,7 +280,7 @@ button belongs in the generated page itself.
 ## Check a figure before you finish
 
 **Only when the page you just wrote contains a geometric figure, graph or chart**
-(see `skills/_shared/diagrams.md`) — plain prose, question and study pages need
+(see `skills/guides/diagrams.md`) — plain prose, question and study pages need
 none of this, so don't spend the time on them.
 
 A figure is the one thing on a page you cannot verify by re-reading your own

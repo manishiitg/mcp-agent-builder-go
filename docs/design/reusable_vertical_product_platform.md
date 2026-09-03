@@ -1122,3 +1122,24 @@ was being skimmed and ignored. Decisions (user):
 Verified live: "explain, practice, short check" on fractions produced a real
 guide (hook, steps, worked examples with CSS fraction bars, hint buttons,
 4-question check) in 13 tool calls.
+
+### 2026-09-03: pinned pages, one progress page, guides skill
+
+- **Pinned pages.** Any HTML page can be a tab at the top of the parent's
+  screen: `pin_page(path, title)` / `unpin_page(path)` tools write the app's
+  own per-key state file (`state/pins.json`, key `pins`), the same one the
+  app's Pin/Unpin buttons write (file viewer for any .html, Unpin on the tab),
+  so both sides see one list. `pins_updated` product event refreshes the app.
+- **One progress page.** Academic map + progress report merged into
+  `reports/progress.html` (what she has, how she is doing, what next, how the
+  parent can help); one tab, one skill, one menu entry.
+- **Guides are a skill.** `skills/_shared` was invisible to `read_skill`
+  (not a skill), which cost every page-building turn two or three failed
+  lookups. It is `skills/guides` now (SKILL.md + html-design.md + diagrams.md),
+  attached to both profiles.
+- **Chat UI reuse, current state.** AgentWorks and Video Studio render the
+  transcript with `components/ChatArea` + `TerminalEventTranscript`; the
+  learning app renders with `frontend/shared/chat` (ChatRenderer,
+  ToolCallSummary), used by nothing else. Same events, different renderer.
+  Moving SparkQuill onto ChatArea the way Video Studio did is the next
+  consistency step and is not started.
