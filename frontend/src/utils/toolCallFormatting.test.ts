@@ -255,3 +255,19 @@ describe('folder-guard denials that exit 0', () => {
     expect(result.isError).toBe(false)
   })
 })
+
+describe('bridge result envelopes', () => {
+  it('unwraps a {success:{content:[{text:{text}}]}} shell result to its stdout', () => {
+    // The exact shape that reached a user's transcript as raw JSON.
+    const raw = JSON.stringify({
+      success: {
+        content: [{ text: { text: JSON.stringify({ stdout: 'Daily Ops — Latency (Dev)\n  routes ok', stderr: '', exit_code: 0 }) } }],
+        isError: false,
+      },
+    })
+    const formatted = formatToolCallResult(raw)
+    expect(formatted.text).toContain('Daily Ops — Latency (Dev)')
+    expect(formatted.text).not.toContain('"success"')
+    expect(formatted.isError).toBe(false)
+  })
+})

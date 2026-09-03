@@ -1250,9 +1250,12 @@ export const EventDispatcher: React.FC<EventDispatcherProps> = React.memo(({
     if (compact && (result || error)) {
       return (
         <CompactWrapper compact={compact}>
-          <div className={`border-l-2 ${isFailed ? 'border-red-400' : 'border-emerald-400'} pl-3 py-1`}>
+          {/* Failure keeps its red rail — that is a state worth seeing. A
+              successful result is the normal case and needs no green stripe;
+              the transcript dropped its own green rail for the same reason. */}
+          <div className={`${isFailed ? 'border-l-2 border-red-400 pl-3' : 'pl-3'} py-1`}>
             <div className="mb-1 flex min-w-0 items-center gap-2">
-              <span className={`text-[10px] font-medium uppercase tracking-wide ${isFailed ? 'text-red-600 dark:text-red-300' : 'text-emerald-600 dark:text-emerald-300'}`}>
+              <span className={`text-[10px] font-medium uppercase tracking-wide ${isFailed ? 'text-red-600 dark:text-red-300' : 'text-muted-foreground'}`}>
                 {isFailed ? 'Error' : 'Result'}
               </span>
               <span className="truncate text-[10px] text-muted-foreground">

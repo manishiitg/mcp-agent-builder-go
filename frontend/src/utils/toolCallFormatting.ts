@@ -57,12 +57,36 @@ function unwrapMcpTextEnvelope(value: unknown): unknown {
       continue
     }
 
-    if (!isRecord(current) || !Array.isArray(current.content)) return current
+    if (!isRecord(current)) return current
+    // Alias to a const: TS won't carry `isRecord` narrowing of a mutable
+    // `let` into the closures below, since it can't prove they run before
+    // `current` is reassigned. `record` stays narrowed for the rest of
+    // this iteration.
+    const record = current
 
-    const textBlocks = current.content
+    // The envelope is not always at the top level: a bridge result arrives as
+    // {success: {content: [...], isError: false}}, and printing that raw is
+    // what put `{"success": {"content": [{"text": {"text": "{\"stdout\"...`
+    // in front of the user instead of the command's output.
+    if (!Array.isArray(record.content)) {
+      const nested = ['success', 'result', 'data']
+        .map(key => record[key])
+        .find((v): v is Record<string, unknown> => isRecord(v) && Array.isArray(v.content))
+      if (!nested) return current
+      current = nested
+      continue
+    }
+
+    const textBlocks = (record.content as unknown[])
       .filter(isRecord)
-      .filter(block => block.type === 'text' && typeof block.text === 'string')
-      .map(block => block.text as string)
+      .map(block => {
+        // A text block is normally {type: "text", text: "..."}. Some bridges
+        // double-wrap it as {text: {text: "..."}} and omit the type.
+        if (typeof block.text === 'string') return block.text
+        if (isRecord(block.text) && typeof block.text.text === 'string') return block.text.text
+        return null
+      })
+      .filter((text): text is string => text !== null)
 
     if (textBlocks.length === 0) return current
     current = textBlocks.join('\n')
