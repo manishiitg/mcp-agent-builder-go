@@ -609,7 +609,11 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   streamingText = '',
   streamingStatus = '',
   surfaceClassName,
-  autoScrollMode = 'reveal-first-response',
+  // Follow the whole turn by default (AgentWorks, SparkQuill, the terminal
+  // center). Only a surface that says so gets reveal-first-response; the
+  // default had drifted to that on 2026-09-02 and AgentWorks lost its
+  // follow behaviour without any call site changing.
+  autoScrollMode = 'follow-turn',
   productRows,
   assistantLabel = 'Agent',
   assistantIcon,

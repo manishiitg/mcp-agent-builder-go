@@ -3610,6 +3610,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
                     error={olderHistory.sessionId === activeSessionId ? olderHistory.error : undefined}
                     onLoadOlder={historyPagination?.hasMore ? loadOlderConversationPage : undefined}
                     onRetry={loadOlderConversationPage}
+                    autoScrollMode="follow-turn"
                   />
             )}
 
@@ -3664,6 +3665,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
                     error={olderHistory.sessionId === activeSessionId ? olderHistory.error : undefined}
                     onLoadOlder={historyPagination?.hasMore ? loadOlderConversationPage : undefined}
                     onRetry={loadOlderConversationPage}
+                    autoScrollMode="follow-turn"
                   />
             )}
           </>
