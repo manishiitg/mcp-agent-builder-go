@@ -201,6 +201,29 @@ func (c *RuntimeCoordinator) StartGeneration(sessionID, reason string) (RuntimeS
 	return cloneRuntimeSnapshot(snapshot), true
 }
 
+// BusyCount reports how many sessions have a generation in flight (starting
+// or running). It is the drain signal deploy-rootless.sh waits on: the
+// session tracker's "running" status and the in-flight HTTP request count
+// both read idle during a steered coding-agent turn (the request returns
+// at once and the model runs in the background), which let a deploy restart
+// the agent mid-turn and cut a Cursor conversation off with a tool error as
+// its last event (RTS, 2026-09-03 16:30Z).
+func (c *RuntimeCoordinator) BusyCount() int {
+	if c == nil {
+		return 0
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	busy := 0
+	for _, record := range c.records {
+		switch record.snapshot.Phase {
+		case runtimePhaseStarting, runtimePhaseRunning:
+			busy++
+		}
+	}
+	return busy
+}
+
 func (c *RuntimeCoordinator) Snapshot(sessionID string) (RuntimeSnapshot, bool) {
 	if c == nil {
 		return RuntimeSnapshot{}, false

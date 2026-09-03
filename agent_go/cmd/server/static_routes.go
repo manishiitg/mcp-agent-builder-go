@@ -362,9 +362,17 @@ func (api *StreamingAPI) drainStatus() map[string]interface{} {
 		}
 	}
 	api.activeSessionsMux.RUnlock()
+	// A steered coding-agent turn returns its HTTP request immediately and
+	// runs the model in the background, so neither the tracker nor the
+	// request count sees it; the runtime coordinator does.
+	generating := api.runtimeCoordinator.BusyCount()
+	if generating > active {
+		active = generating
+	}
+	inFlight := atomic.LoadInt64(&apiRequestsInFlight)
 	return map[string]interface{}{
 		"active_sessions":    active,
-		"in_flight_requests": atomic.LoadInt64(&apiRequestsInFlight),
-		"idle":               active == 0 && atomic.LoadInt64(&apiRequestsInFlight) == 0,
+		"in_flight_requests": inFlight,
+		"idle":               active == 0 && inFlight == 0,
 	}
 }

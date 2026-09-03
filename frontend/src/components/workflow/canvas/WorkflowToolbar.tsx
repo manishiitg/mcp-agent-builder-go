@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState } from 'react'
+import React, { useEffect, useRef, useMemo, useCallback, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
   Cloud,
@@ -11,7 +11,6 @@ import {
   CalendarClock,
   Gauge,
 } from 'lucide-react'
-import ModalPortal from '../../ui/ModalPortal'
 import { useWorkflowStore, type RunFolder } from '../../../stores/useWorkflowStore'
 import { WORKSPACE_VIEWS, type WorkspaceViewId } from '../workspaceViews'
 import { useChatStore } from '../../../stores/useChatStore'
@@ -29,7 +28,6 @@ import { loadWorkflowNotificationInfo, type WorkflowNotificationState } from '..
 import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestStore'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip'
 import { hasWorkflowWriteAccess, hasWorkflowOwnerAccess } from '../../../utils/workflowPermissions'
-import { sendWorkflowMessageToChat } from '../../../utils/reportHumanInputChat'
 
 // Execution phase ID - special phase that should be displayed separately
 const EXECUTION_PHASE_ID = 'execution'
@@ -104,164 +102,6 @@ function normalizeWorkspacePath(path?: string | null): string {
   return (path || '').replace(/\/+$/, '')
 }
 
-interface CompactToolbarMenuProps {
-  label: string
-  icon: React.ReactNode
-  active?: boolean
-  children: (close: () => void) => React.ReactNode
-}
-
-function CompactToolbarMenu({ label, icon, active = false, children }: CompactToolbarMenuProps) {
-  const [open, setOpen] = useState(false)
-  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, ready: false })
-  const containerRef = useRef<HTMLDivElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
-
-  const updateMenuPosition = useCallback(() => {
-    const trigger = containerRef.current?.querySelector('button')
-    const menu = menuRef.current
-    if (!trigger || !menu) return
-    const triggerRect = trigger.getBoundingClientRect()
-    const menuWidth = menu.offsetWidth || 208
-    const menuHeight = menu.offsetHeight || 0
-    const gap = 8
-    const viewportGap = 8
-    const left = Math.max(
-      viewportGap,
-      Math.min(triggerRect.right - menuWidth, window.innerWidth - menuWidth - viewportGap),
-    )
-    const spaceBelow = window.innerHeight - triggerRect.bottom - gap - viewportGap
-    const spaceAbove = triggerRect.top - gap - viewportGap
-    const openAbove = menuHeight > spaceBelow && spaceAbove > spaceBelow
-    const desiredTop = openAbove
-      ? triggerRect.top - gap - menuHeight
-      : triggerRect.bottom + gap
-    const top = Math.max(viewportGap, Math.min(desiredTop, window.innerHeight - menuHeight - viewportGap))
-    setMenuPosition({ top, left, ready: true })
-  }, [])
-
-  useLayoutEffect(() => {
-    if (!open) return
-    updateMenuPosition()
-    window.addEventListener('resize', updateMenuPosition)
-    window.addEventListener('scroll', updateMenuPosition, true)
-    return () => {
-      window.removeEventListener('resize', updateMenuPosition)
-      window.removeEventListener('scroll', updateMenuPosition, true)
-    }
-  }, [open, updateMenuPosition])
-
-  useEffect(() => {
-    if (!open) return
-    const closeOnOutsideClick = (event: MouseEvent) => {
-      if (
-        containerRef.current
-        && !containerRef.current.contains(event.target as Node)
-        && !menuRef.current?.contains(event.target as Node)
-      ) {
-        setOpen(false)
-      }
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', closeOnOutsideClick)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('mousedown', closeOnOutsideClick)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [open])
-
-  return (
-    <div ref={containerRef} className="relative">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => setOpen(current => !current)}
-            className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors ${open || active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
-            aria-label={label}
-            aria-haspopup="menu"
-            aria-expanded={open}
-          >
-            {icon}
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom"><p>{label}</p></TooltipContent>
-      </Tooltip>
-      {open && (
-        <ModalPortal>
-          <div
-            ref={menuRef}
-            role="menu"
-            aria-label={label}
-            className="fixed z-[10000] max-h-[calc(100vh-1rem)] min-w-52 overflow-y-auto rounded-lg border border-border bg-popover p-1.5 text-popover-foreground shadow-xl"
-            style={{
-              top: menuPosition.top,
-              left: menuPosition.left,
-              visibility: menuPosition.ready ? 'visible' : 'hidden',
-            }}
-          >
-            {children(() => setOpen(false))}
-          </div>
-        </ModalPortal>
-      )}
-    </div>
-  )
-}
-
-interface CompactToolbarMenuItemProps {
-  icon: React.ReactNode
-  label: string
-  detail?: string
-  active?: boolean
-  trailingAction?: {
-    label: string
-    icon: React.ReactNode
-    onClick: () => void
-    active?: boolean
-  }
-  'data-testid'?: string
-  onClick: () => void
-}
-
-function CompactToolbarMenuItem({ icon, label, detail, active = false, trailingAction, onClick, 'data-testid': dataTestId }: CompactToolbarMenuItemProps) {
-  return (
-    <div className={`flex items-center rounded-md ${active ? 'bg-accent text-accent-foreground' : 'text-foreground hover:bg-accent hover:text-accent-foreground'}`}>
-      <button
-        type="button"
-        data-testid={dataTestId}
-        role="menuitem"
-        onClick={onClick}
-        className="flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2 text-left text-xs"
-      >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground">{icon}</span>
-        <span className="min-w-0 flex-1">
-          <span className="block font-medium">{label}</span>
-          {detail && <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{detail}</span>}
-        </span>
-      </button>
-      {trailingAction && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={trailingAction.onClick}
-              aria-label={trailingAction.label}
-              aria-pressed={trailingAction.active}
-              className={`mr-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors ${trailingAction.active ? 'text-primary hover:bg-primary/10' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
-            >
-              {trailingAction.icon}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="left"><p>{trailingAction.label}</p></TooltipContent>
-        </Tooltip>
-      )}
-    </div>
-  )
-}
-
 interface WorkflowToolbarProps {
   status: WorkflowExecutionStatus
   hasPlan: boolean
@@ -324,7 +164,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
 
   const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
   const lastCanvasView = useWorkflowStore(state => state.lastCanvasView)
-  const showWorkspacePane = useWorkflowStore(state => state.showWorkspacePane)
   const openWorkspaceView = useWorkflowStore(state => state.openWorkspaceView)
 
   // No explicit view means the pane is on whichever canvas view was last open.
