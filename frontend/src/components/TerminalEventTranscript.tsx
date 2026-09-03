@@ -246,6 +246,21 @@ const AssistantTurnHeader: React.FC<{ event: PollingEvent; timestamp: string; la
 
 const AGENT_BLOCK_CLASS = 'border-l border-emerald-400/55 pl-3 pr-1'
 
+// Pins a scroller to its end over a few frames: Virtuoso measures newly
+// rendered items after paint and compensates scrollTop for the difference,
+// so a single assignment can land short. Stops early once it is there.
+function settleToEnd(scroller: HTMLElement, frames = 8): void {
+  let left = frames
+  const step = () => {
+    scroller.scrollTop = scroller.scrollHeight
+    left -= 1
+    if (left > 0 && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 1) {
+      window.requestAnimationFrame(step)
+    }
+  }
+  window.requestAnimationFrame(step)
+}
+
 // Where an item sits in its agent turn. A turn is everything between two user
 // messages: tool batches, thoughts, replies, presentation and activity rows.
 type TurnSlot = { agent: boolean; first: boolean; last: boolean; header?: PollingEvent; showTime: boolean }
@@ -695,12 +710,16 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   // list and settle a late first fill (history hydrating after an empty
   // mount) with an explicit scroll to the end instead.
   const [initialTopMostItemIndex] = useState(() => Math.max(0, items.length - 1))
-  const settledFirstFillRef = useRef(items.length > 0)
+  // false even when items exist at mount: Virtuoso's initial scroll uses
+  // size estimates, so the first fill always needs the settle below.
+  const settledFirstFillRef = useRef(false)
   useEffect(() => {
     if (settledFirstFillRef.current || items.length === 0) return
     settledFirstFillRef.current = true
     const frame = window.requestAnimationFrame(() => {
       virtuosoRef.current?.scrollToIndex({ index: items.length - 1, align: 'end', behavior: 'auto' })
+      const scroller = scrollerRef.current
+      if (scroller instanceof HTMLElement) settleToEnd(scroller, 12)
     })
     return () => window.cancelAnimationFrame(frame)
   }, [items.length])
@@ -731,7 +750,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
       // scrollToIndex positions by Virtuoso's size estimate; the real end is
       // the scroller's own height once the item is measured.
       const scroller = scrollerRef.current
-      if (scroller instanceof HTMLElement) scroller.scrollTop = scroller.scrollHeight
+      if (scroller instanceof HTMLElement) settleToEnd(scroller)
     }
     const frame = window.requestAnimationFrame(scrollToLatest)
     const settledLayoutTimer = window.setTimeout(scrollToLatest, 180)
@@ -747,19 +766,31 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   // only after Virtuoso's first estimate (a scroll issued on send landed
   // short by that difference, and nothing corrected it until the next
   // event). Observing both the viewport and the list content covers both.
+  //
+  // Two guards keep this from fighting the reader: it only acts when the
+  // reader was already at the end before the change (a list that grows while
+  // they are scrolled up must not yank them down, which showed as a flicker
+  // on every scroll), and it scrolls on the next frame, after Virtuoso's own
+  // scroll compensation for re-measured items, then checks its work for a
+  // few frames because measurements settle in more than one.
+  const nearEndRef = useRef(true)
   useEffect(() => {
     if (autoScrollMode !== 'follow-turn') return
     const scroller = scrollerRef.current
     if (!(scroller instanceof HTMLElement) || typeof ResizeObserver === 'undefined') return
+    const onScroll = () => {
+      nearEndRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48
+    }
+    scroller.addEventListener('scroll', onScroll, { passive: true })
     const stick = () => {
-      if (!followCurrentTurnRef.current) return
-      scroller.scrollTop = scroller.scrollHeight
+      if (!followCurrentTurnRef.current || !nearEndRef.current) return
+      settleToEnd(scroller)
     }
     const observer = new ResizeObserver(stick)
     observer.observe(scroller)
     const list = scroller.querySelector('[data-testid="virtuoso-item-list"]')
     if (list) observer.observe(list)
-    return () => observer.disconnect()
+    return () => { observer.disconnect(); scroller.removeEventListener('scroll', onScroll) }
   }, [autoScrollMode])
 
   // Video Studio presents long-form creative work where a reader often starts
