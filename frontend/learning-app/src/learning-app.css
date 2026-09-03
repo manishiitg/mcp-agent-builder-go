@@ -858,7 +858,13 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-pulse-popover-link { display: block; width: 100%; margin-top: 12px; padding: 10px 14px; border: 0; border-top: 1px solid var(--line); background: var(--surface-2); color: #2f6db0; font: inherit; font-weight: 700; font-size: var(--text-caption); text-align: left; cursor: pointer; }
 .fl-pulse-popover-link:hover { background: #eef4fb; }
 .fl-pulse-popover-config { margin-top: 12px; padding: 12px 14px 14px; border-top: 1px solid var(--line); background: var(--surface-2); }
-.fl-pulse-config-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: var(--text-secondary); font-weight: 700; color: var(--heading); }
+/* A config row reads left to right: an optional checkbox, its label, and the
+   control pushed to the right edge. Space-between used to centre the label
+   between a checkbox and a select. */
+.fl-pulse-config-row { display: flex; align-items: center; gap: 10px; font-size: var(--text-secondary); font-weight: 700; color: var(--heading); }
+.fl-pulse-config-row > select { margin-left: auto; }
+.fl-pulse-config-row > input[type="checkbox"] { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: var(--navy); }
+.fl-pulse-config-row > span { flex: 1 1 auto; min-width: 0; }
 .fl-pulse-config-row select { border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font: inherit; font-size: var(--text-secondary); background: var(--surface); }
 .fl-pulse-config-hint { margin: 12px 0 0; font-size: var(--text-caption); color: #45566f; line-height: 1.55; }
 .fl-pulse-config-input { width: 100%; margin-top: 7px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: var(--text-secondary); color: var(--heading); box-sizing: border-box; }
@@ -914,6 +920,9 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-settings-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; background: var(--navy); color: #fff; }
 .fl-settings-title { font-weight: 800; font-size: var(--text-body); }
 .fl-settings-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px; }
+/* The section labels draw a rule above themselves; the first one has nothing
+   above it to separate from. */
+.fl-settings-body > .fl-drawer-label:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 .fl-settings-engines { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .fl-settings-engine-card { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--heading); font: inherit; cursor: pointer; }
 .fl-settings-engine-card:hover { border-color: #9db2ca; background: #f7faff; }
@@ -945,7 +954,7 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-voice-toggle small { font-size: var(--text-caption); color: var(--muted, #8a8478); }
 
 .fl-settings-engine-name { flex: 1; font-weight: 700; }
-.fl-settings-engine-status { font-size: var(--text-caption); font-weight: 650; color: #b23b3b; }
+.fl-settings-engine-status { margin-left: auto; font-size: var(--text-caption); font-weight: 650; color: #b23b3b; white-space: nowrap; }
 .fl-settings-engine-status.is-ready { color: #2f8a52; }
 .fl-settings-row { display: flex; align-items: center; gap: 10px; margin: 10px 0; font-weight: 600; color: var(--heading); }
 .fl-settings-row select { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font: inherit; background: var(--surface); }

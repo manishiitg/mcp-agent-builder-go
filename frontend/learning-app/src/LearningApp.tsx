@@ -3924,6 +3924,7 @@ export default function LearningApp() {
                     </>
                   )}
 
+                  {backend !== 'platform' && (<>
                   <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Fast mode</p>
                   <p className="fl-note">Keeps the model you chose but lets it think less before answering — quicker replies, less depth, in your own chat, WhatsApp, and Pulse check-ins. Child Mode has its own setting below, so this does not affect {childName || 'your child'}'s tutor. Turn it off again for anything that needs careful judgment.</p>
                   <label className="fl-pulse-config-row">
@@ -3948,6 +3949,7 @@ export default function LearningApp() {
                     />
                     <span>Use fast mode for {childName || 'her'} chat</span>
                   </label>
+                  </>)}
 
                   <VoiceSettings status={voiceStatus} childName={childName} onRefresh={refreshVoiceStatus} />
 

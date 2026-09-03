@@ -5,6 +5,7 @@
 // workspace, setup and connector methods land in the next slices and say so
 // loudly until then.
 import type { ApiEngine, QuickCommand, VoiceStatus } from '../stores/types'
+import { secretsApi } from '../../../src/api/secrets'
 import type {
   FamilyApi, FastMode, ModelInfo, PulseConfig, PulseConfigPatch, SetupState,
   StoredConversation, TurnMessage, TurnResult, TurnStreamEvent,
@@ -313,9 +314,20 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     saveModel: async () => {},
     fastMode: async () => ({ enabled: false, child_enabled: false }) as FastMode,
     saveFastMode: async () => {},
-    secrets: notYet('secrets'),
-    saveSecret: notYet('secrets'),
-    deleteSecret: notYet('secrets'),
+    // The platform's per-user secret store: the value is encrypted server-side
+    // first, only the name is ever listed back. This is the same store the
+    // agent's set_user_secret / list_secrets tools use, so Settings and chat
+    // see one list.
+    secrets: async () => (await secretsApi.listStoredSecrets()).map((s) => s.name),
+    saveSecret: async (name, value) => {
+      const { encrypted } = await secretsApi.encrypt(value)
+      await secretsApi.storeSecret(name, encrypted)
+      return (await secretsApi.listStoredSecrets()).map((s) => s.name)
+    },
+    deleteSecret: async (name) => {
+      await secretsApi.deleteStoredSecret(name)
+      return (await secretsApi.listStoredSecrets()).map((s) => s.name)
+    },
     // The platform runs one shared speech engine for every product; Settings
     // shows it as a single tier in the family server's catalog shape.
     voiceStatus: async () => {
