@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect, useCallback, useRef } from 'react'
+import React, { useMemo, useEffect, useCallback, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { MessageSquare, Plus, Square, X } from 'lucide-react'
 import { useChatStore, type ChatTab } from '../../stores/useChatStore'
@@ -51,12 +51,30 @@ const WorkflowTabItem = React.memo<WorkflowTabItemProps>(({
   // Tabs are a product-level conversation switcher. Derive their small status
   // marker from the session's own lifecycle flags rather than polling the
   // diagnostic execution tree for every active tab.
-  const status: 'busy' | 'idle' | 'stopped' =
+  const rawStatus: 'busy' | 'idle' | 'stopped' =
     tab.isStreaming || tab.hasRunningBgAgents
       ? 'busy'
       : tab.isCompleted
         ? 'stopped'
         : 'idle'
+
+  // A live multi-step run can toggle isStreaming/hasRunningBgAgents on
+  // consecutive 500ms polls as background agents register/deregister between
+  // steps or tool calls — real backend state, but a raw render of it makes
+  // the stop icon visibly blink on and off every second or two. Leaving busy
+  // applies instantly (immediate feedback), so this only smooths the
+  // busy -> idle/stopped edge: it must hold for a short window before the
+  // pill (and the stop button) actually leaves the busy state.
+  const [status, setStatus] = useState(rawStatus)
+  useEffect(() => {
+    if (rawStatus === status) return
+    if (rawStatus === 'busy') {
+      setStatus('busy')
+      return
+    }
+    const timer = setTimeout(() => setStatus(rawStatus), 1200)
+    return () => clearTimeout(timer)
+  }, [rawStatus, status])
   const dot = TAB_STATUS_DOT[status]
   const isBusy = status === 'busy'
 
