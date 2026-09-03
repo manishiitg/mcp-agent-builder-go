@@ -8,6 +8,6 @@
 // Lives in its own module (rather than inside LearningApp.tsx) so extracted
 // components can import it without pulling in the whole app file.
 export const FAMILY_API =
-  (window as { sparkquill?: { apiBaseUrl(): string } }).sparkquill?.apiBaseUrl()
+  (typeof window !== 'undefined' ? (window as { sparkquill?: { apiBaseUrl(): string } }).sparkquill?.apiBaseUrl() : undefined)
   ?? (import.meta as { env?: { VITE_FAMILY_API?: string } }).env?.VITE_FAMILY_API
   ?? 'http://127.0.0.1:8010'

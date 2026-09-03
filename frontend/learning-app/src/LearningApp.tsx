@@ -50,14 +50,13 @@ import {
   type Screen,
   type ApiEngine,
   type ParentMsg,
-  type StoredMsg,
   type ToolCallRecord,
   type TreeNode,
   type WsFile,
   type Activity,
   type VoiceStatus,
 } from './stores'
-import { FAMILY_API } from './apiBase'
+import { api } from './api'
 import { VoiceSettings } from './voice/VoiceSettings'
 import { readReminderSoundPref, persistReminderSoundPref, playReminderChime } from './notifySound'
 import { MicButton, type MicButtonHandle } from './voice/MicButton'
@@ -311,7 +310,7 @@ function rewriteImgSrcsRelativeTo(html: string, dir: string): string {
   return html.replace(/\bsrc=(["'])(.*?)\1/gi, (whole, quote: string, ref: string) => {
     if (/^(https?:)?\/\//i.test(ref) || ref.startsWith('/') || ref.startsWith('data:') || ref.startsWith('#')) return whole
     const resolved = dir ? `${dir}/${ref}` : ref
-    const url = `${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(resolved)}`
+    const url = api.rawUrl(resolved)
     return `src=${quote}${url}${quote}`
   })
 }
@@ -373,8 +372,8 @@ function withSceneResizeScript(html: string): string {
 function withDiagramLib(html: string): string {
   if (!/jxgbox|JXG\./.test(html)) return html
   const tags =
-    `<link rel="stylesheet" href="${FAMILY_API}/lib/jsxgraph.css">` +
-    `<script src="${FAMILY_API}/lib/jsxgraphcore.js"></script>`
+    `<link rel="stylesheet" href="${api.assetUrl('lib/jsxgraph.css')}">` +
+    `<script src="${api.assetUrl('lib/jsxgraphcore.js')}"></script>`
   if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => m + tags)
   return tags + html
 }
@@ -609,9 +608,8 @@ function ActivityItemPreview({ path, name, large }: { path: string; name: string
   useEffect(() => {
     let cancelled = false
     setContent(null)
-    fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent(path)}`)
-      .then((res) => res.json())
-      .then((d: { content?: string }) => {
+    api.readFile(path)
+      .then((d) => {
         if (cancelled) return
         const raw = d.content ?? ''
         if (/^\s*<(!doctype|html)/i.test(raw)) setContent({ kind: 'html', text: rewriteRelativeAssetURLs(raw, path) })
@@ -866,7 +864,7 @@ function formatJSONText(content: string): string {
 // falls back to printViewerContent (CSS-isolated window.print).
 function printFile(path: string) {
   if (/\.(html?)$/i.test(path)) {
-    window.open(`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(path)}&print=1`, '_blank', 'noopener,noreferrer')
+    window.open(api.rawUrl(path, { print: true }), '_blank', 'noopener,noreferrer')
   } else {
     printViewerContent()
   }
@@ -957,7 +955,7 @@ function NonPreviewableFile({ path, meta }: { path: string; meta: Record<string,
       )}
       <a
         className="fl-download-btn"
-        href={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(path)}&download=1`}
+        href={api.rawUrl(path, { download: true })}
         download={name}
       >
         Download
@@ -1014,9 +1012,8 @@ export default function LearningApp() {
   useEffect(() => {
     let cancelled = false
     setEnginesState('loading')
-    fetch(`${FAMILY_API}/api/engines`)
-      .then((res) => { if (!res.ok) throw new Error(String(res.status)); return res.json() })
-      .then((data: ApiEngine[]) => {
+    api.engines()
+      .then((data) => {
         if (cancelled) return
         const sorted = [...data].sort((a, b) => pres(a.id, a.name).order - pres(b.id, b.name).order)
         setEngines(sorted)
@@ -1210,9 +1207,8 @@ export default function LearningApp() {
   useEffect(() => {
     if (screen !== 'parent' && screen !== 'tutor') return
     let cancelled = false
-    fetch(`${FAMILY_API}/api/workspace/tree`)
-      .then((res) => res.json())
-      .then((data: TreeNode[] | { nodes?: TreeNode[]; total_size?: number }) => {
+    api.tree()
+      .then((data) => {
         if (cancelled) return
         // Accepts both the current {nodes,total_size} object and the older bare
         // array, so a packaged frontend built before the size fields still works
@@ -1240,11 +1236,9 @@ export default function LearningApp() {
         // Pulse, since it's all the same thread now.
         if (!resumedRef.current && parentMessages.length === 0) {
           resumedRef.current = true
-          fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent('conversations/parent.json')}`)
-            .then((r) => r.json())
-            .then((dd) => {
-              if (!dd?.content) return
-              const c = JSON.parse(dd.content) as { messages?: StoredMsg[] }
+          api.loadParentConversation()
+            .then((c) => {
+              if (!c) return
               const loaded = (c.messages || []).map(toParentMsg)
               setParentMessages(loaded)
             })
@@ -1492,8 +1486,7 @@ export default function LearningApp() {
   useEffect(() => {
     if (drawerTab !== 'map') return
     let cancelled = false
-    fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent('reports/academic-map.html')}`)
-      .then((r) => r.json())
+    api.readFile('reports/academic-map.html')
       .then((d) => { if (!cancelled) setMapHtml(d.content ?? '') })
       .catch(() => { if (!cancelled) setMapHtml('') })
     return () => { cancelled = true }
@@ -1505,8 +1498,7 @@ export default function LearningApp() {
   useEffect(() => {
     if (drawerTab !== 'progress') return
     let cancelled = false
-    fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent('reports/progress.html')}`)
-      .then((r) => r.json())
+    api.readFile('reports/progress.html')
       .then((d) => { if (!cancelled) setProgressHtml(d.content ?? '') })
       .catch(() => { if (!cancelled) setProgressHtml('') })
     return () => { cancelled = true }
@@ -1519,9 +1511,8 @@ export default function LearningApp() {
   useEffect(() => {
     if (drawerTab !== 'week') return
     let cancelled = false
-    fetch(`${FAMILY_API}/api/week?offset=${weekOffset}`)
-      .then((r) => r.json())
-      .then((d: WeekResponse) => { if (!cancelled) setWeekData(d) })
+    api.week(weekOffset)
+      .then((d) => { if (!cancelled) setWeekData(d) })
       .catch(() => { if (!cancelled) setWeekData(null) })
     return () => { cancelled = true }
   }, [drawerTab, weekOffset, mapRefreshKey])
@@ -1535,9 +1526,8 @@ export default function LearningApp() {
   useEffect(() => {
     if (drawerTab !== 'files' && drawerTab !== 'uploaded') return
     let cancelled = false
-    fetch(`${FAMILY_API}/api/activities`)
-      .then((r) => r.json())
-      .then((d: Activity[]) => { if (!cancelled) setActivities(d ?? []) })
+    api.activities()
+      .then((d) => { if (!cancelled) setActivities(d ?? []) })
       .catch(() => { if (!cancelled) setActivities([]) })
     return () => { cancelled = true }
   }, [drawerTab, mapRefreshKey, setActivities])
@@ -1548,9 +1538,8 @@ export default function LearningApp() {
     if (!waOpen || connectorSection !== 'whatsapp') return
     let cancelled = false
     const poll = () => {
-      fetch(`${FAMILY_API}/api/whatsapp/status`)
-        .then((r) => r.json())
-        .then((d: { accounts: { jid: string; connected: boolean }[]; pairing: { qr_available: boolean; qr_expires_at?: string }; voice_transcription?: { enabled: boolean; installed: boolean; installing: boolean; model_size_mb: number; available: boolean; error?: string } }) => {
+      api.whatsappStatus()
+        .then((d) => {
           if (cancelled) return
           setWaStatus(d)
           setWaQrNonce((n) => n + 1) // there's always a pairing slot open for one more phone
@@ -1567,9 +1556,8 @@ export default function LearningApp() {
   useEffect(() => {
     if (!waOpen || connectorSection !== 'browser') return
     let cancelled = false
-    fetch(`${FAMILY_API}/api/browser/status`)
-      .then((r) => r.json())
-      .then((d: { cli_installed: boolean }) => { if (!cancelled) setBrowserStatus(d) })
+    api.browserStatus()
+      .then((d) => { if (!cancelled) setBrowserStatus(d) })
       .catch(() => { if (!cancelled) setBrowserStatus({ cli_installed: false }) })
     return () => { cancelled = true }
   }, [waOpen, connectorSection])
@@ -1580,9 +1568,8 @@ export default function LearningApp() {
   useEffect(() => {
     if (screen !== 'parent' && !settingsOpen && !pulsePopoverOpen) return
     let cancelled = false
-    fetch(`${FAMILY_API}/api/pulse/config`)
-      .then((r) => r.json())
-      .then((d: { enabled: boolean; cadence_hours: number; last_run_at?: string; watch_sites?: string[]; preferred_hour: number; preferred_hour_set: boolean }) => {
+    api.pulseConfig()
+      .then((d) => {
         if (cancelled) return
         setPulseConfig(d)
         setWatchSitesDraft((d.watch_sites || []).join('\n'))
@@ -1611,9 +1598,8 @@ export default function LearningApp() {
   const [savingModel, setSavingModel] = useState(false)
 
   const loadModels = useCallback(() => {
-    fetch(`${FAMILY_API}/api/models`)
-      .then((r) => r.json())
-      .then((d: ModelInfo) => setModelInfo(d?.models?.length ? d : null))
+    api.models()
+      .then((d) => setModelInfo(d))
       .catch(() => setModelInfo(null))
   }, [])
 
@@ -1626,11 +1612,7 @@ export default function LearningApp() {
     // Optimistic so the select doesn't snap back while the request is in
     // flight; the reload below is the source of truth.
     setModelInfo((cur) => (cur ? { ...cur, selected: id } : cur))
-    fetch(`${FAMILY_API}/api/models`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model_id: id }),
-    })
+    api.saveModel(id)
       .then(() => loadModels())
       .catch(() => loadModels())
       .finally(() => setSavingModel(false))
@@ -1650,9 +1632,8 @@ export default function LearningApp() {
   useEffect(() => {
     if (screen !== 'parent' && screen !== 'tutor' && !settingsOpen) return
     let cancelled = false
-    fetch(`${FAMILY_API}/api/fast-mode`)
-      .then((r) => r.json())
-      .then((d: { enabled: boolean; child_enabled: boolean }) => {
+    api.fastMode()
+      .then((d) => {
         if (cancelled) return
         setFastMode(!!d.enabled)
         setChildFastMode(!!d.child_enabled)
@@ -1664,11 +1645,7 @@ export default function LearningApp() {
   const toggleFastMode = (enabled: boolean) => {
     setFastMode(enabled)
     setSavingFastMode(true)
-    fetch(`${FAMILY_API}/api/fast-mode`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled }),
-    })
+    api.saveFastMode({ enabled })
       .catch(() => {})
       .finally(() => setSavingFastMode(false))
   }
@@ -1679,11 +1656,7 @@ export default function LearningApp() {
   const toggleChildFastModeSetting = (enabled: boolean) => {
     setChildFastMode(enabled)
     setSavingFastMode(true)
-    fetch(`${FAMILY_API}/api/fast-mode`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: fastMode, child_enabled: enabled }),
-    })
+    api.saveFastMode({ enabled: fastMode, child_enabled: enabled })
       .catch(() => {})
       .finally(() => setSavingFastMode(false))
   }
@@ -1692,9 +1665,8 @@ export default function LearningApp() {
   // plus two LookPath calls), so it's refetched each time rather than cached:
   // installing a model elsewhere should be reflected on the next open.
   const refreshVoiceStatus = useCallback(() => {
-    fetch(`${FAMILY_API}/api/voice/status`)
-      .then((r) => r.json())
-      .then((d: VoiceStatus) => setVoiceStatus(d))
+    api.voiceStatus()
+      .then((d) => setVoiceStatus(d))
       .catch(() => {})
   }, [])
   useEffect(() => {
@@ -1717,9 +1689,8 @@ export default function LearningApp() {
   useEffect(() => {
     if (!settingsOpen) return
     let cancelled = false
-    fetch(`${FAMILY_API}/api/secrets`)
-      .then((r) => r.json())
-      .then((d: { names?: string[] }) => { if (!cancelled) setSecretNames(d.names ?? []) })
+    api.secrets()
+      .then((names) => { if (!cancelled) setSecretNames(names) })
       .catch(() => { if (!cancelled) setSecretNames([]) })
     return () => { cancelled = true }
   }, [settingsOpen])
@@ -1729,14 +1700,9 @@ export default function LearningApp() {
     const value = secretValueDraft.trim()
     if (!name || !value) return
     setSavingSecret(true)
-    fetch(`${FAMILY_API}/api/secrets`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, value }),
-    })
-      .then((r) => r.json())
-      .then((d: { names?: string[] }) => {
-        setSecretNames(d.names ?? [])
+    api.saveSecret(name, value)
+      .then((names) => {
+        setSecretNames(names)
         setSecretNameDraft('')
         setSecretValueDraft('')
       })
@@ -1745,13 +1711,8 @@ export default function LearningApp() {
 
   const deleteSecret = (name: string) => {
     setDeletingSecret(name)
-    fetch(`${FAMILY_API}/api/secrets`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
-    })
-      .then((r) => r.json())
-      .then((d: { names?: string[] }) => setSecretNames(d.names ?? []))
+    api.deleteSecret(name)
+      .then((names) => setSecretNames(names))
       .finally(() => setDeletingSecret(null))
   }
 
@@ -1766,11 +1727,9 @@ export default function LearningApp() {
     if (screen !== 'parent' || !conversationId) return
     const id = window.setInterval(() => {
       if (sending) return
-      fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent('conversations/parent.json')}`)
-        .then((r) => r.json())
-        .then((d) => {
-          if (!d?.content) return
-          const c = JSON.parse(d.content) as { messages?: StoredMsg[] }
+      api.loadParentConversation()
+        .then((c) => {
+          if (!c) return
           const fresh = c.messages || []
           // Only ever grows here: a shorter file means our optimistic local
           // copy is ahead (the parent just sent something), never that
@@ -1808,7 +1767,6 @@ export default function LearningApp() {
   // around this tab's own send.
   useEffect(() => {
     if (screen !== 'parent' || !conversationId) return
-    const source = new EventSource(`${FAMILY_API}/api/parent/status?conversation_id=${encodeURIComponent(conversationId)}`)
     let idleTimer: number | undefined
     const armIdleReset = () => {
       if (idleTimer) window.clearTimeout(idleTimer)
@@ -1817,10 +1775,9 @@ export default function LearningApp() {
         setRemoteToolCalls([])
       }, 45000)
     }
-    source.onmessage = (ev) => {
+    const stopWatching = api.watchParent(conversationId, (parsed) => {
       if (sendingRef.current) return
       try {
-        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool_call?: ToolCallRecord }
         if (parsed.type === 'status') {
           setRemoteStatus(parsed.text ?? '')
           armIdleReset()
@@ -1829,9 +1786,9 @@ export default function LearningApp() {
           armIdleReset()
         }
       } catch { /* ignore malformed event */ }
-    }
+    })
     return () => {
-      source.close()
+      stopWatching()
       if (idleTimer) window.clearTimeout(idleTimer)
     }
   }, [screen, conversationId])
@@ -1856,11 +1813,9 @@ export default function LearningApp() {
     if (screen !== 'tutor' || !dir) return
     const id = window.setInterval(() => {
       if (childSending) return
-      fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent(`${dir}/conversation.json`)}`)
-        .then((r) => r.json())
-        .then((d) => {
-          if (!d?.content) return
-          const c = JSON.parse(d.content) as { messages?: StoredMsg[] }
+      api.loadChildConversation(dir)
+        .then((c) => {
+          if (!c) return
           const fresh = c.messages || []
           if (fresh.length > childMessages.length) {
             setChildMessages(fresh.map(toParentMsg))
@@ -1898,7 +1853,6 @@ export default function LearningApp() {
   useEffect(() => {
     const dir = childActivity?.dir
     if (screen !== 'tutor' || !dir) return
-    const source = new EventSource(`${FAMILY_API}/api/child/status?conversation_id=${encodeURIComponent(dir)}`)
     let idleTimer: number | undefined
     const armIdleReset = () => {
       if (idleTimer) window.clearTimeout(idleTimer)
@@ -1910,13 +1864,12 @@ export default function LearningApp() {
         setChildRemoteToolCalls([])
       }, 45000)
     }
-    source.onmessage = (ev) => {
+    const stopWatching = api.watchChild(dir, (parsed) => {
       // Events from THIS tab's own send are already shown via
       // childLiveStatus/childLiveToolCalls (see sendChildText) — skip here so
       // the same tool call never renders twice.
       if (childSendingRef.current) return
       try {
-        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool_call?: ToolCallRecord }
         if (parsed.type === 'status') {
           setChildRemoteStatus(parsed.text ?? '')
           armIdleReset()
@@ -1925,12 +1878,11 @@ export default function LearningApp() {
           armIdleReset()
         }
       } catch { /* ignore malformed event */ }
-    }
-    // Deliberately no onerror handler that closes the connection — the
-    // browser's own EventSource auto-reconnects on a transient drop, and this
-    // subscription is meant to stay up for as long as the screen does.
+    })
+    // The watcher stays up for as long as the screen does; the API layer
+    // owns reconnects.
     return () => {
-      source.close()
+      stopWatching()
       if (idleTimer) window.clearTimeout(idleTimer)
     }
   }, [screen, childActivity?.dir])
@@ -1968,12 +1920,7 @@ export default function LearningApp() {
 
   const savePulseConfig = (patch: { enabled?: boolean; cadence_hours?: number; watch_sites?: string[]; preferred_hour?: number; preferred_hour_set?: boolean }) => {
     setSavingPulse(true)
-    fetch(`${FAMILY_API}/api/pulse/config`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    })
-      .then((r) => r.json())
+    api.savePulseConfig(patch)
       .then((d) => setPulseConfig(d))
       .catch(() => {})
       .finally(() => setSavingPulse(false))
@@ -2003,14 +1950,9 @@ export default function LearningApp() {
   // ADDS rather than replaces — see parent_tools.go).
   const saveSchedule = () => {
     setSavingSchedule(true)
-    fetch(`${FAMILY_API}/api/child-schedule`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entries: scheduleDraft }),
-    })
-      .then(() => fetch(`${FAMILY_API}/api/week?offset=${weekOffset}`))
-      .then((r) => r.json())
-      .then((d: WeekResponse) => { setWeekData(d); setScheduleEditorOpen(false) })
+    api.saveSchedule(scheduleDraft)
+      .then(() => api.week(weekOffset))
+      .then((d) => { setWeekData(d); setScheduleEditorOpen(false) })
       .catch(() => {})
       .finally(() => setSavingSchedule(false))
   }
@@ -2023,14 +1965,12 @@ export default function LearningApp() {
     const before = pulseConfig?.last_run_at
     setPulseRunError(null)
     setPulseRunning(true)
-    fetch(`${FAMILY_API}/api/pulse/run`, { method: 'POST' })
-      .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
-      .then(({ ok, d }) => {
-        if (!ok) { setPulseRunError(d.error || 'Could not start.'); setPulseRunning(false); return }
+    api.runPulse()
+      .then(({ ok, error }) => {
+        if (!ok) { setPulseRunError(error || 'Could not start.'); setPulseRunning(false); return }
         const poll = (attempt: number) => {
           if (attempt > 300) { setPulseRunning(false); setPulseRunError('Taking longer than expected — check back shortly.'); return }
-          fetch(`${FAMILY_API}/api/pulse/config`)
-            .then((r) => r.json())
+          api.pulseConfig()
             .then((cfg) => {
               setPulseConfig(cfg)
               if (cfg.last_run_at && cfg.last_run_at !== before) {
@@ -2054,9 +1994,8 @@ export default function LearningApp() {
   useEffect(() => {
     if (screen !== 'parent' && screen !== 'tutor') return
     let cancelled = false
-    fetch(`${FAMILY_API}/api/child/activity`)
-      .then((r) => r.json())
-      .then((act: Activity | null) => {
+    api.childActivity()
+      .then((act) => {
         if (cancelled) return
         setChildActivity(act)
         if (!act) return
@@ -2066,17 +2005,15 @@ export default function LearningApp() {
         if (loadedActivityDirRef.current === act.dir) return
         if (useChildChatStore.getState().childSending) return
         loadedActivityDirRef.current = act.dir
-        fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent(`${act.dir}/conversation.json`)}`)
-          .then((r2) => r2.json())
-          .then((dd) => {
+        api.loadChildConversation(act.dir)
+          .then((c) => {
             // A newer activity may have been bound while this was in flight;
             // applying a stale one would recreate the bug this fixes.
             if (loadedActivityDirRef.current !== act.dir) return
-            const c = dd?.content ? (JSON.parse(dd.content) as { messages?: StoredMsg[] }) : { messages: [] }
             // Replaces rather than merges — a brand-new activity has no
             // conversation file yet, and must start empty rather than
             // inheriting whatever was on screen.
-            setChildMessages((c.messages || []).map(toParentMsg))
+            setChildMessages((c?.messages || []).map(toParentMsg))
             setChildRemoteStatus('')
             setChildRemoteToolCalls([])
           })
@@ -2118,8 +2055,7 @@ export default function LearningApp() {
     if (!childViewerPath) { setChildViewerContent(null); return }
     let cancelled = false
     setChildViewerContent(null)
-    fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent(childViewerPath)}`)
-      .then((r) => r.json())
+    api.readFile(childViewerPath)
       .then((d) => { if (!cancelled) setChildViewerContent({ isText: !!d.is_text, content: d.is_text ? rewriteRelativeAssetURLs(d.content ?? '', childViewerPath) : (d.content ?? '') }) })
       .catch(() => { if (!cancelled) setChildViewerContent({ isText: false, content: '' }) })
     return () => { cancelled = true }
@@ -2130,8 +2066,7 @@ export default function LearningApp() {
     if (!viewerPath) { setViewerContent(null); return }
     let cancelled = false
     setViewerContent(null)
-    fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent(viewerPath)}`)
-      .then((r) => r.json())
+    api.readFile(viewerPath)
       .then((d) => { if (!cancelled) setViewerContent({ isText: !!d.is_text, content: d.is_text ? rewriteRelativeAssetURLs(d.content ?? '', viewerPath) : (d.content ?? '') }) })
       .catch(() => { if (!cancelled) setViewerContent({ isText: false, content: '' }) })
     return () => { cancelled = true }
@@ -2146,8 +2081,7 @@ export default function LearningApp() {
     setMetaOpen(false)
     if (!viewerPath || viewerPath.endsWith('.meta.json')) return
     let cancelled = false
-    fetch(`${FAMILY_API}/api/workspace/file?path=${encodeURIComponent(viewerPath + '.meta.json')}`)
-      .then((r) => r.json())
+    api.readFile(viewerPath + '.meta.json')
       .then((d) => {
         if (cancelled || !d || !d.is_text || !d.content) return
         try { setViewerMeta(JSON.parse(d.content) as Record<string, unknown>) } catch { /* not valid meta; ignore */ }
@@ -2255,14 +2189,10 @@ export default function LearningApp() {
       if (!m || typeof m !== 'object' || (m as { __sq?: unknown }).__sq !== 1) return
       const msg = m as { op?: string; key?: string; id?: string; data?: unknown; text?: string }
       if (msg.op === 'save' && typeof msg.key === 'string') {
-        fetch(`${FAMILY_API}/api/workspace/state`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key: msg.key, data: msg.data }),
-        }).catch(() => {})
+        api.saveState(msg.key, msg.data).catch(() => {})
       } else if (msg.op === 'load' && typeof msg.key === 'string') {
-        fetch(`${FAMILY_API}/api/workspace/state?key=${encodeURIComponent(msg.key)}`)
-          .then((r) => r.json())
-          .then((d) => iframeRef.current?.contentWindow?.postMessage({ __sq: 1, op: 'loaded', id: msg.id, data: d?.data ?? null }, '*'))
+        api.loadState(msg.key)
+          .then((data) => iframeRef.current?.contentWindow?.postMessage({ __sq: 1, op: 'loaded', id: msg.id, data: data ?? null }, '*'))
           .catch(() => iframeRef.current?.contentWindow?.postMessage({ __sq: 1, op: 'loaded', id: msg.id, data: null }, '*'))
       } else if (msg.op === 'choose' && typeof msg.text === 'string') {
         sendChildTextRef.current(msg.text)
@@ -2277,9 +2207,8 @@ export default function LearningApp() {
   useEffect(() => {
     let cancelled = false
     const load = (attempt: number) => {
-      fetch(`${FAMILY_API}/api/setup`)
-        .then((res) => { if (!res.ok) throw new Error(String(res.status)); return res.json() })
-        .then((data: { next_step?: string; engine?: string; child?: { name?: string; grade?: string; board?: string } | null; parent_label?: string }) => {
+      api.setup()
+        .then((data) => {
           if (cancelled) return
           if (data.engine) setEngine(data.engine)
           if (data.child) {
@@ -2314,13 +2243,8 @@ export default function LearningApp() {
     if (!selectedEngine) return
     setTestState('testing')
     setTestMessage('')
-    fetch(`${FAMILY_API}/api/engines/validate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: selectedEngine.id, model_id: '' }),
-    })
-      .then((res) => res.json())
-      .then((data: { valid: boolean; message?: string }) => {
+    api.validateEngine(selectedEngine.id)
+      .then((data) => {
         setTestState(data.valid ? 'valid' : 'invalid')
         setTestMessage(data.message ?? (data.valid ? 'Connection works.' : 'Test failed.'))
       })
@@ -2337,13 +2261,8 @@ export default function LearningApp() {
   // Verify the parent PIN before returning to Parent Mode from the child screen.
   const submitPinGate = () => {
     setGateError('')
-    fetch(`${FAMILY_API}/api/parent/pin/verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin: gateValue }),
-    })
-      .then((res) => res.json())
-      .then((data: { ok?: boolean }) => {
+    api.verifyPin(gateValue)
+      .then((data) => {
         if (data.ok) { setPinGate(false); setGateValue(''); persistHandoffSide('parent'); move('parent') }
         else setGateError('That PIN isn’t right.')
       })
@@ -2353,21 +2272,13 @@ export default function LearningApp() {
   const persistEngineAndContinue = () => {
     if (!selectedEngine) return
     setSaving(true)
-    fetch(`${FAMILY_API}/api/engine/selection`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ engine: selectedEngine.id }),
-    }).finally(() => { setSaving(false); move('child') })
+    api.selectEngine(selectedEngine.id).finally(() => { setSaving(false); move('child') })
   }
 
   const createChildAndContinue = () => {
     if (!childName.trim()) return
     setSaving(true)
-    fetch(`${FAMILY_API}/api/child`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: childName, grade, board }),
-    }).finally(() => { setSaving(false); move('pin') })
+    api.saveChild({ name: childName, grade, board }).finally(() => { setSaving(false); move('pin') })
   }
 
   const savePinAndContinue = () => {
@@ -2375,13 +2286,8 @@ export default function LearningApp() {
     if (!/^\d{4,8}$/.test(pin)) { setPinError('Use 4–8 digits.'); return }
     if (pin !== pinConfirm) { setPinError('The two PINs don’t match.'); return }
     setSaving(true)
-    fetch(`${FAMILY_API}/api/parent/pin`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin }),
-    })
-      .then((res) => res.json())
-      .then((data: { error?: string }) => { if (data.error) { setPinError(data.error); return } persistHandoffSide('parent'); move('parent') })
+    api.setPin(pin)
+      .then((data) => { if (data.error) { setPinError(data.error); return } persistHandoffSide('parent'); move('parent') })
       .catch(() => setPinError('Could not save the PIN.'))
       .finally(() => setSaving(false))
   }
@@ -2398,13 +2304,8 @@ export default function LearningApp() {
     // server-side, a non-tmux provider, or the request itself failed).
     if (sending) {
       setFocusInput('')
-      fetch(`${FAMILY_API}/api/parent/steer`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversation_id: conversationId, message: text }),
-      })
-        .then((res) => res.json())
-        .then((data: { steered?: boolean }) => {
+      api.steerParent(conversationId, text)
+        .then((data) => {
           if (data.steered) setParentMessages((cur) => [...cur, { role: 'user', text }])
           else setQueue((q) => [...q, text])
         })
@@ -2430,21 +2331,16 @@ export default function LearningApp() {
     // are best-effort UX: a stream error is silently ignored, and the final
     // persisted reply (from the blocking fetch below) is always the source
     // of truth regardless of what streamed in.
-    const statusSource = new EventSource(`${FAMILY_API}/api/parent/status?conversation_id=${encodeURIComponent(conversationId)}`)
-    statusSource.onmessage = (ev) => {
-      try {
-        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool_call?: ToolCallRecord }
-        if (parsed.type === 'delta') setStreamingReply((cur) => cur + (parsed.text ?? ''))
-        else if (parsed.type === 'status') setLiveStatus(parsed.text ?? '')
-        // Live tool-call visibility as each call happens (not batched at the
-        // end). No result yet; the final response
-        // replaces this with the same calls, results filled in.
-        else if (parsed.type === 'tool_call' && parsed.tool_call) {
-          setLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
-        }
-      } catch { /* ignore malformed event */ }
+    const onStream = (parsed: { type?: string; text?: string; tool_call?: ToolCallRecord }) => {
+      if (parsed.type === 'delta') setStreamingReply((cur) => cur + (parsed.text ?? ''))
+      else if (parsed.type === 'status') setLiveStatus(parsed.text ?? '')
+      // Live tool-call visibility as each call happens (not batched at the
+      // end). No result yet; the final response
+      // replaces this with the same calls, results filled in.
+      else if (parsed.type === 'tool_call' && parsed.tool_call) {
+        setLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
+      }
     }
-    statusSource.onerror = () => statusSource.close()
     // Keep source on each message so Pulse/etc. tags survive the round-trip and
     // don't get flattened to plain replies when this turn re-persists history.
     const history = next.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, text: m.text ?? '', source: m.source }))
@@ -2452,13 +2348,8 @@ export default function LearningApp() {
     // file (same condition the viewer JSX itself uses) — otherwise nothing is
     // really "on screen" to reference.
     const currentViewerPath = (drawerTab === 'files' || drawerTab === 'allfiles' || drawerTab === 'uploaded') ? viewerPath : ''
-    fetch(`${FAMILY_API}/api/parent/message`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: history, conversation_id: conversationId, viewer_path: currentViewerPath || undefined }),
-    })
-      .then((res) => res.json())
-      .then((data: { reply?: string; error?: string; suggestions?: { label: string; message: string }[]; tool_events?: { tool: string; name?: string; grade?: string; board?: string; path?: string; parent_label?: string }[]; tool_calls?: ToolCallRecord[] }) => {
+    api.sendParentTurn({ messages: history, conversationId, viewerPath: currentViewerPath || undefined }, onStream)
+      .then((data) => {
         const events = data.tool_events ?? []
         const toolMsgs: ParentMsg[] = events.filter((e) => e.tool === 'set_child_profile').map((e) => ({ role: 'tool', tool: e.tool, name: e.name, grade: e.grade, board: e.board }))
         const cp = events.find((e) => e.tool === 'set_child_profile')
@@ -2477,7 +2368,7 @@ export default function LearningApp() {
         setParentMessages((cur) => [...cur, ...toolMsgs, { role: 'assistant', text: data.error ? `Sorry — ${data.error}` : (data.reply || '(no response)') }])
       })
       .catch(() => setParentMessages((cur) => [...cur, { role: 'assistant', text: 'Sorry — I couldn’t reach the learning engine.' }]))
-      .finally(() => { setSending(false); setLiveStatus(''); setStreamingReply(''); setLiveToolCalls([]); statusSource.close(); setMapRefreshKey((k) => k + 1) })
+      .finally(() => { setSending(false); setLiveStatus(''); setStreamingReply(''); setLiveToolCalls([]); setMapRefreshKey((k) => k + 1) })
   }
 
   const sendParentMessage = (event: FormEvent<HTMLFormElement>) => {
@@ -2492,12 +2383,7 @@ export default function LearningApp() {
   const unpairWhatsApp = (jid: string) => {
     if (!window.confirm(`Unlink this WhatsApp number (+${jid})? You can always re-pair by scanning a new QR code.`)) return
     setUnpairingJid(jid)
-    fetch(`${FAMILY_API}/api/whatsapp/unpair`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jid }),
-    })
-      .then((r) => r.json())
+    api.whatsappUnpair(jid)
       .then(() => {
         setWaStatus((cur) => (cur ? { ...cur, accounts: cur.accounts.filter((a) => a.jid !== jid) } : cur))
         setWaQrNonce((n) => n + 1)
@@ -2515,13 +2401,8 @@ export default function LearningApp() {
   // own "Remove" button in Settings → Voice.
   const toggleVoiceTranscription = (enabled: boolean) => {
     setVoiceToggling(true)
-    fetch(`${FAMILY_API}/api/whatsapp/voice`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled }),
-    })
-      .then((r) => r.json())
-      .then((d: { enabled: boolean; installed: boolean; installing: boolean; model_size_mb: number; available: boolean; error?: string }) => {
+    api.whatsappVoice(enabled)
+      .then((d) => {
         setWaStatus((cur) => (cur ? { ...cur, voice_transcription: d } : cur))
       })
       .finally(() => setVoiceToggling(false))
@@ -2544,13 +2425,8 @@ export default function LearningApp() {
     // possible.
     if (childSending) {
       setChildInput('')
-      fetch(`${FAMILY_API}/api/child/steer`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversation_id: convId, message: text }),
-      })
-        .then((res) => res.json())
-        .then((data: { steered?: boolean }) => {
+      api.steerChild(convId, text)
+        .then((data) => {
           if (data.steered) setChildMessages((cur) => [...cur, { role: 'user', text }])
           else setChildQueue((q) => [...q, text])
         })
@@ -2564,30 +2440,20 @@ export default function LearningApp() {
     setChildLiveStatus('')
     setChildStreamingReply('')
     setChildLiveToolCalls([])
-    const statusSource = new EventSource(`${FAMILY_API}/api/child/status?conversation_id=${encodeURIComponent(convId)}`)
-    statusSource.onmessage = (ev) => {
-      // Same JSON envelope as the parent stream ({type:"status"|"delta"|"tool_call",text,tool,args}).
-      try {
-        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool_call?: ToolCallRecord }
-        if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
-        else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
-        else if (parsed.type === 'tool_call' && parsed.tool_call) {
-          setChildLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
-        }
-      } catch { /* ignore malformed event */ }
+    // Same JSON envelope as the parent stream ({type:"status"|"delta"|"tool_call",text,tool,args}).
+    const onStream = (parsed: { type?: string; text?: string; tool_call?: ToolCallRecord }) => {
+      if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
+      else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
+      else if (parsed.type === 'tool_call' && parsed.tool_call) {
+        setChildLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
+      }
     }
-    statusSource.onerror = () => statusSource.close()
     const history = next.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, text: m.text ?? '' }))
     if (modelExtra && history.length > 0) {
       history[history.length - 1] = { ...history[history.length - 1], text: history[history.length - 1].text + '\n\n' + modelExtra }
     }
-    fetch(`${FAMILY_API}/api/child/message`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: history, conversation_id: convId }),
-    })
-      .then((res) => res.json())
-      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; scene?: string; tool_calls?: ToolCallRecord[] }) => {
+    api.sendChildTurn({ messages: history, conversationId: convId }, onStream)
+      .then((data) => {
         const events = data.tool_events ?? []
         const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
         if (of?.path) { setChildViewerFocus(of.focus ?? ''); setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
@@ -2614,7 +2480,7 @@ export default function LearningApp() {
         if (childReminderSound) playReminderChime()
       })
       .catch(() => setChildMessages((cur) => [...cur, { role: 'assistant', text: 'I couldn’t reach the tutor just now — try again in a moment.' }]))
-      .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); setChildLiveToolCalls([]); statusSource.close(); setChildTreeRefreshKey((k) => k + 1) })
+      .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); setChildLiveToolCalls([]); setChildTreeRefreshKey((k) => k + 1) })
   }
 
   // sendChildKickoff silently starts a turn after a handoff WITHOUT showing a
@@ -2633,29 +2499,19 @@ export default function LearningApp() {
     setChildLiveStatus('')
     setChildStreamingReply('')
     setChildLiveToolCalls([])
-    const statusSource = new EventSource(`${FAMILY_API}/api/child/status?conversation_id=${encodeURIComponent(convId)}`)
-    statusSource.onmessage = (ev) => {
-      try {
-        const parsed = JSON.parse(ev.data) as { type?: string; text?: string; tool_call?: ToolCallRecord }
-        if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
-        else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
-        else if (parsed.type === 'tool_call' && parsed.tool_call) {
-          setChildLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
-        }
-      } catch { /* ignore malformed event */ }
+    const onStream = (parsed: { type?: string; text?: string; tool_call?: ToolCallRecord }) => {
+      if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
+      else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
+      else if (parsed.type === 'tool_call' && parsed.tool_call) {
+        setChildLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
+      }
     }
-    statusSource.onerror = () => statusSource.close()
     const history = hidden.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, text: m.text ?? '' }))
     if (modelExtra && history.length > 0) {
       history[history.length - 1] = { ...history[history.length - 1], text: history[history.length - 1].text + '\n\n' + modelExtra }
     }
-    fetch(`${FAMILY_API}/api/child/message`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: history, conversation_id: convId }),
-    })
-      .then((res) => res.json())
-      .then((data: { reply?: string; error?: string; tool_events?: { tool: string; path?: string; focus?: string; stars?: number; total?: number; reason?: string }[]; scene?: string; tool_calls?: ToolCallRecord[] }) => {
+    api.sendChildTurn({ messages: history, conversationId: convId }, onStream)
+      .then((data) => {
         const events = data.tool_events ?? []
         const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
         if (of?.path) { setChildViewerFocus(of.focus ?? ''); setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
@@ -2678,7 +2534,7 @@ export default function LearningApp() {
         if (childReminderSound) playReminderChime()
       })
       .catch(() => setChildMessages((cur) => [...cur, { role: 'assistant', text: 'I couldn’t reach the tutor just now — try again in a moment.' }]))
-      .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); setChildLiveToolCalls([]); statusSource.close(); setChildTreeRefreshKey((k) => k + 1) })
+      .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); setChildLiveToolCalls([]); setChildTreeRefreshKey((k) => k + 1) })
   }
 
   // The SQ postMessage bridge (below) is registered once on mount, so it
@@ -2736,13 +2592,8 @@ export default function LearningApp() {
   // instead of its own same-activity heuristic.
   const performHandoff = (dir: string, greetingText: string, resume: boolean) => {
     const myGeneration = ++handoffGenerationRef.current
-    fetch(`${FAMILY_API}/api/parent/handoff`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dir, resume }),
-    })
-      .then((res) => res.json())
-      .then((data: { new_session?: boolean; dir?: string; goal?: string }) => {
+    api.handoff(dir, resume)
+      .then((data) => {
         if (!data.dir) return
         // A newer handoff has started since this one was fired (a different
         // activity, clicked before this request finished) — its own response
@@ -2871,12 +2722,8 @@ export default function LearningApp() {
     if (files.length === 0) return Promise.resolve()
     setUploading(true)
     const jobs = files.map((f) => {
-      const fd = new FormData()
-      fd.append('file', f)
-      fd.append('scope', 'parent')
-      return fetch(`${FAMILY_API}/api/upload`, { method: 'POST', body: fd })
-        .then((res) => res.json())
-        .then((data: { name?: string; error?: string }) => ({ name: data.name || f.name, error: data.error }))
+      return api.upload(f, 'parent')
+        .then((data) => ({ name: data.name || f.name, error: data.error }))
         .catch(() => ({ name: f.name, error: 'upload failed' }))
     })
     return Promise.all(jobs)
@@ -2930,12 +2777,8 @@ export default function LearningApp() {
     if (files.length === 0) return Promise.resolve()
     setChildUploading(true)
     const jobs = files.map((f) => {
-      const fd = new FormData()
-      fd.append('file', f)
-      fd.append('scope', 'child')
-      return fetch(`${FAMILY_API}/api/upload`, { method: 'POST', body: fd })
-        .then((res) => res.json())
-        .then((data: { name?: string; error?: string }) => ({ name: data.name || f.name, error: data.error }))
+      return api.upload(f, 'child')
+        .then((data) => ({ name: data.name || f.name, error: data.error }))
         .catch(() => ({ name: f.name, error: 'upload failed' }))
     })
     return Promise.all(jobs)
@@ -3197,7 +3040,7 @@ export default function LearningApp() {
                       <div className="fl-msg-col">
                         <div className="fl-photo-row">
                           {g.paths.map((p, pi) => {
-                            const rawUrl = `${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(p)}`
+                            const rawUrl = api.rawUrl(p)
                             return (
                               <a key={pi} href={rawUrl} target="_blank" rel="noopener noreferrer" className="fl-photocard">
                                 <img src={rawUrl} alt="Photo received on WhatsApp" loading="lazy" />
@@ -3215,7 +3058,7 @@ export default function LearningApp() {
                     return <ToolCallSummary key={i} calls={m.toolCalls ?? []} />
                   }
                   if (m.tool === 'video' && m.path) {
-                    const rawUrl = `${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(m.path)}`
+                    const rawUrl = api.rawUrl(m.path)
                     return (
                       <div key={i} className="fl-msg is-agent">
                         <span className="fl-msg-avatar is-sun"><Paperclip size={16} /></span>
@@ -3226,7 +3069,7 @@ export default function LearningApp() {
                     )
                   }
                   if (m.tool === 'voice_failed' && m.path) {
-                    const rawUrl = `${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(m.path)}`
+                    const rawUrl = api.rawUrl(m.path)
                     return (
                       <div key={i} className="fl-msg is-agent">
                         <span className="fl-msg-avatar is-sun"><Mic size={16} /></span>
@@ -3665,7 +3508,7 @@ export default function LearningApp() {
                       same content TYPE (e.g. one .md to another). */}
                   <div key={viewerPath} className="fl-viewer-body">
                   {/\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(viewerPath) ? (
-                    <img className="fl-viewer-img" src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(viewerPath)}`} alt={viewerPath.split('/').pop() || ''} />
+                    <img className="fl-viewer-img" src={api.rawUrl(viewerPath)} alt={viewerPath.split('/').pop() || ''} />
                   ) : /\.pdf$/i.test(viewerPath) ? (
                     // PDFs render in the browser's native viewer (with its own
                     // zoom/page controls) — the raw endpoint serves them inline
@@ -3673,11 +3516,11 @@ export default function LearningApp() {
                     // pointed straight at it is all it takes. No sandbox here: it
                     // would disable the built-in PDF viewer, and the bytes are our
                     // own workspace file, not untrusted HTML.
-                    <iframe className="fl-viewer-frame" title="PDF preview" src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(viewerPath)}`} />
+                    <iframe className="fl-viewer-frame" title="PDF preview" src={api.rawUrl(viewerPath)} />
                   ) : /\.(mp4|webm|mov|m4v)$/i.test(viewerPath) ? (
-                    <video className="fl-viewer-media" controls src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(viewerPath)}`} />
+                    <video className="fl-viewer-media" controls src={api.rawUrl(viewerPath)} />
                   ) : /\.(mp3|wav|m4a|aac|ogg|oga|flac|opus)$/i.test(viewerPath) ? (
-                    <audio className="fl-viewer-media" controls src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(viewerPath)}`} />
+                    <audio className="fl-viewer-media" controls src={api.rawUrl(viewerPath)} />
                   ) : !viewerContent ? (
                     <p className="fl-note">Loading…</p>
                   ) : !viewerContent.isText ? (
@@ -3957,7 +3800,7 @@ export default function LearningApp() {
                       {sorted.map((e) => (
                         IMAGE_PATH_RE.test(e.path) ? (
                           <button key={e.path} type="button" className="fl-thumb-item" onClick={() => { setViewerImageList(imagePaths); setViewerPath(e.path) }}>
-                            <img className="fl-thumb-img" src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(e.path)}`} alt="" loading="lazy" />
+                            <img className="fl-thumb-img" src={api.rawUrl(e.path)} alt="" loading="lazy" />
                             <span className="fl-thumb-caption">{e.label}{e.date ? ` · ${e.date}` : ''}</span>
                           </button>
                         ) : (
@@ -4091,7 +3934,7 @@ export default function LearningApp() {
                               : 'Scan this code with WhatsApp on your phone:'} <strong>Settings → Linked Devices → Link a Device.</strong>
                           </p>
                           {waStatus?.pairing?.qr_available ? (
-                            <img className="fl-wa-qr" src={`${FAMILY_API}/api/whatsapp/pair?n=${waQrNonce}`} alt="WhatsApp pairing QR code" />
+                            <img className="fl-wa-qr" src={api.whatsappPairImageUrl(waQrNonce)} alt="WhatsApp pairing QR code" />
                           ) : (
                             <div className="fl-wa-qr is-loading">Preparing QR…</div>
                           )}
@@ -4176,11 +4019,7 @@ export default function LearningApp() {
                             onClick={() => {
                               setEngine(item.id)
                               setSavingEngine(true)
-                              fetch(`${FAMILY_API}/api/engine/selection`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ engine: item.id }),
-                              }).finally(() => setSavingEngine(false))
+                              api.selectEngine(item.id).finally(() => setSavingEngine(false))
                             }}
                           >
                             <span className="fl-settings-engine-col">
@@ -4363,12 +4202,12 @@ export default function LearningApp() {
                         {g.paths.map((p, pi) => (
                           <a
                             key={pi}
-                            href={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(p)}`}
+                            href={api.rawUrl(p)}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="fl-photocard"
                           >
-                            <img src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(p)}`} alt="Photo received on WhatsApp" loading="lazy" />
+                            <img src={api.rawUrl(p)} alt="Photo received on WhatsApp" loading="lazy" />
                           </a>
                         ))}
                       </div>
@@ -4380,14 +4219,14 @@ export default function LearningApp() {
                   ) : m.role === 'tool' && m.tool === 'video' && m.path ? (
                     <div key={i} className="fl-tmsg is-tutor">
                       <span className="fl-tmsg-avatar"><Paperclip size={16} /></span>
-                      <video className="fl-videocard" src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(m.path)}`} controls preload="metadata" />
+                      <video className="fl-videocard" src={api.rawUrl(m.path)} controls preload="metadata" />
                     </div>
                   ) : m.role === 'tool' && m.tool === 'voice_failed' && m.path ? (
                     <div key={i} className="fl-tmsg is-tutor">
                       <span className="fl-tmsg-avatar"><Mic size={16} /></span>
                       <div className="fl-msg-col">
                         <div className="fl-toolcard is-error"><Mic size={15} /> <span>Voice note received — couldn’t transcribe it</span></div>
-                        <audio className="fl-audiocard" src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(m.path)}`} controls preload="metadata" />
+                        <audio className="fl-audiocard" src={api.rawUrl(m.path)} controls preload="metadata" />
                       </div>
                     </div>
                   ) : m.role === 'tool' && (m.tool === 'upload' || m.tool === 'upload_error') ? (
@@ -4619,13 +4458,13 @@ export default function LearningApp() {
                   </div>
                   <div key={childViewerPath} className="fl-viewer-body">
                   {IMAGE_PATH_RE.test(childViewerPath) ? (
-                    <img className="fl-viewer-img" src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(childViewerPath)}`} alt="" />
+                    <img className="fl-viewer-img" src={api.rawUrl(childViewerPath)} alt="" />
                   ) : /\.pdf$/i.test(childViewerPath) ? (
-                    <iframe className="fl-viewer-frame" title="PDF preview" src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(childViewerPath)}`} />
+                    <iframe className="fl-viewer-frame" title="PDF preview" src={api.rawUrl(childViewerPath)} />
                   ) : /\.(mp4|webm|mov|m4v)$/i.test(childViewerPath) ? (
-                    <video className="fl-viewer-media" controls src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(childViewerPath)}`} />
+                    <video className="fl-viewer-media" controls src={api.rawUrl(childViewerPath)} />
                   ) : /\.(mp3|wav|m4a|aac|ogg|oga|flac|opus)$/i.test(childViewerPath) ? (
-                    <audio className="fl-viewer-media" controls src={`${FAMILY_API}/api/workspace/raw?path=${encodeURIComponent(childViewerPath)}`} />
+                    <audio className="fl-viewer-media" controls src={api.rawUrl(childViewerPath)} />
                   ) : !childViewerContent ? (
                     <p className="fl-note">Loading…</p>
                   ) : !childViewerContent.isText ? (
@@ -4766,7 +4605,7 @@ export default function LearningApp() {
               <p className="engine-note">Checking which AI teachers are installed on this computer…</p>
             )}
             {enginesState === 'error' && (
-              <p className="engine-note is-error">Couldn’t reach the learning service at {FAMILY_API}. Make sure it’s running, then <button type="button" className="linklike" onClick={() => window.location.reload()}>try again</button>.</p>
+              <p className="engine-note is-error">Couldn’t reach the learning service at {api.baseUrl}. Make sure it’s running, then <button type="button" className="linklike" onClick={() => window.location.reload()}>try again</button>.</p>
             )}
 
             {enginesState === 'ready' && (
