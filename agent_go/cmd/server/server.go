@@ -3645,7 +3645,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				workflowPhaseFolder = resolvedWPath
 				logfWithContext(queryLogCtx.WithWorkflow(resolvedWPath), "[WORKFLOW_PHASE] Loaded config from manifest at %s", resolvedWPath)
 				if manifest.Capabilities.LLMConfig != nil {
-					phaseLLM, _ := workshopResolveLLMConfig(manifest.Capabilities.LLMConfig)
+					phaseLLM, _ := workshopResolveLLMConfig(lockedPresetLLMConfig(manifest.Capabilities.LLMConfig))
 					if phaseLLM != nil && phaseLLM.Provider != "" && phaseLLM.ModelID != "" {
 						if requestLLMConfigOverridesManifest(req) {
 							logfWithContext(queryLogCtx.WithWorkflow(resolvedWPath), "[WORKFLOW_PHASE] Preserving request LLM %s/%s from %s over manifest phase LLM %s/%s",
@@ -4412,7 +4412,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 		if wsPath != "" {
 			if manifest, found, mErr := ReadWorkflowManifest(context.Background(), wsPath); mErr == nil && found && manifest.Capabilities.LLMConfig != nil {
-				presetLLMConfig = manifest.Capabilities.LLMConfig
+				presetLLMConfig = lockedPresetLLMConfig(manifest.Capabilities.LLMConfig)
 			}
 		}
 	}
