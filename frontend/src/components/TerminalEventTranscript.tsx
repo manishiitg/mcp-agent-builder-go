@@ -690,6 +690,28 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     }
   }, [autoScrollMode, items.length, latestUserMessageKey, transcriptTailRevision])
 
+  // Chrome outside the list (a product's working indicator, suggestion pills,
+  // delivery status) mounts after the message that triggered it and shrinks
+  // the transcript's viewport without changing its items. Virtuoso does not
+  // re-anchor on that, so the tail of the last message slid under the new
+  // row. While a turn is being followed, any viewport shrink re-scrolls to
+  // the end.
+  useEffect(() => {
+    if (autoScrollMode !== 'follow-turn') return
+    const scroller = scrollerRef.current
+    if (!(scroller instanceof HTMLElement) || typeof ResizeObserver === 'undefined') return
+    let lastHeight = scroller.clientHeight
+    const observer = new ResizeObserver(() => {
+      const height = scroller.clientHeight
+      const shrank = height < lastHeight
+      lastHeight = height
+      if (!shrank || !followCurrentTurnRef.current) return
+      virtuosoRef.current?.scrollToIndex({ index: 'LAST', align: 'end', behavior: 'auto' })
+    })
+    observer.observe(scroller)
+    return () => observer.disconnect()
+  }, [autoScrollMode])
+
   // Video Studio presents long-form creative work where a reader often starts
   // examining the first lines while the agent is still writing. Reveal that
   // first assistant text, then stop: continuously following every streamed
