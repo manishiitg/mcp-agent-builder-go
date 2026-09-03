@@ -121,7 +121,24 @@ export PATH
 test "$(HOME="$HOME" npm config get prefix)" = "$tools_dir"
 token="$(sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' "$global_file" | head -n 1)"
 test -n "$token"
-CLAUDE_CODE_OAUTH_TOKEN="$token" claude -p --output-format json <<< 'say OK' | jq -e '.is_error == false' >/dev/null
+# The token must be real: `claude auth status` says "logged in" for any
+# non-empty string, so only a round trip proves it, and a dead token would
+# deploy an agent that fails on every user's first turn. A capped account is
+# a different thing -- "session limit" / "rate limit" means the token is valid
+# and the account is merely busy, which a deploy does not make worse and which
+# the live agent is already subject to -- so that answer is a warning, not a
+# failure (2026-09-03: a release was blocked for 90 minutes by exactly this).
+preflight_reply="$(CLAUDE_CODE_OAUTH_TOKEN="$token" claude -p --output-format json <<< 'say OK' || true)"
+if ! printf '%s' "$preflight_reply" | jq -e '.is_error == false' >/dev/null 2>&1; then
+  preflight_result="$(printf '%s' "$preflight_reply" | jq -r '.result // empty' 2>/dev/null || true)"
+  case "$preflight_result" in
+    *"session limit"*|*"usage limit"*|*"rate limit"*|*"Rate limit"*|*"capacity"*)
+      echo "WARNING: Claude token is valid but the account is capped right now (${preflight_result}); continuing." >&2 ;;
+    *)
+      echo "Claude token validation failed: ${preflight_result:-no JSON reply from claude -p}" >&2
+      exit 1 ;;
+  esac
+fi
 REMOTE_PREFLIGHT
 "${SSH[@]}" "set -e; browser_dir='$(dirname "$REMOTE_BROWSER_PATH")'; browser_wrapper=\"\$browser_dir/agentworks-chrome-headless\"; install -m 0755 '$REMOTE_RELEASE/browser/agentworks-chrome-headless' \"\$browser_wrapper\"; env_file='$REMOTE_APP/.env'; global_file='$REMOTE_APP/.globals-$RELEASE_ID'; awk '!/^GLOBAL_SECRET_|^CLAUDE_CODE_OAUTH_TOKEN=|^AGENT_BROWSER_EXECUTABLE_PATH=/' \"\$env_file\" > \"\$env_file.next\"; echo \"AGENT_BROWSER_EXECUTABLE_PATH=\$browser_wrapper\" >> \"\$env_file.next\"; grep -q '^MCP_API_URL=' \"\$env_file.next\" || echo 'MCP_API_URL=http://127.0.0.1:8000' >> \"\$env_file.next\"; cat \"\$global_file\" >> \"\$env_file.next\"; chmod 600 \"\$env_file.next\"; mv \"\$env_file.next\" \"\$env_file\"; rm -f \"\$global_file\"; find /data/video-studio/docs/_users -type d -path '*/Chats/Video Studio/projects' -print0 | while IFS= read -r -d '' projects_root; do find \"\$projects_root\" -mindepth 1 -maxdepth 1 -type d -print0 | while IFS= read -r -d '' project; do install -d -m 0755 \"\$project/.claude/skills\"; rsync -a --delete '$REMOTE_RELEASE/claude-skills/' \"\$project/.claude/skills/\"; rm -rf \"\$project/skills/video-studio\"; done; done; install -d -m 0755 \"\$HOME/.config/systemd/user\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-workspace.service' \"\$HOME/.config/systemd/user/video-studio-workspace.service\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-agent.service' \"\$HOME/.config/systemd/user/video-studio-agent.service\"; install -m 0644 '$REMOTE_RELEASE/systemd/video-studio-gateway.service' \"\$HOME/.config/systemd/user/video-studio-gateway.service\"; systemctl --user daemon-reload; ln -sfn '$REMOTE_RELEASE' '$REMOTE_APP/current'; systemctl --user restart video-studio-workspace video-studio-agent video-studio-gateway; systemctl --user is-active video-studio-agent video-studio-workspace video-studio-gateway; grep -Fq 'apiBaseUrl: \"\",' '$REMOTE_APP/current/frontend/runtime-config.js'; grep -Fq 'workspaceApiBaseUrl: \"/api/wp\",' '$REMOTE_APP/current/frontend/runtime-config.js'"
 
