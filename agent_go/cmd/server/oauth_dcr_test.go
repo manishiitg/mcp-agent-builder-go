@@ -117,3 +117,23 @@ func TestEnsureRegisteredClientPropagatesFailure(t *testing.T) {
 		t.Fatal("expected registration failure to be reported")
 	}
 }
+
+func TestEnsureRegisteredClientCacheHonoursXDGConfigHome(t *testing.T) {
+	api, home := newDCRTestAPI(t)
+	srv, _ := newDCRServer(t)
+	xdg := filepath.Join(home, "xdg-config")
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	if _, err := api.ensureRegisteredClient("user1", "Demo", srv.URL, "http://127.0.0.1:9/cb"); err != nil {
+		t.Fatalf("registration failed: %v", err)
+	}
+	// The record sits beside the token files, which follow XDG_CONFIG_HOME
+	// (mcpagentTokensRoot); a literal ~/.config path would be unwritable where
+	// that directory is root-owned (RTS).
+	if _, err := os.Stat(filepath.Join(xdg, "mcpagent/tokens/user1/Demo.client.json")); err != nil {
+		t.Fatalf("client cache not written under XDG_CONFIG_HOME: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config/mcpagent/tokens/user1/Demo.client.json")); err == nil {
+		t.Fatal("client cache must not be written under ~/.config when XDG_CONFIG_HOME is set")
+	}
+}

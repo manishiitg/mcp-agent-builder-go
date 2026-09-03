@@ -517,9 +517,9 @@ func (api *StreamingAPI) handleOAuthStatus(w http.ResponseWriter, r *http.Reques
 	if serverConfig.OAuth == nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"server_name":  serverName,
-			"has_oauth":    false,
-			"valid":        false,
+			"server_name":   serverName,
+			"has_oauth":     false,
+			"valid":         false,
 			"authenticated": false,
 		})
 		return
@@ -903,7 +903,10 @@ type registeredClient struct {
 // It sits beside the token file so removing a user's token directory clears the
 // registration with it.
 func getUserClientFilePath(userID, serverName string) string {
-	return fmt.Sprintf("~/.config/mcpagent/tokens/%s/%s.client.json", userID, serverName)
+	// Same root as the token files (XDG_CONFIG_HOME-aware): on RTS ~/.config is
+	// root-owned and only the XDG tree is writable, so a literal ~/.config path
+	// would fail to persist the registration there.
+	return filepath.Join(mcpagentTokensRoot(), userID, serverName+".client.json")
 }
 
 // ensureRegisteredClient returns the DCR client for a server, registering one on
@@ -934,6 +937,12 @@ func (api *StreamingAPI) ensureRegisteredClient(userID, serverName, registration
 	data, err := json.Marshal(client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode client registration: %w", err)
+	}
+	// The user's token directory may not exist yet (first connector ever for
+	// this user, or a fresh XDG root); without this the write below failed
+	// silently and every connect re-registered.
+	if err := os.MkdirAll(filepath.Dir(clientFile), 0o700); err != nil {
+		api.logger.Error(fmt.Sprintf("Failed to create client registration dir for %s: %v", serverName, err), err)
 	}
 	// 0600: the record can carry a client_secret.
 	if err := os.WriteFile(clientFile, data, 0600); err != nil {
