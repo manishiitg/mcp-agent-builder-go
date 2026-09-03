@@ -1264,6 +1264,10 @@ audio.fl-viewer-media { background: var(--surface); }
    button/textarea chrome). Preflight is off in this app to protect its own
    styles, so give the hosted chat that baseline here; :where keeps it below
    any utility class the components set. */
+/* Preflight's border reset: Tailwind's border utilities only set a width and
+   rely on this for the style, so without it the transcript's turn rail and
+   card borders never draw. */
+.fl-platform-chat :where(*, *::before, *::after) { border-width: 0; border-style: solid; border-color: hsl(var(--border)); }
 .fl-platform-chat :where(button) { appearance: none; background: transparent; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; cursor: pointer; box-shadow: none; }
 .fl-platform-chat :where(button:disabled) { cursor: default; }
 .fl-platform-chat :where(textarea, input) { font: inherit; color: inherit; }
