@@ -65,7 +65,9 @@ echo "aws: $(/usr/local/bin/aws --version)"
 echo "ntn: $(/usr/local/bin/ntn --version)"
 REMOTE_SCRIPT
 
-cmd_id="$(aws_rts ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --comment "install workflow system tools" --parameters "$(jq -cn --arg s "$REMOTE" '{commands: [$s], executionTimeout: ["900"]}')" --query 'Command.CommandId' --output text)"
+# AWS-RunShellScript executes with sh (dash); the script is bash, so ship it
+# to a file and run it with bash explicitly.
+cmd_id="$(aws_rts ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --comment "install workflow system tools" --parameters "$(jq -cn --arg s "$REMOTE" '{commands: ["cat > /tmp/install-system-tools.sh <<'"'"'SSM_EOF'"'"'\n" + $s + "\nSSM_EOF", "bash /tmp/install-system-tools.sh", "rm -f /tmp/install-system-tools.sh"], executionTimeout: ["900"]}')" --query 'Command.CommandId' --output text)"
 echo "ssm command $cmd_id sent; waiting"
 for _ in $(seq 1 90); do
   st="$(aws_rts ssm get-command-invocation --command-id "$cmd_id" --instance-id "$instance" --query Status --output text 2>/dev/null || echo Pending)"
