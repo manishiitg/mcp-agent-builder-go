@@ -146,14 +146,16 @@ const TranscriptEvent: React.FC<{
   renderInteraction?: (interaction: ProductInteraction, event: PollingEvent) => React.ReactNode
   assistantLabel?: string
   assistantIcon?: React.ReactNode
-}> = ({ event, onSendMessage, compactUserBottom = false, inTurn = false, renderInteraction, assistantLabel, assistantIcon }) => {
+  /** The turn's clock is shown elsewhere or not at all; draw no time on this row. */
+  hideTimestamp?: boolean
+}> = ({ event, onSendMessage, compactUserBottom = false, inTurn = false, renderInteraction, assistantLabel, assistantIcon, hideTimestamp = false }) => {
   if (event.type === 'product_interaction') {
     const interaction = parseProductInteraction(event)
     return interaction && renderInteraction ? <>{renderInteraction(interaction, event)}</> : null
   }
   const payload = transcriptEventPayload(event)
   const content = typeof payload.content === 'string' ? payload.content.trim() : ''
-  const timestamp = transcriptTimestamp(event)
+  const timestamp = hideTimestamp ? '' : transcriptTimestamp(event)
 
   const presentation = presentationActivity(event)
   if (presentation) {
@@ -246,7 +248,20 @@ const AGENT_BLOCK_CLASS = 'border-l border-emerald-400/55 pl-3 pr-1'
 
 // Where an item sits in its agent turn. A turn is everything between two user
 // messages: tool batches, thoughts, replies, presentation and activity rows.
-type TurnSlot = { agent: boolean; first: boolean; last: boolean; header?: PollingEvent }
+type TurnSlot = { agent: boolean; first: boolean; last: boolean; header?: PollingEvent; showTime: boolean }
+
+// A time label only where time passed: the first message, and any message
+// more than this long after the previous labelled one. Back-to-back turns
+// carry no clock.
+const TIME_LABEL_GAP_MS = 5 * 60 * 1000
+
+function itemTime(item: TranscriptRenderItem | undefined): number {
+  if (!item || item.kind === 'live') return NaN
+  const event = item.kind === 'event' ? item.event : item.events[0]
+  if (!event) return NaN
+  const payload = transcriptEventPayload(event)
+  return Date.parse(event.timestamp || (typeof payload.timestamp === 'string' ? payload.timestamp : ''))
+}
 
 function isUserItem(item: TranscriptRenderItem | undefined): boolean {
   return item?.kind === 'event' && item.event.type === 'user_message'
@@ -255,16 +270,24 @@ function isUserItem(item: TranscriptRenderItem | undefined): boolean {
 function buildTurnSlots(data: TranscriptRenderItem[]): TurnSlot[] {
   const slots: TurnSlot[] = []
   let inTurn = false
+  let lastLabelled = NaN
+  const decideTime = (item: TranscriptRenderItem): boolean => {
+    const at = itemTime(item)
+    if (!Number.isFinite(at)) return false
+    if (Number.isFinite(lastLabelled) && at - lastLabelled < TIME_LABEL_GAP_MS) return false
+    lastLabelled = at
+    return true
+  }
   data.forEach((item, index) => {
     if (item.kind === 'live' || isUserItem(item)) {
       inTurn = false
-      slots.push({ agent: false, first: false, last: false })
+      slots.push({ agent: false, first: false, last: false, showTime: item.kind !== 'live' && decideTime(item) })
       return
     }
     const first = !inTurn
     inTurn = true
     const next = data[index + 1]
-    slots.push({ agent: true, first, last: !next || next.kind === 'live' || isUserItem(next) })
+    slots.push({ agent: true, first, last: !next || next.kind === 'live' || isUserItem(next), showTime: first && decideTime(item) })
   })
   // The header carries the turn's reply metadata (turn, duration, time): the
   // turn's first reply, or its first event while there is no reply yet.
@@ -1026,6 +1049,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
                   renderInteraction={renderInteraction}
                   assistantLabel={assistantLabel}
                   assistantIcon={assistantIcon}
+                  hideTimestamp={!(slot?.showTime ?? true)}
                 />
               )
           if (!slot?.agent) {
@@ -1036,7 +1060,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
           return (
             <div data-testid={testId} className="px-3">
               <div className={`${AGENT_BLOCK_CLASS} ${slot.first ? 'mt-4' : ''} ${slot.last ? 'mb-4' : ''}`}>
-                {slot.first && slot.header && <AssistantTurnHeader event={slot.header} timestamp={transcriptTimestamp(slot.header)} label={assistantLabel} icon={assistantIcon} />}
+                {slot.first && slot.header && <AssistantTurnHeader event={slot.header} timestamp={slot.showTime ? transcriptTimestamp(slot.header) : ''} label={assistantLabel} icon={assistantIcon} />}
                 {body}
               </div>
             </div>
