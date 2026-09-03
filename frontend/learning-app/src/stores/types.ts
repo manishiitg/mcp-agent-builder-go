@@ -89,3 +89,6 @@ export type Activity = {
 export function toParentMsg(m: StoredMsg): ParentMsg {
   return { role: m.role as ParentMsg['role'], text: m.text, tool: m.tool, stars: m.stars, reason: m.reason, source: m.source, html: m.html, path: m.path }
 }
+
+/** One entry of the composer's quick menu: the label shown, the message sent as if typed. */
+export type QuickCommand = { label: string; message: string }

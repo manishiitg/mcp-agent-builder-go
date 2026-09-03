@@ -50,6 +50,7 @@ import {
   type Screen,
   type ApiEngine,
   type ParentMsg,
+  type QuickCommand,
   type ToolCallRecord,
   type TreeNode,
   type WsFile,
@@ -693,38 +694,7 @@ function Markdown({ text }: { text: string }) {
   return <SharedChatMarkdown text={text} theme={readTheme() === 'dark' ? 'dark' : 'light'} linkComponent={ChatLink} />
 }
 
-// QUICK_SKILLS are one-click shortcuts in the composer menu; each sends a message
-// that triggers the matching agent skill.
-const QUICK_SKILLS = [
-  { label: 'Create study material', message: 'Create study material for my child — follow your create-study-material skill and make it a designed, static (view-only) HTML page.' },
-  { label: 'Create a practice test', message: 'Create a practice test for my child — follow your create-test skill: an interactive HTML page that records my child’s typed answers, plus a separate answer key for me.' },
-  { label: 'Update progress report', message: 'Build an updated progress report — follow your create-progress-report skill, make it a designed HTML page, and give me a short coach-style read of the evidence here in chat too.' },
-  { label: 'Update academic map', message: 'Update the academic map — follow your create-academic-map skill (designed HTML at reports/academic-map.html).' },
-  { label: 'Back up workspace', message: 'Back up my workspace now — follow your backup skill.' },
-]
 
-// CHILD_QUICK_ACTIONS: fixed one-tap shortcuts for the handful of requests that
-// come up constantly but aren't worth typing out — same Sparkles-icon popover
-// pattern as QUICK_SKILLS in Parent Mode. Unlike suggest_actions (removed from
-// Child Mode entirely), these are deliberately NOT model-generated: a static
-// list of common asks, always the same, always available. Tapping one just
-// sends its message exactly as if she'd typed it — the tutor's own judgment
-// (already covered by its existing prompt) decides what to actually do, same
-// as if she'd typed the words herself. Add more here freely; nothing else
-// needs to change.
-const CHILD_QUICK_ACTIONS: { label: string; message: string }[] = [
-  { label: 'Update answers for print', message: "Please update all my answered questions on this page so it's ready to print." },
-  { label: 'No more hints', message: "Don't give me any more hints — just tell me if I'm right or wrong." },
-  { label: 'Be stricter', message: "Grade my answers more strictly from now on — don't count a partial or close answer as correct, and tell me exactly what's wrong." },
-  { label: 'Harder question', message: 'Can you give me a harder question?' },
-  { label: 'Easier question', message: 'Can you give me an easier question?' },
-  { label: 'Give me a hint', message: 'Can you give me a hint?' },
-  { label: 'Keep quizzing me, harder each time', message: 'Keep asking me progressively harder questions on this until I fully understand it.' },
-  { label: 'One section at a time', message: "Let's go one section at a time — keep quizzing me on this section until I really understand it before moving to the next." },
-  { label: 'Explain it a different way', message: "Can you explain this in a completely different way — not just the same explanation again?" },
-  { label: 'Give me a real example', message: 'Can you give me a real-world example of this, not just the definition?' },
-  { label: 'Check my full working', message: "Please check my full working step by step, not just whether my final answer is right." },
-]
 
 // formatBytes renders a byte count the way a person reads it. Sizes here are
 // for keeping an eye on how the workspace grows, so one decimal past KB is
@@ -953,6 +923,14 @@ export default function LearningApp() {
   const testMessage = useSetupStore((s) => s.testMessage)
   const setTestMessage = useSetupStore((s) => s.setTestMessage)
 
+  // The composer's quick menus come from the product (product.yaml
+  // `commands:`); the standalone backend serves its own fixed list.
+  const [quickCommands, setQuickCommands] = useState<{ parent: QuickCommand[]; child: QuickCommand[] }>({ parent: [], child: [] })
+  useEffect(() => {
+    let alive = true
+    api.commands().then((c) => { if (alive) setQuickCommands(c) }).catch(() => {})
+    return () => { alive = false }
+  }, [])
   useEffect(() => {
     let cancelled = false
     setEnginesState('loading')
@@ -3146,7 +3124,7 @@ export default function LearningApp() {
                 <button type="button" className="composer-icon" aria-label="Quick actions" aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)}><Sparkles size={19} /></button>
                 {menuOpen && (
                   <div className="fl-menu" role="menu">
-                    {QUICK_SKILLS.map((s) => (
+                    {quickCommands.parent.map((s) => (
                       <button key={s.label} type="button" role="menuitem" onClick={() => { setMenuOpen(false); sendParentText(s.message) }}>{s.label}</button>
                     ))}
                   </div>
@@ -4266,7 +4244,7 @@ export default function LearningApp() {
                   <button type="button" className="composer-icon" aria-label="Quick requests" aria-expanded={childQuickMenuOpen} onClick={() => setChildQuickMenuOpen((v) => !v)}><Sparkles size={19} /></button>
                   {childQuickMenuOpen && (
                     <div className="fl-menu" role="menu">
-                      {CHILD_QUICK_ACTIONS.map((qa) => (
+                      {quickCommands.child.map((qa) => (
                         <button key={qa.label} type="button" role="menuitem" onClick={() => { setChildQuickMenuOpen(false); sendChildText(qa.message) }}>{qa.label}</button>
                       ))}
                     </div>

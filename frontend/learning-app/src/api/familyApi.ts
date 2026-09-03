@@ -6,7 +6,7 @@
 // so the 4,900-line component never has to know which one it is talking to.
 //
 // Shapes mirror the family server's JSON exactly (see cmd/family-server).
-import type { ApiEngine, Activity, StoredMsg, ToolCallRecord, TreeNode, VoiceStatus } from '../stores/types'
+import type { ApiEngine, Activity, QuickCommand, StoredMsg, ToolCallRecord, TreeNode, VoiceStatus } from '../stores/types'
 
 export type SetupState = {
   engine?: string
@@ -123,6 +123,9 @@ export interface FamilyApi {
   activities(): Promise<Activity[]>
   week(offset: number): Promise<WeekResponse>
   saveSchedule(entries: ScheduleEntry[]): Promise<void>
+
+  /** The composer's quick menus for both modes (the product's `commands:`). */
+  commands(): Promise<{ parent: QuickCommand[]; child: QuickCommand[] }>
 
   // ---- settings ------------------------------------------------------------
   models(): Promise<ModelInfo | null>

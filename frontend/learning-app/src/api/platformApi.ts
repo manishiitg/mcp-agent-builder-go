@@ -4,13 +4,14 @@
 // shapes the UI already understands. Slice 2 covers conversations; the
 // workspace, setup and connector methods land in the next slices and say so
 // loudly until then.
-import type { ApiEngine, VoiceStatus } from '../stores/types'
+import type { ApiEngine, QuickCommand, VoiceStatus } from '../stores/types'
 import type {
   FamilyApi, FastMode, ModelInfo, PulseConfig, PulseConfigPatch, SetupState,
   StoredConversation, TurnMessage, TurnResult, TurnStreamEvent,
   WhatsAppStatus, WhatsAppVoiceTranscription,
 } from './familyApi'
 import { TurnCollector, type EventBatch, messagesFromEvents, type PlatformEvent } from './platform/events'
+import { quickCommandsFromProfile } from './platform/commands'
 import { fetchSessionEvents, followSession, conversationToRestoredEvents, type RestorableConversation } from '../../../shared/session'
 import { FamilyWorkspace, documentsURL } from './platform/workspace'
 
@@ -242,6 +243,14 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     }
   }
 
+  async function commands(): Promise<{ parent: QuickCommand[]; child: QuickCommand[] }> {
+    const [parent, child] = await Promise.all([
+      request<{ commands?: Array<Record<string, unknown>> }>('GET', `/api/agent-profiles/${PARENT_PROFILE}`),
+      request<{ commands?: Array<Record<string, unknown>> }>('GET', `/api/agent-profiles/${CHILD_PROFILE}`),
+    ])
+    return { parent: quickCommandsFromProfile(parent), child: quickCommandsFromProfile(child) }
+  }
+
   async function engines(): Promise<ApiEngine[]> {
     const profile = await request<{ runtime?: { provider_options?: { id: string; label: string; default?: boolean }[] } }>('GET', `/api/agent-profiles/${PARENT_PROFILE}`)
     return (profile.runtime?.provider_options ?? []).map((o) => ({ id: o.id, name: o.label, runtime_command: '', runtime_available: true, auth_configured: true, usable: true } as ApiEngine))
@@ -252,6 +261,7 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
 
     setup,
     engines,
+    commands,
     validateEngine: async () => ({ valid: true, message: 'The platform manages the model.' }),
     selectEngine: async () => {},
     saveChild: notYet('saving the child profile from the setup screen'),

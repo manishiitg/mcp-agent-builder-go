@@ -59,13 +59,28 @@ profile:
         activity: {label: Activity ready, destination: Viewer, detail: Ready to hand over}
     - id: sparkquill.suggest-actions
     - id: sparkquill.find-image
+  commands:
+    - name: create-study-material
+      description: "Create study material"
+      prompt: "Create study material for my child \u2014 follow your create-study-material skill and make it a designed, static (view-only) HTML page."
+    - name: create-a-practice-test
+      description: "Create a practice test"
+      prompt: "Create a practice test for my child \u2014 follow your create-test skill: an interactive HTML page that records my child\u2019s typed answers, plus a separate answer key for me."
+    - name: update-progress-report
+      description: "Update progress report"
+      prompt: "Build an updated progress report \u2014 follow your create-progress-report skill, make it a designed HTML page, and give me a short coach-style read of the evidence here in chat too."
+    - name: update-academic-map
+      description: "Update academic map"
+      prompt: "Update the academic map \u2014 follow your create-academic-map skill (designed HTML at reports/academic-map.html)."
+    - name: back-up-workspace
+      description: "Back up workspace"
+      prompt: "Back up my workspace now \u2014 follow your backup skill."
   tool_policy:
     mode: allowlist
     enabled:
       - execute_shell_command
       - diff_patch_workspace_file
       - read_image
-      - web_search
       - notify_user
       - agent_browser
       - list_secrets
@@ -143,6 +158,40 @@ profiles:
       - id: sparkquill.celebrate
       - id: sparkquill.show-scene
       - id: sparkquill.find-activity-image
+    commands:
+      - name: update-answers-for-print
+        description: "Update answers for print"
+        prompt: "Please update all my answered questions on this page so it's ready to print."
+      - name: no-more-hints
+        description: "No more hints"
+        prompt: "Don't give me any more hints \u2014 just tell me if I'm right or wrong."
+      - name: be-stricter
+        description: "Be stricter"
+        prompt: "Grade my answers more strictly from now on \u2014 don't count a partial or close answer as correct, and tell me exactly what's wrong."
+      - name: harder-question
+        description: "Harder question"
+        prompt: "Can you give me a harder question?"
+      - name: easier-question
+        description: "Easier question"
+        prompt: "Can you give me an easier question?"
+      - name: give-me-a-hint
+        description: "Give me a hint"
+        prompt: "Can you give me a hint?"
+      - name: keep-quizzing-me-harder-each-time
+        description: "Keep quizzing me, harder each time"
+        prompt: "Keep asking me progressively harder questions on this until I fully understand it."
+      - name: one-section-at-a-time
+        description: "One section at a time"
+        prompt: "Let's go one section at a time \u2014 keep quizzing me on this section until I really understand it before moving to the next."
+      - name: explain-it-a-different-way
+        description: "Explain it a different way"
+        prompt: "Can you explain this in a completely different way \u2014 not just the same explanation again?"
+      - name: give-me-a-real-example
+        description: "Give me a real example"
+        prompt: "Can you give me a real-world example of this, not just the definition?"
+      - name: check-my-full-working
+        description: "Check my full working"
+        prompt: "Please check my full working step by step, not just whether my final answer is right."
     tool_policy:
       mode: allowlist
       enabled:

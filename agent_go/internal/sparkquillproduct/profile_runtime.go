@@ -41,6 +41,30 @@ type FamilyState struct {
 	Schedule    []ScheduleEntry `json:"schedule,omitempty"`
 }
 
+// The family workspace layout. Tools, the inbox note and the prompt all read
+// these names from here, so the prompt cannot describe folders that the code
+// no longer uses.
+const (
+	MaterialsFolder = "materials"
+	MemoryFolder    = "memory"
+	ReportsFolder   = "reports"
+	ArchiveFolder   = "archive"
+	InboxFolder     = "inbox"
+)
+
+// WorkspaceLayout renders the "YOUR WORKSPACE" bullets of the parent prompt.
+func WorkspaceLayout() string {
+	return strings.Join([]string{
+		"- " + ActivitiesFolder + "/<yyyy-mm-dd>-<slug>/ — every piece of child-facing content lives in its own activity folder: the content files, its activity.json manifest, any <name>-KEY.md answer key, and (once she starts) her own conversation and attempts/.",
+		"- " + MaterialsFolder + "/<subject>/<topic>/ — school material the family uploaded; each file has a .meta.json alongside whose extracted_text already holds the full content.",
+		"- " + MemoryFolder + "/preferences.md, " + MemoryFolder + "/interests.md, " + MemoryFolder + "/child-profile.json — durable context about the parent and child, kept current by the check-in. Read them when a preference or interest would change what you do; never write them by hand.",
+		"- " + MemoryFolder + "/browser-notes.md — your own short cheat sheet for sites you browse with agent_browser; read it before a familiar site, keep it current, edit in place.",
+		"- " + ReportsFolder + "/ — the academic map and the progress report.",
+		"- " + ArchiveFolder + "/ — retired activities: still real evidence, never handed to her again.",
+		"- " + InboxFolder + "/ — uploads waiting to be filed (you are told above when there are any).",
+	}, "\n") + "\n"
+}
+
 // ParentPromptVariables computes the parent prompt's Product variables:
 // who the child is, and the nudges for whatever the family has not told
 // Quill yet. Mirrors parentSystemPrompt in cmd/family-server.
@@ -73,6 +97,7 @@ func ParentPromptVariables(s FamilyState) map[string]string {
 		"SCHEDULE_NUDGE":     "",
 		"CONNECTOR_NOTE":     "",
 		"INBOX_NOTE":         "",
+		"WORKSPACE_LAYOUT":   WorkspaceLayout(),
 	}
 	if len(missing) > 0 {
 		vars["CHILD_INFO_NUDGE"] = "IMPORTANT — you do not yet know the child's " + strings.Join(missing, ", ") +
@@ -201,7 +226,7 @@ func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIU
 		if err != nil {
 			return nil, err
 		}
-		interests := loader.read(ctx, rt.UserID, path.Join(familyRoot, "memory", "interests.md"))
+		interests := loader.read(ctx, rt.UserID, path.Join(familyRoot, MemoryFolder, "interests.md"))
 		return ChildPromptVariables(state, activityRoot, interests), nil
 	})
 }
@@ -263,7 +288,7 @@ func (l familyLoader) listInbox(ctx context.Context, userID, familyRoot string) 
 		return nil
 	}
 	depth := 1
-	result, err := l.client(userID).ListWorkspaceFiles(ctx, workspace.ListWorkspaceFilesParams{Folder: path.Join(strings.Trim(familyRoot, "/"), "inbox"), MaxDepth: &depth})
+	result, err := l.client(userID).ListWorkspaceFiles(ctx, workspace.ListWorkspaceFilesParams{Folder: path.Join(strings.Trim(familyRoot, "/"), InboxFolder), MaxDepth: &depth})
 	if err != nil {
 		return nil
 	}

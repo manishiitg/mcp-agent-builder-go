@@ -37,7 +37,13 @@ func ResolveCommandPrompts(fsys fs.FS, commands []CommandBinding) error {
 	for i, command := range commands {
 		file := strings.TrimSpace(command.File)
 		if file == "" {
-			return fmt.Errorf("command %q declares no file", command.Name)
+			// A short command carries its prompt inline; only an empty one is
+			// a mistake (it would be offered as a button that sends nothing).
+			if strings.TrimSpace(command.Prompt) == "" {
+				return fmt.Errorf("command %q declares neither a file nor a prompt", command.Name)
+			}
+			commands[i].Prompt = strings.TrimSpace(command.Prompt)
+			continue
 		}
 		contents, err := fs.ReadFile(fsys, file)
 		if err != nil {
