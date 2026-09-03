@@ -3165,7 +3165,6 @@ export default function LearningApp() {
             </form>
               </>
             )}
-            <p className="fl-disclaimer">SparkQuill can make mistakes. Please review important content before sharing it with {childName || 'your child'}.</p>
           </section>
           <div
             className="fl-parent-resizer"
