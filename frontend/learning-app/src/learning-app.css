@@ -447,13 +447,15 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-child-assignment-pill:hover { background: #fdecc4; border-color: #e8cf94; box-shadow: 0 2px 8px rgba(138, 109, 31, .12); }
 .fl-child-assignment-pill:disabled { cursor: default; }
 .fl-child-assignment-pill:disabled:hover { background: #fff7e6; border-color: #f2e2bd; box-shadow: none; }
-/* Icon + chevron only, always — never the full activity title. The name is
-   already shown in the worksheet's own toolbar right beside this, so it was
-   pure duplication at full size and only got hidden once the pane narrowed;
-   there's no width where showing it is actually useful. The button/chevron
-   stay, since it's the only way to the Goal/Plan popover. */
-.fl-child-assignment-pill > span { display: none; }
-.fl-child-assignment-pill { padding: 6px 9px; }
+/* The pill carries the activity's title (the worksheet toolbar shows the
+   page's own name, not the activity), clipped rather than wrapped, and drops
+   to icon + chevron only when the chat pane is genuinely narrow. The button
+   stays either way: it is the only way to the Goal popover. */
+.fl-child-assignment-pill > span { display: block; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+@container childchat (max-width: 480px) {
+  .fl-child-assignment-pill > span { display: none; }
+  .fl-child-assignment-pill { padding: 6px 9px; }
+}
 .fl-child-assignment-pill svg:last-child { flex: 0 0 auto; transition: transform .15s ease; }
 .fl-child-assignment-pill svg.is-open { transform: rotate(180deg); }
 .fl-child-goal-popover { position: absolute; top: calc(100% + 10px); left: 50%; transform: translateX(-50%); z-index: 30; width: min(360px, 82vw); padding: 14px 16px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 14px 34px rgba(13, 35, 76, .18); text-align: left; }
