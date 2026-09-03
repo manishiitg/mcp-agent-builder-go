@@ -166,7 +166,15 @@ func (api *StreamingAPI) persistChatConversationToPathWithTerminalSession(sessio
 	if terminalSnapshots := api.captureChatHistoryTerminalSnapshots(snapshotSessionID, runtime); len(terminalSnapshots) > 0 {
 		convData["terminal_snapshots"] = terminalSnapshots
 	}
-	uiEvents = trimChatHistoryUIEvents(uiEvents)
+	convPath := strings.TrimSpace(conversationPath)
+	if convPath == "" {
+		convPath = chatHistoryConversationPath(userID, sessionID, now)
+	}
+	// The in-memory event store only knows about turns since this process
+	// started. Writing it alone after a restart replaced the whole saved trace
+	// with the newest turn, so a reopened chat lost its tool calls and the
+	// restore-time ordering of older messages collapsed into that one turn.
+	uiEvents = trimChatHistoryUIEvents(mergeChatHistoryUIEvents(readPersistedChatHistoryUIEvents(context.Background(), convPath), uiEvents))
 	if len(uiEvents) > 0 {
 		convData["ui_events"] = uiEvents
 	}
@@ -175,11 +183,6 @@ func (api *StreamingAPI) persistChatConversationToPathWithTerminalSession(sessio
 	if err != nil {
 		logfWithContext(logCtx, "[CHAT_HISTORY] Failed to marshal conversation for %s: %v", sessionID, err)
 		return
-	}
-
-	convPath := strings.TrimSpace(conversationPath)
-	if convPath == "" {
-		convPath = chatHistoryConversationPath(userID, sessionID, now)
 	}
 	// A rebuild that has fewer user turns than the record on disk is a partial
 	// one, and writing it destroys the fuller history (salesoutreach lost 242
@@ -852,6 +855,63 @@ func collapseChatHistoryStreamingChunks(uiEvents []internalevents.Event) []inter
 		i = last
 	}
 	return collapsed
+}
+
+// readPersistedChatHistoryUIEvents returns the UI trace already saved for a
+// conversation, or nil when there is none or it cannot be read.
+func readPersistedChatHistoryUIEvents(ctx context.Context, conversationPath string) []internalevents.Event {
+	if strings.TrimSpace(conversationPath) == "" {
+		return nil
+	}
+	content, exists, err := readFileFromWorkspace(ctx, conversationPath)
+	if err != nil || !exists || strings.TrimSpace(content) == "" {
+		return nil
+	}
+	raw := chatHistoryUIEvents([]byte(content))
+	if len(raw) == 0 {
+		return nil
+	}
+	var persisted []internalevents.Event
+	if err := json.Unmarshal(raw, &persisted); err != nil {
+		return nil
+	}
+	return persisted
+}
+
+// mergeChatHistoryUIEvents keeps the saved trace that predates what the live
+// event store holds, then the live events. The live store is authoritative
+// for anything it covers: a saved event is kept only when it is older than the
+// oldest live event and not already present by id.
+func mergeChatHistoryUIEvents(persisted, live []internalevents.Event) []internalevents.Event {
+	if len(persisted) == 0 {
+		return live
+	}
+	if len(live) == 0 {
+		return persisted
+	}
+	oldest := live[0].Timestamp
+	liveIDs := make(map[string]struct{}, len(live))
+	for _, event := range live {
+		if !event.Timestamp.IsZero() && (oldest.IsZero() || event.Timestamp.Before(oldest)) {
+			oldest = event.Timestamp
+		}
+		if event.ID != "" {
+			liveIDs[event.ID] = struct{}{}
+		}
+	}
+	merged := make([]internalevents.Event, 0, len(persisted)+len(live))
+	for _, event := range persisted {
+		if event.ID != "" {
+			if _, dup := liveIDs[event.ID]; dup {
+				continue
+			}
+		}
+		if !oldest.IsZero() && !event.Timestamp.Before(oldest) {
+			continue
+		}
+		merged = append(merged, event)
+	}
+	return append(merged, live...)
 }
 
 func trimChatHistoryUIEvents(uiEvents []internalevents.Event) []internalevents.Event {

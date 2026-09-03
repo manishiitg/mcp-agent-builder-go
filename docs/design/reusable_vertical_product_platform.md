@@ -1203,3 +1203,46 @@ Child mode (keyed activity conversations) is not moved yet.
   events, so tool chips of older turns do not survive a reload in any product;
   the durable conversation has the tool messages, so the converter could
   synthesize chips from them (not done).
+
+### 2026-09-03 — pills are declared on the tool binding, not as a panel flag
+
+A tool that renders something in the chat now says so on its own binding in
+product.yaml, next to `presentation:`:
+
+```yaml
+- id: sparkquill.suggest-actions
+  interaction:
+    kind: suggestions          # the product_interaction kind the tool emits
+    render: chat.suggestions   # the shared chat rendering for it
+```
+
+`ToolBinding.Interaction` reaches the factory as
+`ToolRuntimeContext.Interaction` (same path as Presentation), so the factory
+reads the kind from the binding instead of hard-coding it. The host reads
+`tools[].interaction.render === 'chat.suggestions'` from the profile and mounts
+`ProductSuggestions` with that kind. `ui_panels.suggestions` is gone: the
+chat renders whatever the tools declare, so a product adds a pill-emitting tool
+and gets pills without touching the frontend.
+
+Scrolling in the SparkQuill parent chat uses the platform's `follow-turn`
+mode (the same one AgentWorks uses), which follows the whole turn until the
+reader scrolls up, instead of the reveal-first-response variant.
+
+### 2026-09-03 — the saved UI trace survives restarts; the agent block starts at its tool call
+
+- `persistChatConversationToPathWithTerminalSession` used to write the
+  in-memory event store as `ui_events`, so after a restart the first turn
+  replaced the whole saved trace with itself. Restore then interpolated every
+  older message's timestamp across that one turn and the newest reply sorted
+  above turns from ten minutes earlier. Persist now merges the saved trace
+  (events older than the live store, deduped by id) before the live events and
+  trims to the cap; restore anchors interpolation on the first user prompt the
+  trace still holds, so untraced turns stay before it (`restore.ts`).
+- In the transcript, a turn's `AGENT · duration · time` header is drawn on the
+  tool batch that begins the turn, and the reply below it omits its own
+  header, so tool work reads as part of the reply. Expanded tool cards use
+  card/muted tokens (light on light products) instead of black overlays.
+- `initialTopMostItemIndex` is pinned at mount; a late first fill scrolls to
+  the end explicitly. Note for anyone verifying in Chrome: a background tab
+  never fires ResizeObserver, so Virtuoso renders nothing there. Check in a
+  foreground tab.

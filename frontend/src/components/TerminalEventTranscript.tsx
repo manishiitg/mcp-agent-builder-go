@@ -120,17 +120,29 @@ function removeAdjacentDuplicateAssistantResponses(items: TranscriptItem[]): Tra
   })
 }
 
+function transcriptTimestamp(event: PollingEvent): string {
+  const payload = transcriptEventPayload(event)
+  const rawTimestamp = event.timestamp || (typeof payload.timestamp === 'string' ? payload.timestamp : '')
+  return rawTimestamp && Number.isFinite(Date.parse(rawTimestamp))
+    ? new Date(rawTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : ''
+}
+
+// The event the transcript renders as the agent's reply for a turn.
+function isAgentResponseEvent(event: PollingEvent): boolean {
+  return AGENT_RESPONSE_EVENT_TYPES.has(event.type || '') && Boolean(assistantResponseText(event))
+}
+
 const TranscriptEvent: React.FC<{
   event: PollingEvent
   onSendMessage?: (msg: string) => void
   compactUserBottom?: boolean
-}> = ({ event, onSendMessage, compactUserBottom = false }) => {
+  /** The tool batch just above already drew this turn's header. */
+  hideAssistantHeader?: boolean
+}> = ({ event, onSendMessage, compactUserBottom = false, hideAssistantHeader = false }) => {
   const payload = transcriptEventPayload(event)
   const content = typeof payload.content === 'string' ? payload.content.trim() : ''
-  const rawTimestamp = event.timestamp || (typeof payload.timestamp === 'string' ? payload.timestamp : '')
-  const timestamp = rawTimestamp && Number.isFinite(Date.parse(rawTimestamp))
-    ? new Date(rawTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : ''
+  const timestamp = transcriptTimestamp(event)
 
   const presentation = presentationActivity(event)
   if (presentation) {
@@ -148,7 +160,7 @@ const TranscriptEvent: React.FC<{
   const result = typeof payload.result === 'string' ? payload.result.trim() : ''
   const responseContent = content || finalResult || result
   if (AGENT_RESPONSE_EVENT_TYPES.has(event.type || '') && responseContent) {
-    return <AssistantTranscriptMessage event={event} content={responseContent} timestamp={timestamp} />
+    return <AssistantTranscriptMessage event={event} content={responseContent} timestamp={timestamp} hideHeader={hideAssistantHeader} />
   }
 
   if (isExecutionPromptTranscriptMessage(event)) {
@@ -197,23 +209,33 @@ const UserTranscriptMessage: React.FC<{ content: string; timestamp: string; comp
   )
 }
 
-const AssistantTranscriptMessage: React.FC<{ event: PollingEvent; content: string; timestamp: string; label?: string }> = ({ event, content, timestamp, label = 'Agent' }) => {
+// The turn's header line: who spoke, turn, duration, time. It sits at the top
+// of the agent's block, which starts at the turn's first tool call when there
+// is one, so tool work reads as part of the reply rather than a stray chip.
+const AssistantTurnHeader: React.FC<{ event: PollingEvent; timestamp: string; label?: string }> = ({ event, timestamp, label = 'Agent' }) => {
   const fields = transcriptEventPayload(event)
   const duration = typeof fields.duration === 'number' && fields.duration > 0
     ? formatDurationCompact(fields.duration)
     : ''
   const turn = typeof fields.turn === 'number' ? fields.turn : undefined
   const metadata = [turn != null ? `Turn ${turn}` : '', duration, timestamp].filter(Boolean).join(' · ')
-
   return (
-    <article data-testid="terminal-clear-assistant-message" className="my-4 border-l border-emerald-400/55 pl-4 pr-2">
-      <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700/80 dark:text-emerald-300/75">
-        <span>{label}</span>
-        {metadata && <>
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/60" />
-          <span className="normal-case font-medium tracking-normal text-muted-foreground">{metadata}</span>
-        </>}
-      </div>
+    <div data-testid="terminal-clear-assistant-header" className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700/80 dark:text-emerald-300/75">
+      <span>{label}</span>
+      {metadata && <>
+        <span className="h-1 w-1 rounded-full bg-muted-foreground/60" />
+        <span className="normal-case font-medium tracking-normal text-muted-foreground">{metadata}</span>
+      </>}
+    </div>
+  )
+}
+
+const AGENT_BLOCK_CLASS = 'border-l border-emerald-400/55 pl-4 pr-2'
+
+const AssistantTranscriptMessage: React.FC<{ event: PollingEvent; content: string; timestamp: string; label?: string; hideHeader?: boolean }> = ({ event, content, timestamp, label = 'Agent', hideHeader = false }) => {
+  return (
+    <article data-testid="terminal-clear-assistant-message" className={`${hideHeader ? 'mb-4' : 'my-4'} ${AGENT_BLOCK_CLASS}`}>
+      {!hideHeader && <AssistantTurnHeader event={event} timestamp={timestamp} label={label} />}
       <div className="[&_li]:!text-[14px] [&_p]:!text-[14px]">
         <ConversationMarkdownRenderer content={content} framed={false} maxHeight="none" />
       </div>
@@ -288,8 +310,8 @@ const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
       data-testid="terminal-clear-tool-call"
       className={`rounded border ${
         displayStatus === 'error'
-          ? 'border-red-900/80 bg-red-950/20'
-          : 'border-border bg-muted/30'
+          ? 'border-red-300/70 bg-red-50/70 dark:border-red-900/80 dark:bg-red-950/20'
+          : 'border-border/70 bg-card'
       }`}
     >
       <button
@@ -307,7 +329,7 @@ const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
         )}
         {duration && <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground">{duration}</span>}
         {displayStatus === 'error' && (
-          <span className="shrink-0 rounded bg-red-100 px-1.5 py-0.5 text-[10px] text-red-700 dark:bg-red-950 dark:text-red-300">
+          <span className="shrink-0 rounded bg-red-100/80 px-1.5 py-0.5 text-[10px] text-red-700 dark:bg-red-950 dark:text-red-300">
             failed
           </span>
         )}
@@ -317,7 +339,7 @@ const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
       </button>
 
       {open && (
-        <div className="space-y-2 border-t border-border px-2 py-2">
+        <div className="space-y-2 border-t border-border/70 px-2 py-2">
           {pair.args && <ToolCallField label="Arguments" value={pair.args} />}
           {pair.result && <ToolCallField label="Output" value={pair.result} />}
           {!hasDetail && (
@@ -352,15 +374,15 @@ const ToolCallField: React.FC<{ label: string; value: string }> = ({ label, valu
           </span>
         )}
         {formatted.isError && (
-          <span className="rounded bg-red-950 px-1 py-0.5 text-[9px] tracking-normal text-red-300">
+          <span className="rounded bg-red-100 px-1 py-0.5 text-[9px] tracking-normal text-red-700 dark:bg-red-950 dark:text-red-300">
             error
           </span>
         )}
       </div>
       <pre className={`max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border p-2 text-[11px] leading-5 ${
         formatted.isError
-          ? 'border-red-900/70 bg-red-950/30 text-red-200'
-          : 'border-transparent bg-black/30 text-foreground/90'
+          ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-200'
+          : 'border-border/60 bg-muted/40 text-foreground/90'
       }`}>
         {shown}
       </pre>
@@ -534,6 +556,21 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     if (!hasOlder) return
     onLoadOlder?.()
   }, [hasOlder, onLoadOlder])
+
+  // initialTopMostItemIndex is a mount-time prop: Virtuoso keeps the list
+  // invisible until it has scrolled there. Keep it fixed for the life of the
+  // list and settle a late first fill (history hydrating after an empty
+  // mount) with an explicit scroll to the end instead.
+  const [initialTopMostItemIndex] = useState(() => Math.max(0, items.length - 1))
+  const settledFirstFillRef = useRef(items.length > 0)
+  useEffect(() => {
+    if (settledFirstFillRef.current || items.length === 0) return
+    settledFirstFillRef.current = true
+    const frame = window.requestAnimationFrame(() => {
+      virtuosoRef.current?.scrollToIndex({ index: items.length - 1, align: 'end', behavior: 'auto' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [items.length])
 
   // Sending a message changes more than the transcript: the optimistic user
   // row appears immediately, then delivery/status chrome can reduce the
@@ -837,21 +874,35 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
           setIsAtTranscriptStart(startIndex === 0)
         }}
         followOutput={autoScrollMode === 'follow-turn' ? 'smooth' : false}
-        initialTopMostItemIndex={Math.max(0, items.length - 1)}
+        initialTopMostItemIndex={initialTopMostItemIndex}
         computeItemKey={(_, item) => item.key}
         itemContent={(index, item) =>
           item.kind === 'live' ? (
             <LiveAssistantTranscript text={item.text} status={item.status} />
           ) : item.kind === 'tools' ? (
-            <div className="px-5">
-              <ToolBatch item={item} />
-            </div>
+            (() => {
+              const next = items[index + 1]
+              const reply = next?.kind === 'event' && isAgentResponseEvent(next.event) ? next.event : null
+              return (
+                <div className="px-5">
+                  {reply ? (
+                    <div className={`mt-4 ${AGENT_BLOCK_CLASS}`}>
+                      <AssistantTurnHeader event={reply} timestamp={transcriptTimestamp(reply)} />
+                      <ToolBatch item={item} />
+                    </div>
+                  ) : (
+                    <ToolBatch item={item} />
+                  )}
+                </div>
+              )
+            })()
           ) : (
             <div data-testid={`terminal-clear-event-${item.event.id || item.key}`} className="px-5 py-0.5">
               <TranscriptEvent
                 event={item.event}
                 onSendMessage={onSendMessage}
                 compactUserBottom={items[index + 1]?.kind === 'tools'}
+                hideAssistantHeader={items[index - 1]?.kind === 'tools'}
               />
             </div>
           )

@@ -57,6 +57,9 @@ profile:
         kind: sparkquill.activity
         activity: {label: Activity ready, destination: Viewer, detail: Ready to hand over}
     - id: sparkquill.suggest-actions
+      interaction:
+        kind: suggestions
+        render: chat.suggestions
     - id: sparkquill.find-image
   commands:
     - name: create-study-material
@@ -123,7 +126,6 @@ profile:
   ui_panels:
     schedules: true
     files: true
-    suggestions: true
   schedules:
     - id: pulse
       name: Check-in

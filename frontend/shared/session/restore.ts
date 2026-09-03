@@ -48,6 +48,35 @@ export function makeRestoredEvent(
   } as PollingEvent
 }
 
+type TracedEventLike = { type?: string; timestamp?: string; data?: unknown }
+
+function eventPromptText(event: TracedEventLike): string {
+  const outer = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {}
+  const inner = outer.data && typeof outer.data === 'object' ? outer.data as Record<string, unknown> : {}
+  const content = inner.content ?? outer.content
+  return typeof content === 'string' ? content.trim() : ''
+}
+
+// The resume_order of the history message that the trace's earliest
+// user_message event corresponds to, or undefined when the trace has no user
+// prompt or none of them matches a persisted message.
+function firstTracedUserPromptOrder(uiEvents: ReadonlyArray<TracedEventLike>, messages: ChatHistoryMessage[]): number | undefined {
+  const traced = uiEvents
+    .filter(event => event.type === 'user_message' && Number.isFinite(Date.parse(event.timestamp || '')))
+    .sort((a, b) => Date.parse(a.timestamp || '') - Date.parse(b.timestamp || ''))
+  for (const event of traced) {
+    const prompt = eventPromptText(event)
+    if (!prompt) continue
+    const match = messages.find(message => {
+      const role = getMessageRole(message)
+      return (role === 'human' || role === 'user') && getMessageText(message).trim() === prompt
+    })
+    const order = match ? Number(match.resume_order) : NaN
+    if (Number.isFinite(order)) return order
+  }
+  return undefined
+}
+
 export function conversationToRestoredEvents(conversation: RestorableConversation): PollingEvent[] {
   const sessionId = conversation.session_id
   const messages = conversation.conversation_history || []
@@ -64,12 +93,24 @@ export function conversationToRestoredEvents(conversation: RestorableConversatio
   // UI trace does. The source order lets a restored user/update/final message
   // remain in the right place among tool calls instead of appearing after the
   // whole trace just because it was rebuilt at restore time.
+  //
+  // The trace is bounded and can start well after the conversation did (a
+  // restart, or the persisted cap). Spreading every message across the trace
+  // put turns from before the trace inside it, above the tool calls and reply
+  // of the newest turn. Anchor on the first user prompt the trace still holds:
+  // messages before it get timestamps before the trace, the rest spread over it.
+  const traceAnchorOrder = firstTracedUserPromptOrder(conversation.ui_events || [], messages)
   const restoredMessageTimestamp = (message: ChatHistoryMessage): string | undefined => {
     const order = Number(message.resume_order)
     if (!Number.isFinite(order) || traceStart === undefined || traceEnd === undefined || sourceMessageCount <= 0) {
       return undefined
     }
-    const position = Math.max(0, Math.min(1, (order + 1) / (sourceMessageCount + 1)))
+    if (traceAnchorOrder !== undefined && order < traceAnchorOrder) {
+      return new Date(traceStart - ((traceAnchorOrder - order) * 1000)).toISOString()
+    }
+    const first = traceAnchorOrder ?? 0
+    const span = Math.max(1, sourceMessageCount - first + 1)
+    const position = Math.max(0, Math.min(1, (order - first + 1) / span))
     return new Date(traceStart + ((traceEnd - traceStart) * position)).toISOString()
   }
   // Page identity is durable across "Load earlier" requests. Without this,

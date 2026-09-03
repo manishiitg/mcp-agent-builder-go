@@ -165,6 +165,38 @@ describe('hydrateTabEvents restored chat fallback', () => {
     expect(events.filter(event => event.type === 'unified_completion')).toHaveLength(1)
   })
 
+  it('keeps turns from before the saved trace above it instead of spreading them across it', () => {
+    // Three old turns, then one traced turn. The trace (a restart cleared the
+    // rest) holds only the last prompt and its tool call.
+    const history = [
+      { Role: 'human', Parts: [{ Text: 'first prompt' }], resume_order: 0 },
+      { Role: 'ai', Parts: [{ Text: 'first reply' }], resume_order: 1 },
+      { Role: 'human', Parts: [{ Text: 'second prompt' }], resume_order: 2 },
+      { Role: 'ai', Parts: [{ Text: 'second reply' }], resume_order: 3 },
+      { Role: 'human', Parts: [{ Text: 'traced prompt' }], resume_order: 4 },
+      { Role: 'ai', Parts: [{ Text: 'traced reply' }], resume_order: 5 },
+    ]
+    const events = conversationToRestoredEvents({
+      session_id: 's',
+      conversation_history: history,
+      history_source_message_count: 6,
+      ui_events: [
+        { id: 'u', type: 'user_message', timestamp: '2026-09-03T08:20:03Z', session_id: 's', data: { data: { content: 'traced prompt' } } },
+        { id: 't', type: 'tool_call_start', timestamp: '2026-09-03T08:20:09Z', session_id: 's', data: { data: { tool_name: 'execute_shell_command' } } },
+        { id: 'e', type: 'agent_end', timestamp: '2026-09-03T08:20:14Z', session_id: 's', data: { data: {} } },
+      ],
+    } as never)
+    const at = (content: string) => Date.parse(events.find(event => {
+      const data = (event.data as { data?: { content?: string; final_result?: string } }).data
+      return data?.content === content || data?.final_result === content
+    })!.timestamp || '')
+    const traceStart = Date.parse('2026-09-03T08:20:03Z')
+    expect(at('first prompt')).toBeLessThan(at('second reply'))
+    expect(at('second reply')).toBeLessThan(traceStart)
+    expect(at('traced prompt')).toBeGreaterThanOrEqual(traceStart)
+    expect(at('traced reply')).toBeGreaterThan(Date.parse('2026-09-03T08:20:09Z'))
+  })
+
   it('uses the saved formatted trace when a read-only schedule explicitly requests it', async () => {
     mocks.getRecentSessionEvents.mockResolvedValue({
       events: [],

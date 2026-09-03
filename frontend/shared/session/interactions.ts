@@ -19,14 +19,14 @@ export function parseProductInteraction(event: PollingEvent): ProductInteraction
   return { id: event.id, product: typeof p.product === 'string' ? p.product : '', kind, payload }
 }
 
-/** The suggestion buttons for the latest reply: the last `suggestions` interaction after the last user message. */
-export function latestSuggestions(events: PollingEvent[] | undefined): SuggestedAction[] {
+/** The suggestion buttons for the latest reply: the last interaction of `kind` (the tool binding's interaction.kind) after the last user message. */
+export function latestSuggestions(events: PollingEvent[] | undefined, kind = 'suggestions'): SuggestedAction[] {
   let out: SuggestedAction[] = []
   for (const e of events ?? []) {
     const type = e.type ?? (e.data as { type?: string } | undefined)?.type
     if (type === 'user_message') { out = []; continue }
     const it = parseProductInteraction(e)
-    if (!it || it.kind !== 'suggestions') continue
+    if (!it || it.kind !== kind) continue
     const actions = Array.isArray(it.payload.actions) ? (it.payload.actions as { label?: unknown; message?: unknown }[]) : []
     out = actions
       .map((a) => ({ label: String(a.label ?? '').trim(), message: String(a.message ?? '').trim() }))

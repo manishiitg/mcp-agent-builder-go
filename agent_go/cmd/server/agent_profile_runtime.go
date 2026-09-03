@@ -431,6 +431,7 @@ func (api *StreamingAPI) registerAgentProfileTools(registrar definitionToolRegis
 			UserID: userID, SessionID: sessionID, WorkspacePath: workspacePath,
 			Emit:         func(event any) { api.emitAgentProfileEvent(sessionID, event) },
 			Presentation: binding.Presentation,
+			Interaction:  binding.Interaction,
 		})
 		if err != nil {
 			return err

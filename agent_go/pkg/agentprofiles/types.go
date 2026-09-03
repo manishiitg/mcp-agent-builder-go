@@ -219,6 +219,18 @@ type ToolBinding struct {
 	// docs/design/agent_tool_surface_single_source.md for why a declared fact
 	// beats a fact re-derived per call site.
 	Presentation *PresentationBinding `json:"presentation,omitempty" yaml:"presentation,omitempty"`
+	// Interaction declares that this tool's execution emits a product
+	// interaction the chat renders in place: `kind` names the event the tool
+	// emits (read by the factory, like Presentation.Kind), `render` names the
+	// shared chat rendering for it. Today: render "chat.suggestions" draws
+	// tappable next-step buttons from payload {actions: [{label, message}]}.
+	Interaction *InteractionBinding `json:"interaction,omitempty" yaml:"interaction,omitempty"`
+}
+
+// InteractionBinding is a tool's declared in-chat rendering.
+type InteractionBinding struct {
+	Kind   string `json:"kind" yaml:"kind"`
+	Render string `json:"render" yaml:"render"`
 }
 
 // PresentationBinding names the presentation kind a tool produces and the
@@ -348,11 +360,6 @@ type UIPanels struct {
 	// browser AgentWorks' own multi-agent files view uses -- unscoped,
 	// unlike Video Studio's FilesPanel which is pinned to one project.
 	Files bool `json:"files,omitempty" yaml:"files,omitempty"`
-	// Suggestions shows tappable next-step buttons under a reply, taken from
-	// the product's `suggestions` interaction (a product_interaction event
-	// with payload {actions: [{label, message}]}, the shape the
-	// suggest_actions tool emits). Tapping one submits its message.
-	Suggestions bool `json:"suggestions,omitempty" yaml:"suggestions,omitempty"`
 }
 
 const (
@@ -435,6 +442,9 @@ type ToolRuntimeContext struct {
 	// any. A tool factory that presents something reads the kind from here
 	// instead of hardcoding it — see ToolBinding.Presentation.
 	Presentation *PresentationBinding
+	// Interaction is the calling binding's declared InteractionBinding, if
+	// any; a factory that emits an interaction reads the kind from here.
+	Interaction *InteractionBinding
 }
 
 // RuntimeContext contains trusted, server-resolved state for a profile turn.

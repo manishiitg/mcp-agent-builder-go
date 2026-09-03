@@ -29,7 +29,7 @@ export const FAMILY_WORKSPACE = 'Chats/SparkQuill'
 
 export type ProductInteraction = { kind: string; payload: Record<string, unknown> }
 export type ProductPresentation = { kind: string; payload: Record<string, unknown> }
-type ProfileDeclaration = { ui_panels?: { suggestions?: boolean }; tools?: { presentation?: { kind?: string } }[] }
+type ProfileDeclaration = { tools?: { presentation?: { kind?: string }; interaction?: { kind?: string; render?: string } }[] }
 
 type Props = {
   title: string
@@ -46,8 +46,9 @@ const queryClient = new QueryClient()
 // remount finds it).
 let openedTab: Promise<{ tabId: string; sessionId: string }> | null = null
 
-// Whether this product's manifest opts into suggestion pills (ui_panels.suggestions).
-let suggestionsEnabled = false
+// The tool binding that asked for in-chat suggestions (product.yaml
+// `interaction: { kind, render: chat.suggestions }`), if any.
+let suggestionsKind: string | null = null
 
 function SparkQuillConversation({ events, isStreaming, isRestoring, streamingText, streamingStatus, hasOlder, loadingOlder, historyError, onLoadOlder, landingContent, onSubmitQuery }: ChatContentRendererProps) {
   if (!isRestoring && events.length === 0 && !streamingText) return <>{landingContent}</>
@@ -65,12 +66,12 @@ function SparkQuillConversation({ events, isStreaming, isRestoring, streamingTex
         onLoadOlder={onLoadOlder}
         onRetry={onLoadOlder}
         surfaceClassName="fl-platform-surface"
-        autoScrollMode="reveal-first-response"
+        autoScrollMode="follow-turn"
       />
       {isStreaming && !streamingText && (
         <div className="fl-thinking fl-platform-working"><img src="/sparkquill-loader.svg" alt="" width={30} height={30} /><span>{streamingStatus ? `Quill is: ${streamingStatus}…` : 'Working on it…'}</span></div>
       )}
-      {onSubmitQuery && suggestionsEnabled && <ProductSuggestions events={events} onSubmit={onSubmitQuery} hidden={isStreaming} />}
+      {onSubmitQuery && suggestionsKind && <ProductSuggestions events={events} kind={suggestionsKind} onSubmit={onSubmitQuery} hidden={isStreaming} />}
     </div>
   )
 }
@@ -126,7 +127,8 @@ export default function PlatformChat({ title, childName, theme, commands, landin
       // What the product declares in product.yaml: which panels this
       // surface offers and which presentation kinds its tools emit.
       const profile = await agentApi.getAgentProfile(PARENT_PROFILE_ID).catch(() => null) as ProfileDeclaration | null
-      suggestionsEnabled = Boolean(profile?.ui_panels?.suggestions)
+      const suggestionBinding = (profile?.tools ?? []).find((t) => t.interaction?.render === 'chat.suggestions')
+      suggestionsKind = suggestionBinding ? (suggestionBinding.interaction?.kind || 'suggestions') : null
       setPresentationKinds((profile?.tools ?? []).map((t) => t.presentation?.kind).filter((k): k is string => typeof k === 'string' && k.length > 0))
       const conversation = await agentApi.resolveAgentProfileConversation(PARENT_PROFILE_ID, {}, existing?.sessionId ?? undefined)
       const createdTabId = await chatStore.createChatTab(title, {

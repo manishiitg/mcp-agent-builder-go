@@ -13,6 +13,15 @@ func TestManifestDeclaresParentAndChild(t *testing.T) {
 		t.Fatalf("profiles = %+v", profiles)
 	}
 	parent, child := profiles[0], profiles[1]
+	var suggest *agentprofiles.ToolBinding
+	for i := range parent.Tools {
+		if parent.Tools[i].ID == "sparkquill.suggest-actions" {
+			suggest = &parent.Tools[i]
+		}
+	}
+	if suggest == nil || suggest.Interaction == nil || suggest.Interaction.Kind != "suggestions" || suggest.Interaction.Render != "chat.suggestions" {
+		t.Fatalf("suggest_actions must declare its in-chat rendering: %+v", suggest)
+	}
 	if parent.Runtime.Conversation.Mode != agentprofiles.ConversationModeSingleton || len(parent.Schedules) != 1 || parent.Schedules[0].ID != "pulse" {
 		t.Fatalf("parent shape wrong: %+v", parent.Runtime.Conversation)
 	}

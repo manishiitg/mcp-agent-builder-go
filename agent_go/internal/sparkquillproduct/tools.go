@@ -108,6 +108,15 @@ func (w familyWorkspace) saveFamily(ctx context.Context, state FamilyState) erro
 	return nil
 }
 
+// interactionKind is the event kind the binding declared for this tool
+// (product.yaml `interaction.kind`), or the product's default.
+func interactionKind(runtime agentprofiles.ToolRuntimeContext, fallback string) string {
+	if runtime.Interaction != nil && strings.TrimSpace(runtime.Interaction.Kind) != "" {
+		return strings.TrimSpace(runtime.Interaction.Kind)
+	}
+	return fallback
+}
+
 func emitInteraction(runtime agentprofiles.ToolRuntimeContext, kind string, payload map[string]interface{}) {
 	if runtime.Emit == nil {
 		return
@@ -586,7 +595,7 @@ func suggestActionsFactory() agentprofiles.ToolFactory {
 					}
 					actions = append(actions, map[string]interface{}{"label": label, "message": message})
 				}
-				emitInteraction(runtime, "suggestions", map[string]interface{}{"actions": actions})
+				emitInteraction(runtime, interactionKind(runtime, "suggestions"), map[string]interface{}{"actions": actions})
 				return jsonResult(map[string]interface{}{"status": "ok", "count": len(actions)})
 			},
 		}, nil
