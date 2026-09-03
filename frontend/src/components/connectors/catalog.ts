@@ -25,15 +25,37 @@ const CONNECTOR_DESCRIPTIONS: Record<string, string> = {
   Paddle: 'Review subscriptions, transactions, and customer billing',
   Port: 'Query your service catalog and developer portal',
   Indeed: 'Search job listings and manage employer postings',
-  Morningstar: 'Look up investment research, funds, and market data',
-  'Parallel Search MCP': 'Run web searches built for agent workflows',
-  'Hugging Face': 'Search models, datasets, and Spaces on the Hub',
-  'Cloudflare Docs': 'Search Cloudflare product documentation',
-  'AWS Knowledge': 'Search AWS docs and best-practice guidance',
-  Wolfram: 'Compute answers, math, and curated factual data',
-  Exa: 'Search the web with embedding-based retrieval',
-  Browserbase: 'Drive a hosted headless browser session',
-  Cortex: 'Query your internal service catalog and scorecards',
+  Lovable: 'Build and deploy apps and websites from a prompt',
+  Supabase: 'Manage and query your Postgres databases',
+  Vercel: 'Inspect deployments, logs, and project settings',
+  Atlassian: 'Work with Jira issues and Confluence pages',
+  Asana: 'Track tasks, projects, and team workload',
+  Intercom: 'Search conversations, contacts, and help articles',
+  ClickUp: 'Manage tasks, docs, and project spaces',
+  Mixpanel: 'Query product analytics events and funnels',
+  Stripe: 'Review payments, customers, and subscriptions',
+  Ramp: 'Review card spend, bills, and reimbursements',
+  Zapier: 'Trigger and run automations across your apps',
+  Square: 'Manage payments, orders, and catalog items',
+  PayPal: 'Review transactions, invoices, and payouts',
+  Webflow: 'Manage sites, CMS collections, and publishing',
+  Wix: 'Manage site content, stores, and bookings',
+  'monday.com': 'Track boards, items, and team workflows',
+  Neon: 'Query and branch serverless Postgres databases',
+  Netlify: 'Inspect sites, deploys, and build logs',
+  Cloudflare: 'Manage Workers, KV, R2, and DNS bindings',
+  Datadog: 'Query metrics, monitors, logs, and traces',
+  Plaid: 'Inspect linked accounts and financial data',
+  Prisma: 'Manage Postgres databases and schema changes',
+  Sanity: 'Query and edit structured content documents',
+  Amplitude: 'Explore product analytics and user journeys',
+  Miro: 'Work with boards, frames, and sticky notes',
+  Railway: 'Deploy services and inspect build logs',
+  Contentful: 'Query and edit structured content entries',
+  Upstash: 'Manage serverless Redis and Kafka data',
+  CircleCI: 'Inspect pipelines, workflows, and job logs',
+  Loops: 'Send product email and manage contacts',
+  Shortcut: 'Track stories, epics, and iterations',
 }
 
 /**
@@ -43,4 +65,83 @@ const CONNECTOR_DESCRIPTIONS: Record<string, string> = {
  */
 export function descriptionFor(serverName: string): string {
   return CONNECTOR_DESCRIPTIONS[serverName] ?? 'Custom MCP server'
+}
+
+/**
+ * Section a connector is filed under in the directory, mirroring how the
+ * upstream plugin directories group the same services. Presentation copy like
+ * the descriptions above, not configuration.
+ *
+ * A server with no entry falls into "Other", which is where user-added custom
+ * servers land too, so nothing drops out of the directory for want of a
+ * category.
+ */
+const CONNECTOR_CATEGORIES: Record<string, string> = {
+  Sentry: 'Developer Tools',
+  Grafana: 'Developer Tools',
+  Honeycomb: 'Developer Tools',
+  MongoDB: 'Developer Tools',
+  Supabase: 'Developer Tools',
+  Vercel: 'Developer Tools',
+  WorkOS: 'Developer Tools',
+  Port: 'Developer Tools',
+  Apify: 'Developer Tools',
+  Resend: 'Developer Tools',
+  Lovable: 'Developer Tools',
+  Notion: 'Productivity',
+  Linear: 'Productivity',
+  Asana: 'Productivity',
+  ClickUp: 'Productivity',
+  Atlassian: 'Productivity',
+  Stripe: 'Business & Operations',
+  Paddle: 'Business & Operations',
+  Ramp: 'Business & Operations',
+  Intercom: 'Business & Operations',
+  Indeed: 'Business & Operations',
+  PostHog: 'Data & Analytics',
+  Mixpanel: 'Data & Analytics',
+  Airtable: 'Data & Analytics',
+  Canva: 'Creativity',
+  Neon: 'Developer Tools',
+  Netlify: 'Developer Tools',
+  Cloudflare: 'Developer Tools',
+  Datadog: 'Developer Tools',
+  Prisma: 'Developer Tools',
+  Zapier: 'Developer Tools',
+  Miro: 'Productivity',
+  'monday.com': 'Productivity',
+  Square: 'Business & Operations',
+  PayPal: 'Business & Operations',
+  Plaid: 'Business & Operations',
+  Amplitude: 'Data & Analytics',
+  Webflow: 'Creativity',
+  Wix: 'Creativity',
+  Sanity: 'Creativity',
+  Railway: 'Developer Tools',
+  Upstash: 'Developer Tools',
+  CircleCI: 'Developer Tools',
+  Contentful: 'Creativity',
+  Loops: 'Business & Operations',
+  Shortcut: 'Productivity',
+}
+
+/** Fallback section for connectors with no category, including custom ones. */
+export const OTHER_CATEGORY = 'Other'
+
+/**
+ * Display order for the directory's sections. A category outside this list
+ * sorts after the known ones rather than disappearing.
+ */
+export const CATEGORY_ORDER: string[] = [
+  'Developer Tools',
+  'Productivity',
+  'Business & Operations',
+  'Data & Analytics',
+  'Creativity',
+  OTHER_CATEGORY,
+]
+
+/** The directory section a connector belongs to. */
+export function categoryFor(serverName: string): string {
+  return CONNECTOR_CATEGORIES[serverName] ?? OTHER_CATEGORY
 }
