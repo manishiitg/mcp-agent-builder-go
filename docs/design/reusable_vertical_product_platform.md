@@ -1431,3 +1431,10 @@ builder/run system prompt, `PhaseChatSystemPrompt` in
   today (only a Slack webhook *secret name* on the manifest, no bot-route
   check), and wiring one is bigger than this pass. The section's wording
   already hedges ("Users **may** reach this workflow through...").
+
+**Addendum:** `refresh_workspace_view(view)` is a second tool (decision
+2026-09-03: view and refresh are different actions). It emits the same
+`workflow.view` presentation with `payload.action: "refresh"`; the page
+reloads an on-screen view (`refreshWorkspaceView`: the report re-reads its
+HTML via its refresh event, every other view remounts on a token) and opens
+a view that is not on screen. `open_workspace_view` never refreshes.

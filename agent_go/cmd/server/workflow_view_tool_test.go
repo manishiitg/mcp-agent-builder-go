@@ -7,14 +7,20 @@ import (
 	"time"
 )
 
-type recordingRegistrar struct {
-	name string
+type recordedTool struct {
 	desc string
 	exec func(context.Context, map[string]interface{}) (string, error)
 }
 
+type recordingRegistrar struct {
+	tools map[string]recordedTool
+}
+
 func (r *recordingRegistrar) RegisterCustomTool(name, desc string, _ map[string]interface{}, exec func(context.Context, map[string]interface{}) (string, error), _ string) error {
-	r.name, r.desc, r.exec = name, desc, exec
+	if r.tools == nil {
+		r.tools = map[string]recordedTool{}
+	}
+	r.tools[name] = recordedTool{desc: desc, exec: exec}
 	return nil
 }
 
@@ -28,18 +34,31 @@ func TestOpenWorkspaceViewToolOpensAKnownViewAndRefusesOthers(t *testing.T) {
 	if err := api.registerOpenWorkspaceViewTool(reg, "s1", "Workflow/x"); err != nil {
 		t.Fatal(err)
 	}
-	if reg.name != "open_workspace_view" || !strings.Contains(reg.desc, "report — Report") || !strings.Contains(reg.desc, "schedules — Schedules") {
-		t.Fatalf("tool = %q\n%s", reg.name, reg.desc)
+	open, ok := reg.tools["open_workspace_view"]
+	if !ok || !strings.Contains(open.desc, "report — Report") || !strings.Contains(open.desc, "schedules — Schedules") || !strings.Contains(open.desc, "refresh_workspace_view") {
+		t.Fatalf("open tool = %+v", open)
 	}
-	out, err := reg.exec(context.Background(), map[string]interface{}{"view": "Report"})
+	out, err := open.exec(context.Background(), map[string]interface{}{"view": "Report"})
 	if err != nil || !strings.Contains(out, `"opened":"report"`) || !strings.Contains(out, `"label":"Report"`) {
 		t.Fatalf("out=%s err=%v", out, err)
 	}
-	if _, err := reg.exec(context.Background(), map[string]interface{}{"view": "dashboard"}); err == nil || !strings.Contains(err.Error(), "one of:") {
+	if _, err := open.exec(context.Background(), map[string]interface{}{"view": "dashboard"}); err == nil || !strings.Contains(err.Error(), "one of:") {
 		t.Fatalf("unknown view must list the real ones: %v", err)
 	}
+	refresh, ok := reg.tools["refresh_workspace_view"]
+	if !ok {
+		t.Fatal("refresh_workspace_view must be registered alongside open_workspace_view")
+	}
+	out, err = refresh.exec(context.Background(), map[string]interface{}{"view": "database"})
+	if err != nil || !strings.Contains(out, `"refreshed":"database"`) {
+		t.Fatalf("refresh out=%s err=%v", out, err)
+	}
 	ev, err := workspaceViewPresentation("costs", "Workflow/x")
-	if err != nil || ev.Kind != WorkflowViewPresentationKind || ev.Payload["view"] != "costs" || ev.Activity == nil || ev.Activity.Detail != "Costs" || ev.WorkspacePath != "Workflow/x" {
+	if err != nil || ev.Kind != WorkflowViewPresentationKind || ev.Payload["view"] != "costs" || ev.Payload["action"] != "open" || ev.Activity == nil || ev.Activity.Detail != "Costs" || ev.WorkspacePath != "Workflow/x" {
 		t.Fatalf("event = %+v err=%v", ev, err)
+	}
+	rv, err := workspaceViewAction("report", "Workflow/x", "refresh")
+	if err != nil || rv.Payload["action"] != "refresh" || rv.Activity.Label != "Refreshed" || rv.PresentationID == ev.PresentationID {
+		t.Fatalf("refresh event = %+v err=%v", rv, err)
 	}
 }

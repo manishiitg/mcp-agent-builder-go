@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { WORKFLOW_REPORT_REFRESH_EVENT } from '../components/workflow/reportRefreshEvent'
 import type { WorkflowPhase, ExecutionOptions, VariablesManifest, EvaluationPlan } from '../services/api-types'
 import type { WorkshopMode } from '../commands/types'
 import type { AgentConfigs } from '../utils/stepConfigMatching'
@@ -311,6 +312,8 @@ interface WorkflowStore {
   showWorkspacePane: boolean
   chatAreaExpanded: boolean
   workflowWorkspaceView: WorkflowWorkspaceView
+  /** Bumped by refreshWorkspaceView; the view host remounts the open view on change. Transient, not per preset. */
+  workspaceViewRefreshToken: number
   focusedPane: FocusedPane // Which pane gets ~75% — 'preview' (canvas) or 'chat'
   layoutDirection: LayoutDirection // Canvas layout direction ('LR' = horizontal, 'TB' = vertical)
   // The canvas view (Plan or Report) the pane shows when workflowWorkspaceView
@@ -390,6 +393,10 @@ interface WorkflowStore {
    * (toolbar buttons, chat file links, jump-to-plan). Records Plan/Report as
    * `lastCanvasView` and un-minimizes the workspace for Files. */
   openWorkspaceView: (view: WorkspaceViewId) => void
+  /** Reload whatever the workspace pane is showing: the report re-reads its
+   * HTML, every other view remounts and refetches. Used when the agent opens
+   * a view that is already on screen after changing what it shows. */
+  refreshWorkspaceView: () => void
   setLayoutDirection: (direction: LayoutDirection) => void
 
   // Workflow chat tabs
@@ -428,6 +435,7 @@ interface WorkflowStore {
 export const useWorkflowStore = create<WorkflowStore>()(
     (set, get) => ({
       // === Initial State ===
+      workspaceViewRefreshToken: 0,
       // Constants
       phases: [],
       isLoadingPhases: false,
@@ -1216,6 +1224,12 @@ export const useWorkflowStore = create<WorkflowStore>()(
         get().setWorkflowWorkspaceView(view)
         get().setShowWorkspacePane(true)
         useAppStore.getState().setWorkspaceMinimized(view !== 'files')
+      },
+
+      refreshWorkspaceView: () => {
+        set(state => ({ workspaceViewRefreshToken: state.workspaceViewRefreshToken + 1 }))
+        // The report view keeps its HTML in its own state and listens for this.
+        window.dispatchEvent(new Event(WORKFLOW_REPORT_REFRESH_EVENT))
       },
 
       setLayoutDirection: (direction: LayoutDirection) => {

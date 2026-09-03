@@ -113,6 +113,7 @@ function FilesBody() {
 
 function InspectorBody({ workspacePath, presetQueryId }: { workspacePath: string | null; presetQueryId: string | null }) {
   const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
+  const refreshToken = useWorkflowStore(state => state.workspaceViewRefreshToken)
   const { planData, selectedRunFolder, runFolderNames, workspace, pulse } = useWorkspaceViewData()
   const plan = planData.plan
   const refreshWorkspaceState = workspace.refresh
@@ -209,6 +210,8 @@ function InspectorBody({ workspacePath, presetQueryId }: { workspacePath: string
   if (!isInspectorView(workflowWorkspaceView)) return null
   return (
     <Suspense
+      // A new token remounts the view, so it refetches whatever it shows.
+      key={`${workflowWorkspaceView}:${refreshToken}`}
       fallback={
         <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
           Loading…

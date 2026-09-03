@@ -20,7 +20,7 @@ import { HtmlReportFrame } from './reportWidgets/HtmlWidgetFrame'
 import { ReportEmbedProvider, type ReportDataApi } from './reportWidgets/reportEmbedContext'
 import { ReportHumanInputPanel } from './ReportHumanInputPanel'
 
-const WORKFLOW_REPORT_REFRESH_EVENT = 'workflow-report-refresh-requested'
+import { WORKFLOW_REPORT_REFRESH_EVENT } from './reportRefreshEvent'
 
 function debugReportView(event: string, detail?: Record<string, unknown>) {
   if (!import.meta.env.DEV) return
