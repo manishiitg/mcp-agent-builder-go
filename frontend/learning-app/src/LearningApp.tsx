@@ -3219,7 +3219,7 @@ export default function LearningApp() {
                 {pins.map((p) => (
                   <button key={p.path} role="tab" aria-selected={drawerTab === `pin:${p.path}`} className={drawerTab === `pin:${p.path}` ? 'is-active' : ''} type="button" title={p.path} onClick={() => setDrawerTab(`pin:${p.path}`)}>{p.title}</button>
                 ))}
-                <button role="tab" aria-selected={drawerTab === 'files'} className={drawerTab === 'files' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('files')}>Workspace</button>
+                <button role="tab" aria-selected={drawerTab === 'files'} className={drawerTab === 'files' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('files')}>Activities</button>
                 <button role="tab" aria-selected={drawerTab === 'uploaded'} className={drawerTab === 'uploaded' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('uploaded')}>Uploaded</button>
                 {/* Browsing every raw file is a power-user escape hatch, not a
                     peer of the four content views — an icon keeps it one tap
