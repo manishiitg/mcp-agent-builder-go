@@ -145,7 +145,8 @@ const TranscriptEvent: React.FC<{
   inTurn?: boolean
   renderInteraction?: (interaction: ProductInteraction, event: PollingEvent) => React.ReactNode
   assistantLabel?: string
-}> = ({ event, onSendMessage, compactUserBottom = false, inTurn = false, renderInteraction, assistantLabel }) => {
+  assistantIcon?: React.ReactNode
+}> = ({ event, onSendMessage, compactUserBottom = false, inTurn = false, renderInteraction, assistantLabel, assistantIcon }) => {
   if (event.type === 'product_interaction') {
     const interaction = parseProductInteraction(event)
     return interaction && renderInteraction ? <>{renderInteraction(interaction, event)}</> : null
@@ -170,7 +171,7 @@ const TranscriptEvent: React.FC<{
   const result = typeof payload.result === 'string' ? payload.result.trim() : ''
   const responseContent = content || finalResult || result
   if (AGENT_RESPONSE_EVENT_TYPES.has(event.type || '') && responseContent) {
-    return <AssistantTranscriptMessage event={event} content={responseContent} timestamp={timestamp} framed={!inTurn} label={assistantLabel} />
+    return <AssistantTranscriptMessage event={event} content={responseContent} timestamp={timestamp} framed={!inTurn} label={assistantLabel} icon={assistantIcon} />
   }
 
   if (isExecutionPromptTranscriptMessage(event)) {
@@ -222,7 +223,7 @@ const UserTranscriptMessage: React.FC<{ content: string; timestamp: string; comp
 // The turn's header line: who spoke, turn, duration, time. It sits at the top
 // of the agent's block, which starts at the turn's first tool call when there
 // is one, so tool work reads as part of the reply rather than a stray chip.
-const AssistantTurnHeader: React.FC<{ event: PollingEvent; timestamp: string; label?: string }> = ({ event, timestamp, label = 'Agent' }) => {
+const AssistantTurnHeader: React.FC<{ event: PollingEvent; timestamp: string; label?: string; icon?: React.ReactNode }> = ({ event, timestamp, label = 'Agent', icon }) => {
   const fields = transcriptEventPayload(event)
   const duration = typeof fields.duration === 'number' && fields.duration > 0
     ? formatDurationCompact(fields.duration)
@@ -231,6 +232,7 @@ const AssistantTurnHeader: React.FC<{ event: PollingEvent; timestamp: string; la
   const metadata = [turn != null ? `Turn ${turn}` : '', duration, timestamp].filter(Boolean).join(' · ')
   return (
     <div data-testid="terminal-clear-assistant-header" className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700/80 dark:text-emerald-300/75">
+      {icon && <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center [&>img]:h-4 [&>img]:w-4 [&>svg]:h-4 [&>svg]:w-4" aria-hidden="true">{icon}</span>}
       <span>{label}</span>
       {metadata && <>
         <span className="h-1 w-1 rounded-full bg-muted-foreground/60" />
@@ -281,10 +283,10 @@ function buildTurnSlots(data: TranscriptRenderItem[]): TurnSlot[] {
   return slots
 }
 
-const AssistantTranscriptMessage: React.FC<{ event: PollingEvent; content: string; timestamp: string; label?: string; framed?: boolean }> = ({ event, content, timestamp, label = 'Agent', framed = true }) => {
+const AssistantTranscriptMessage: React.FC<{ event: PollingEvent; content: string; timestamp: string; label?: string; icon?: React.ReactNode; framed?: boolean }> = ({ event, content, timestamp, label = 'Agent', icon, framed = true }) => {
   return (
     <article data-testid="terminal-clear-assistant-message" className={framed ? `my-4 ${AGENT_BLOCK_CLASS}` : 'py-1'}>
-      {framed && <AssistantTurnHeader event={event} timestamp={timestamp} label={label} />}
+      {framed && <AssistantTurnHeader event={event} timestamp={timestamp} label={label} icon={icon} />}
       <div className="[&_li]:!text-[length:calc(14px*var(--chat-scale,1))] [&_p]:!text-[length:calc(14px*var(--chat-scale,1))] [&_li]:!leading-[calc(24px*var(--chat-scale,1))] [&_p]:!leading-[calc(24px*var(--chat-scale,1))]">
         <ConversationMarkdownRenderer content={content} framed={false} maxHeight="none" />
       </div>
@@ -551,6 +553,8 @@ interface TerminalEventTranscriptProps {
   productRows?: { kinds: string[]; render: (interaction: ProductInteraction, event: PollingEvent) => React.ReactNode }
   /** What the agent is called in turn headers ("Agent" by default; a product passes its own name, e.g. "Quill"). */
   assistantLabel?: string
+  /** A small mark drawn before the label in turn headers (a product's logo); none by default. */
+  assistantIcon?: React.ReactNode
 }
 
 const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
@@ -570,6 +574,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   autoScrollMode = 'reveal-first-response',
   productRows,
   assistantLabel = 'Agent',
+  assistantIcon,
 }) => {
   const scrollerRef = useRef<HTMLElement | Window | null>(null)
   const virtuosoRef = useRef<VirtuosoHandle | null>(null)
@@ -1019,6 +1024,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
                   inTurn={Boolean(slot?.agent)}
                   renderInteraction={renderInteraction}
                   assistantLabel={assistantLabel}
+                  assistantIcon={assistantIcon}
                 />
               )
           if (!slot?.agent) {
@@ -1029,7 +1035,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
           return (
             <div data-testid={testId} className="px-3">
               <div className={`${AGENT_BLOCK_CLASS} ${slot.first ? 'mt-4' : ''} ${slot.last ? 'mb-4' : ''}`}>
-                {slot.first && slot.header && <AssistantTurnHeader event={slot.header} timestamp={transcriptTimestamp(slot.header)} label={assistantLabel} />}
+                {slot.first && slot.header && <AssistantTurnHeader event={slot.header} timestamp={transcriptTimestamp(slot.header)} label={assistantLabel} icon={assistantIcon} />}
                 {body}
               </div>
             </div>

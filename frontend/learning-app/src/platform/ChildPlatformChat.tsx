@@ -101,6 +101,7 @@ function ChildConversation({ events, isStreaming, isRestoring, streamingText, st
         surfaceClassName="fl-platform-surface"
         autoScrollMode="follow-turn"
         assistantLabel="Quill"
+        assistantIcon={<img src="/sparkquill-mark.svg" alt="" width={16} height={16} />}
         productRows={{ kinds, render: renderProductRow }}
       />
       {isStreaming && !streamingText && (

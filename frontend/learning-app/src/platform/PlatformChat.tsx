@@ -68,6 +68,7 @@ function SparkQuillConversation({ events, isStreaming, isRestoring, streamingTex
         surfaceClassName="fl-platform-surface"
         autoScrollMode="follow-turn"
         assistantLabel="Quill"
+        assistantIcon={<img src="/sparkquill-mark.svg" alt="" width={16} height={16} />}
       />
       {isStreaming && !streamingText && (
         <div className="fl-thinking fl-platform-working"><img src="/sparkquill-loader.svg" alt="" width={30} height={30} /><span>{streamingStatus ? `Quill is: ${streamingStatus}…` : 'Working on it…'}</span></div>
