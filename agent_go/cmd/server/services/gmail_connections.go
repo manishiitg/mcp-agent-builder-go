@@ -703,3 +703,36 @@ func (g *GmailService) MarkConnectionConnected(ctx context.Context, id, email st
 	}
 	return updated, nil
 }
+
+// shouldAutoEnableGmail decides whether an authenticated gws is reason enough
+// to switch the channel on by itself. The operator asked for exactly that
+// (2026-09-03): gws present, authenticated, Gmail scope granted -> enabled,
+// no toggle to find. A deliberate disable in the settings form is respected.
+func shouldAutoEnableGmail(cfg *GmailConfig, st GmailAuthStatus) bool {
+	if cfg == nil || cfg.Enabled || cfg.ManuallyDisabled {
+		return false
+	}
+	return st.GwsInstalled && st.Authenticated && st.HasGmailScope
+}
+
+// EnableIfAuthenticated switches the Gmail channel on when the effective
+// sending account is authenticated with the Gmail scope, persists that, and
+// registers the connector with the live NotificationManager so notify_user
+// offers Gmail on the next turn without a restart. Reports whether it did.
+func (g *GmailService) EnableIfAuthenticated(ctx context.Context) (bool, error) {
+	cfg := g.GetConfig()
+	if cfg.Enabled || cfg.ManuallyDisabled {
+		return false, nil
+	}
+	if !shouldAutoEnableGmail(cfg, g.EffectiveAuthStatus(ctx)) {
+		return false, nil
+	}
+	cfg.Enabled = true
+	if err := g.SaveConfig(ctx, cfg); err != nil {
+		return false, err
+	}
+	if nm := GetNotificationManager(); nm != nil && g.IsEnabled() {
+		nm.RegisterConnector(g)
+	}
+	return true, nil
+}

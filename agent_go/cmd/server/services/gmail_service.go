@@ -103,6 +103,12 @@ type GmailConfig struct {
 	// AdoptHostAccount seeded from the host's own gws login, so an empty
 	// registry is not re-seeded from it on the next listing.
 	HostAccountDismissed bool `json:"host_account_dismissed,omitempty"`
+
+	// ManuallyDisabled records that the operator switched the channel off in
+	// the settings form. EnableIfAuthenticated then leaves it off: an
+	// authenticated gws is otherwise reason enough to enable the channel
+	// without a separate toggle, but not to override a deliberate choice.
+	ManuallyDisabled bool `json:"manually_disabled,omitempty"`
 }
 
 // GmailService implements NotificationConnector (and UserNotificationConnector)

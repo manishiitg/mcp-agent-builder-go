@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -79,11 +80,46 @@ func getGmailConfigHandler(api *StreamingAPI) http.HandlerFunc {
 			http.Error(w, fmt.Sprintf("failed to initialize Gmail service: %v", err), http.StatusInternalServerError)
 			return
 		}
+		autoEnableGmailIfAuthenticated(r.Context(), svc)
 		cfg := svc.GetConfig()
 		auth := svc.EffectiveAuthStatus(r.Context())
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(buildGmailConfigResponse(svc, cfg, auth))
 	}
+}
+
+// autoEnableGmailIfAuthenticated flips the channel on when gws is
+// authenticated with the Gmail scope; a failure to persist is logged, never
+// surfaced, because the read the caller is serving still has an answer.
+func autoEnableGmailIfAuthenticated(ctx context.Context, svc *services.GmailService) {
+	enabled, err := svc.EnableIfAuthenticated(ctx)
+	if err != nil {
+		log.Printf("[GMAIL] auto-enable failed: %v", err)
+	} else if enabled {
+		log.Printf("[GMAIL] channel enabled automatically: gws is authenticated with the Gmail scope")
+	}
+}
+
+// mergeGmailConfigRequest applies the settings form onto the stored config.
+// Only the fields the form owns change; registry state (connections, default
+// connection, adoption/disable flags) survives a save. Switching the channel
+// off through the form is the one deliberate signal that must stop
+// auto-enable, so it sets ManuallyDisabled; switching it on clears it.
+func mergeGmailConfigRequest(current *services.GmailConfig, req GmailConfigRequest) *services.GmailConfig {
+	cfg := &services.GmailConfig{}
+	if current != nil {
+		copied := *current
+		cfg = &copied
+	}
+	cfg.Enabled = req.Enabled
+	cfg.DefaultTo = req.DefaultTo
+	cfg.BlockedRecipients = req.BlockedRecipients
+	cfg.GwsPath = req.GwsPath
+	cfg.ConfigHome = req.ConfigHome
+	cfg.CredentialsFile = req.CredentialsFile
+	cfg.Token = req.Token
+	cfg.ManuallyDisabled = !req.Enabled
+	return cfg
 }
 
 // getGmailStatusHandler returns just the auto-detected auth state — useful for
@@ -95,6 +131,7 @@ func getGmailStatusHandler(api *StreamingAPI) http.HandlerFunc {
 			http.Error(w, fmt.Sprintf("failed to initialize Gmail service: %v", err), http.StatusInternalServerError)
 			return
 		}
+		autoEnableGmailIfAuthenticated(r.Context(), svc)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(svc.EffectiveAuthStatus(r.Context()))
 	}
@@ -119,15 +156,11 @@ func updateGmailConfigHandler(api *StreamingAPI) http.HandlerFunc {
 			return
 		}
 
-		cfg := &services.GmailConfig{
-			Enabled:           req.Enabled,
-			DefaultTo:         req.DefaultTo,
-			BlockedRecipients: req.BlockedRecipients,
-			GwsPath:           req.GwsPath,
-			ConfigHome:        req.ConfigHome,
-			CredentialsFile:   req.CredentialsFile,
-			Token:             req.Token,
-		}
+		// Merge into the stored config rather than replacing it: the form
+		// carries only the channel fields, and writing it verbatim wiped the
+		// connections registry (accounts, default, adoption/disable flags)
+		// every time Default recipients was saved.
+		cfg := mergeGmailConfigRequest(svc.GetConfig(), req)
 		if err := svc.SaveConfig(r.Context(), cfg); err != nil {
 			http.Error(w, fmt.Sprintf("failed to save config: %v", err), http.StatusInternalServerError)
 			return
