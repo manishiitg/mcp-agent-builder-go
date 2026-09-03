@@ -1,0 +1,574 @@
+package sparkquillproduct
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"path"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/commonsimages"
+	orchestratorevents "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/presentations"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
+)
+
+// The family's tools as product tool factories. Every tool talks to the
+// user's workspace through the workspace API (never the local disk), reads
+// and writes the same files the standalone app does (family.json, activity
+// manifests, memory/ mirrors), and reaches the surface either through a
+// presentation row (durable: a file or an activity shown on the right) or a
+// ProductInteractionEvent (transient: suggestions, a celebration, a scene).
+const toolCategory = "family_tools"
+
+const (
+	presentationsMigration          = `CREATE TABLE IF NOT EXISTS ui_presentations (id TEXT PRIMARY KEY, kind TEXT NOT NULL, schema_version INTEGER NOT NULL, session_id TEXT, title TEXT NOT NULL, payload_json TEXT NOT NULL, resources_json TEXT NOT NULL, actions_json TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`
+	presentationsKindIndexMigration = `CREATE INDEX IF NOT EXISTS idx_ui_presentations_kind ON ui_presentations(kind)`
+)
+
+// familyWorkspace is one turn's view of the family root through the
+// workspace API.
+type familyWorkspace struct {
+	client *workspace.Client
+	root   string // the family root (parent: the conversation workspace; child: derived from the activity)
+}
+
+func newFamilyWorkspace(workspaceAPIURL string, runtime agentprofiles.ToolRuntimeContext, root string) familyWorkspace {
+	return familyWorkspace{
+		client: workspace.NewClient(workspaceAPIURL,
+			workspace.WithUserID(runtime.UserID),
+			workspace.WithExtraEnv(map[string]string{"MCP_SESSION_ID": runtime.SessionID})),
+		root: runtimeRoot(runtime.UserID, root),
+	}
+}
+
+// runtimeRoot maps a profile workspace path ("Chats/SparkQuill") to the
+// per-user path the folder guard and the file API are keyed on
+// ("_users/<id>/Chats/SparkQuill"); an already-expanded path is kept.
+func runtimeRoot(userID, workspacePath string) string {
+	clean := strings.Trim(strings.TrimSpace(strings.ReplaceAll(workspacePath, "\\", "/")), "/")
+	if strings.HasPrefix(clean, "_users/") {
+		return clean
+	}
+	user := strings.TrimSpace(userID)
+	if user == "" {
+		user = "default"
+	}
+	user = path.Base(user)
+	return path.Join("_users", user, clean)
+}
+
+func (w familyWorkspace) path(parts ...string) string {
+	return path.Join(append([]string{w.root}, parts...)...)
+}
+
+func (w familyWorkspace) read(ctx context.Context, rel string) (string, bool) {
+	result, err := w.client.ReadWorkspaceFile(ctx, workspace.ReadWorkspaceFileParams{Filepath: w.path(rel)})
+	if err != nil {
+		return "", false
+	}
+	return result.Content, true
+}
+
+func (w familyWorkspace) write(ctx context.Context, rel, content string) error {
+	_, err := w.client.UpdateWorkspaceFile(ctx, workspace.UpdateWorkspaceFileParams{Filepath: w.path(rel), Content: content})
+	return err
+}
+
+func (w familyWorkspace) loadFamily(ctx context.Context) (FamilyState, error) {
+	var state FamilyState
+	raw, ok := w.read(ctx, FamilyFile)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return state, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		return state, fmt.Errorf("parse %s: %w", FamilyFile, err)
+	}
+	return state, nil
+}
+
+// saveFamily writes family.json and the memory/ mirrors the skills read.
+func (w familyWorkspace) saveFamily(ctx context.Context, state FamilyState) error {
+	content, err := encodeJSON(state)
+	if err != nil {
+		return err
+	}
+	if err := w.write(ctx, FamilyFile, content); err != nil {
+		return fmt.Errorf("save %s: %w", FamilyFile, err)
+	}
+	if state.Child != nil {
+		profile, _ := encodeJSON(state.Child)
+		_ = w.write(ctx, "memory/child-profile.json", profile)
+	}
+	schedule, _ := encodeJSON(map[string]interface{}{"entries": state.Schedule})
+	_ = w.write(ctx, "memory/child-schedule.json", schedule)
+	return nil
+}
+
+func emitInteraction(runtime agentprofiles.ToolRuntimeContext, kind string, payload map[string]interface{}) {
+	if runtime.Emit == nil {
+		return
+	}
+	runtime.Emit(&orchestratorevents.ProductInteractionEvent{Product: ProductName, Kind: kind, Payload: payload})
+}
+
+func stringArg(args map[string]interface{}, key string) string {
+	if v, ok := args[key]; ok && v != nil {
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+	return ""
+}
+
+func jsonResult(v interface{}) (string, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// ---- family state --------------------------------------------------------
+
+func setChildProfileFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
+		return agentprofiles.ToolSpec{
+			Name: "set_child_profile", Category: toolCategory,
+			Description: "Save or update the child's profile — name, grade, and school board — once the parent tells you. Call this whenever you learn any of these so future sessions and material are tailored to the right level.",
+			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"name":  map[string]interface{}{"type": "string", "description": "the child's name"},
+				"grade": map[string]interface{}{"type": "string", "description": "the child's grade/class, e.g. 10"},
+				"board": map[string]interface{}{"type": "string", "description": "the school board, e.g. CBSE, ICSE, State Board"},
+			}},
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				name, grade, board := stringArg(args, "name"), stringArg(args, "grade"), stringArg(args, "board")
+				if name == "" && grade == "" && board == "" {
+					return "", fmt.Errorf("provide at least one of name, grade, board")
+				}
+				state, err := ws.loadFamily(ctx)
+				if err != nil {
+					return "", err
+				}
+				if state.Child == nil {
+					state.Child = &Child{Language: "en"}
+				}
+				if name != "" {
+					state.Child.Name = name
+				}
+				if grade != "" {
+					state.Child.Grade = grade
+				}
+				if board != "" {
+					state.Child.Board = board
+				}
+				if err := ws.saveFamily(ctx, state); err != nil {
+					return "", err
+				}
+				emitInteraction(runtime, "family_updated", map[string]interface{}{"child": state.Child})
+				return jsonResult(map[string]interface{}{"status": "ok", "name": state.Child.Name, "grade": state.Child.Grade, "board": state.Child.Board})
+			},
+		}, nil
+	}
+}
+
+func setChildScheduleFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
+		return agentprofiles.ToolSpec{
+			Name: "set_child_schedule", Category: toolCategory,
+			Description: "Save one or more recurring weekly commitments to the child's schedule — school hours, tuition, sports practice — once the parent tells you, or you notice one from context. ADDS to the existing schedule (never replaces it); an entry that exactly matches one already saved is silently skipped, so it is safe to call even if you are not sure it is new.",
+			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"entries": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+					"day":   map[string]interface{}{"type": "string", "description": "e.g. Monday"},
+					"start": map[string]interface{}{"type": "string", "description": "24h local time, e.g. 08:00"},
+					"end":   map[string]interface{}{"type": "string", "description": "24h local time, e.g. 14:30"},
+					"label": map[string]interface{}{"type": "string", "description": "e.g. School, Football practice"},
+				}, "required": []string{"day", "start", "end", "label"}}},
+			}, "required": []string{"entries"}},
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				raw, _ := args["entries"].([]interface{})
+				var added []ScheduleEntry
+				for _, item := range raw {
+					m, ok := item.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					e := ScheduleEntry{Day: stringArg(m, "day"), Start: stringArg(m, "start"), End: stringArg(m, "end"), Label: stringArg(m, "label")}
+					if e.Day == "" || e.Start == "" || e.End == "" || e.Label == "" {
+						continue
+					}
+					added = append(added, e)
+				}
+				if len(added) == 0 {
+					return "", fmt.Errorf("no valid entries provided — each needs day, start, end, and label")
+				}
+				state, err := ws.loadFamily(ctx)
+				if err != nil {
+					return "", err
+				}
+				newCount := 0
+				for _, e := range added {
+					dup := false
+					for _, ex := range state.Schedule {
+						if ex == e {
+							dup = true
+							break
+						}
+					}
+					if !dup {
+						state.Schedule = append(state.Schedule, e)
+						newCount++
+					}
+				}
+				if err := ws.saveFamily(ctx, state); err != nil {
+					return "", err
+				}
+				emitInteraction(runtime, "family_updated", map[string]interface{}{"schedule": state.Schedule})
+				return jsonResult(map[string]interface{}{"status": "ok", "added": newCount, "total_entries": len(state.Schedule)})
+			},
+		}, nil
+	}
+}
+
+func setParentLabelFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
+		return agentprofiles.ToolSpec{
+			Name: "set_parent_label", Category: toolCategory,
+			Description: "Save how the parent wants to be referred to when you talk ABOUT them to the child — e.g. \"mom\", \"dad\", \"grandma\", or their first name. Call this once you learn it.",
+			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"label": map[string]interface{}{"type": "string", "description": "e.g. mom, dad, grandma, or a first name"},
+			}, "required": []string{"label"}},
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				label := stringArg(args, "label")
+				if label == "" {
+					return "", fmt.Errorf("label is required")
+				}
+				state, err := ws.loadFamily(ctx)
+				if err != nil {
+					return "", err
+				}
+				state.ParentLabel = label
+				if err := ws.saveFamily(ctx, state); err != nil {
+					return "", err
+				}
+				emitInteraction(runtime, "family_updated", map[string]interface{}{"parent_label": label})
+				return jsonResult(map[string]interface{}{"status": "ok", "label": label})
+			},
+		}, nil
+	}
+}
+
+// ---- activities ----------------------------------------------------------
+
+func createLearningActivityFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
+		return agentprofiles.ToolSpec{
+			Name: "create_learning_activity", Category: toolCategory,
+			Description: "Finalize an activity you've already built. First create the folder " + ActivitiesFolder + "/<yyyy-mm-dd>-<slug>/ and write its content files into it (the study material / test HTML, and any answer key as <name>-KEY.md), then call this with that folder as `dir` to write its activity.json manifest. `items` are the bare filenames inside the folder, in the order the child works through them (do NOT include the answer key). For an instruction-only activity (the tutor generates questions live), leave `items` empty and put the full description in `goal`. `goal` is WHAT this activity is for, in the parent's own words — what finishing looks like and anything the parent genuinely cares about; not a turn-by-turn script. `persona` is the tutor's tone. After this, call open_activity(dir) so the parent sees it on the right. Neither this nor open_activity hands anything to the child — only the parent does.",
+			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"dir":     map[string]interface{}{"type": "string", "description": "the activity folder you created: " + ActivitiesFolder + "/<yyyy-mm-dd>-<slug>"},
+				"title":   map[string]interface{}{"type": "string", "description": "short human title, e.g. \"Fractions — Quick Check\""},
+				"subject": map[string]interface{}{"type": "string", "description": "the school subject, e.g. Math"},
+				"topic":   map[string]interface{}{"type": "string", "description": "the topic within the subject, e.g. Fractions"},
+				"items":   map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "bare filenames inside the folder, in order (exclude any *-KEY.md answer key). Empty = instruction-only activity; then goal is required."},
+				"goal":    map[string]interface{}{"type": "string", "description": "WHAT the activity is for and what finishing looks like, plus anything the parent genuinely cares about"},
+				"persona": map[string]interface{}{"type": "string", "description": "the tutor's tone/personality for this activity, e.g. \"playful coach\""},
+			}, "required": []string{"dir", "title"}},
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				rel, slug, err := activityFolder(ws.root, stringArg(args, "dir"))
+				if err != nil {
+					return "", err
+				}
+				title := stringArg(args, "title")
+				if title == "" {
+					return "", fmt.Errorf("title is required")
+				}
+				var items []string
+				if raw, ok := args["items"].([]interface{}); ok {
+					for _, it := range raw {
+						name := path.Base(strings.TrimSpace(fmt.Sprint(it)))
+						if name == "" || name == "." || it == nil || isAnswerKey(name) {
+							continue
+						}
+						if _, found := ws.read(ctx, path.Join(rel, name)); !found {
+							return "", fmt.Errorf("item %q not found in the activity folder — write it first", name)
+						}
+						items = append(items, name)
+					}
+				}
+				goal := stringArg(args, "goal")
+				if len(items) == 0 && goal == "" {
+					return "", fmt.Errorf("either items (files in the folder) or goal (for an instruction-only activity) is required")
+				}
+				manifest := ActivityManifest{Title: title, Subject: stringArg(args, "subject"), Topic: stringArg(args, "topic"), Items: items, Goal: goal, Persona: stringArg(args, "persona"), CreatedAt: nowStamp()}
+				content, err := encodeJSON(manifest)
+				if err != nil {
+					return "", err
+				}
+				if err := ws.write(ctx, path.Join(rel, "activity.json"), content); err != nil {
+					return "", fmt.Errorf("write activity.json: %w", err)
+				}
+				// The activity is also the child's project: product.json is what
+				// binds one child conversation to this folder. Keep an existing
+				// session id so re-finalizing does not reset her conversation.
+				project := activityProject{SchemaVersion: 1, Product: ChildProfileID, ID: slug, Title: title, Description: goal, SessionID: "product-" + uuid.NewString()}
+				if existing, ok := ws.read(ctx, path.Join(rel, "product.json")); ok {
+					var prev activityProject
+					if json.Unmarshal([]byte(existing), &prev) == nil && strings.TrimSpace(prev.SessionID) != "" {
+						project.SessionID = prev.SessionID
+					}
+				}
+				projectContent, _ := encodeJSON(project)
+				if err := ws.write(ctx, path.Join(rel, "product.json"), projectContent); err != nil {
+					return "", fmt.Errorf("write product.json: %w", err)
+				}
+				emitInteraction(runtime, "activity_created", map[string]interface{}{"dir": rel, "title": title, "items": len(items)})
+				return jsonResult(map[string]interface{}{"status": "ok", "dir": rel, "title": title, "items": len(items)})
+			},
+		}, nil
+	}
+}
+
+// ---- showing things -------------------------------------------------------
+
+func presentationActivity(binding *agentprofiles.PresentationBinding) *orchestratorevents.PresentationActivity {
+	if binding == nil || binding.Activity == nil {
+		return nil
+	}
+	return &orchestratorevents.PresentationActivity{Label: binding.Activity.Label, Destination: binding.Activity.Destination, Detail: binding.Activity.Detail}
+}
+
+// openFileFactory shows one workspace file on the right. conversationOnly
+// pins it to the conversation workspace (the child's activity, with a focus
+// argument); otherwise any path under the family root is allowed.
+func openFileFactory(workspaceAPIURL string, conversationOnly bool) agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
+		description := "Show a workspace file to the parent on the right side of the screen. Call this right after you create or update a file the parent should see (study material, a test, a progress report, the academic map). Pass the path relative to the workspace."
+		params := map[string]interface{}{"path": map[string]interface{}{"type": "string", "description": "workspace-relative path to the file to display"}}
+		if conversationOnly {
+			description = "Show a lesson, worksheet, or one of her own saved pages on the right side of her screen. Pass the path relative to the activity folder. PASS focus WHENEVER you are talking about one specific question or section — that is what actually scrolls the page to it; omit it to keep her current position (for example right after recording an answer)."
+			params["focus"] = map[string]interface{}{"type": "string", "description": "id of the element to scroll to — a question (\"q4\"), a section (\"s2\"), a worked example (\"s2-1\"), or a figure (\"fig1\"); see skills/_shared/html-design.md. Ignored if no such id exists."}
+		}
+		return agentprofiles.ToolSpec{
+			Name: "open_file", Category: toolCategory, Description: description,
+			Parameters: map[string]interface{}{"type": "object", "properties": params, "required": []string{"path"}},
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				if runtime.Presentation == nil || strings.TrimSpace(runtime.Presentation.Kind) == "" {
+					return "", fmt.Errorf("open_file: profile did not declare a presentation kind for this tool")
+				}
+				rel := strings.Trim(strings.TrimSpace(stringArg(args, "path")), "/")
+				if rel == "" || strings.Contains(rel, "..") {
+					return "", fmt.Errorf("invalid path")
+				}
+				rel = strings.TrimPrefix(rel, ws.root+"/")
+				if _, ok := ws.read(ctx, rel); !ok {
+					return "", fmt.Errorf("no file at %q", rel)
+				}
+				focus := strings.TrimPrefix(stringArg(args, "focus"), "#")
+				if focus != "" && focus[0] >= '0' && focus[0] <= '9' {
+					focus = "q" + focus
+				}
+				fullPath := ws.path(rel)
+				event, err := presentations.Upsert(ctx, ws.client, presentations.Presentation{
+					Kind: runtime.Presentation.Kind, IdentityKey: fullPath, Title: path.Base(rel),
+					WorkspacePath: runtime.WorkspacePath, SessionID: runtime.SessionID,
+					Activity:  presentationActivity(runtime.Presentation),
+					Payload:   map[string]interface{}{"path": fullPath, "focus": focus},
+					Resources: []map[string]string{{"kind": "workspace.file", "path": fullPath, "role": "primary"}},
+				})
+				if err != nil {
+					return "", fmt.Errorf("show file: %w", err)
+				}
+				if runtime.Emit != nil {
+					runtime.Emit(&event)
+				}
+				return jsonResult(map[string]interface{}{"status": "ok", "opened": rel})
+			},
+		}, nil
+	}
+}
+
+func openActivityFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
+		return agentprofiles.ToolSpec{
+			Name: "open_activity", Category: toolCategory,
+			Description: "Show a whole activity (its title, goal, and item list) to the parent on the right side of the screen — a dedicated overview with its own 'Give to <child>' button, not a single file. Call this right after create_learning_activity finishes and whenever the parent asks to see an EXISTING activity as a whole. Pass the activity folder (dir).",
+			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"dir": map[string]interface{}{"type": "string", "description": "the activity folder: " + ActivitiesFolder + "/<slug>"},
+			}, "required": []string{"dir"}},
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				if runtime.Presentation == nil || strings.TrimSpace(runtime.Presentation.Kind) == "" {
+					return "", fmt.Errorf("open_activity: profile did not declare a presentation kind for this tool")
+				}
+				rel, slug, err := activityFolder(ws.root, stringArg(args, "dir"))
+				if err != nil {
+					return "", err
+				}
+				raw, ok := ws.read(ctx, path.Join(rel, "activity.json"))
+				if !ok {
+					return "", fmt.Errorf("no activity found at %q (create it first)", rel)
+				}
+				var manifest ActivityManifest
+				if err := json.Unmarshal([]byte(raw), &manifest); err != nil {
+					return "", fmt.Errorf("activity.json at %q is not valid: %w", rel, err)
+				}
+				fullDir := ws.path(rel)
+				event, err := presentations.Upsert(ctx, ws.client, presentations.Presentation{
+					Kind: runtime.Presentation.Kind, IdentityKey: fullDir, Title: manifest.Title,
+					WorkspacePath: runtime.WorkspacePath, SessionID: runtime.SessionID,
+					Activity: presentationActivity(runtime.Presentation),
+					Payload: map[string]interface{}{"dir": fullDir, "activity_id": slug, "title": manifest.Title, "subject": manifest.Subject, "topic": manifest.Topic,
+						"items": manifest.Items, "goal": manifest.Goal, "persona": manifest.Persona, "child_profile": ChildProfileID},
+					Resources: []map[string]string{{"kind": "workspace.folder", "path": fullDir, "role": "primary"}},
+				})
+				if err != nil {
+					return "", fmt.Errorf("show activity: %w", err)
+				}
+				if runtime.Emit != nil {
+					runtime.Emit(&event)
+				}
+				return jsonResult(map[string]interface{}{"status": "ok", "opened": rel})
+			},
+		}, nil
+	}
+}
+
+// ---- transient surface interactions ---------------------------------------
+
+func suggestActionsFactory() agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		return agentprofiles.ToolSpec{
+			Name: "suggest_actions", Category: toolCategory,
+			Description: "Call this at the END of EVERY turn, without exception — a turn that ends without it leaves the parent with nothing to tap. Offer 2–4 clickable buttons; each has a short label and the exact message sent as if the parent typed it when clicked. Prefer things they probably AREN'T already thinking about, but if nothing non-obvious comes to mind, offer the two most useful obvious things rather than skipping the call. Never a \"give this to the child\" button (that one is already on the right).",
+			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"actions": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+					"label":   map[string]interface{}{"type": "string", "description": "short button text, 2–4 words"},
+					"message": map[string]interface{}{"type": "string", "description": "the message sent as the parent when clicked"},
+				}, "required": []string{"label", "message"}}},
+			}, "required": []string{"actions"}},
+			Execute: func(_ context.Context, args map[string]interface{}) (string, error) {
+				raw, _ := args["actions"].([]interface{})
+				var actions []map[string]interface{}
+				for _, it := range raw {
+					m, ok := it.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					label, message := stringArg(m, "label"), stringArg(m, "message")
+					if label == "" || message == "" {
+						continue
+					}
+					actions = append(actions, map[string]interface{}{"label": label, "message": message})
+				}
+				emitInteraction(runtime, "suggestions", map[string]interface{}{"actions": actions})
+				return jsonResult(map[string]interface{}{"status": "ok", "count": len(actions)})
+			},
+		}, nil
+	}
+}
+
+func celebrateFactory() agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		return agentprofiles.ToolSpec{
+			Name: "celebrate", Category: toolCategory,
+			Description: "Award 1-3 stars for genuine effort or progress, right now, in the moment — finishing a test, working through something hard, a nice improvement, real persistence. Shown live in the chat; not tracked as a total. Never for just showing up or a single easy answer.",
+			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"stars":  map[string]interface{}{"type": "integer", "description": "how many stars, 1 to 3"},
+				"reason": map[string]interface{}{"type": "string", "description": "one short, warm sentence about what earned it"},
+			}, "required": []string{"stars", "reason"}},
+			Execute: func(_ context.Context, args map[string]interface{}) (string, error) {
+				stars := 1
+				if f, ok := args["stars"].(float64); ok {
+					stars = int(f)
+				}
+				if stars < 1 {
+					stars = 1
+				}
+				if stars > 3 {
+					stars = 3
+				}
+				reason := stringArg(args, "reason")
+				if reason == "" {
+					return "", fmt.Errorf("reason is required")
+				}
+				emitInteraction(runtime, "celebrate", map[string]interface{}{"stars": stars, "reason": reason})
+				return jsonResult(map[string]interface{}{"status": "ok", "stars_awarded": stars})
+			},
+		}, nil
+	}
+}
+
+func showSceneFactory() agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		return agentprofiles.ToolSpec{
+			Name: "show_scene", Category: toolCategory,
+			Description: "Show a small, self-contained HTML visual INLINE in this reply — a story beat, a diagram, a 'guess before you peek' moment, a mini interactive scene. Real CSS animation AND real JavaScript are available, so build actual interactivity when it fits. Keep it SMALL and self-contained (inline CSS/JS only, no external assets or network calls, follow skills/_shared/html-design.md). Any timer loop must have a natural stopping point. IF THE SCENE ASKS HER ANYTHING, IT MUST CARRY THE ANSWERS AS BUTTONS — two to four of them, each calling `SQ.choose(text, this)`. Call this when a visual moment genuinely helps, not every turn.",
+			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"html": map[string]interface{}{"type": "string", "description": "the small, self-contained HTML snippet to show inline"},
+			}, "required": []string{"html"}},
+			Execute: func(_ context.Context, args map[string]interface{}) (string, error) {
+				html := stringArg(args, "html")
+				if html == "" {
+					return "", fmt.Errorf("html is required")
+				}
+				emitInteraction(runtime, "scene", map[string]interface{}{"html": html})
+				return `{"status":"ok"}`, nil
+			},
+		}, nil
+	}
+}
+
+// ---- pictures ----------------------------------------------------------
+
+// findImageFactory saves a Commons picture into a workspace folder.
+// conversationOnly pins the destination to the conversation workspace (the
+// child's activity).
+func findImageFactory(workspaceAPIURL string, conversationOnly bool) agentprofiles.ToolFactory {
+	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
+		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
+		return agentprofiles.ToolSpec{
+			Name: "find_image", Category: toolCategory, Description: commonsimages.Description, Parameters: commonsimages.Params,
+			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
+				query := stringArg(args, "query")
+				if query == "" {
+					return "", fmt.Errorf("query is required")
+				}
+				dir := strings.Trim(stringArg(args, "dir"), "/")
+				if conversationOnly || dir == "" {
+					dir = ""
+				}
+				if strings.Contains(dir, "..") {
+					return "", fmt.Errorf("that folder isn't one you can write a picture into")
+				}
+				callCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+				defer cancel()
+				img, err := commonsimages.Search(callCtx, query)
+				if err != nil {
+					return "", err
+				}
+				if img == nil {
+					return jsonResult(map[string]interface{}{"status": "no_match", "query": query, "note": "Wikimedia Commons had nothing usable for this; continue without a picture, or retry with a shorter subject-only query."})
+				}
+				data, ext, err := commonsimages.Download(callCtx, img)
+				if err != nil {
+					return "", err
+				}
+				filename := commonsimages.FileName(stringArg(args, "filename"), ext)
+				folder := ws.path(strings.TrimPrefix(dir, ws.root+"/"))
+				if _, err := ws.client.UploadBinary(ctx, folder, filename, data); err != nil {
+					return "", fmt.Errorf("save picture: %w", err)
+				}
+				return jsonResult(map[string]interface{}{"status": "ok", "filename": filename, "width": img.Width, "height": img.Height, "title": img.Title,
+					"attribution": commonsimages.Credit(img), "source": img.PageURL, "embed_hint": fmt.Sprintf("<img src=%q alt=%q>", filename, img.Title)})
+			},
+		}, nil
+	}
+}

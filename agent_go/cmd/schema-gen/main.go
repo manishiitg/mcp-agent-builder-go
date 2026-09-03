@@ -148,6 +148,7 @@ type EventDataUnion struct {
 
 	// Presentation Events
 	PresentationUpdated *orchestrator_events.PresentationUpdatedEvent `json:"presentation_updated,omitempty"`
+	ProductInteraction  *orchestrator_events.ProductInteractionEvent  `json:"product_interaction,omitempty"`
 
 	// Step Execution Events
 	StepTokenUsage         *todo_creation_human.StepTokenUsageEvent         `json:"step_token_usage,omitempty"`
@@ -301,6 +302,7 @@ var EventRegistry = map[events.EventType]string{
 
 	// Presentation Events
 	orchestrator_events.PresentationUpdated: "presentation_updated",
+	orchestrator_events.ProductInteraction:  "product_interaction",
 
 	// Step Execution Events
 	orchestrator_events.StepTokenUsage:         "step_token_usage",
@@ -591,6 +593,7 @@ type UnifiedEvent struct {
 	SyntheticTurnReadyEvent        orchestrator_events.SyntheticTurnReadyEvent        `json:"synthetic_turn_ready"`
 	AutoNotificationSteeredEvent   orchestrator_events.AutoNotificationSteeredEvent   `json:"auto_notification_steered"`
 	PresentationUpdatedEvent       orchestrator_events.PresentationUpdatedEvent       `json:"presentation_updated"`
+	ProductInteractionEvent        orchestrator_events.ProductInteractionEvent        `json:"product_interaction"`
 
 	// Human Verification Events
 	RequestHumanFeedbackEvent orchestrator_events.RequestHumanFeedbackEvent `json:"request_human_feedback"`

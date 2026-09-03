@@ -218,6 +218,23 @@ func (e *PresentationUpdatedEvent) GetEventType() events.EventType {
 	return PresentationUpdated
 }
 
+// ProductInteractionEvent is emitted by a product tool for its own surface:
+// Product names the product, Kind is the product's own vocabulary (for
+// SparkQuill: "suggestions", "celebrate", "scene", "family_updated",
+// "activity_created"), Payload is the kind's data. Transient by design --
+// nothing is persisted beyond the session's event stream; a product that
+// needs a durable panel item uses a presentation instead.
+type ProductInteractionEvent struct {
+	events.BaseEventData
+	Product string                 `json:"product"`
+	Kind    string                 `json:"kind"`
+	Payload map[string]interface{} `json:"payload"`
+}
+
+func (e *ProductInteractionEvent) GetEventType() events.EventType {
+	return ProductInteraction
+}
+
 // SyntheticTurnReadyEvent notifies the main agent that background work has
 // started or completed, so a synthetic turn can weave the update in.
 type SyntheticTurnReadyEvent struct {
