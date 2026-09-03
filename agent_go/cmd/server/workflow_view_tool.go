@@ -28,6 +28,7 @@ var workflowWorkspaceViews = []struct{ ID, Label, About string }{
 	{"backup", "Backup", "backup status"},
 	{"publish", "Publish", "the published page"},
 	{"notify", "Notify", "notification settings"},
+	{"access", "Access", "who can see or edit this workflow, and (admins) the deployment's users"},
 	{"skills", "Workflow skills", "the workflow's skills"},
 	{"secrets", "Workflow secrets", "the workflow's secrets (names only)"},
 	{"mcp", "Workflow MCP servers", "the workflow's MCP servers"},

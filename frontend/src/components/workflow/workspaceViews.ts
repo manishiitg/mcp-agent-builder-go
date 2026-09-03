@@ -19,6 +19,7 @@ import {
   Puzzle,
   Route,
   Server,
+  ShieldCheck,
   Table2,
   type LucideIcon,
 } from 'lucide-react'
@@ -91,6 +92,10 @@ const VIEWS = [
   { id: 'backup', kind: 'inspector', label: 'Backup', icon: Cloud, toolbarGroup: 'pulse', pane: true },
   { id: 'publish', kind: 'inspector', label: 'Publish', icon: Globe, toolbarGroup: 'pulse', pane: true },
   { id: 'notify', kind: 'inspector', label: 'Notify', icon: BellRing, toolbarGroup: 'pulse', pane: true },
+  // Access (share this workflow / manage users) opens in the pane like the
+  // rest of Setup, not a modal (user request 2026-09-03). Button is hand-built
+  // in the toolbar because its visibility is permission-gated.
+  { id: 'access', kind: 'inspector', label: 'Access', icon: ShieldCheck, toolbarGroup: 'pulse', pane: true },
   // -- capability sections (WorkflowCapabilitiesPanel), then folders -------
   { id: 'skills', kind: 'capability', label: 'Workflow skills', icon: Puzzle, toolbarGroup: 'capabilities', pane: true, managesOwnScroll: true },
   { id: 'secrets', kind: 'capability', label: 'Workflow secrets', icon: KeyRound, toolbarGroup: 'capabilities', pane: true },

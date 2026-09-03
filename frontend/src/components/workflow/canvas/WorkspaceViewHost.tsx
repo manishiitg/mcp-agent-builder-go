@@ -64,6 +64,7 @@ const PulseView = lazy(() => import('../PulseView'))
 const WorkflowBackupView = lazy(() => import('../WorkflowBackupView'))
 const WorkflowPublishView = lazy(() => import('../WorkflowPublishView'))
 const WorkflowNotificationView = lazy(() => import('../WorkflowNotificationView'))
+const WorkflowAccessView = lazy(() => import('../WorkflowAccessView'))
 
 function formatPulseTimestamp(value?: string): string {
   if (!value) return ''
@@ -195,6 +196,8 @@ function InspectorBody({ workspacePath, presetQueryId }: { workspacePath: string
         return <WorkflowPublishView workspacePath={workspacePath} />
       case 'notify':
         return <WorkflowNotificationView workspacePath={workspacePath} />
+      case 'access':
+        return <WorkflowAccessView workspacePath={workspacePath} />
       case 'skills':
       case 'mcp':
       case 'secrets':

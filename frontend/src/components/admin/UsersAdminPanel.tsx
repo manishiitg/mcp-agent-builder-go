@@ -7,7 +7,7 @@ import ModalPortal from '../ui/ModalPortal'
 interface UsersAdminPanelProps {
   isOpen: boolean
   onClose: () => void
-  /** Render only the body, for a host (AccessCenter) that supplies the modal shell and header. */
+  /** Render only the body, for a host (WorkflowAccessView) that supplies the pane shell and header. */
   embedded?: boolean
 }
 

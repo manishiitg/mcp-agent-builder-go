@@ -26,7 +26,6 @@ import { getBackupDotClass } from '../backupStatus'
 import { getPublishDotClass } from '../publishStatus'
 import { getNotificationDotClass } from '../notificationStatus'
 import { loadWorkflowNotificationInfo, type WorkflowNotificationState } from '../../../services/workflow-notifications'
-import AccessCenter from '../AccessCenter'
 import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestStore'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip'
 import { hasWorkflowWriteAccess, hasWorkflowOwnerAccess } from '../../../utils/workflowPermissions'
@@ -347,7 +346,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [backupState, setBackupState] = useState<string>('loading')
   const [publishState, setPublishState] = useState<string>('not_configured')
   const [notificationState, setNotificationState] = useState<WorkflowNotificationState | 'loading'>('loading')
-  const [showAccessCenter, setShowAccessCenter] = useState(false)
   // Share is for this workflow's owners (or an admin), multi-user mode only.
   const isMultiUser = useAuthStore(state => state.isMultiUserMode)
   const isAdminUser = useAuthStore(state => state.user?.is_admin === true)
@@ -861,9 +859,10 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={() => setShowAccessCenter(true)}
-                      className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
+                      onClick={() => openWorkspaceView('access')}
+                      className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'access' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
                       aria-label="Access"
+                      aria-pressed={workflowWorkspaceView === 'access'}
                     >
                       <ShieldCheck className="w-3.5 h-3.5" />
                     </button>
@@ -882,13 +881,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       </div>
     </div>
     {/* Access: this workflow's sharing + (admins) the deployment's users */}
-    <AccessCenter
-      isOpen={showAccessCenter}
-      onClose={() => setShowAccessCenter(false)}
-      workspacePath={workspacePath ? (normalizeWorkspacePath(workspacePath) ?? workspacePath) : undefined}
-      canShareWorkflow={canShareWorkflow}
-      canManageUsers={canManageAccess}
-    />
     </>
   )
 }
