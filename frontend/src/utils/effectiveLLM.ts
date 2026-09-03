@@ -37,3 +37,22 @@ export function effectiveLLMUnderLock(
   if (!fallback?.provider || !fallback?.model_id) return own
   return { provider: fallback.provider, model_id: fallback.model_id, forcedByLock: true }
 }
+
+/**
+ * Provider-only variant for surfaces that know the provider but not the model
+ * (the composer's "Sending to …" / live-input labels). Under a lock the next
+ * turn runs on the published default unless the caller's provider is itself
+ * published, so that is what the label must say -- it read the workflow's
+ * saved builder provider and announced "Sending to Claude Code" on a
+ * deployment locked to Cursor (RTS, 2026-09-03).
+ */
+export function effectiveProviderUnderLock(
+  provider: string | null | undefined,
+  locked: boolean,
+  published: SavedLLM[],
+): string | null {
+  const own = provider?.trim() || null
+  if (!locked || published.length === 0) return own
+  if (own && published.some((entry) => norm(entry.provider) === norm(own))) return own
+  return published[0]?.provider?.trim() || own
+}

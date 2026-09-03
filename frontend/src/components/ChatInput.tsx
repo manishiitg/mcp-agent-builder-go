@@ -36,7 +36,7 @@ import { hasActiveSessionWork } from '../utils/activitySessions'
 import { headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
 import { shouldClearAcceptedChatDraft } from '../utils/chatSubmissionDraft'
 import { liveTerminalControlKey } from '../utils/liveTerminalKeys'
-import { effectiveLLMUnderLock } from '../utils/effectiveLLM'
+import { effectiveLLMUnderLock, effectiveProviderUnderLock } from '../utils/effectiveLLM'
 import { normalizeEventViewMode } from '../stores/useChatStore'
 
 const removePasteMarkersFromText = (text: string, markers: string[]) => {
@@ -742,19 +742,28 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   ])
 
   const effectiveProviderForSteer = useMemo(() => {
-    if (isWorkflowPhaseChat) {
-      return manifestBuilderLLM?.provider
-        || workflowPhasePreset?.llmConfig?.builder_llm?.provider
-        || workflowPhasePreset?.llmConfig?.provider
-        || tabConfig?.llmConfig?.provider
-        || null
-    }
-    if (multiAgentEffectiveLLMConfig?.provider) return multiAgentEffectiveLLMConfig.provider
-    return tabConfig?.llmConfig?.provider ?? null
+    // The saved/preset provider is only a preference: under a locked
+    // deployment the turn runs on the published default (same rule as the
+    // status chip and the server's resolveLockedLLM), so every label derived
+    // from this value must reflect the lock too.
+    const saved = (() => {
+      if (isWorkflowPhaseChat) {
+        return manifestBuilderLLM?.provider
+          || workflowPhasePreset?.llmConfig?.builder_llm?.provider
+          || workflowPhasePreset?.llmConfig?.provider
+          || tabConfig?.llmConfig?.provider
+          || null
+      }
+      if (multiAgentEffectiveLLMConfig?.provider) return multiAgentEffectiveLLMConfig.provider
+      return tabConfig?.llmConfig?.provider ?? null
+    })()
+    return effectiveProviderUnderLock(saved, llmConfigLocked, publishedLLMs)
   }, [
     isWorkflowPhaseChat,
+    llmConfigLocked,
     manifestBuilderLLM?.provider,
     multiAgentEffectiveLLMConfig?.provider,
+    publishedLLMs,
     tabConfig?.llmConfig?.provider,
     workflowPhasePreset?.llmConfig?.builder_llm?.provider,
     workflowPhasePreset?.llmConfig?.provider])
