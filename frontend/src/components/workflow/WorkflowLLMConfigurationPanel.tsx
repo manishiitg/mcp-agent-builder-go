@@ -15,6 +15,7 @@ import type { LLMOption } from '../../types/llm'
 import { llmOptionsKey } from '../../utils/llmConfigDisplay'
 import { resolvePiModelGroup } from '../../utils/llmDisplay'
 import { getWorkflowLLMOptions, getWorkflowLLMTierDefaults, getWorkflowProviderOptions } from '../../utils/workflowLLMTierDefaults'
+import { effectiveLLMUnderLock } from '../../utils/effectiveLLM'
 
 type RoleKey = 'tier_1' | 'tier_2' | 'tier_3' | 'builder_llm' | 'pulse_llm'
 const ROLE_KEYS: RoleKey[] = ['tier_1', 'tier_2', 'tier_3', 'builder_llm', 'pulse_llm']
@@ -177,6 +178,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     isProviderSupported,
     llmConfigLocked,
     lockedProviders,
+    publishedLLMs,
     bedrockConfig,
     openaiConfig,
     vertexConfig,
@@ -199,6 +201,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     isProviderSupported: state.isProviderSupported,
     llmConfigLocked: state.llmConfigLocked,
     lockedProviders: state.lockedProviders,
+    publishedLLMs: state.savedLLMs,
     bedrockConfig: state.bedrockConfig,
     openaiConfig: state.openaiConfig,
     vertexConfig: state.vertexConfig,
@@ -1101,13 +1104,51 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   }
 
   if (llmConfigLocked) {
+    // Say what runs rather than only that it is locked: the published default
+    // (what every workflow on this deployment uses), then the other providers
+    // the platform knows, greyed out, so people can see what could be enabled.
+    const effective = effectiveLLMUnderLock(
+      { provider: llmConfig?.builder_llm?.provider ?? llmConfig?.provider, model_id: llmConfig?.builder_llm?.model_id },
+      true,
+      publishedLLMs,
+    )
+    const activeEntry = effective ? providerManifest.find(p => p.id === effective.provider) : undefined
+    const activeName = activeEntry?.display_name ?? effective?.provider ?? 'the published default'
+    const others = providerManifest
+      .filter(p => !p.deprecated && p.id !== effective?.provider)
+      .map(p => p.display_name)
+      .sort((a, b) => a.localeCompare(b))
     return (
-      <div className="flex items-start gap-2 rounded-md border border-dashed border-border px-4 py-5 text-sm text-muted-foreground">
-        <Lock className="mt-0.5 h-4 w-4 shrink-0" />
-        <div>
-          <div className="font-medium text-foreground">LLM settings are locked by admin</div>
-          <div className="mt-0.5 text-xs">Contact your administrator to enable new providers or models.</div>
+      <div className="space-y-3 rounded-md border border-border px-4 py-4 text-sm">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="text-muted-foreground">This workflow runs on</span>
+          <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            {activeName}
+          </span>
+          {effective?.model_id && effective.model_id !== effective.provider && (
+            <span className="font-mono text-[11px] text-muted-foreground">{effective.model_id}</span>
+          )}
+          <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+            <Lock className="h-3 w-3" /> Set by your administrator
+          </span>
         </div>
+        <p className="text-xs text-muted-foreground">
+          Every workflow on this deployment uses this model; it cannot be changed per workflow.
+        </p>
+        {others.length > 0 && (
+          <div className="text-xs text-muted-foreground">
+            <div className="mb-1 font-medium text-foreground/80">Other providers on this platform</div>
+            <div className="flex flex-wrap gap-1.5">
+              {others.map(name => (
+                <span key={name} className="inline-flex items-center gap-1 rounded-md border border-dashed border-border px-2 py-0.5 opacity-60" title="Locked on this deployment">
+                  <Lock className="h-3 w-3" /> {name}
+                </span>
+              ))}
+            </div>
+            <div className="mt-1">Ask your administrator to enable one of these.</div>
+          </div>
+        )}
       </div>
     )
   }

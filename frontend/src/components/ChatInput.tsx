@@ -36,6 +36,7 @@ import { hasActiveSessionWork } from '../utils/activitySessions'
 import { headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
 import { shouldClearAcceptedChatDraft } from '../utils/chatSubmissionDraft'
 import { liveTerminalControlKey } from '../utils/liveTerminalKeys'
+import { effectiveLLMUnderLock } from '../utils/effectiveLLM'
 import { normalizeEventViewMode } from '../stores/useChatStore'
 
 const removePasteMarkersFromText = (text: string, markers: string[]) => {
@@ -621,11 +622,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     providerManifestLoaded,
     loadProviderManifest,
     primaryConfig,
+    llmConfigLocked,
+    publishedLLMs,
   } = useLLMStore(useShallow(state => ({
     providerManifest: state.providerManifest,
     providerManifestLoaded: state.providerManifestLoaded,
     loadProviderManifest: state.loadProviderManifest,
     primaryConfig: state.primaryConfig,
+    llmConfigLocked: state.llmConfigLocked,
+    publishedLLMs: state.savedLLMs,
   })))
   
   // Note: activeTab may be undefined during initial render before tabs are created
@@ -1335,8 +1340,19 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // keeping its process alive must never make this spinner claim the agent is
   // still working.
   const mainAgentRuntimeStatus = useMemo(() => {
-    const provider = activeSession?.runtime?.provider?.trim() || primaryLLM?.provider?.trim() || ''
-    const model = activeSession?.runtime?.model_id?.trim() || primaryLLM?.model?.trim() || ''
+    // Under a locked deployment the next turn runs on the published default
+    // whatever this workflow saved or a past session reported, so that is
+    // what the composer shows (server: resolveLockedLLM).
+    const effective = effectiveLLMUnderLock(
+      {
+        provider: activeSession?.runtime?.provider?.trim() || primaryLLM?.provider?.trim() || '',
+        model_id: activeSession?.runtime?.model_id?.trim() || primaryLLM?.model?.trim() || '',
+      },
+      llmConfigLocked,
+      publishedLLMs,
+    )
+    const provider = effective?.provider || ''
+    const model = effective?.model_id || ''
     if (!provider) return null
 
     // A durable foreground completion settles the turn even when the periodic
@@ -1370,6 +1386,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     isTurnInFlight,
     primaryLLM?.model,
     primaryLLM?.provider,
+    llmConfigLocked,
+    publishedLLMs,
   ])
 
   // mainAgentRuntimeStatus reads activeSession from activeSessionsCache, a
