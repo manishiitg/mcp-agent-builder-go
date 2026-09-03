@@ -16,7 +16,9 @@ import { useModeStore } from '../../../src/stores/useModeStore'
 import { useAppStore } from '../../../src/stores/useAppStore'
 import { hydrateTabEvents, restoreSession } from '../../../src/utils/sessionRestore'
 import { setProductCommands } from '../../../src/commands/registry'
-import { parsePresentationUpdatedEvent, type PollingEvent } from '../../../shared/session'
+import { usePresentationEvents } from '../../../src/platform/presentations/usePresentationEvents'
+import { useProductInteractions } from '../../../src/platform/interactions/useProductInteractions'
+import { ProductSuggestions } from '../../../src/platform/chat/ProductSuggestions'
 import type { QuickCommand } from '../stores/types'
 import { api } from '../api'
 import { toProductCommandDefinitions } from './productCommands'
@@ -27,6 +29,7 @@ export const FAMILY_WORKSPACE = 'Chats/SparkQuill'
 
 export type ProductInteraction = { kind: string; payload: Record<string, unknown> }
 export type ProductPresentation = { kind: string; payload: Record<string, unknown> }
+type ProfileDeclaration = { ui_panels?: { suggestions?: boolean }; tools?: { presentation?: { kind?: string } }[] }
 
 type Props = {
   title: string
@@ -43,29 +46,10 @@ const queryClient = new QueryClient()
 // remount finds it).
 let openedTab: Promise<{ tabId: string; sessionId: string }> | null = null
 
-function payloadOf(e: PollingEvent): Record<string, unknown> {
-  return ((e.data as { data?: Record<string, unknown> } | undefined)?.data ?? {}) as Record<string, unknown>
-}
-
-/** The suggestion pills of the latest reply: the last `suggestions` interaction after the last user message. */
-function latestSuggestions(events: PollingEvent[]): { label: string; message: string }[] {
-  let out: { label: string; message: string }[] = []
-  for (const e of events) {
-    const type = e.type ?? (e.data as { type?: string } | undefined)?.type
-    if (type === 'user_message') { out = []; continue }
-    if (type !== 'product_interaction') continue
-    const p = payloadOf(e)
-    if (p.kind !== 'suggestions') continue
-    const actions = ((p.payload as { actions?: unknown[] } | undefined)?.actions ?? []) as { label?: unknown; message?: unknown }[]
-    out = actions
-      .map((a) => ({ label: String(a.label ?? '').trim(), message: String(a.message ?? '').trim() }))
-      .filter((a) => a.label && a.message)
-  }
-  return out
-}
+// Whether this product's manifest opts into suggestion pills (ui_panels.suggestions).
+let suggestionsEnabled = false
 
 function SparkQuillConversation({ events, isStreaming, isRestoring, streamingText, streamingStatus, hasOlder, loadingOlder, historyError, onLoadOlder, landingContent, onSubmitQuery }: ChatContentRendererProps) {
-  const suggestions = isStreaming ? [] : latestSuggestions(events)
   if (!isRestoring && events.length === 0 && !streamingText) return <>{landingContent}</>
   return (
     <div className="fl-platform-transcript">
@@ -86,13 +70,7 @@ function SparkQuillConversation({ events, isStreaming, isRestoring, streamingTex
       {isStreaming && !streamingText && (
         <div className="fl-thinking fl-platform-working"><img src="/sparkquill-loader.svg" alt="" width={30} height={30} /><span>{streamingStatus ? `Quill is: ${streamingStatus}…` : 'Working on it…'}</span></div>
       )}
-      {suggestions.length > 0 && onSubmitQuery && (
-        <div className="fl-suggestions" aria-label="Recommended next steps">
-          {suggestions.map((s, i) => (
-            <button key={i} type="button" className="fl-suggestion" onClick={() => onSubmitQuery(s.message)}>{s.label}</button>
-          ))}
-        </div>
-      )}
+      {onSubmitQuery && suggestionsEnabled && <ProductSuggestions events={events} onSubmit={onSubmitQuery} hidden={isStreaming} />}
     </div>
   )
 }
@@ -100,6 +78,7 @@ function SparkQuillConversation({ events, isStreaming, isRestoring, streamingTex
 export default function PlatformChat({ title, childName, theme, commands, landing, onInteraction, onPresentation }: Props) {
   const [tabId, setTabId] = useState<string | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [presentationKinds, setPresentationKinds] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
 
   // The shared components style themselves by the html class, the way the
@@ -144,6 +123,11 @@ export default function PlatformChat({ title, childName, theme, commands, landin
       await waitForChatStoreHydration()
       const chatStore = useChatStore.getState()
       const existing = Object.values(chatStore.chatTabs).find((tab) => tab.metadata?.agentProfileId === PARENT_PROFILE_ID)
+      // What the product declares in product.yaml: which panels this
+      // surface offers and which presentation kinds its tools emit.
+      const profile = await agentApi.getAgentProfile(PARENT_PROFILE_ID).catch(() => null) as ProfileDeclaration | null
+      suggestionsEnabled = Boolean(profile?.ui_panels?.suggestions)
+      setPresentationKinds((profile?.tools ?? []).map((t) => t.presentation?.kind).filter((k): k is string => typeof k === 'string' && k.length > 0))
       const conversation = await agentApi.resolveAgentProfileConversation(PARENT_PROFILE_ID, {}, existing?.sessionId ?? undefined)
       const createdTabId = await chatStore.createChatTab(title, {
         mode: 'multi-agent',
@@ -167,30 +151,22 @@ export default function PlatformChat({ title, childName, theme, commands, landin
     return () => { cancelled = true }
   }, [title])
 
-  // Product events ride the same stream ChatArea opens; hand the new ones to
-  // the workspace panel. Events already present when the tab is opened are
-  // history, not something to act on again.
-  const events = useChatStore((s) => (sessionId ? s.tabEvents[sessionId] : undefined))
-  const seen = useRef<Set<string> | null>(null)
+  // Product events ride the same stream ChatArea keeps, through the
+  // platform's own selectors (the same ones Video Studio uses for its
+  // presentations). Events already present when the tab opened are history,
+  // not something to act on again.
+  const interactions = useProductInteractions(sessionId ?? undefined)
+  const presentations = usePresentationEvents(sessionId ?? undefined, presentationKinds)
+  // Both lists are in event order and only grow within a session, so what
+  // is new is everything past the count already handed over.
+  const handed = useRef<{ interactions: number; presentations: number } | null>(null)
   useEffect(() => {
-    if (!events) return
-    if (!seen.current) {
-      seen.current = new Set(events.map((e) => e.id))
-      return
-    }
-    for (const e of events) {
-      if (seen.current.has(e.id)) continue
-      seen.current.add(e.id)
-      const type = e.type ?? (e.data as { type?: string } | undefined)?.type
-      if (type === 'product_interaction') {
-        const p = payloadOf(e)
-        onInteraction({ kind: String(p.kind ?? ''), payload: (p.payload ?? {}) as Record<string, unknown> })
-      } else if (type === 'presentation_updated') {
-        const parsed = parsePresentationUpdatedEvent(e)
-        if (parsed) onPresentation({ kind: parsed.kind, payload: parsed.payload })
-      }
-    }
-  }, [events, onInteraction, onPresentation])
+    if (!sessionId) return
+    if (!handed.current) { handed.current = { interactions: interactions.length, presentations: presentations.length }; return }
+    for (const it of interactions.slice(handed.current.interactions)) onInteraction({ kind: it.kind, payload: it.payload })
+    for (const p of presentations.slice(handed.current.presentations)) onPresentation({ kind: p.kind, payload: p.payload })
+    handed.current = { interactions: interactions.length, presentations: presentations.length }
+  }, [sessionId, interactions, presentations, onInteraction, onPresentation])
 
   return (
     <QueryClientProvider client={queryClient}>

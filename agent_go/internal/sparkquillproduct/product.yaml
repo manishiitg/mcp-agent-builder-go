@@ -123,6 +123,7 @@ profile:
   ui_panels:
     schedules: true
     files: true
+    suggestions: true
   schedules:
     - id: pulse
       name: Check-in

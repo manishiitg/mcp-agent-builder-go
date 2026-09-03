@@ -1260,3 +1260,13 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-platform-transcript .fl-suggestions { padding: 6px 16px 10px; }
 
 .fl-platform-working { padding: 4px 16px 10px; }
+
+/* The shared components assume Tailwind's preflight (no browser default
+   button/textarea chrome). Preflight is off in this app to protect its own
+   styles, so give the hosted chat that baseline here; :where keeps it below
+   any utility class the components set. */
+.fl-platform-chat :where(button) { appearance: none; background: transparent; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; cursor: pointer; box-shadow: none; }
+.fl-platform-chat :where(button:disabled) { cursor: default; }
+.fl-platform-chat :where(textarea, input) { font: inherit; color: inherit; }
+.fl-platform-chat :where(pre, code) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.fl-platform-chat :where(p, ul, ol) { margin: 0; }

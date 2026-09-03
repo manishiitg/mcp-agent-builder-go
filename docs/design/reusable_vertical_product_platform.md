@@ -1177,3 +1177,29 @@ Host requirements learned the hard way:
   carries `dark:` variants so it reads on a light surface.
 Standalone mode keeps the old renderer until the family-server is retired.
 Child mode (keyed activity conversations) is not moved yet.
+
+### 2026-09-03: product features declared in product.yaml, styling owned by the product
+
+- **Styling.** The shared composer and transcript paint with the shadcn tokens
+  only; a product sets the token values on its wrapper (SparkQuill:
+  `.fl-platform-chat` in learning-app.css, light + dark). A host without
+  Tailwind preflight gives the hosted chat a `:where(button…)` baseline.
+- **Suggestion pills are a platform feature.** Contract in
+  `frontend/shared/session/interactions.ts` (`product_interaction` kind
+  `suggestions`, payload `{actions:[{label,message}]}`), selector
+  `src/platform/interactions/useProductInteractions.ts` (twin of
+  `usePresentationEvents`), component `src/platform/chat/ProductSuggestions.tsx`.
+  A product opts in with `ui_panels.suggestions: true`; the surface reads the
+  profile (`agentApi.getAgentProfile`) instead of hardcoding it. The
+  `suggest_actions` tool itself still lives in the SparkQuill package; moving
+  it to a platform factory is the remaining step.
+- **Presentations.** The surface derives the kinds it reacts to from the
+  profile's tool bindings (`tools[].presentation.kind`) and uses the platform's
+  `usePresentationEvents`.
+- Product tool events are stamped with a real timestamp at emission
+  (`stampEventData`): a zero inner timestamp sorted them to year 0001 in a
+  restored trace, which is why pills vanished after a reload.
+- Restore keeps only the last `maxPersistedChatHistoryUIEvents` (200) trace
+  events, so tool chips of older turns do not survive a reload in any product;
+  the durable conversation has the tool messages, so the converter could
+  synthesize chips from them (not done).

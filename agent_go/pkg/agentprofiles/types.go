@@ -348,6 +348,11 @@ type UIPanels struct {
 	// browser AgentWorks' own multi-agent files view uses -- unscoped,
 	// unlike Video Studio's FilesPanel which is pinned to one project.
 	Files bool `json:"files,omitempty" yaml:"files,omitempty"`
+	// Suggestions shows tappable next-step buttons under a reply, taken from
+	// the product's `suggestions` interaction (a product_interaction event
+	// with payload {actions: [{label, message}]}, the shape the
+	// suggest_actions tool emits). Tapping one submits its message.
+	Suggestions bool `json:"suggestions,omitempty" yaml:"suggestions,omitempty"`
 }
 
 const (
