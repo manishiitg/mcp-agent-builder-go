@@ -100,6 +100,7 @@ function ChildConversation({ events, isStreaming, isRestoring, streamingText, st
         onRetry={onLoadOlder}
         surfaceClassName="fl-platform-surface"
         autoScrollMode="follow-turn"
+        assistantLabel="Quill"
         productRows={{ kinds, render: renderProductRow }}
       />
       {isStreaming && !streamingText && (

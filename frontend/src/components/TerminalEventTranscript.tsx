@@ -19,6 +19,9 @@ import { formatToolCallArguments, formatToolCallResult } from '../utils/toolCall
 import type { PollingEvent, TerminalSnapshot } from '../services/api-types'
 import { parseProductInteraction, type ProductInteraction } from '../../shared/session/interactions'
 
+// Message text sizes multiply --chat-scale (default 1), so a product can offer
+// a bigger reading size (SparkQuill's Child Mode "T" button sets it on the
+// chat section) without the transcript knowing about the control.
 type TranscriptRenderItem = TranscriptItem | {
   kind: 'live'
   key: string
@@ -141,7 +144,8 @@ const TranscriptEvent: React.FC<{
   /** Rendered inside a turn block that already draws the border and header. */
   inTurn?: boolean
   renderInteraction?: (interaction: ProductInteraction, event: PollingEvent) => React.ReactNode
-}> = ({ event, onSendMessage, compactUserBottom = false, inTurn = false, renderInteraction }) => {
+  assistantLabel?: string
+}> = ({ event, onSendMessage, compactUserBottom = false, inTurn = false, renderInteraction, assistantLabel }) => {
   if (event.type === 'product_interaction') {
     const interaction = parseProductInteraction(event)
     return interaction && renderInteraction ? <>{renderInteraction(interaction, event)}</> : null
@@ -166,7 +170,7 @@ const TranscriptEvent: React.FC<{
   const result = typeof payload.result === 'string' ? payload.result.trim() : ''
   const responseContent = content || finalResult || result
   if (AGENT_RESPONSE_EVENT_TYPES.has(event.type || '') && responseContent) {
-    return <AssistantTranscriptMessage event={event} content={responseContent} timestamp={timestamp} framed={!inTurn} />
+    return <AssistantTranscriptMessage event={event} content={responseContent} timestamp={timestamp} framed={!inTurn} label={assistantLabel} />
   }
 
   if (isExecutionPromptTranscriptMessage(event)) {
@@ -192,7 +196,7 @@ const UserTranscriptMessage: React.FC<{ content: string; timestamp: string; comp
   if (!collapsible) {
     return (
       <div className={`ml-auto mt-4 max-w-[84%] text-right ${compactBottom ? 'mb-1' : 'mb-4'}`}>
-        <div className="whitespace-pre-wrap break-words text-[14px] leading-6 text-foreground">{shown}</div>
+        <div className="whitespace-pre-wrap break-words text-[length:calc(14px*var(--chat-scale,1))] leading-[calc(24px*var(--chat-scale,1))] text-foreground">{shown}</div>
         {timestamp && <div className="mt-1 text-[10px] tabular-nums text-muted-foreground">{timestamp}</div>}
       </div>
     )
@@ -200,7 +204,7 @@ const UserTranscriptMessage: React.FC<{ content: string; timestamp: string; comp
 
   return (
     <article className={`ml-auto mt-4 w-[min(92%,52rem)] rounded-lg border border-border bg-muted/30 px-4 py-3 text-left ${compactBottom ? 'mb-1' : 'mb-4'}`}>
-      <div className="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground/90">{shown}</div>
+      <div className="whitespace-pre-wrap break-words text-[length:calc(13px*var(--chat-scale,1))] leading-[calc(24px*var(--chat-scale,1))] text-foreground/90">{shown}</div>
       <div className="mt-2 flex items-center gap-3">
         <button
           type="button"
@@ -281,7 +285,7 @@ const AssistantTranscriptMessage: React.FC<{ event: PollingEvent; content: strin
   return (
     <article data-testid="terminal-clear-assistant-message" className={framed ? `my-4 ${AGENT_BLOCK_CLASS}` : 'py-1'}>
       {framed && <AssistantTurnHeader event={event} timestamp={timestamp} label={label} />}
-      <div className="[&_li]:!text-[14px] [&_p]:!text-[14px]">
+      <div className="[&_li]:!text-[length:calc(14px*var(--chat-scale,1))] [&_p]:!text-[length:calc(14px*var(--chat-scale,1))] [&_li]:!leading-[calc(24px*var(--chat-scale,1))] [&_p]:!leading-[calc(24px*var(--chat-scale,1))]">
         <ConversationMarkdownRenderer content={content} framed={false} maxHeight="none" />
       </div>
     </article>
@@ -545,6 +549,8 @@ interface TerminalEventTranscriptProps {
    * product's own rendering (a celebration, an inline scene). Other
    * interaction kinds stay on the side channel. */
   productRows?: { kinds: string[]; render: (interaction: ProductInteraction, event: PollingEvent) => React.ReactNode }
+  /** What the agent is called in turn headers ("Agent" by default; a product passes its own name, e.g. "Quill"). */
+  assistantLabel?: string
 }
 
 const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
@@ -563,6 +569,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   surfaceClassName,
   autoScrollMode = 'reveal-first-response',
   productRows,
+  assistantLabel = 'Agent',
 }) => {
   const scrollerRef = useRef<HTMLElement | Window | null>(null)
   const virtuosoRef = useRef<VirtuosoHandle | null>(null)
@@ -1011,6 +1018,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
                   compactUserBottom={listData[index + 1]?.kind === 'tools'}
                   inTurn={Boolean(slot?.agent)}
                   renderInteraction={renderInteraction}
+                  assistantLabel={assistantLabel}
                 />
               )
           if (!slot?.agent) {
@@ -1021,7 +1029,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
           return (
             <div data-testid={testId} className="px-3">
               <div className={`${AGENT_BLOCK_CLASS} ${slot.first ? 'mt-4' : ''} ${slot.last ? 'mb-4' : ''}`}>
-                {slot.first && slot.header && <AssistantTurnHeader event={slot.header} timestamp={transcriptTimestamp(slot.header)} />}
+                {slot.first && slot.header && <AssistantTurnHeader event={slot.header} timestamp={transcriptTimestamp(slot.header)} label={assistantLabel} />}
                 {body}
               </div>
             </div>
@@ -1035,7 +1043,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
 const LiveAssistantTranscript: React.FC<{ text: string; status: string }> = ({ text, status }) => (
   text ? (
     <article data-testid="terminal-clear-live-assistant-message" className="mx-3 my-4 border-l border-emerald-400/55 pl-3 pr-1">
-      <div className="[&_li]:!text-[14px] [&_p]:!text-[14px]">
+      <div className="[&_li]:!text-[length:calc(14px*var(--chat-scale,1))] [&_p]:!text-[length:calc(14px*var(--chat-scale,1))] [&_li]:!leading-[calc(24px*var(--chat-scale,1))] [&_p]:!leading-[calc(24px*var(--chat-scale,1))]">
         <ConversationMarkdownRenderer content={text} framed={false} maxHeight="none" />
       </div>
       <span aria-label="Writing" className="mt-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-400" />
