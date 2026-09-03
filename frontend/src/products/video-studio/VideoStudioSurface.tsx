@@ -269,7 +269,6 @@ function VideoStudioConversation({
       onLoadOlder={onLoadOlder}
       onRetry={onLoadOlder}
       surfaceClassName="bg-gradient-to-b from-slate-950 via-slate-950 to-violet-950/35"
-      autoScrollMode="reveal-first-response"
     />
   )
 }

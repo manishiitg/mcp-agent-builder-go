@@ -614,9 +614,6 @@ interface TerminalEventTranscriptProps {
   /** Optional product skin for the transcript backdrop. AgentWorks keeps its
    * existing default; product surfaces can use their own visual identity. */
   surfaceClassName?: string
-  /** Whether a product should follow an entire turn, or reveal meaningful
-   * turn boundaries (send, tool, first stream, final answer) only. */
-  autoScrollMode?: 'follow-turn' | 'reveal-first-response'
   /** Product interactions to show in place, inside the agent's turn, with the
    * product's own rendering (a celebration, an inline scene). Other
    * interaction kinds stay on the side channel. */
@@ -641,11 +638,6 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   streamingText = '',
   streamingStatus = '',
   surfaceClassName,
-  // Follow the whole turn by default (AgentWorks, SparkQuill, the terminal
-  // center). Only a surface that says so gets reveal-first-response; the
-  // default had drifted to that on 2026-09-02 and AgentWorks lost its
-  // follow behaviour without any call site changing.
-  autoScrollMode = 'follow-turn',
   productRows,
   assistantLabel = 'Agent',
   assistantIcon,
@@ -686,38 +678,6 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   }, [items, streamingStatus, streamingText.length])
   const followedUserMessageKeyRef = useRef(latestUserMessageKey)
   const followCurrentTurnRef = useRef(true)
-  // Keep this unset until the first effect runs. Initialising it to the latest
-  // user row made an in-progress turn restored after refresh look historical:
-  // the first streaming response then never armed Video Studio's one-time
-  // reveal and arrived below the composer.
-  const firstResponseUserMessageKeyRef = useRef<string | null>(null)
-  const initializedFirstResponseRevealRef = useRef(false)
-  const revealFirstResponseRef = useRef(false)
-  // Video Studio intentionally does not follow every streamed token. It does
-  // need to reveal meaningful state changes in a turn, though: tool activity,
-  // the first live response, and the durable final answer.
-  const initializedActivityRevealRef = useRef(false)
-  const previousLiveStreamRef = useRef(false)
-  const lastRevealedToolKeyRef = useRef('')
-  const lastRevealedAssistantKeyRef = useRef('')
-  // Virtuoso is not always ready in the same commit that adds an optimistic
-  // user row. Keep a short, keyed retry sequence alive across the status/text
-  // re-renders that immediately follow submission.
-  const userRevealGenerationRef = useRef(0)
-  const assistantResponseAfterLatestUser = useMemo(() => {
-    let latestUserIndex = -1
-    for (let index = items.length - 1; index >= 0; index -= 1) {
-      const item = items[index]
-      if (item.kind === 'event' && item.event.type === 'user_message') {
-        latestUserIndex = index
-        break
-      }
-    }
-    if (latestUserIndex < 0) return false
-    return items.slice(latestUserIndex + 1).some(item =>
-      item.kind === 'event' && Boolean(assistantResponseText(item.event)),
-    )
-  }, [items])
   // Do not reserve a permanent header for history. The user reaches this
   // control at the oldest currently-loaded item; it only exists when another
   // page can actually be fetched from the backend. A short restored transcript
@@ -769,7 +729,6 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   // the whole current turn through its final answer, and stop only when the
   // reader deliberately scrolls upward.
   useEffect(() => {
-    if (autoScrollMode !== 'follow-turn') return
     const isNewUserMessage = Boolean(
       latestUserMessageKey && followedUserMessageKeyRef.current !== latestUserMessageKey,
     )
@@ -796,7 +755,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
       window.cancelAnimationFrame(frame)
       window.clearTimeout(settledLayoutTimer)
     }
-  }, [autoScrollMode, items.length, latestUserMessageKey, transcriptTailRevision])
+  }, [items.length, latestUserMessageKey, transcriptTailRevision])
 
   // Stick to the end while a turn is being followed. Two things move the end
   // without a new item: chrome outside the list (a working indicator, pills,
@@ -813,7 +772,6 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   // few frames because measurements settle in more than one.
   const nearEndRef = useRef(true)
   useEffect(() => {
-    if (autoScrollMode !== 'follow-turn') return
     const scroller = scrollerRef.current
     if (!(scroller instanceof HTMLElement) || typeof ResizeObserver === 'undefined') return
     const onScroll = () => {
@@ -831,153 +789,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     const list = scroller.querySelector('[data-testid="virtuoso-item-list"]')
     if (list) observer.observe(list)
     return () => { observer.disconnect(); scroller.removeEventListener('scroll', onScroll) }
-  }, [autoScrollMode])
-
-  // Video Studio presents long-form creative work where a reader often starts
-  // examining the first lines while the agent is still writing. Reveal that
-  // first assistant text, then stop: continuously following every streamed
-  // chunk steals the reader's scroll position and makes the response hard to
-  // inspect. AgentWorks keeps the existing full-turn follow behaviour above.
-  useEffect(() => {
-    if (autoScrollMode !== 'reveal-first-response') return
-    let userMessageFrame: number | undefined
-    let userMessageSettledLayoutTimer: number | undefined
-    const isInitialTranscript = !initializedFirstResponseRevealRef.current
-    let shouldRevealUserMessage = false
-    const isNewUserMessage = Boolean(
-      !isInitialTranscript &&
-      latestUserMessageKey &&
-      firstResponseUserMessageKeyRef.current !== latestUserMessageKey,
-    )
-    if (isInitialTranscript) {
-      initializedFirstResponseRevealRef.current = true
-      firstResponseUserMessageKeyRef.current = latestUserMessageKey
-      // A page reload can reconnect while the agent is already thinking. Arm
-      // that live turn without treating a completed, restored conversation as
-      // a new response that should steal the reader's position.
-      // A brand-new conversation mounts only after its optimistic first user
-      // row exists. That row is not history: it needs the same one-time
-      // reveal as any later sent message once the response begins.
-      const isOnlyPendingInitialUserMessage = Boolean(
-        latestUserMessageKey && items.length === 1 && !assistantResponseAfterLatestUser,
-      )
-      revealFirstResponseRef.current = Boolean(
-        latestUserMessageKey && !assistantResponseAfterLatestUser && (
-          streamingText.trim() || streamingStatus.trim() || isOnlyPendingInitialUserMessage
-        ),
-      )
-      shouldRevealUserMessage = isOnlyPendingInitialUserMessage
-    } else if (isNewUserMessage) {
-      firstResponseUserMessageKeyRef.current = latestUserMessageKey
-      revealFirstResponseRef.current = true
-      shouldRevealUserMessage = true
-    }
-    if (shouldRevealUserMessage) {
-      // Video Studio deliberately does not follow every streamed token, but a
-      // sent message must still move into view. ChatArea's legacy scroller is
-      // outside this Virtuoso instance, so it cannot do this for product
-      // transcripts. Reveal the new user row once; the existing branch below
-      // will reveal the first assistant text once it arrives.
-      const revealGeneration = ++userRevealGenerationRef.current
-      const revealUserMessage = () => {
-        if (userRevealGenerationRef.current !== revealGeneration) return
-        virtuosoRef.current?.scrollToIndex({
-          index: Math.max(0, items.length - 1),
-          align: 'end',
-          behavior: 'auto',
-        })
-      }
-      // This must happen synchronously in the committed render. Streaming
-      // status can update before the next animation frame; if scrolling lives
-      // only in rAF, effect cleanup cancels it and the newly sent message stays
-      // hidden above the fixed composer.
-      revealUserMessage()
-      userMessageFrame = window.requestAnimationFrame(revealUserMessage)
-      userMessageSettledLayoutTimer = window.setTimeout(revealUserMessage, 160)
-      // Do not cancel this final retry on the first status/text update. That
-      // update is exactly what previously cancelled the only scheduled scroll
-      // before Virtuoso had measured the new live row.
-      window.setTimeout(revealUserMessage, 420)
-    }
-
-    const assistantHasBegun = Boolean(streamingText.trim()) || assistantResponseAfterLatestUser
-    if (!revealFirstResponseRef.current || !assistantHasBegun) {
-      return () => {
-        if (userMessageFrame !== undefined) window.cancelAnimationFrame(userMessageFrame)
-        if (userMessageSettledLayoutTimer !== undefined) window.clearTimeout(userMessageSettledLayoutTimer)
-      }
-    }
-
-    revealFirstResponseRef.current = false
-    const targetIndex = Math.max(0, (streamingText || streamingStatus) ? items.length : items.length - 1)
-    // Reveal the opening of the assistant response once, keeping it just above
-    // the composer. `align: start` pulled the whole transcript upward as soon
-    // as the first streamed text arrived, which looked like a small jump right
-    // after sending. At this point the live row is still short; end alignment
-    // keeps both the sent message and the first reply in a stable position.
-    const reveal = () => {
-      virtuosoRef.current?.scrollToIndex({ index: targetIndex, align: 'end', behavior: 'auto' })
-    }
-    // Reveal now as well as after layout settles. The first SSE status/text
-    // update can otherwise clean up the scheduled rAF before it has a chance
-    // to run, which is exactly why the first response appeared below the
-    // composer after sending a message.
-    reveal()
-    const frame = window.requestAnimationFrame(reveal)
-    const settledLayoutTimer = window.setTimeout(reveal, 160)
-    return () => {
-      if (userMessageFrame !== undefined) window.cancelAnimationFrame(userMessageFrame)
-      if (userMessageSettledLayoutTimer !== undefined) window.clearTimeout(userMessageSettledLayoutTimer)
-      window.cancelAnimationFrame(frame)
-      window.clearTimeout(settledLayoutTimer)
-    }
-  }, [assistantResponseAfterLatestUser, autoScrollMode, items.length, latestUserMessageKey, streamingStatus, streamingText])
-
-  // Keep the active work visible at the important boundaries without stealing
-  // the reader's position for every streaming update. This is separate from
-  // the first-response reveal above because tool cards and durable completion
-  // rows are normal transcript items, not live streaming text.
-  useEffect(() => {
-    if (autoScrollMode !== 'reveal-first-response') return
-
-    const liveStreamActive = Boolean(streamingText.trim() || streamingStatus.trim())
-    const tail = items[items.length - 1]
-    const toolKey = tail?.kind === 'tools' ? tail.key : ''
-    const assistantKey = tail?.kind === 'event' && assistantResponseText(tail.event)
-      ? tail.key
-      : ''
-
-    if (!initializedActivityRevealRef.current) {
-      initializedActivityRevealRef.current = true
-      previousLiveStreamRef.current = liveStreamActive
-      lastRevealedToolKeyRef.current = toolKey
-      lastRevealedAssistantKeyRef.current = assistantKey
-      return
-    }
-
-    const firstLiveChunk = liveStreamActive && !previousLiveStreamRef.current
-    const newToolActivity = Boolean(toolKey && toolKey !== lastRevealedToolKeyRef.current)
-    const newAssistantReply = Boolean(assistantKey && assistantKey !== lastRevealedAssistantKeyRef.current)
-    previousLiveStreamRef.current = liveStreamActive
-    if (toolKey) lastRevealedToolKeyRef.current = toolKey
-    if (assistantKey) lastRevealedAssistantKeyRef.current = assistantKey
-
-    if (!firstLiveChunk && !newToolActivity && !newAssistantReply) return
-
-    const targetIndex = liveStreamActive
-      ? items.length
-      : Math.max(0, items.length - 1)
-    const revealBoundary = () => {
-      virtuosoRef.current?.scrollToIndex({ index: targetIndex, align: 'end', behavior: 'auto' })
-    }
-    revealBoundary()
-    const frame = window.requestAnimationFrame(revealBoundary)
-    const settledLayoutTimer = window.setTimeout(revealBoundary, 160)
-    return () => {
-      window.cancelAnimationFrame(frame)
-      window.clearTimeout(settledLayoutTimer)
-    }
-  }, [autoScrollMode, items, streamingStatus, streamingText])
+  }, [])
 
   // Electron occasionally fails to route a physical wheel/trackpad gesture to
   // Virtuoso's internal scroller even though accessibility scroll actions work.
@@ -1105,7 +917,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
         rangeChanged={({ startIndex }) => {
           setIsAtTranscriptStart(startIndex === 0)
         }}
-        followOutput={autoScrollMode === 'follow-turn' ? 'auto' : false}
+        followOutput="auto"
         // Render well beyond the viewport so scrolling reveals rows that are
         // already there instead of rows popping in as they mount.
         increaseViewportBy={{ top: 1200, bottom: 600 }}
