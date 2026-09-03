@@ -110,9 +110,6 @@ export function useWorkflowBots(workspacePath: string | null) {
   const [gmailConnections, setGmailConnections] = useState<GmailConnection[]>([])
   const [gmailConnectionsBusy, setGmailConnectionsBusy] = useState<string | null>(null)
   const [gmailNewConnectionName, setGmailNewConnectionName] = useState('')
-  // Optional: adopt a gws config directory that is ALREADY authenticated on the
-  // host, instead of signing in through the browser.
-  const [gmailNewConnectionDir, setGmailNewConnectionDir] = useState('')
   // Set while a Google sign-in is in flight, so the row can say it is waiting.
   const [gmailAuthPending, setGmailAuthPending] = useState<string | null>(null)
   const [gmailTestedTo, setGmailTestedTo] = useState<string | null>(null)
@@ -672,7 +669,6 @@ export function useWorkflowBots(workspacePath: string | null) {
     // gmail senders (multi-account)
     gmailConnections, gmailConnectionsBusy, gmailAuthPending,
     gmailNewConnectionName, setGmailNewConnectionName,
-    gmailNewConnectionDir, setGmailNewConnectionDir,
     loadGmailConnections, runGmailConnectionAction, connectGmailAccount,
   }
 }

@@ -16,7 +16,6 @@ type GmailNotificationsBots = Pick<WorkflowBots,
   | 'gmailBlockedDefaults' | 'gmailDefaultIsBlocked' | 'gmailTestPassed' | 'gmailHasChanges' | 'loadGmail' | 'saveGmail' | 'testGmail'
   | 'gmailConnections' | 'gmailConnectionsBusy' | 'gmailAuthPending'
   | 'gmailNewConnectionName' | 'setGmailNewConnectionName'
-  | 'gmailNewConnectionDir' | 'setGmailNewConnectionDir'
   | 'runGmailConnectionAction' | 'connectGmailAccount'
 >
 
@@ -28,7 +27,6 @@ export function GmailNotifications({ bots }: { bots: GmailNotificationsBots }) {
     gmailBlockedDefaults, gmailDefaultIsBlocked, gmailTestPassed, gmailHasChanges, loadGmail, saveGmail, testGmail,
     gmailConnections, gmailConnectionsBusy, gmailAuthPending,
     gmailNewConnectionName, setGmailNewConnectionName,
-    gmailNewConnectionDir, setGmailNewConnectionDir,
     runGmailConnectionAction, connectGmailAccount,
   } = bots
 
@@ -184,26 +182,15 @@ export function GmailNotifications({ bots }: { bots: GmailNotificationsBots }) {
                       onClick={() => runGmailConnectionAction('new', async () => {
                         await agentApi.createGmailConnection({
                           display_name: gmailNewConnectionName.trim(),
-                          config_home: gmailNewConnectionDir.trim() || undefined,
                         })
                         setGmailNewConnectionName('')
-                        setGmailNewConnectionDir('')
                       })}
                     >
                       Add account
                     </Button>
                   </div>
-                  <input
-                    type="text"
-                    value={gmailNewConnectionDir}
-                    onChange={event => setGmailNewConnectionDir(event.target.value)}
-                    disabled={readOnly}
-                    placeholder="Existing gws config directory (optional)"
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
                   <p className="text-xs text-muted-foreground">
                     Add the account, then click <strong>Sign in with Google</strong> on its row to authorize it in your browser.
-                    The directory field is only needed to adopt a <code>gws</code> profile already authenticated on the host.
                   </p>
                 </div>
               </Card>
