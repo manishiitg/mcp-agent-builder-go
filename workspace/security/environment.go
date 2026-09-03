@@ -42,6 +42,12 @@ func buildDockerEnvironment() []string {
 		// Allow pip install when Python is externally managed (PEP 668); avoids "break system packages" errors in LLM-run shells
 		"PIP_BREAK_SYSTEM_PACKAGES=1",
 
+		// HOME is /tmp here, so the AWS CLI and boto3 would look for profiles in
+		// /tmp/.aws. Point both at the system config the box installs
+		// (deploy/aws-ec2/install-system-tools.sh), where the named "RTS" profile
+		// and the default both resolve to the instance role. A path, not a secret.
+		"AWS_CONFIG_FILE=/usr/local/etc/aws/config",
+
 		// DO NOT include:
 		// - DATABASE_URL
 		// - API_KEYS

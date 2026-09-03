@@ -60,8 +60,45 @@ exec /usr/local/lib/ntn/ntn "$@"
 NTN
 chmod 0755 /usr/local/bin/ntn
 
+# AWS profile "RTS" for workflow shells. The rtslatency workflow was written
+# against a named profile on the operator's laptop; on the box the credentials
+# are the instance role, so both `default` and `RTS` resolve to it through
+# IMDS. The sandbox runs with HOME=/tmp and exports
+# AWS_CONFIG_FILE=/usr/local/etc/aws/config (workspace/security/environment.go);
+# until that build is deployed, the aws launcher below sets the same variable
+# and a copy at /tmp/.aws/config (recreated at boot by tmpfiles) covers boto3.
+install -d -m 0755 /usr/local/etc/aws
+cat > /usr/local/etc/aws/config <<'AWSCFG'
+[default]
+region = us-west-2
+credential_source = Ec2InstanceMetadata
+
+[profile RTS]
+region = us-west-2
+credential_source = Ec2InstanceMetadata
+AWSCFG
+chmod 0644 /usr/local/etc/aws/config
+real_aws="$(readlink -f /usr/local/bin/aws 2>/dev/null || true)"
+case "$real_aws" in
+  /usr/local/aws-cli/*) ;;
+  *) real_aws="/usr/local/aws-cli/v2/current/bin/aws" ;;
+esac
+rm -f /usr/local/bin/aws
+cat > /usr/local/bin/aws <<AWSWRAP
+#!/usr/bin/env bash
+export AWS_CONFIG_FILE="\${AWS_CONFIG_FILE:-/usr/local/etc/aws/config}"
+exec "$real_aws" "\$@"
+AWSWRAP
+chmod 0755 /usr/local/bin/aws
+install -d -m 0755 /tmp/.aws && install -m 0644 /usr/local/etc/aws/config /tmp/.aws/config
+cat > /etc/tmpfiles.d/agentworks-aws.conf <<'TMPF'
+d /tmp/.aws 0755 root root -
+C /tmp/.aws/config 0644 root root - /usr/local/etc/aws/config
+TMPF
+
 echo "git: $(git --version)"
 echo "aws: $(/usr/local/bin/aws --version)"
+echo "aws RTS profile: $(/usr/local/bin/aws --profile RTS sts get-caller-identity --query Arn --output text 2>&1 | tail -1)"
 echo "ntn: $(/usr/local/bin/ntn --version)"
 REMOTE_SCRIPT
 
