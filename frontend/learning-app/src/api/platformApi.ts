@@ -228,6 +228,27 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
 
   // ---- workspace -----------------------------------------------------------
   const ws = new FamilyWorkspace(request)
+
+  // ---- check-in (the product schedule) --------------------------------------
+  const CHECKIN_JOB_ID = `product:${PARENT_PROFILE}:pulse`
+  type ScheduleJob = { enabled?: boolean; last_run_at?: string | null }
+  type ProfileSchedules = { schedules?: { id?: string; enabled?: boolean; cadence_hours?: number }[] }
+  async function checkinConfig(): Promise<PulseConfig> {
+    const [job, family, profile] = await Promise.all([
+      request<ScheduleJob>('GET', `/api/scheduler/jobs/${encodeURIComponent(CHECKIN_JOB_ID)}`).catch(() => null),
+      ws.readFamily(),
+      request<ProfileSchedules>('GET', `/api/agent-profiles/${PARENT_PROFILE}`).catch(() => null),
+    ])
+    const declared = (profile?.schedules ?? []).find((s) => s.id === 'pulse')
+    return {
+      enabled: job?.enabled ?? declared?.enabled ?? false,
+      cadence_hours: declared?.cadence_hours ?? 24,
+      last_run_at: job?.last_run_at ?? undefined,
+      watch_sites: family.watch_sites ?? [],
+      preferred_hour: 8,
+      preferred_hour_set: false,
+    }
+  }
   const readFile = (path: string) => ws.readFile(path)
 
   async function setup(): Promise<SetupState> {
@@ -355,9 +376,25 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     whatsappPairImageUrl: () => '',
     whatsappUnpair: notYet('WhatsApp'),
     whatsappVoice: notYet('WhatsApp') as (enabled: boolean) => Promise<WhatsAppVoiceTranscription>,
-    pulseConfig: notYet('the check-in settings') as () => Promise<PulseConfig>,
-    savePulseConfig: notYet('the check-in settings') as (patch: PulseConfigPatch) => Promise<PulseConfig>,
-    runPulse: notYet('running the check-in'),
+    // The check-in is the product's `pulse` schedule, run by the platform
+    // scheduler: a fixed message sequence on a cadence from the manifest.
+    // The parent can switch it on or off and run it now; the cadence is the
+    // product's. Watched websites are family state the prompt reads.
+    pulseConfig: checkinConfig,
+    savePulseConfig: async (patch) => {
+      if (patch.enabled !== undefined) {
+        await request('POST', `/api/scheduler/jobs/${encodeURIComponent(CHECKIN_JOB_ID)}/${patch.enabled ? 'enable' : 'disable'}`, {})
+      }
+      if (patch.watch_sites) {
+        const family = await ws.readFamily()
+        await ws.writeJSON('family.json', { ...family, watch_sites: patch.watch_sites.map((s) => s.trim()).filter(Boolean) })
+      }
+      return checkinConfig()
+    },
+    runPulse: async () => {
+      await request('POST', `/api/scheduler/jobs/${encodeURIComponent(CHECKIN_JOB_ID)}/trigger`, {})
+      return { ok: true }
+    },
   }
   return api
 }

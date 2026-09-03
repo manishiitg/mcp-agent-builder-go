@@ -1335,3 +1335,13 @@ standalone backend and its renderers stay in the learning app; the platform
 backend is the hosted deployment. The two are not expected to have feature
 parity: the shared-chat work (ChatArea hosting, pills, product rows, turn
 blocks) is platform-only, and the family server keeps its own chat UI.
+
+### 2026-09-03 — the check-in is the product schedule
+
+"Pulse" is called Check-in everywhere the parent sees it. On the platform
+backend the popup is a skin over the manifest's `pulse` schedule
+(`product:sparkquill:pulse` in the scheduler): on/off and Run now go to the
+scheduler's enable/disable/trigger routes, the cadence is the product's
+(shown, not edited), last run comes from the job, and watched websites live
+in family.json `watch_sites`, which the parent prompt already reads. The
+family server keeps its own cadence and preferred-hour controls.

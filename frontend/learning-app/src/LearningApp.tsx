@@ -2786,12 +2786,12 @@ export default function LearningApp() {
                   <button
                     className="fl-pulse-pill"
                     type="button"
-                    aria-label="Pulse"
-                    title="Pulse"
+                    aria-label="Check-in"
+                    title="Check-in"
                     onClick={() => setPulsePopoverOpen((v) => !v)}
                   >
                     <PulseIcon size={14} />
-                    <span>Pulse</span>
+                    <span>Check-in</span>
                     <span className={`fl-dot ${pulseConfig?.enabled ? 'is-ready' : ''}`} />
                   </button>
                   {pulsePopoverOpen && (
@@ -2800,7 +2800,7 @@ export default function LearningApp() {
                     <div className="fl-pulse-popover" role="dialog">
                       <div className="fl-pulse-popover-head">
                         <PulseIcon size={15} />
-                        <span>Pulse</span>
+                        <span>Check-in</span>
                         <span className={`fl-pulse-badge ${pulseConfig?.enabled ? 'is-on' : 'is-off'}`}>
                           {pulseConfig?.enabled ? 'On' : 'Off'}
                         </span>
@@ -2808,7 +2808,7 @@ export default function LearningApp() {
                       </div>
                       <div className="fl-pulse-body">
                         <div className="fl-pulse-col">
-                          <p className="fl-pulse-popover-desc">Quill checks in on its own now and then — reviewing recent activity, keeping the progress report and progress page current.</p>
+                          <p className="fl-pulse-popover-desc">Quill checks in on its own now and then: it reviews recent activity, updates what it remembers about you both, and sends you one short summary.</p>
                           <button
                             type="button"
                             className="fl-pulse-toggle"
@@ -2820,6 +2820,13 @@ export default function LearningApp() {
                             </span>
                             {pulseConfig?.enabled ? 'Turn off' : 'Turn on'}
                           </button>
+                          {backend === 'platform' && (
+                            <div className="fl-pulse-popover-meta">
+                              <span>Checks every</span>
+                              <span>{pulseConfig ? `${pulseConfig.cadence_hours} hours` : '…'}</span>
+                            </div>
+                          )}
+                          {backend !== 'platform' && (<>
                           <label className="fl-pulse-config-row">
                             <span>Check every</span>
                             <select
@@ -2854,6 +2861,7 @@ export default function LearningApp() {
                               ))}
                             </select>
                           </label>
+                          </>)}
                           <div className="fl-pulse-popover-meta">
                             <span>Last check-in</span>
                             <span>{pulseConfig?.last_run_at ? new Date(pulseConfig.last_run_at).toLocaleString() : 'Not yet'}</span>
