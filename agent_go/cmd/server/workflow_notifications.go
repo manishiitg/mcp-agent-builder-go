@@ -148,7 +148,7 @@ func notificationAccountChannels(ctx context.Context) []WorkflowNotificationAcco
 		// only the auth badge depends on gws, so only it waits.
 		auth := gmail.EffectiveAuthStatusCached()
 		gmailState := "not_ready"
-		gmailSummary := "Gmail is not ready at account level."
+		gmailSummary := gmailNotReadyReason(config, auth)
 		switch {
 		case auth.Checking:
 			gmailState = "checking"
@@ -279,4 +279,24 @@ func (api *StreamingAPI) handleGetWorkflowNotifications(w http.ResponseWriter, r
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// gmailNotReadyReason names the first unmet condition for the Gmail channel
+// instead of a blanket "not ready": the Notify panel showed a connected,
+// authenticated account as "Not ready" with no way to tell it was only
+// missing a default recipient (user, 2026-09-03).
+func gmailNotReadyReason(config *services.GmailConfig, auth services.GmailAuthStatus) string {
+	switch {
+	case !auth.GwsInstalled:
+		return "gws is not installed on the server."
+	case !auth.Authenticated:
+		return "No Gmail account is signed in."
+	case !auth.HasGmailScope:
+		return "The signed-in account has no Gmail send scope."
+	case config == nil || !config.Enabled:
+		return "The Gmail channel is switched off."
+	case strings.TrimSpace(config.DefaultTo) == "":
+		return "No default recipient is set."
+	}
+	return "Gmail is not ready at account level."
 }

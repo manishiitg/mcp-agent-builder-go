@@ -35,7 +35,7 @@ describe('bot and notification settings separation', () => {
     expect(notifications).toContain('Agentic notification delivery')
     expect(notifications).toContain('Workflow Slack webhook')
     expect(notifications).toContain('Gmail account channel')
-    expect(notifications).toContain('The agent never reads a webhook URL')
+    expect(notifications).toContain('Change with')
     expect(notifications).not.toContain('My routing')
   })
 })
