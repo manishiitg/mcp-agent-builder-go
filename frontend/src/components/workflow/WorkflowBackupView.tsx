@@ -51,8 +51,6 @@ const getBackupSummary = (backupInfo: WorkflowBackupInfoResponse | null): string
       return 'Backup is configured, but the builder has not verified a successful run yet.'
     case 'running':
       return 'A builder backup task is running and will update backup/status.json.'
-    case 'stale':
-      return 'The automation changed since the last healthy backup.'
     default:
       return 'Backup status is waiting for the builder to update backup/status.json.'
   }

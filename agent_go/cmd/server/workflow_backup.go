@@ -20,7 +20,6 @@ const (
 	workflowBackupStateConfiguredNotVerified = "configured_not_verified"
 	workflowBackupStateRunning               = "running"
 	workflowBackupStateHealthy               = "healthy"
-	workflowBackupStateStale                 = "stale"
 	workflowBackupStatePartial               = "partial"
 	workflowBackupStateFailed                = "failed"
 )
@@ -116,7 +115,12 @@ func readWorkflowBackupStatus(ctx context.Context, workspacePath string) (*Workf
 	return &status, true, nil
 }
 
-func workflowBackupEffectiveState(config *WorkflowBackupConfig, status *WorkflowBackupStatus, currentSourceHash string) string {
+// workflowBackupEffectiveState reports the backup's health only -- whether the
+// last run succeeded, not whether the workflow's files have since changed. A
+// prior version also flagged "stale" when a content hash no longer matched
+// the last backup, which read as change detection rather than a health
+// signal and confused users (2026-09-03).
+func workflowBackupEffectiveState(config *WorkflowBackupConfig, status *WorkflowBackupStatus) string {
 	if config == nil || !config.Enabled {
 		return workflowBackupStateNotConfigured
 	}
@@ -126,11 +130,7 @@ func workflowBackupEffectiveState(config *WorkflowBackupConfig, status *Workflow
 	if status == nil || strings.TrimSpace(status.State) == "" {
 		return workflowBackupStateConfiguredNotVerified
 	}
-	state := strings.TrimSpace(status.State)
-	if state == workflowBackupStateHealthy && status.LastSourceHash != "" && currentSourceHash != "" && status.LastSourceHash != currentSourceHash {
-		return workflowBackupStateStale
-	}
-	return state
+	return strings.TrimSpace(status.State)
 }
 
 func workflowBackupHasRemoteDestination(config *WorkflowBackupConfig) bool {
@@ -273,7 +273,7 @@ func (api *StreamingAPI) handleGetWorkflowBackup(w http.ResponseWriter, r *http.
 		Success:           true,
 		Config:            manifest.Backup,
 		Status:            status,
-		EffectiveState:    workflowBackupEffectiveState(manifest.Backup, status, sourceHash),
+		EffectiveState:    workflowBackupEffectiveState(manifest.Backup, status),
 		CurrentSourceHash: sourceHash,
 		TrackedFilesCount: trackedFiles,
 		Supported:         supportedWorkflowBackupStrategies(),

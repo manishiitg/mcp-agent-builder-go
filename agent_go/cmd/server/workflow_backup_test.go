@@ -15,7 +15,6 @@ func TestWorkflowBackupHashIncludesManagedDatabaseSnapshot(t *testing.T) {
 }
 
 func TestWorkflowBackupEffectiveState(t *testing.T) {
-	sourceHash := "current-hash"
 	remoteConfig := func() *WorkflowBackupConfig {
 		return &WorkflowBackupConfig{
 			Enabled: true,
@@ -40,7 +39,7 @@ func TestWorkflowBackupEffectiveState(t *testing.T) {
 		{
 			name:   "disabled config",
 			config: &WorkflowBackupConfig{Enabled: false},
-			status: &WorkflowBackupStatus{State: workflowBackupStateHealthy, LastSourceHash: sourceHash},
+			status: &WorkflowBackupStatus{State: workflowBackupStateHealthy},
 			want:   workflowBackupStateNotConfigured,
 		},
 		{
@@ -57,7 +56,7 @@ func TestWorkflowBackupEffectiveState(t *testing.T) {
 					ID: "local-git", Type: "git-bundle", Provider: "local",
 				}},
 			},
-			status: &WorkflowBackupStatus{State: workflowBackupStateHealthy, LastSourceHash: sourceHash},
+			status: &WorkflowBackupStatus{State: workflowBackupStateHealthy},
 			want:   workflowBackupStateLocalOnly,
 		},
 		{
@@ -67,16 +66,10 @@ func TestWorkflowBackupEffectiveState(t *testing.T) {
 			want:   workflowBackupStateConfiguredNotVerified,
 		},
 		{
-			name:   "healthy current hash",
-			config: remoteConfig(),
-			status: &WorkflowBackupStatus{State: workflowBackupStateHealthy, LastSourceHash: sourceHash},
-			want:   workflowBackupStateHealthy,
-		},
-		{
-			name:   "healthy stale hash",
+			name:   "healthy stays healthy even after files change",
 			config: remoteConfig(),
 			status: &WorkflowBackupStatus{State: workflowBackupStateHealthy, LastSourceHash: "old-hash"},
-			want:   workflowBackupStateStale,
+			want:   workflowBackupStateHealthy,
 		},
 		{
 			name:   "failed stays failed",
@@ -88,7 +81,7 @@ func TestWorkflowBackupEffectiveState(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := workflowBackupEffectiveState(tt.config, tt.status, sourceHash)
+			got := workflowBackupEffectiveState(tt.config, tt.status)
 			if got != tt.want {
 				t.Fatalf("workflowBackupEffectiveState() = %q, want %q", got, tt.want)
 			}

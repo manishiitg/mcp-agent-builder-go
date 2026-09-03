@@ -16,7 +16,6 @@ export type BackupState =
   | 'configured_not_verified'
   | 'running'
   | 'healthy'
-  | 'stale'
   | 'partial'
   | 'failed'
   | 'skipped'
@@ -36,8 +35,6 @@ export const formatBackupStateLabel = (state?: string): string => {
       return 'Running'
     case 'healthy':
       return 'Healthy'
-    case 'stale':
-      return 'Changed since backup'
     case 'partial':
       return 'Partial'
     case 'failed':
@@ -76,7 +73,6 @@ export const getBackupStateVisual = (state?: string): BackupStateVisual => {
         badge: 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300',
         icon: 'text-sky-600 dark:text-sky-300'
       }
-    case 'stale':
     case 'partial':
     case 'configured_not_verified':
       return {
@@ -109,7 +105,6 @@ export const getBackupDotClass = (state?: string): string => {
       return 'bg-emerald-500'
     case 'running':
       return 'bg-sky-500 animate-pulse'
-    case 'stale':
     case 'partial':
     case 'configured_not_verified':
       return 'bg-amber-500'

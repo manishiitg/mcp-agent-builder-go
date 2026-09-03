@@ -24,7 +24,6 @@ const (
 	workflowPublishStateConfiguredNotVerified = "configured_not_verified"
 	workflowPublishStatePublishing            = "publishing"
 	workflowPublishStatePublished             = "published"
-	workflowPublishStateStale                 = "stale"
 	workflowPublishStateFailed                = "failed"
 )
 
@@ -111,18 +110,19 @@ func readWorkflowPublishStatus(ctx context.Context, workspacePath string) (*Work
 	return &status, true, nil
 }
 
-func workflowPublishEffectiveState(config *WorkflowPublishConfig, status *WorkflowPublishStatus, currentSourceHash string) string {
+// workflowPublishEffectiveState reports the publish's health only -- whether
+// the last publish succeeded, not whether the workflow's files have since
+// changed. A prior version also flagged "stale" when a content hash no
+// longer matched the last publish, which read as change detection rather
+// than a health signal and confused users (2026-09-03).
+func workflowPublishEffectiveState(config *WorkflowPublishConfig, status *WorkflowPublishStatus) string {
 	if config == nil || !config.Enabled {
 		return workflowPublishStateNotConfigured
 	}
 	if status == nil || strings.TrimSpace(status.State) == "" {
 		return workflowPublishStateConfiguredNotVerified
 	}
-	state := strings.TrimSpace(status.State)
-	if state == workflowPublishStatePublished && status.LastSourceHash != "" && currentSourceHash != "" && status.LastSourceHash != currentSourceHash {
-		return workflowPublishStateStale
-	}
-	return state
+	return strings.TrimSpace(status.State)
 }
 
 // The artifacts whose change should trigger a re-publish: report HTML and
@@ -209,7 +209,7 @@ func (api *StreamingAPI) handleGetWorkflowPublish(w http.ResponseWriter, r *http
 		Success:           true,
 		Config:            manifest.Publish,
 		Status:            status,
-		EffectiveState:    workflowPublishEffectiveState(manifest.Publish, status, sourceHash),
+		EffectiveState:    workflowPublishEffectiveState(manifest.Publish, status),
 		URL:               url,
 		CurrentSourceHash: sourceHash,
 		Supported:         supportedWorkflowPublishStrategies(),

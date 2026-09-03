@@ -20,8 +20,6 @@ export const formatPublishStateLabel = (state?: string): string => {
       return 'Publishing'
     case 'published':
       return 'Published'
-    case 'stale':
-      return 'Changed since publish'
     case 'failed':
       return 'Failed'
     default:
@@ -49,7 +47,6 @@ export const getPublishStateVisual = (state?: string): PublishStateVisual => {
         badge: 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300',
         icon: 'text-sky-600 dark:text-sky-300'
       }
-    case 'stale':
     case 'configured_not_verified':
       return {
         Icon: AlertTriangle,
@@ -78,7 +75,6 @@ export const getPublishDotClass = (state?: string): string => {
       return 'bg-emerald-500'
     case 'publishing':
       return 'bg-sky-500 animate-pulse'
-    case 'stale':
     case 'configured_not_verified':
       return 'bg-amber-500'
     case 'failed':

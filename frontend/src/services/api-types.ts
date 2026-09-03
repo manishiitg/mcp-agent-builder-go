@@ -2615,7 +2615,7 @@ export interface WorkflowBackupDestination {
 
 export interface WorkflowBackupStatus {
   version: number
-  state: 'not_configured' | 'configured_not_verified' | 'running' | 'healthy' | 'stale' | 'partial' | 'failed' | string
+  state: 'not_configured' | 'configured_not_verified' | 'running' | 'healthy' | 'partial' | 'failed' | string
   last_attempt_at?: string
   last_success_at?: string
   last_agent_session_id?: string
@@ -2649,7 +2649,7 @@ export interface WorkflowBackupInfoResponse {
   success: boolean
   config?: WorkflowBackupConfig
   status?: WorkflowBackupStatus
-  effective_state: 'not_configured' | 'local_only' | 'configured_not_verified' | 'running' | 'healthy' | 'stale' | 'partial' | 'failed' | string
+  effective_state: 'not_configured' | 'local_only' | 'configured_not_verified' | 'running' | 'healthy' | 'partial' | 'failed' | string
   current_source_hash?: string
   tracked_files_count?: number
   supported: WorkflowBackupStrategyInfo[]
@@ -2684,7 +2684,7 @@ export interface WorkflowPublishDestination {
 
 export interface WorkflowPublishStatus {
   version: number
-  state: 'not_configured' | 'configured_not_verified' | 'publishing' | 'published' | 'stale' | 'failed' | string
+  state: 'not_configured' | 'configured_not_verified' | 'publishing' | 'published' | 'failed' | string
   url?: string
   last_published_at?: string
   last_attempt_at?: string
@@ -2721,7 +2721,7 @@ export interface WorkflowPublishInfoResponse {
   success: boolean
   config?: WorkflowPublishConfig
   status?: WorkflowPublishStatus
-  effective_state: 'not_configured' | 'configured_not_verified' | 'publishing' | 'published' | 'stale' | 'failed' | string
+  effective_state: 'not_configured' | 'configured_not_verified' | 'publishing' | 'published' | 'failed' | string
   url?: string
   current_source_hash?: string
   supported: WorkflowPublishStrategyInfo[]
