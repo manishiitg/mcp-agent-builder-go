@@ -18,8 +18,6 @@ Available tools:
 
 Provider-setup essentials (do not hand-edit provider-auth storage — it's encrypted and managed via ` + "`set_provider_auth`" + `; audio/video/image/music providers are workspace **tool** capabilities, not published-LLM entries — call ` + "`list_llm_capabilities(capability=\"...\")`" + ` for the authoritative availability answer).
 
-Provider media tools are deprecated and hidden from agents while these two text/search tools are the active testing focus.
-
 **For the full reference on these two active tools — use cases, tier selection, parameters, provider routing, scripted MCP-bridge calls, and common-mistake gotchas — call:** ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workspace-media-tools.md\"}])`" + `. In scripted/code-execution mode, also read ` + "`references/mcp-bridge.md`" + ` before writing the bridge call; never invoke a provider directly or put credentials in a script.`
 }
 
@@ -31,5 +29,5 @@ Provider media tools are deprecated and hidden from agents while these two text/
 func GetSpecialWorkspaceToolsPointer() string {
 	return `## Special Workspace Tools
 
-The active provider-backed text and web-search tools are available through the MCP bridge. Provider media tools are deprecated and hidden from agents while text/search testing is the focus. Before using ` + "`search_web_llm`" + ` or ` + "`generate_text_llm`" + `, read the attached ` + "`builder-reference`" + ` skill's ` + "`references/workspace-media-tools.md`" + ` (or call ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workspace-media-tools.md\"}])`" + `) for use cases, tier selection, parameters, provider routing, and known gotchas. In scripted/code-execution mode, also read ` + "`references/mcp-bridge.md`" + ` and invoke only the granted tool through the authenticated MCP bridge — never invoke a provider directly or put credentials in a script. Use ` + "`list_llm_capabilities`" + ` as the authoritative availability source and ` + "`set_provider_auth`" + ` for credentials; never place credentials in shell commands or files.`
+The active provider-backed text and web-search tools are available through the MCP bridge. Before using ` + "`search_web_llm`" + ` or ` + "`generate_text_llm`" + `, read the attached ` + "`builder-reference`" + ` skill's ` + "`references/workspace-media-tools.md`" + ` (or call ` + "`read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/workspace-media-tools.md\"}])`" + `) for use cases, tier selection, parameters, provider routing, and known gotchas. In scripted/code-execution mode, also read ` + "`references/mcp-bridge.md`" + ` and invoke only the granted tool through the authenticated MCP bridge — never invoke a provider directly or put credentials in a script. Use ` + "`list_llm_capabilities`" + ` as the authoritative availability source and ` + "`set_provider_auth`" + ` for credentials; never place credentials in shell commands or files.`
 }

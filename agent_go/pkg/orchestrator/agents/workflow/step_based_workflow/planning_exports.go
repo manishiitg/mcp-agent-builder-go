@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -230,8 +231,20 @@ func PhaseChatSystemPrompt(phaseId string, templateVars map[string]string) strin
 	if len(rendered) < 1000 {
 		panic(fmt.Sprintf("[FATAL] Phase chat system prompt for phase=%q is only %d chars (expected 10000+). Template likely has missing variables or rendering issues.", phaseId, len(rendered)))
 	}
-	return rendered
+	// Conditional blocks in the template each carry their own surrounding blank
+	// line, so a block that renders empty (an {{if}} that's false, or one whose
+	// body is itself blank in this mode) leaves runs of 3+ newlines behind.
+	// Harmless to the model, but it reads like the prompt has holes in it.
+	return collapseBlankLines(rendered)
 }
+
+// collapseBlankLines squashes 3+ consecutive newlines down to a single blank
+// line (2 newlines), the same normalization a Markdown renderer would apply.
+func collapseBlankLines(s string) string {
+	return blankLineRunPattern.ReplaceAllString(s, "\n\n")
+}
+
+var blankLineRunPattern = regexp.MustCompile(`\n{3,}`)
 
 // SchedulerCallbacks provides schedule CRUD operations via callbacks from server.go.
 // This avoids importing database/scheduler packages in the workshop package.

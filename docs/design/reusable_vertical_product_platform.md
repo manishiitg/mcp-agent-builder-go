@@ -1380,3 +1380,54 @@ family server keeps its own cadence and preferred-hour controls.
 `openWorkspaceView` call the toolbar buttons make. The Go list of views
 mirrors `workspaceViews.ts` and a vitest keeps them identical. This is the
 product presentation mechanism applied to AgentWorks itself.
+
+### 2026-09-03 — workflow builder system prompt review
+
+Reviewed the rendered `interactiveWorkshopSystemTemplate` (the workflow
+builder/run system prompt, `PhaseChatSystemPrompt` in
+`pkg/orchestrator/agents/workflow/step_based_workflow`). Fixes applied:
+
+- The mode identity (`**WORKSHOP MODE**`/`**RUN MODE**` — what the agent
+  is right now) used to render 100+ lines after the `## CURRENT MODE:`
+  heading that names it, separated by Execution policy, Deployed channel,
+  and Reporting. It now sits directly under the heading, and the
+  phase-detection paragraph, Foundation check, and Core loop are folded
+  into the same workshop block instead of being scattered.
+- `WorkflowObjective`/`WorkflowSuccessCriteria` were computed server-side
+  every turn and then never printed — the template told the agent to go
+  re-read `soul.md` instead. Now inlined directly under CURRENT STATE when
+  both are present; the existing "ask the user" fallbacks for a missing
+  objective/criteria are unchanged.
+- The agent can now open a toolbar view for the user
+  (`open_workspace_view`, added earlier this session): a bullet in
+  "Talking to the user" says to use it instead of describing where to
+  click, and the Reporting section calls it out after
+  `validate_report_html()`.
+- Removed the duplicate "HTML report UI (brief)" section (the main
+  `## Reporting` section already said the same thing for both modes).
+- `read_skill(skills=[{"name":"builder-reference","path":"references/X.md"}])`
+  appeared ~17 times; replaced with a `builder-reference/references/X.md`
+  shorthand plus one unconditional sentence (right after the soul.md
+  instruction) defining what the shorthand means, so it renders in every
+  mode, not only the CLI/skill-projected branch that had its own
+  (now-redundant) explanation.
+- Two leading-tab lines that rendered as literal Markdown code blocks
+  (the Run Mode tool-availability block, and the Optimization section's
+  "Hard rules" paragraph) are dedented.
+- The standing "read builder/ conversations before every reply" instruction
+  moved out of the Core loop into DEBUGGING, conditioned on actually having
+  a repeated failure to check against.
+- Trimmed CLI-internals trivia (the "~60-second silent MCP-call ceiling"
+  explanation) from the shared Tools cheat-sheet's Human attention bullet,
+  keeping only the actionable `timeout_seconds <= 45` rule; and removed
+  "deprecated and hidden ... testing focus" internal-status framing from
+  both `GetSpecialWorkspaceToolsInstructions` and
+  `GetSpecialWorkspaceToolsPointer` in `pkg/instructions`.
+- `PhaseChatSystemPrompt` now collapses runs of 3+ newlines to one blank
+  line (`collapseBlankLines`), a template-whitespace artifact from
+  conditional blocks rendering empty in a given mode.
+- Not done: gating "Deployed channel runtime" on an actual connected
+  Slack/WhatsApp signal — no such signal is computed at prompt-render time
+  today (only a Slack webhook *secret name* on the manifest, no bot-route
+  check), and wiring one is bigger than this pass. The section's wording
+  already hedges ("Users **may** reach this workflow through...").

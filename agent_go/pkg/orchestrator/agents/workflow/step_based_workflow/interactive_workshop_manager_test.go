@@ -79,7 +79,7 @@ func TestInteractiveWorkshopPromptDocumentsMessageSequenceRouteReuse(t *testing.
 		"Maker+Reviewer",
 		"Clean-Room Retry",
 		"HITL Re-entry",
-		`read_skill(skills=[{"name":"builder-reference","path":"references/plan-design.md"}])`,
+		`builder-reference/references/plan-design.md`,
 	}
 	for _, snippet := range inlineMustContain {
 		if !strings.Contains(prompt, snippet) {

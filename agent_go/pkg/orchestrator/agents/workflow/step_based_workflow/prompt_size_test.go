@@ -356,7 +356,7 @@ func TestWorkshopModeIsMergedSuperset(t *testing.T) {
 	// so do not duplicate individual catalog entries in the system prompt.
 	mustContain := []string{
 		"create_human_input_request",
-		`read_skill(skills=[{"name":"builder-reference","path":"references/optimize-playbook.md"}])`,
+		`builder-reference/references/optimize-playbook.md`, // shorthand for read_skill(skills=[{name:builder-reference,path:references/optimize-playbook.md}])
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(prompt, s) {
