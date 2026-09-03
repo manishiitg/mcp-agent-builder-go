@@ -1278,3 +1278,23 @@ transcript, the way the parent's pills do:
   selector the parent uses. The old per-activity polling, WhatsApp watch and
   fast-mode toggle are family-server only and skipped on the platform backend.
 - The worksheet/chat split now defaults to half the window.
+
+### 2026-09-03 — answer keys leave the child's sandbox; child prompt review
+
+The activity folder is the child conversation's whole workspace, so a
+`<name>-KEY.md` written into it was readable by the child regardless of what
+her prompt said. Keys now live in `keys/<activity-slug>-KEY.md` at the family
+root: the parent prompt writes them there, `create_learning_activity` moves
+any key it still finds in the folder (and reports `answer_keys_moved_to`),
+and the parent prompt hook sweeps every activity folder once per process for
+keys written before this change. The child prompt no longer needs the
+"you cannot see the keys" sentence.
+
+Child prompt (`prompts/child.md`) after review: the tool roster, the
+"runtime's own shell" note, the "(I uploaded it to <path>)" phrasing and the
+raw-HTML colour instruction are gone (the shared markdown renderer does not
+render raw HTML); the two skill-file reads are replaced by the rules that
+mattered (JSXGraph for figures, self-contained pages, `SQ.choose` buttons,
+`<div class="q">`); notify_user has a rule (upset, or stuck a long time);
+the handoff opening message is named; sections reordered to identity →
+answers → activity → showing things → format.

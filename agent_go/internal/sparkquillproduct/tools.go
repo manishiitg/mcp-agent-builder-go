@@ -80,6 +80,59 @@ func (w familyWorkspace) write(ctx context.Context, rel, content string) error {
 	return err
 }
 
+// list returns the direct entries of a folder, or nothing when it is missing.
+func (w familyWorkspace) list(ctx context.Context, rel string) []folderEntry {
+	depth := 1
+	result, err := w.client.ListWorkspaceFiles(ctx, workspace.ListWorkspaceFilesParams{Folder: w.path(rel), MaxDepth: &depth})
+	if err != nil {
+		return nil
+	}
+	return parseFolderListing(result.Raw)
+}
+
+func (w familyWorkspace) move(ctx context.Context, fromRel, toRel string) error {
+	_, err := w.client.MoveWorkspaceFile(ctx, workspace.MoveWorkspaceFileParams{SourceFilepath: w.path(fromRel), DestinationFilepath: w.path(toRel)})
+	return err
+}
+
+// relocateAnswerKeys moves every *-KEY.md found directly in an activity folder
+// to the parent-only keys folder and returns the new family-relative paths.
+// The activity folder is the child's sandbox, so nothing parent-only may stay
+// in it, whatever the prompt asked for.
+func (w familyWorkspace) relocateAnswerKeys(ctx context.Context, rel, slug string) []string {
+	var moved []string
+	taken := map[string]bool{}
+	for _, e := range w.list(ctx, rel) {
+		name := path.Base(strings.TrimSpace(e.FilePath))
+		if e.Type == "folder" || !isAnswerKey(name) {
+			continue
+		}
+		dest := answerKeyDestination(slug, name, taken)
+		if err := w.move(ctx, path.Join(rel, name), dest); err != nil {
+			continue
+		}
+		moved = append(moved, dest)
+	}
+	return moved
+}
+
+// sweepAnswerKeys relocates keys left inside any activity folder (written
+// before keys had their own folder). Cheap, and safe to repeat.
+func (w familyWorkspace) sweepAnswerKeys(ctx context.Context) int {
+	n := 0
+	for _, e := range w.list(ctx, ActivitiesFolder) {
+		if e.Type != "folder" {
+			continue
+		}
+		slug := path.Base(strings.TrimSpace(e.FilePath))
+		if slug == "" || slug == "." {
+			continue
+		}
+		n += len(w.relocateAnswerKeys(ctx, path.Join(ActivitiesFolder, slug), slug))
+	}
+	return n
+}
+
 func (w familyWorkspace) loadFamily(ctx context.Context) (FamilyState, error) {
 	var state FamilyState
 	raw, ok := w.read(ctx, FamilyFile)
@@ -300,6 +353,9 @@ func createLearningActivityFactory(workspaceAPIURL string) agentprofiles.ToolFac
 				}
 				emitInteraction(runtime, "activity_created", map[string]interface{}{"dir": rel, "title": title, "items": len(items)})
 				result := map[string]interface{}{"status": "ok", "dir": rel, "title": title, "items": len(items)}
+				if keys := ws.relocateAnswerKeys(ctx, rel, slug); len(keys) > 0 {
+					result["answer_keys_moved_to"] = keys
+				}
 				if len(reports) > 0 {
 					var dropped, warnings []string
 					for _, r := range reports {

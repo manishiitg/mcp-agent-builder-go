@@ -75,6 +75,22 @@ func activityFolder(familyRoot, raw string) (rel, slug string, err error) {
 
 // isAnswerKey mirrors the standalone app's rule: *-KEY.md never becomes an
 // item the child sees.
+// KeysFolder holds the parent-only answer keys, outside every activity
+// folder: the activity folder is the child's whole sandbox, so a key kept
+// inside it is a key she can read.
+const KeysFolder = "keys"
+
+// answerKeyDestination is where an activity's key lives: keys/<slug>-KEY.md,
+// or keys/<slug>-<name> when the activity has more than one key file.
+func answerKeyDestination(slug, name string, taken map[string]bool) string {
+	dest := path.Join(KeysFolder, slug+"-KEY.md")
+	if taken[dest] {
+		dest = path.Join(KeysFolder, slug+"-"+path.Base(name))
+	}
+	taken[dest] = true
+	return dest
+}
+
 func isAnswerKey(name string) bool {
 	base := strings.ToLower(path.Base(name))
 	return strings.HasSuffix(base, "-key.md") || strings.HasSuffix(base, "-key.markdown")

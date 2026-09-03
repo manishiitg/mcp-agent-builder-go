@@ -22,13 +22,52 @@ type fakeWorkspace struct {
 
 func (f *fakeWorkspace) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		// GET /api/documents?folder=… lists a folder's direct entries.
+		if r.URL.Path == "/api/documents" && r.Method == http.MethodGet {
+			folder := strings.Trim(r.URL.Query().Get("folder"), "/") + "/"
+			seen := map[string]bool{}
+			var entries []map[string]interface{}
+			for fp := range f.files {
+				if !strings.HasPrefix(fp, folder) {
+					continue
+				}
+				rest := strings.TrimPrefix(fp, folder)
+				if i := strings.Index(rest, "/"); i >= 0 {
+					if dir := folder + rest[:i]; !seen[dir] {
+						seen[dir] = true
+						entries = append(entries, map[string]interface{}{"filepath": dir, "type": "folder"})
+					}
+					continue
+				}
+				entries = append(entries, map[string]interface{}{"filepath": fp, "type": "file"})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "data": entries})
+			return
+		}
 		if !strings.HasPrefix(r.URL.Path, "/api/documents/") {
 			http.NotFound(w, r)
 			return
 		}
 		p := strings.TrimPrefix(r.URL.Path, "/api/documents/")
-		f.mu.Lock()
-		defer f.mu.Unlock()
+		// POST /api/documents/<path>/move relocates a file.
+		if r.Method == http.MethodPost && strings.HasSuffix(p, "/move") {
+			src := strings.TrimSuffix(p, "/move")
+			var body struct {
+				Destination string `json:"destination_path"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			content, ok := f.files[src]
+			if !ok || body.Destination == "" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			delete(f.files, src)
+			f.files[body.Destination] = content
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 			content, ok := f.files[p]
@@ -146,6 +185,16 @@ func TestCreateLearningActivityWritesManifestAndProject(t *testing.T) {
 	}
 	if !strings.Contains(out, `"items":1`) {
 		t.Fatalf("answer key must never be an item: %s", out)
+	}
+	// The activity folder is the child's sandbox: the key must have left it.
+	if _, still := fake.files["_users/u1/Chats/SparkQuill/activities/2026-09-03-fractions/quick-check-KEY.md"]; still {
+		t.Fatal("the answer key must not stay inside the activity folder")
+	}
+	if fake.files["_users/u1/Chats/SparkQuill/keys/2026-09-03-fractions-KEY.md"] != "answers" {
+		t.Fatalf("the answer key must move to keys/: %v", fake.files)
+	}
+	if !strings.Contains(out, `"answer_keys_moved_to":["keys/2026-09-03-fractions-KEY.md"]`) {
+		t.Fatalf("the tool must report where the key went: %s", out)
 	}
 	var manifest ActivityManifest
 	if err := json.Unmarshal([]byte(fake.files["_users/u1/Chats/SparkQuill/activities/2026-09-03-fractions/activity.json"]), &manifest); err != nil {
@@ -309,5 +358,34 @@ func TestPinAndUnpinPageKeepTheAppsStateFile(t *testing.T) {
 	}
 	if k := sink.kinds(); len(k) != 3 || k[0] != "pins_updated" {
 		t.Fatalf("events = %v", k)
+	}
+}
+
+func TestSweepAnswerKeysMovesStrayKeysOutOfEveryActivity(t *testing.T) {
+	fake, _, rt, url := newToolHarness(t)
+	fake.files["_users/u1/Chats/SparkQuill/activities/2026-09-01-old/old.html"] = "<html>"
+	fake.files["_users/u1/Chats/SparkQuill/activities/2026-09-01-old/old-KEY.md"] = "k1"
+	fake.files["_users/u1/Chats/SparkQuill/activities/2026-09-01-old/extra-KEY.md"] = "k2"
+	fake.files["_users/u1/Chats/SparkQuill/activities/2026-09-02-new/activity.json"] = "{}"
+	ws := newFamilyWorkspace(url, rt, rt.WorkspacePath)
+	if n := ws.sweepAnswerKeys(context.Background()); n != 2 {
+		t.Fatalf("moved %d keys, want 2: %v", n, fake.files)
+	}
+	for _, left := range []string{"_users/u1/Chats/SparkQuill/activities/2026-09-01-old/old-KEY.md", "_users/u1/Chats/SparkQuill/activities/2026-09-01-old/extra-KEY.md"} {
+		if _, still := fake.files[left]; still {
+			t.Fatalf("%s must leave the activity folder", left)
+		}
+	}
+	got := 0
+	for fp := range fake.files {
+		if strings.HasPrefix(fp, "_users/u1/Chats/SparkQuill/keys/2026-09-01-old-") && strings.HasSuffix(fp, "KEY.md") {
+			got++
+		}
+	}
+	if got != 2 {
+		t.Fatalf("both keys must land under keys/ for the activity: %v", fake.files)
+	}
+	if ws.sweepAnswerKeys(context.Background()) != 0 {
+		t.Fatal("a second sweep must find nothing")
 	}
 }

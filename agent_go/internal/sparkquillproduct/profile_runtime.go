@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
@@ -43,10 +44,15 @@ const (
 	InboxFolder     = "inbox"
 )
 
+// keySweeps remembers the family roots whose activity folders were already
+// swept for stray answer keys in this process.
+var keySweeps sync.Map
+
 // WorkspaceLayout renders the "YOUR WORKSPACE" bullets of the parent prompt.
 func WorkspaceLayout() string {
 	return strings.Join([]string{
-		"- " + ActivitiesFolder + "/<yyyy-mm-dd>-<slug>/ — every piece of child-facing content lives in its own activity folder: the content files, its activity.json manifest, any <name>-KEY.md answer key, and (once she starts) her own conversation and attempts/.",
+		"- " + ActivitiesFolder + "/<yyyy-mm-dd>-<slug>/ — every piece of child-facing content lives in its own activity folder: the content files, its activity.json manifest, and (once she starts) her own conversation and attempts/. She can read everything in it.",
+		"- " + KeysFolder + "/<activity-slug>-KEY.md — the parent-only answer keys, one per activity, outside her reach. Never write a key anywhere else.",
 		"- " + MaterialsFolder + "/<subject>/<topic>/ — school material the family uploaded; each file has a .meta.json alongside whose extracted_text already holds the full content.",
 		"- " + MemoryFolder + "/preferences.md, " + MemoryFolder + "/interests.md, " + MemoryFolder + "/child-profile.json — durable context about the parent and child, kept current by the check-in. Read them when a preference or interest would change what you do; never write them by hand.",
 		"- " + MemoryFolder + "/browser-notes.md — your own short cheat sheet for sites you browse with agent_browser; read it before a familiar site, keep it current, edit in place.",
@@ -199,6 +205,11 @@ func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIU
 		}
 		vars := ParentPromptVariables(state)
 		vars["INBOX_NOTE"] = InboxNote(loader.listInbox(ctx, rt.UserID, familyRoot))
+		// Keys written into activity folders before keys/ existed are the
+		// child's to read; move them once per process, before this turn.
+		if _, done := keySweeps.LoadOrStore(familyRoot, true); !done && strings.TrimSpace(workspaceAPIURL) != "" {
+			newFamilyWorkspace(workspaceAPIURL, agentprofiles.ToolRuntimeContext{UserID: rt.UserID, SessionID: rt.SessionID}, familyRoot).sweepAnswerKeys(ctx)
+		}
 		return vars, nil
 	}); err != nil {
 		return err
