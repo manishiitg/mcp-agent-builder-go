@@ -15,7 +15,7 @@ func TestManifestDeclaresParentAndChild(t *testing.T) {
 	parent, child := profiles[0], profiles[1]
 	var suggest *agentprofiles.ToolBinding
 	for i := range parent.Tools {
-		if parent.Tools[i].ID == "sparkquill.suggest-actions" {
+		if parent.Tools[i].ID == "platform.suggest-actions" {
 			suggest = &parent.Tools[i]
 		}
 	}

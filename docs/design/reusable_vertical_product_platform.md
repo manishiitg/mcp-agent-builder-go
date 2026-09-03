@@ -1315,3 +1315,17 @@ The activity's title, goal, pages and persona are rendered into the child
 prompt from activity.json at prompt time (`ChildPromptVariables`), so the
 goal no longer rides on the kickoff message or on the model reading the
 manifest first.
+
+### 2026-09-03 — suggest_actions is a platform tool
+
+`internal/platformtools` holds tool factories the platform owns; the server
+registers them on the profile registry before any product. The first is
+`platform.suggest-actions` (`suggest_actions`): a product binds it in its
+manifest with `interaction: {kind, render: chat.suggestions}` and gets pills
+without any code. `ToolRuntimeContext.Product` (the calling profile's
+product) tags the emitted interaction. SparkQuill's own copy is gone; its
+prompt still decides when the tool is called.
+
+Family-server code paths stay in the learning app for now: the desktop
+shell (`desktop-sparkquill/main.js`) still spawns `family-server`, so the
+standalone backend is live until the desktop moves to the platform server.

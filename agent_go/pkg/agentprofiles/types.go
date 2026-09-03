@@ -445,6 +445,9 @@ type ToolRuntimeContext struct {
 	// Interaction is the calling binding's declared InteractionBinding, if
 	// any; a factory that emits an interaction reads the kind from here.
 	Interaction *InteractionBinding
+	// Product is the product the calling profile belongs to, so a
+	// platform-owned tool can tag what it emits for the right surface.
+	Product string
 }
 
 // RuntimeContext contains trusted, server-resolved state for a profile turn.

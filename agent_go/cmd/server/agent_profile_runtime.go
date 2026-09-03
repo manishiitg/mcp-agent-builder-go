@@ -432,6 +432,7 @@ func (api *StreamingAPI) registerAgentProfileTools(registrar definitionToolRegis
 			Emit:         func(event any) { api.emitAgentProfileEvent(sessionID, event) },
 			Presentation: binding.Presentation,
 			Interaction:  binding.Interaction,
+			Product:      resolved.Definition.Product,
 		})
 		if err != nil {
 			return err

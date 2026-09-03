@@ -56,7 +56,7 @@ profile:
       presentation:
         kind: sparkquill.activity
         activity: {label: Activity ready, destination: Viewer, detail: Ready to hand over}
-    - id: sparkquill.suggest-actions
+    - id: platform.suggest-actions
       interaction:
         kind: suggestions
         render: chat.suggestions

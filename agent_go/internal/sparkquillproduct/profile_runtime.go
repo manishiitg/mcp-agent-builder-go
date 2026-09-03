@@ -190,7 +190,6 @@ func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIU
 		"sparkquill.open-file":                openFileFactory(workspaceAPIURL, false),
 		"sparkquill.open-activity-file":       openFileFactory(workspaceAPIURL, true),
 		"sparkquill.open-activity":            openActivityFactory(workspaceAPIURL),
-		"sparkquill.suggest-actions":          suggestActionsFactory(),
 		"sparkquill.celebrate":                celebrateFactory(),
 		"sparkquill.show-scene":               showSceneFactory(),
 		"sparkquill.find-image":               findImageFactory(workspaceAPIURL, false),

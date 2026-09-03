@@ -626,38 +626,6 @@ func openActivityFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 
 // ---- transient surface interactions ---------------------------------------
 
-func suggestActionsFactory() agentprofiles.ToolFactory {
-	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
-		return agentprofiles.ToolSpec{
-			Name: "suggest_actions", Category: toolCategory,
-			Description: "Call this at the END of EVERY turn, without exception — a turn that ends without it leaves the parent with nothing to tap. Offer 2–4 clickable buttons; each has a short label and the exact message sent as if the parent typed it when clicked. Prefer things they probably AREN'T already thinking about, but if nothing non-obvious comes to mind, offer the two most useful obvious things rather than skipping the call. Never a \"give this to the child\" button (that one is already on the right).",
-			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-				"actions": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-					"label":   map[string]interface{}{"type": "string", "description": "short button text, 2–4 words"},
-					"message": map[string]interface{}{"type": "string", "description": "the message sent as the parent when clicked"},
-				}, "required": []string{"label", "message"}}},
-			}, "required": []string{"actions"}},
-			Execute: func(_ context.Context, args map[string]interface{}) (string, error) {
-				raw, _ := args["actions"].([]interface{})
-				var actions []map[string]interface{}
-				for _, it := range raw {
-					m, ok := it.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					label, message := stringArg(m, "label"), stringArg(m, "message")
-					if label == "" || message == "" {
-						continue
-					}
-					actions = append(actions, map[string]interface{}{"label": label, "message": message})
-				}
-				emitInteraction(runtime, interactionKind(runtime, "suggestions"), map[string]interface{}{"actions": actions})
-				return jsonResult(map[string]interface{}{"status": "ok", "count": len(actions)})
-			},
-		}, nil
-	}
-}
-
 func celebrateFactory() agentprofiles.ToolFactory {
 	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
 		return agentprofiles.ToolSpec{

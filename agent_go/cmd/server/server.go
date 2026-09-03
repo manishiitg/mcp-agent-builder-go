@@ -30,6 +30,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/financeproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/inspector"
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/platformtools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/sparkquillproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/videoproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/agentprofiles"
@@ -1695,6 +1696,10 @@ func runServer(cmd *cobra.Command, args []string) {
 		log.Fatalf("Failed to initialize AgentWorks CLI security store: %v", err)
 	}
 	profileRegistry := agentprofiles.NewRegistry()
+	// Platform-owned tools first: any product's manifest may bind them.
+	if err := platformtools.RegisterAgentProfileTools(profileRegistry); err != nil {
+		log.Fatalf("Failed to register platform agent profile tools: %v", err)
+	}
 	if productEnabled("video-studio") {
 		if err := videoproduct.RegisterProductSkills(); err != nil {
 			log.Fatalf("Failed to register Video Studio skills: %v", err)

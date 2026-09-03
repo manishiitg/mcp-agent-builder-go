@@ -249,10 +249,6 @@ func TestCreateLearningActivityWritesManifestAndProject(t *testing.T) {
 func TestTransientToolsEmitProductInteractions(t *testing.T) {
 	_, sink, rt, _ := newToolHarness(t)
 	ctx := context.Background()
-	suggest := build(t, suggestActionsFactory(), rt)
-	if _, err := suggest.Execute(ctx, map[string]interface{}{"actions": []interface{}{map[string]interface{}{"label": "How's she doing?", "message": "progress"}, map[string]interface{}{"label": "", "message": "x"}}}); err != nil {
-		t.Fatal(err)
-	}
 	celebrate := build(t, celebrateFactory(), rt)
 	if out, err := celebrate.Execute(ctx, map[string]interface{}{"stars": float64(7), "reason": "finished!"}); err != nil || !strings.Contains(out, `"stars_awarded":3`) {
 		t.Fatalf("stars must clamp to 3: %s %v", out, err)
@@ -261,11 +257,8 @@ func TestTransientToolsEmitProductInteractions(t *testing.T) {
 	if _, err := scene.Execute(ctx, map[string]interface{}{"html": "<b>hi</b>"}); err != nil {
 		t.Fatal(err)
 	}
-	if k := strings.Join(sink.kinds(), ","); k != "suggestions,celebrate,scene" {
+	if k := strings.Join(sink.kinds(), ","); k != "celebrate,scene" {
 		t.Fatalf("events = %s", k)
-	}
-	if actions, _ := sink.events[0].Payload["actions"].([]map[string]interface{}); len(actions) != 1 {
-		t.Fatalf("blank suggestions must be dropped: %+v", sink.events[0].Payload)
 	}
 	for _, e := range sink.events {
 		if e.Product != ProductName || e.GetEventType() != orchestratorevents.ProductInteraction {
