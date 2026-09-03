@@ -15,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
@@ -35,6 +36,12 @@ func (api *StreamingAPI) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":  "healthy",
 		"time":    time.Now(),
 		"version": llmtypes.VERSION,
+		// Read by deploy-rootless.sh before it swaps releases: a restart while
+		// a turn is running returns 502 to the user mid-message (RTS,
+		// 2026-09-03, twice in one afternoon). active_sessions counts turns
+		// the tracker still considers running; in_flight_requests counts
+		// non-GET API requests currently being served.
+		"drain": api.drainStatus(),
 		"config": map[string]interface{}{"provider": api.config.Provider,
 			"model":            api.config.ModelID,
 			"temperature":      api.config.Temperature,
@@ -341,4 +348,23 @@ func checkLocalChromeCdpVersion(port int) (map[string]interface{}, error) {
 		"browser":   payload.Browser,
 		"endpoint":  endpoint,
 	}, nil
+}
+
+// drainStatus reports what a deploy should wait for before restarting.
+func (api *StreamingAPI) drainStatus() map[string]interface{} {
+	// The tracker retains finished sessions for 24h; only ones still in the
+	// running lifecycle state hold a turn a restart would cut.
+	api.activeSessionsMux.RLock()
+	active := 0
+	for _, session := range api.activeSessions {
+		if session != nil && normalizeSessionLifecycleStatus(session.Status) == sessionLifecycleRunning {
+			active++
+		}
+	}
+	api.activeSessionsMux.RUnlock()
+	return map[string]interface{}{
+		"active_sessions":    active,
+		"in_flight_requests": atomic.LoadInt64(&apiRequestsInFlight),
+		"idle":               active == 0 && atomic.LoadInt64(&apiRequestsInFlight) == 0,
+	}
 }
