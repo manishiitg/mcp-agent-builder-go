@@ -303,7 +303,7 @@ html, body, #root { margin: 0; height: 100%; }
 .fl-menu button:hover { background: #fdf4e0; }
 .fl-composer textarea { min-width: 0; min-height: 40px; max-height: 160px; padding: 9px 0; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; color: var(--heading); font: inherit; font-size: var(--text-body); line-height: 1.4; }
 .fl-composer textarea::placeholder { color: #5f708c; }
-.fl-disclaimer { margin: 0 clamp(16px, 2.5vw, 36px) 16px; color: #8090a6; font-size: var(--text-caption); text-align: center; }
+.fl-disclaimer { margin: 2px clamp(16px, 2.5vw, 36px) 5px; color: #8090a6; font-size: 11px; line-height: 1.2; text-align: center; }
 
 /* Centre thread messages */
 /* No cap at all: the row may use the full width .fl-thread's own padding leaves
