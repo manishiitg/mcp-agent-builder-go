@@ -20,7 +20,7 @@ const (
 	claudeCodeProviderID = "claude-code"
 	cursorCLIProviderID  = "cursor-cli"
 	// piCLIProviderID scopes a workflow-level Gemini key for Video Studio's
-	// Pi CLI option, which is pinned to google/gemini-3.7-flash -- not a
+	// Pi CLI option, which is pinned to google/gemini-3.8-flash -- not a
 	// general per-sub-provider Pi CLI credential store. If Video Studio ever
 	// offers a Pi CLI model routed through a different sub-provider, this
 	// needs its own scoped credential (and its own ID) rather than widening
@@ -239,7 +239,7 @@ func validateCursorCLIAPIKey(parent context.Context, key string) error {
 
 // validatePiCLIGeminiAPIKey checks the key directly against Google's Gemini
 // API rather than through the pi CLI binary: Video Studio's Pi CLI option is
-// pinned to google/gemini-3.7-flash, and this scoped credential is exactly
+// pinned to google/gemini-3.8-flash, and this scoped credential is exactly
 // that Gemini key, so validating it does not need pi (or tmux) installed on
 // the backend the way the general Pi CLI runtime check does.
 func validatePiCLIGeminiAPIKey(parent context.Context, key string) error {
@@ -317,7 +317,7 @@ func (api *StreamingAPI) workflowProviderAPIKeys(ctx context.Context, userID, wo
 	}
 
 	// Pi CLI routes by sub-provider (see PiProviderKeys), but Video Studio's
-	// Pi CLI option is pinned to google/gemini-3.7-flash, so the only key a
+	// Pi CLI option is pinned to google/gemini-3.8-flash, so the only key a
 	// project-scoped override can mean here is the "google" entry. Fail
 	// closed on that one entry only, not the whole map -- an unrelated
 	// shared zai/minimax/etc. key has nothing to do with this lookup and
