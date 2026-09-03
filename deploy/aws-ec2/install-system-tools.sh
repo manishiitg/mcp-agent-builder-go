@@ -60,6 +60,23 @@ exec /usr/local/lib/ntn/ntn "$@"
 NTN
 chmod 0755 /usr/local/bin/ntn
 
+# surge.sh CLI for workflow publishing (rtslatency publishes rts-daily-ops.surge.sh).
+# Installed with the system node so the sandbox sees it; the launcher maps the
+# workflow-attached secrets SECRET_SURGE_LOGIN / SECRET_SURGE_TOKEN onto the
+# SURGE_LOGIN / SURGE_TOKEN variables the CLI reads, because HOME is /tmp in the
+# sandbox and there is no ~/.netrc to log in with.
+if ! test -x /usr/lib/node_modules/surge/lib/cli.js; then
+  npm install -g --silent surge >/dev/null
+fi
+rm -f /usr/local/bin/surge
+cat > /usr/local/bin/surge <<'SURGE'
+#!/usr/bin/env bash
+if [[ -z "${SURGE_LOGIN:-}" && -n "${SECRET_SURGE_LOGIN:-}" ]]; then export SURGE_LOGIN="$SECRET_SURGE_LOGIN"; fi
+if [[ -z "${SURGE_TOKEN:-}" && -n "${SECRET_SURGE_TOKEN:-}" ]]; then export SURGE_TOKEN="$SECRET_SURGE_TOKEN"; fi
+exec /usr/bin/node /usr/lib/node_modules/surge/lib/cli.js "$@"
+SURGE
+chmod 0755 /usr/local/bin/surge
+
 # AWS profile "RTS" for workflow shells. The rtslatency workflow was written
 # against a named profile on the operator's laptop; on the box the credentials
 # are the instance role, so both `default` and `RTS` resolve to it through
