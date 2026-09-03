@@ -218,7 +218,11 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   // Provider selection goes through the panel's Save, but the drill-ins (API
   // keys, publish, Pi keys) and role edits write immediately -- disable all of
   // it for read-only users rather than only the Save button upstream.
-  const readOnly = !useCanWriteWorkflow()
+  // A locked deployment (LLM_CONFIG_LOCKED) shows the same list, fully
+  // disabled: the published provider reads "In use", every other row is
+  // visible for reference but cannot be tested, selected or configured.
+  const readOnly = !useCanWriteWorkflow() || llmConfigLocked
+  const disabledTitle = llmConfigLocked ? 'Set by your administrator for this deployment' : READ_ONLY_TITLE
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [tokenOpen, setTokenOpen] = useState(false)
@@ -367,6 +371,16 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
 
   // Which row the current config corresponds to, if any.
   const selectedRowId = useMemo<string | null>(() => {
+    if (llmConfigLocked) {
+      // What actually runs under the lock (server: resolveLockedLLM), whatever
+      // this workflow saved -- so the published provider is the one "In use".
+      const effective = effectiveLLMUnderLock(
+        { provider: llmConfig?.builder_llm?.provider ?? llmConfig?.provider, model_id: llmConfig?.builder_llm?.model_id },
+        true,
+        publishedLLMs,
+      )
+      if (effective) return effective.provider
+    }
     if (!llmConfig) return null
     if (llmConfig.mode === 'provider_profile') {
       if (llmConfig.provider === 'pi-cli') {
@@ -706,7 +720,12 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
           {selectedRow.groupFilter && selectedRow.modelId && (
             <span className="truncate font-mono text-[11px] text-muted-foreground">{selectedRow.modelId}</span>
           )}
-          {!usable && (
+          {llmConfigLocked && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground" title="Every workflow on this deployment uses this provider">
+              <Lock className="h-3 w-3" /> Set by your administrator
+            </span>
+          )}
+          {!usable && !llmConfigLocked && (
             <>
               <span className={`text-xs font-medium ${tone.text}`} title={statusTitle(status.label)}>
                 {statusActionText(status.label) ?? status.label}
@@ -856,7 +875,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
             type="button"
             onClick={() => void testRow(row)}
             disabled={readOnly || test?.status === 'testing'}
-            title={readOnly ? READ_ONLY_TITLE : `Send a test prompt to ${row.name}`}
+            title={readOnly ? disabledTitle : `Send a test prompt to ${row.name}`}
             className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-2 py-0.5 text-xs font-medium text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
           >
             {test?.status === 'testing' ? <><Loader2 className="h-3 w-3 animate-spin" /> Testing…</> : 'Test'}
@@ -865,7 +884,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
             type="button"
             onClick={() => void applyRowToWorkflow(row)}
             disabled={readOnly || selected || !row.selectable || rowUsing === row.id}
-            title={readOnly ? READ_ONLY_TITLE : selected ? 'Already in use' : !usable ? 'Not verified yet: Test first, or use anyway' : `Use ${row.name} for this workflow`}
+            title={readOnly ? disabledTitle : selected ? 'Already in use' : !usable ? 'Not verified yet: Test first, or use anyway' : `Use ${row.name} for this workflow`}
             className="inline-flex shrink-0 items-center gap-1 rounded-md bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {rowUsing === row.id ? <><Loader2 className="h-3 w-3 animate-spin" /> Saving…</> : 'Use'}
@@ -882,7 +901,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
             aria-checked={selected}
             disabled={readOnly || !row.selectable}
             onClick={() => selectRow(row)}
-            title={readOnly ? READ_ONLY_TITLE : row.selectable ? `Use ${row.name} for this workflow` : 'Loading models…'}
+            title={readOnly ? disabledTitle : row.selectable ? `Use ${row.name} for this workflow` : 'Loading models…'}
             className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-border transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-40"
           >
             {selected && <span className="h-2 w-2 rounded-full bg-primary" />}
@@ -1007,7 +1026,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
                   aria-checked={selected}
                   disabled={disabled}
                   onClick={pick}
-                  title={readOnly ? READ_ONLY_TITLE : selected ? 'In use' : `Use ${row.modelId} for this workflow`}
+                  title={readOnly ? disabledTitle : selected ? 'In use' : `Use ${row.modelId} for this workflow`}
                   className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-border transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {selected && <span className="h-2 w-2 rounded-full bg-primary" />}
@@ -1069,7 +1088,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
           )}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             {isCustomized && defaultValue && (
-              <button type="button" onClick={() => resetRole(row.key)} disabled={readOnly} title={readOnly ? READ_ONLY_TITLE : undefined} className="text-[11px] text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline">
+              <button type="button" onClick={() => resetRole(row.key)} disabled={readOnly} title={readOnly ? disabledTitle : undefined} className="text-[11px] text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline">
                 Reset to provider default
               </button>
             )}
@@ -1080,7 +1099,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
                   {fallbackList.map((fallback, index) => (
                     <span key={`${row.key}-${configKey(fallback)}-${index}`} className="mr-1 inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-foreground">
                       {fallback.provider}/{fallback.model_id.split('/').pop()}
-                      <button type="button" onClick={() => updateFallbacks(row.key, fallbackList.filter((_, itemIndex) => itemIndex !== index))} disabled={readOnly} title={readOnly ? READ_ONLY_TITLE : undefined} className="text-muted-foreground hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50" aria-label={`Remove ${row.label} fallback`}>
+                      <button type="button" onClick={() => updateFallbacks(row.key, fallbackList.filter((_, itemIndex) => itemIndex !== index))} disabled={readOnly} title={readOnly ? disabledTitle : undefined} className="text-muted-foreground hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50" aria-label={`Remove ${row.label} fallback`}>
                         <X className="h-3 w-3" />
                       </button>
                     </span>
@@ -1103,56 +1122,6 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
     )
   }
 
-  if (llmConfigLocked) {
-    // Say what runs rather than only that it is locked: the published default
-    // (what every workflow on this deployment uses), then the other providers
-    // the platform knows, greyed out, so people can see what could be enabled.
-    const effective = effectiveLLMUnderLock(
-      { provider: llmConfig?.builder_llm?.provider ?? llmConfig?.provider, model_id: llmConfig?.builder_llm?.model_id },
-      true,
-      publishedLLMs,
-    )
-    const activeEntry = effective ? providerManifest.find(p => p.id === effective.provider) : undefined
-    const activeName = activeEntry?.display_name ?? effective?.provider ?? 'the published default'
-    const others = providerManifest
-      .filter(p => !p.deprecated && p.id !== effective?.provider)
-      .map(p => p.display_name)
-      .sort((a, b) => a.localeCompare(b))
-    return (
-      <div className="space-y-3 rounded-md border border-border px-4 py-4 text-sm">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="text-muted-foreground">This workflow runs on</span>
-          <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
-            <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            {activeName}
-          </span>
-          {effective?.model_id && effective.model_id !== effective.provider && (
-            <span className="font-mono text-[11px] text-muted-foreground">{effective.model_id}</span>
-          )}
-          <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-            <Lock className="h-3 w-3" /> Set by your administrator
-          </span>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Every workflow on this deployment uses this model; it cannot be changed per workflow.
-        </p>
-        {others.length > 0 && (
-          <div className="text-xs text-muted-foreground">
-            <div className="mb-1 font-medium text-foreground/80">Other providers on this platform</div>
-            <div className="flex flex-wrap gap-1.5">
-              {others.map(name => (
-                <span key={name} className="inline-flex items-center gap-1 rounded-md border border-dashed border-border px-2 py-0.5 opacity-60" title="Locked on this deployment">
-                  <Lock className="h-3 w-3" /> {name}
-                </span>
-              ))}
-            </div>
-            <div className="mt-1">Ask your administrator to enable one of these.</div>
-          </div>
-        )}
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-border bg-muted/20 p-3">
@@ -1160,8 +1129,13 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
         {renderTokenLine()}
       </div>
 
-      {((!selectedRow && !advanced) || changing) && (
+      {((!selectedRow && !advanced) || changing || llmConfigLocked) && (
       <>
+      {llmConfigLocked && (
+        <p className="text-xs text-muted-foreground">
+          Every workflow on this deployment uses the provider marked “In use”. The others are shown for reference and cannot be selected here — ask your administrator to enable one.
+        </p>
+      )}
       <div className="flex items-center gap-2">
         <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -1250,7 +1224,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
                   type="button"
                   onClick={useManagedDefaults}
                   disabled={readOnly || !selectedProfile}
-                  title={readOnly ? READ_ONLY_TITLE : selectedProfile ? undefined : 'No provider profile to return to'}
+                  title={readOnly ? disabledTitle : selectedProfile ? undefined : 'No provider profile to return to'}
                   className="shrink-0 text-xs font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Use provider defaults for all roles
