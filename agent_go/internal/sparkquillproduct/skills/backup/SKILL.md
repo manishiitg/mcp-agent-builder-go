@@ -5,8 +5,8 @@ description: Back up the family's learning workspace to the parent's own private
 
 # Back up the workspace
 
-Protect the family's data — materials, generated study/tests/reports, the academic
-map, and conversations — by pushing it to the parent's OWN **private Hugging Face
+Protect the family's data — materials, generated study/tests/reports, the progress
+page, and conversations — by pushing it to the parent's OWN **private Hugging Face
 Hub dataset repo**, via the `hf` CLI (already installed). This is the ONLY
 destination this family uses — never suggest GitHub, Drive, S3, or anything else,
 and never suggest a different destination "for images" — `hf upload` handles

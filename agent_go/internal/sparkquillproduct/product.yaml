@@ -36,7 +36,6 @@ profile:
     - teach-coding
     - discover-something-new
     - create-progress-report
-    - create-academic-map
     - publish
     - notify
     - backup
@@ -66,9 +65,6 @@ profile:
     - name: update-progress-report
       description: "Update progress report"
       prompt: "Build an updated progress report \u2014 follow your create-progress-report skill, make it a designed HTML page, and give me a short coach-style read of the evidence here in chat too."
-    - name: update-academic-map
-      description: "Update academic map"
-      prompt: "Update the academic map \u2014 follow your create-academic-map skill (designed HTML at reports/academic-map.html)."
     - name: back-up-workspace
       description: "Back up workspace"
       prompt: "Back up my workspace now \u2014 follow your backup skill."

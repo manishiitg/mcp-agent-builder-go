@@ -1,9 +1,9 @@
 # SparkQuill HTML design system
 
 > Activity pages are Quill's own design now (see the parent prompt); this
-> guide is for the progress report and the academic map.
+> guide is for the progress page.
 
-Every HTML file the app generates (progress reports, academic map, study material,
+Every HTML file the app generates (the progress page, study material,
 tests, and anything else) shares this look so they feel like one product. Build a
 **complete standalone document** — inline the CSS, no web fonts, no hotlinked
 images, no network calls at load time.
@@ -184,7 +184,7 @@ that breaks the moment the page is printed or opened offline.
 ```
 
 Use `.card` for each section, `.badge` for marks or a "Current" tag, `.good`/`.focus`
-for going-well / to-practise, a `.grid` of `.card`s for the academic map's subjects,
+for going-well / to-practise, a `.grid` of `.card`s for the subject cards,
 `.note` for honest caveats, and `.answered-note` for the tutor's progress marks.
 
 `.answered-note` records WHAT she answered and never whether it was right. Write it

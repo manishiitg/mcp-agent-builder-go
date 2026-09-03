@@ -206,7 +206,7 @@ function persistChildSideWidth(px: number) {
 // Parent Mode's own drag-to-resize for the workspace drawer — same mechanism
 // as the child's worksheet, but capped at HALF the window rather than nearly
 // all of it: the drawer here is a reference panel beside the conversation
-// (Academics/Progress/Files), not the primary thing being read, so the chat
+// (Progress/Files), not the primary thing being read, so the chat
 // should never be squeezed to a sliver the way the child's worksheet is
 // allowed to claim most of the screen.
 const PARENT_SIDE_WIDTH_KEY = 'sparkquill.parent-side-width'
@@ -1349,8 +1349,6 @@ export default function LearningApp() {
   // back to the default top-level-only view. Absent from this map = use the
   // component's own default (top level open, everything nested closed).
   const [treeExpanded, setTreeExpanded] = useState<Record<string, boolean>>({})
-  const mapHtml = useWorkspaceStore((s) => s.mapHtml)
-  const setMapHtml = useWorkspaceStore((s) => s.setMapHtml)
   const mapRefreshKey = useWorkspaceStore((s) => s.mapRefreshKey)
   const setMapRefreshKey = useWorkspaceStore((s) => s.setMapRefreshKey)
   const progressHtml = useWorkspaceStore((s) => s.progressHtml)
@@ -1374,18 +1372,6 @@ export default function LearningApp() {
   const setGateValue = usePinGateStore((s) => s.setGateValue)
   const gateError = usePinGateStore((s) => s.gateError)
   const setGateError = usePinGateStore((s) => s.setGateError)
-
-  // Load the real, agent-generated reports/academic-map.html for the Subjects
-  // tab — refetches whenever the tab is opened or a turn just completed (the
-  // agent may have rebuilt the map during that turn).
-  useEffect(() => {
-    if (drawerTab !== 'map') return
-    let cancelled = false
-    api.readFile('reports/academic-map.html')
-      .then((d) => { if (!cancelled) setMapHtml(d.content ?? '') })
-      .catch(() => { if (!cancelled) setMapHtml('') })
-    return () => { cancelled = true }
-  }, [drawerTab, mapRefreshKey, setMapHtml])
 
   // Load the real, agent-generated reports/progress.html for the Progress tab
   // — a single living document, rendered directly (not a link the parent has
@@ -2713,7 +2699,7 @@ export default function LearningApp() {
                       </div>
                       <div className="fl-pulse-body">
                         <div className="fl-pulse-col">
-                          <p className="fl-pulse-popover-desc">Quill checks in on its own now and then — reviewing recent activity, keeping the progress report and academic map current.</p>
+                          <p className="fl-pulse-popover-desc">Quill checks in on its own now and then — reviewing recent activity, keeping the progress report and progress page current.</p>
                           <button
                             type="button"
                             className="fl-pulse-toggle"
@@ -3114,7 +3100,6 @@ export default function LearningApp() {
           <aside className="fl-drawer" aria-label="Learning workspace">
             {!((drawerTab === 'files' || drawerTab === 'allfiles' || drawerTab === 'uploaded') && viewerPath) && (
               <div className="fl-drawer-tabs" role="tablist" aria-label="Workspace views">
-                <button role="tab" aria-selected={drawerTab === 'map'} className={drawerTab === 'map' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('map')}>Academics</button>
                 <button role="tab" aria-selected={drawerTab === 'progress'} className={drawerTab === 'progress' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('progress')}>Progress</button>
                 <button role="tab" aria-selected={drawerTab === 'files'} className={drawerTab === 'files' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('files')}>Workspace</button>
                 <button role="tab" aria-selected={drawerTab === 'uploaded'} className={drawerTab === 'uploaded' ? 'is-active' : ''} type="button" onClick={() => setDrawerTab('uploaded')}>Uploaded</button>
@@ -3166,19 +3151,6 @@ export default function LearningApp() {
                   })()}
                   <p className="fl-callout"><span className="fl-dot is-ready" /> Materials live in the family workspace on this computer. Quill reads them to explain progress and create study material.</p>
                 </>
-              )}
-
-              {drawerTab === 'map' && (
-                mapHtml === null ? (
-                  <p className="fl-note">Loading the academic map…</p>
-                ) : mapHtml.includes('living view grows as') ? (
-                  // Still the startup placeholder seedWorkspace() writes before the
-                  // agent has ever run create-academic-map — an honest empty state
-                  // rather than a blank iframe.
-                  <p className="fl-note">The academic map hasn't been built yet — ask Quill to "update the academic map" once there's some material to show.</p>
-                ) : (
-                  <iframe className="fl-map-frame" title="Academic map" sandbox="allow-scripts" srcDoc={withDiagramLib(mapHtml)} />
-                )
               )}
 
               {drawerTab === 'progress' && (
@@ -3364,7 +3336,7 @@ export default function LearningApp() {
                     // Hierarchy: subject -> topic -> activity -> item. Every piece of
                     // generated content IS an activity now, so this groups the
                     // structured /api/activities objects directly — no path-parsing.
-                    // Raw uploads have their own "Uploaded" tab; the academic map/
+                    // Raw uploads have their own "Uploaded" tab; the progress page/
                     // progress report have their own dedicated tabs, so they're not
                     // duplicated here.
                     const subjectsList = Array.from(new Set(activities.filter((a) => a.subject).map((a) => a.subject!))).sort()

@@ -335,7 +335,7 @@ func presentationActivity(binding *agentprofiles.PresentationBinding) *orchestra
 func openFileFactory(workspaceAPIURL string, conversationOnly bool) agentprofiles.ToolFactory {
 	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
 		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
-		description := "Show a workspace file to the parent on the right side of the screen. Call this right after you create or update a file the parent should see (study material, a test, a progress report, the academic map). Pass the path relative to the workspace."
+		description := "Show a workspace file to the parent on the right side of the screen. Call this right after you create or update a file the parent should see (study material, a test, the progress page). Pass the path relative to the workspace."
 		params := map[string]interface{}{"path": map[string]interface{}{"type": "string", "description": "workspace-relative path to the file to display"}}
 		if conversationOnly {
 			description = "Show a lesson, worksheet, or one of her own saved pages on the right side of her screen. Pass the path relative to the activity folder. PASS focus WHENEVER you are talking about one specific question or section — that is what actually scrolls the page to it; omit it to keep her current position (for example right after recording an answer)."

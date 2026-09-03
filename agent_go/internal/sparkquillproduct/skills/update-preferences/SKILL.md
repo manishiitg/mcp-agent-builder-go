@@ -9,8 +9,7 @@ This is run by Pulse (the periodic check-in), never by a live parent request —
 parent never asks for this directly, so don't mention it to them as a step you're
 doing; just fold the result into your normal Pulse reply if it's worth a line.
 
-`memory/preferences.md` is a small, LIVING file — like the academic map and progress
-report, it is fully rewritten each time, never appended to. It exists to remember
+`memory/preferences.md` is a small, LIVING file — like the progress page, it is fully rewritten each time, never appended to. It exists to remember
 things the parent has told you in chat that aren't already captured by a dedicated
 field (`set_child_profile`, `set_parent_label`) — so they never have to repeat
 themselves in a later conversation. This includes general teaching preferences

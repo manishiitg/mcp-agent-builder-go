@@ -54,7 +54,6 @@ const STANDALONE_COMMANDS = {
   { label: "Create study material", message: "Create study material for my child \u2014 follow your create-study-material skill and make it a designed, static (view-only) HTML page." },
   { label: "Create a practice test", message: "Create a practice test for my child \u2014 follow your create-test skill: an interactive HTML page that records my child\u2019s typed answers, plus a separate answer key for me." },
   { label: "Update progress report", message: "Build an updated progress report \u2014 follow your create-progress-report skill, make it a designed HTML page, and give me a short coach-style read of the evidence here in chat too." },
-  { label: "Update academic map", message: "Update the academic map \u2014 follow your create-academic-map skill (designed HTML at reports/academic-map.html)." },
   { label: "Back up workspace", message: "Back up my workspace now \u2014 follow your backup skill." },
 ],
   child: [
