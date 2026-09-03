@@ -1,6 +1,32 @@
 # Reusable Platform for Dedicated Agent Products
 
-**Status:** Proposed architecture  
+**Status:** In use. SparkQuill runs on the platform (hosted) and on its own
+family server (desktop). Dated notes at the end of this document are the
+change log; this block is the state as of 2026-09-03.
+
+## Where things stand (2026-09-03)
+
+**Built and on main.** SparkQuill's parent and child conversations are
+AgentWorks' `ChatArea`, hosted by `PlatformChat` and `ChildPlatformChat`;
+streaming, tool chips, restore, scrolling and the turn layout are the same
+code in every product, styled through tokens the product sets. Everything
+product-specific is declared in `product.yaml`: tool bindings carry their
+`presentation` (right panel) and `interaction` (in-chat rendering: pills,
+celebration, scene) and the `schedules` block is the check-in. Platform-owned
+tools live in `internal/platformtools` (first: `platform.suggest-actions`).
+On the platform backend the app also covers setup (child profile, PIN),
+handoff and continue-vs-fresh, secrets, voice status, the check-in popup,
+pinned pages, the keys folder outside the child's sandbox, and a new-build
+reload notice.
+
+**Decisions.** The desktop app keeps its own family server; the standalone
+backend and renderers stay in the learning app and the two backends are not
+expected to have feature parity. WhatsApp stays unimplemented on the
+platform backend. The RTS deploy is not needed yet.
+
+**Open.** Whether SparkQuill's Settings should list only its own secrets or
+the whole per-user store (today: the whole store).
+
 **Scope:** AgentWorks (workflow engine), SparkQuill/family-server (first vertical),
 and 3-10 further dedicated products, each substantially custom. See
 "Designing for ten products, not two" — the target count changes the bar for
