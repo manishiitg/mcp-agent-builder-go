@@ -6,7 +6,6 @@ import {
   LoaderCircle,
   Play,
   ShieldCheck,
-  Share2,
   Activity,
   BellRing,
   CalendarClock,
@@ -27,8 +26,7 @@ import { getBackupDotClass } from '../backupStatus'
 import { getPublishDotClass } from '../publishStatus'
 import { getNotificationDotClass } from '../notificationStatus'
 import { loadWorkflowNotificationInfo, type WorkflowNotificationState } from '../../../services/workflow-notifications'
-import UsersAdminPanel from '../../admin/UsersAdminPanel'
-import WorkflowSharePopup from '../WorkflowSharePopup'
+import AccessCenter from '../AccessCenter'
 import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestStore'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip'
 import { hasWorkflowWriteAccess, hasWorkflowOwnerAccess } from '../../../utils/workflowPermissions'
@@ -349,8 +347,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [backupState, setBackupState] = useState<string>('loading')
   const [publishState, setPublishState] = useState<string>('not_configured')
   const [notificationState, setNotificationState] = useState<WorkflowNotificationState | 'loading'>('loading')
-  const [showAccessPopup, setShowAccessPopup] = useState(false)
-  const [showSharePopup, setShowSharePopup] = useState(false)
+  const [showAccessCenter, setShowAccessCenter] = useState(false)
   // Share is for this workflow's owners (or an admin), multi-user mode only.
   const isMultiUser = useAuthStore(state => state.isMultiUserMode)
   const isAdminUser = useAuthStore(state => state.user?.is_admin === true)
@@ -854,41 +851,26 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 </Tooltip>
               )
             })}
-            {/* Access lives with the rest of setup. Share = who may see or
-                edit THIS workflow (owners and readers); Users & access =
-                the deployment's accounts, roles and products (admins). */}
+            {/* Access lives with the rest of setup: one button, one panel
+                with two tabs -- who may see or edit THIS workflow, and (for
+                admins) the deployment's accounts, roles and products. */}
             {(canShareWorkflow || canManageAccess) && (
-              <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
-            )}
-            {canShareWorkflow && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => setShowSharePopup(true)}
-                    className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
-                    aria-label="Share workflow"
-                  >
-                    <Share2 className="w-3.5 h-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom"><p>Share this workflow: who can see or edit it</p></TooltipContent>
-              </Tooltip>
-            )}
-            {canManageAccess && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => setShowAccessPopup(true)}
-                    className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
-                    aria-label="Users and access"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom"><p>Users &amp; access: accounts, roles and products (admins)</p></TooltipContent>
-              </Tooltip>
+              <>
+                <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => setShowAccessCenter(true)}
+                      className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
+                      aria-label="Access"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom"><p>Access: share this workflow{canManageAccess ? ', manage users' : ''}</p></TooltipContent>
+                </Tooltip>
+              </>
             )}
           </div>
           </ToolbarGroup>
@@ -899,18 +881,14 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
         </TooltipProvider>
       </div>
     </div>
-    {/* Users & access (admins only) */}
-    <UsersAdminPanel
-      isOpen={showAccessPopup}
-      onClose={() => setShowAccessPopup(false)}
+    {/* Access: this workflow's sharing + (admins) the deployment's users */}
+    <AccessCenter
+      isOpen={showAccessCenter}
+      onClose={() => setShowAccessCenter(false)}
+      workspacePath={workspacePath ? (normalizeWorkspacePath(workspacePath) ?? workspacePath) : undefined}
+      canShareWorkflow={canShareWorkflow}
+      canManageUsers={canManageAccess}
     />
-    {workspacePath && (
-      <WorkflowSharePopup
-        isOpen={showSharePopup}
-        onClose={() => setShowSharePopup(false)}
-        workspacePath={normalizeWorkspacePath(workspacePath) ?? workspacePath}
-      />
-    )}
     </>
   )
 }

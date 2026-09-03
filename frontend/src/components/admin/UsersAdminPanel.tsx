@@ -7,6 +7,8 @@ import ModalPortal from '../ui/ModalPortal'
 interface UsersAdminPanelProps {
   isOpen: boolean
   onClose: () => void
+  /** Render only the body, for a host (AccessCenter) that supplies the modal shell and header. */
+  embedded?: boolean
 }
 
 // Account roles as the admin sees them. Only two facts sit behind the three
@@ -36,7 +38,7 @@ const productLabel = (id: string) => PRODUCT_LABELS[id] ?? id
  * passwords, disable or delete. Replaces the old per-user workflow-access
  * tier popup; those tiers are now derived from the role here.
  */
-const UsersAdminPanel: React.FC<UsersAdminPanelProps> = ({ isOpen, onClose }) => {
+const UsersAdminPanel: React.FC<UsersAdminPanelProps> = ({ isOpen, onClose, embedded = false }) => {
   const me = useAuthStore((s) => s.user)
   const [users, setUsers] = useState<AdminUser[]>([])
   const [products, setProducts] = useState<string[]>([])
@@ -117,22 +119,8 @@ const UsersAdminPanel: React.FC<UsersAdminPanelProps> = ({ isOpen, onClose }) =>
 
   if (!isOpen) return null
 
-  return (
-    <ModalPortal>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
-        <div
-          className="bg-background border border-border rounded-lg shadow-xl w-full max-w-4xl max-h-[88vh] flex flex-col"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="flex items-center justify-between p-4 border-b border-border">
-            <div className="flex items-center gap-2">
-              <Users className="w-5 h-5 text-muted-foreground" />
-              <h2 className="text-lg font-semibold">Users &amp; access</h2>
-            </div>
-            <button onClick={onClose} className="p-1 rounded hover:bg-accent" aria-label="Close">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
+  const body = (
+    <>
           <div className="px-4 pt-3 pb-2 text-xs text-muted-foreground">
             Accounts live in <code className="text-[11px] bg-muted px-1 py-0.5 rounded">config/users.json</code>. A member owns what they create;
             a read-only account cannot create anything and only sees what is shared with it. Product boxes decide which surfaces an account may open
@@ -341,6 +329,27 @@ const UsersAdminPanel: React.FC<UsersAdminPanelProps> = ({ isOpen, onClose }) =>
               <button onClick={() => setResetFor(null)} className="px-3 py-1.5 text-sm rounded border border-border hover:bg-accent">Cancel</button>
             </div>
           )}
+    </>
+  )
+  if (embedded) return body
+
+  return (
+    <ModalPortal>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+        <div
+          className="bg-background border border-border rounded-lg shadow-xl w-full max-w-4xl max-h-[88vh] flex flex-col"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between p-4 border-b border-border">
+            <div className="flex items-center gap-2">
+              <Users className="w-5 h-5 text-muted-foreground" />
+              <h2 className="text-lg font-semibold">Users &amp; access</h2>
+            </div>
+            <button onClick={onClose} className="p-1 rounded hover:bg-accent" aria-label="Close">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          {body}
         </div>
       </div>
     </ModalPortal>
