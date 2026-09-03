@@ -134,6 +134,8 @@ import { isMainAgentTerminal } from '../utils/terminalIdentity'
 
 const AUTO_NOTIFICATION_PREFIX = '[AUTO-NOTIFICATION]'
 const FALLBACK_CODING_AGENT_PROVIDERS = new Set(['claude-code', 'codex-cli', 'cursor-cli', 'pi-cli'])
+// Providers whose chat turns never have a tmux pane (server: codingAgentUsesStructuredTransport).
+const STRUCTURED_TRANSPORT_PROVIDERS = new Set(['cursor-cli'])
 const FALLBACK_LIVE_INPUT_PROVIDERS = new Set(['claude-code', 'codex-cli', 'cursor-cli', 'pi-cli'])
 
 const formatResumeChatTime = (value?: string): string => {
@@ -767,6 +769,12 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     tabConfig?.llmConfig?.provider,
     workflowPhasePreset?.llmConfig?.builder_llm?.provider,
     workflowPhasePreset?.llmConfig?.provider])
+  // Cursor always runs on the structured (--print) transport in chat unless a
+  // product profile says tmux (server: codingAgentUsesStructuredTransport), so
+  // there is no live terminal to open: the pane could only ever say
+  // "Starting…". Hide the toggle for it instead (user request, 2026-09-03).
+  const liveTerminalOffered = mainTerminalAvailable
+    && !STRUCTURED_TRANSPORT_PROVIDERS.has((effectiveProviderForSteer || '').trim().toLowerCase())
   useEffect(() => {
     if (!providerManifestLoaded) {
       void loadProviderManifest()
@@ -3413,7 +3421,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 ? `${botPlatform || 'Bot'} run — view only`
               : 'View only — restored conversation'}
           </span>
-          {mainTerminalAvailable && activeTabId && (
+          {liveTerminalOffered && activeTabId && (
             <Button
               type="button"
               variant={terminalViewSelected ? 'secondary' : 'ghost'}
@@ -3755,7 +3763,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                       </TooltipContent>
                   </Tooltip>
                 )}
-                {mainTerminalAvailable && activeTabId && !isProductSurface && (
+                {liveTerminalOffered && activeTabId && !isProductSurface && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button

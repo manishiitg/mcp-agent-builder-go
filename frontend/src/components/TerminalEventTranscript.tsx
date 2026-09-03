@@ -452,15 +452,13 @@ const ToolCallField: React.FC<{ label: string; value: string }> = ({ label, valu
   )
 }
 
-// Thinking behaves like a tool batch with one difference: it is open while it
-// is the newest thing in the transcript (the agent is still reasoning) and
-// minimises on its own once the answer text or a tool batch follows. A manual
-// toggle wins until the next automatic close.
-const ThinkingBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'thinking' }>; open: boolean }> = ({ item, open }) => {
-  const [override, setOverride] = useState<boolean | null>(null)
-  useEffect(() => { setOverride(null) }, [open])
-  const expanded = override ?? open
-  const toggle = useCallback(() => setOverride(prev => !(prev ?? open)), [open])
+// Thinking is a collapsible block like a tool batch, open by default (user
+// decision 2026-09-03: it used to minimise once the answer streamed, which
+// hid commentary people were still reading). `live` only drives the pulse dot
+// while the agent is still reasoning; the toggle is the user's alone.
+const ThinkingBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'thinking' }>; live: boolean }> = ({ item, live }) => {
+  const [expanded, setExpanded] = useState(true)
+  const toggle = useCallback(() => setExpanded(prev => !prev), [])
 
   return (
     <div data-testid="terminal-clear-thinking-batch" className="my-1">
@@ -472,7 +470,7 @@ const ThinkingBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'thinking'
         className="flex items-center gap-1 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:text-foreground"
       >
         <span>Thinking</span>
-        {open && <span aria-hidden="true" className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground/70" />}
+        {live && <span aria-hidden="true" className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground/70" />}
         {expanded
           ? <ChevronDown className="h-3 w-3 shrink-0" />
           : <ChevronRight className="h-3 w-3 shrink-0" />}
@@ -480,7 +478,7 @@ const ThinkingBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'thinking'
       {expanded && (
         <p
           data-testid="terminal-clear-thinking-batch-content"
-          className="mt-1 whitespace-pre-wrap break-words border-l border-border pl-3 text-sm leading-6 text-muted-foreground"
+          className="mt-1 whitespace-pre-wrap break-words border-l border-border pl-3 text-xs leading-5 text-muted-foreground"
         >
           {item.text}
         </p>
@@ -1015,7 +1013,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
           const body = item.kind === 'tools'
             ? <ToolBatch item={item} />
             : item.kind === 'thinking'
-              ? <ThinkingBatch item={item} open={index === items.length - 1 && !streamingText.trim()} />
+              ? <ThinkingBatch item={item} live={index === items.length - 1 && !streamingText.trim()} />
               : (
                 <TranscriptEvent
                   event={item.event}
