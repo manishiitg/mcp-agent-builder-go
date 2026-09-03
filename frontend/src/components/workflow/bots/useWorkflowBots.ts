@@ -594,6 +594,12 @@ export function useWorkflowBots(workspacePath: string | null) {
   const gmailTestPassed = gmailTestResult?.success === true
     && gmailTestedTo === (gmailConfig.default_to || '')
     && !gmailDefaultIsBlocked
+  // An authenticated account with the Gmail scope is reason enough to enable
+  // the channel (user decision 2026-09-03; the server auto-enables on the same
+  // condition). A passing test still counts, for a host that is authenticated
+  // some other way.
+  const gmailCanEnable = gmailTestPassed
+    || (gmailConfig.auth?.authenticated === true && gmailConfig.auth?.has_gmail_scope === true)
   const gmailHasChanges = gmailConfig.enabled !== gmailOriginal.enabled
     || (gmailConfig.default_to || '') !== gmailOriginal.default_to
     || JSON.stringify(gmailCurrentBlocked) !== JSON.stringify(gmailOriginal.blocked_recipients)
@@ -678,7 +684,7 @@ export function useWorkflowBots(workspacePath: string | null) {
     // gmail
     gmailOpen, setGmailOpen, gmailConfig, setGmailConfig, gmailBlockedText, setGmailBlockedText,
     gmailLoading, gmailChecking, gmailSaving, gmailTesting, gmailError, gmailSuccess, gmailTestResult,
-    gmailBlockedDefaults, gmailDefaultIsBlocked, gmailTestPassed, gmailHasChanges, loadGmail, saveGmail, testGmail,
+    gmailBlockedDefaults, gmailDefaultIsBlocked, gmailTestPassed, gmailCanEnable, gmailHasChanges, loadGmail, saveGmail, testGmail,
     // gmail senders (multi-account)
     gmailConnections, gmailConnectionsBusy, gmailAuthPending,
     gmailNewConnectionName, setGmailNewConnectionName,

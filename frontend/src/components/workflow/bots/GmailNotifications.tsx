@@ -13,7 +13,7 @@ type GmailNotificationsBots = Pick<WorkflowBots,
   | 'readOnly'
   | 'gmailOpen' | 'setGmailOpen' | 'gmailConfig' | 'setGmailConfig' | 'gmailBlockedText' | 'setGmailBlockedText'
   | 'gmailLoading' | 'gmailChecking' | 'gmailSaving' | 'gmailTesting' | 'gmailError' | 'gmailSuccess' | 'gmailTestResult'
-  | 'gmailBlockedDefaults' | 'gmailDefaultIsBlocked' | 'gmailTestPassed' | 'gmailHasChanges' | 'loadGmail' | 'saveGmail' | 'testGmail'
+  | 'gmailBlockedDefaults' | 'gmailDefaultIsBlocked' | 'gmailCanEnable' | 'gmailHasChanges' | 'loadGmail' | 'saveGmail' | 'testGmail'
   | 'gmailConnections' | 'gmailConnectionsBusy' | 'gmailAuthPending'
   | 'gmailNewConnectionName' | 'setGmailNewConnectionName'
   | 'gmailNewConnectionDir' | 'setGmailNewConnectionDir'
@@ -25,7 +25,7 @@ export function GmailNotifications({ bots }: { bots: GmailNotificationsBots }) {
     readOnly,
     gmailOpen, setGmailOpen, gmailConfig, setGmailConfig, gmailBlockedText, setGmailBlockedText,
     gmailLoading, gmailChecking, gmailSaving, gmailTesting, gmailError, gmailSuccess, gmailTestResult,
-    gmailBlockedDefaults, gmailDefaultIsBlocked, gmailTestPassed, gmailHasChanges, loadGmail, saveGmail, testGmail,
+    gmailBlockedDefaults, gmailDefaultIsBlocked, gmailCanEnable, gmailHasChanges, loadGmail, saveGmail, testGmail,
     gmailConnections, gmailConnectionsBusy, gmailAuthPending,
     gmailNewConnectionName, setGmailNewConnectionName,
     gmailNewConnectionDir, setGmailNewConnectionDir,
@@ -65,12 +65,12 @@ export function GmailNotifications({ bots }: { bots: GmailNotificationsBots }) {
                     <h4 className="text-sm font-medium">Enable Gmail</h4>
                     <p className="mt-0.5 text-xs text-muted-foreground">Available to notify_user across workflows and product chats.</p>
                   </div>
-                  <label className={`relative inline-flex items-center ${!gmailConfig.enabled && !gmailTestPassed ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
-                    <input type="checkbox" checked={gmailConfig.enabled} disabled={readOnly || (!gmailConfig.enabled && !gmailTestPassed)} onChange={event => setGmailConfig({ ...gmailConfig, enabled: event.target.checked })} className="peer sr-only" />
+                  <label className={`relative inline-flex items-center ${!gmailConfig.enabled && !gmailCanEnable ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+                    <input type="checkbox" checked={gmailConfig.enabled} disabled={readOnly || (!gmailConfig.enabled && !gmailCanEnable)} onChange={event => setGmailConfig({ ...gmailConfig, enabled: event.target.checked })} className="peer sr-only" />
                     <div className="h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-blue-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-disabled:opacity-40 dark:bg-gray-700" />
                   </label>
                 </div>
-                {!gmailConfig.enabled && !gmailTestPassed && <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">Send a successful test email before enabling.</p>}
+                {!gmailConfig.enabled && !gmailCanEnable && <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">Sign in a Gmail account below to enable; it switches on automatically once one is connected.</p>}
               </Card>
               <Card className="p-4">
                 <div className="flex items-center justify-between gap-2">
@@ -224,7 +224,7 @@ export function GmailNotifications({ bots }: { bots: GmailNotificationsBots }) {
               <Button variant="outline" onClick={testGmail} disabled={readOnly || gmailTesting || !gmailConfig.default_to || gmailDefaultIsBlocked} title={readOnly ? READ_ONLY_TITLE : undefined} className="w-full">{gmailTesting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Sending…</> : 'Send test email'}</Button>
               {gmailTestResult && <Card className={`p-3 text-sm ${gmailTestResult.success ? 'border-green-300 bg-green-50 text-green-700 dark:border-green-700 dark:bg-green-900/20 dark:text-green-300' : 'border-red-300 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-900/20 dark:text-red-300'}`}>{gmailTestResult.message}</Card>}
               <div className="flex justify-end">
-                <Button onClick={saveGmail} disabled={readOnly || !gmailHasChanges || gmailSaving || gmailLoading || gmailDefaultIsBlocked || (gmailConfig.enabled && !gmailTestPassed)} title={readOnly ? READ_ONLY_TITLE : undefined}>{gmailSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving…</> : 'Save'}</Button>
+                <Button onClick={saveGmail} disabled={readOnly || !gmailHasChanges || gmailSaving || gmailLoading || gmailDefaultIsBlocked || (gmailConfig.enabled && !gmailCanEnable)} title={readOnly ? READ_ONLY_TITLE : undefined}>{gmailSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving…</> : 'Save'}</Button>
               </div>
             </>
           )}
