@@ -15,7 +15,10 @@ const ROUTES = new Set([
   'minimax/h3-max/text-to-video',
   'minimax/h3-max/image-to-video',
   'minimax/h3-max/reference-to-video',
+  'minimax/h3-max-turbo/image-to-video',
 ])
+const H3_MAX_IMAGE_ROUTE = 'minimax/h3-max/image-to-video'
+const H3_MAX_TURBO_IMAGE_ROUTE = 'minimax/h3-max-turbo/image-to-video'
 const ASPECT_RATIOS = new Set(['adaptive', '21:9', '16:9', '4:3', '1:1', '3:4', '9:16'])
 
 function usage(exitCode = 0) {
@@ -30,6 +33,7 @@ Input JSON must include endpoint and prompt. endpoint is one of:
   minimax/h3-max/text-to-video
   minimax/h3-max/image-to-video
   minimax/h3-max/reference-to-video
+  minimax/h3-max-turbo/image-to-video (initial image-controlled anchor only)
 
 An omitted duration falls back to 15 seconds. Plan and send an explicit duration
 for every shot; the fallback is not a reason to pad a shorter beat. The runner writes JSON-lines progress to stdout and <state>.log.jsonl. It never
@@ -154,11 +158,18 @@ function validateInput(raw) {
     if (!ASPECT_RATIOS.has(input.aspect_ratio) || input.aspect_ratio === 'adaptive') throw new Error('text-to-video aspect_ratio must be 21:9, 16:9, 4:3, 1:1, 3:4, or 9:16')
     if (images.length || videos.length || audio.length || input.image_url || input.end_image_url) throw new Error('text-to-video cannot include reference or image-frame fields; choose the matching H3 Max route')
   }
-  if (endpoint === 'minimax/h3-max/image-to-video') {
+  if (endpoint === H3_MAX_IMAGE_ROUTE) {
     if (typeof input.image_url !== 'string' || !isUrl(input.image_url)) throw new Error('image-to-video requires an HTTP(S) image_url')
     if (input.end_image_url != null && (typeof input.end_image_url !== 'string' || !isUrl(input.end_image_url))) throw new Error('end_image_url must be an HTTP(S) URL when supplied')
     delete input.aspect_ratio
     if (images.length || videos.length || audio.length) throw new Error('image-to-video accepts image_url/end_image_url only; use reference-to-video for multimodal conditioning')
+  }
+  if (endpoint === H3_MAX_TURBO_IMAGE_ROUTE) {
+    if (typeof input.image_url !== 'string' || !isUrl(input.image_url)) throw new Error('H3 Max Turbo is approved only for an initial image-controlled anchor and requires an HTTP(S) image_url')
+    if (input.end_image_url != null && (typeof input.end_image_url !== 'string' || !isUrl(input.end_image_url))) throw new Error('end_image_url must be an HTTP(S) URL when supplied')
+    if (input.end_image_url && !input.image_url) throw new Error('end_image_url requires image_url')
+    if (input.aspect_ratio != null) throw new Error('H3 Max Turbo image-to-video follows image_url aspect ratio; do not send aspect_ratio')
+    if (images.length || videos.length || audio.length) throw new Error('H3 Max Turbo is only for the initial image-controlled anchor; use H3 Max reference-to-video for continuity or multimodal conditioning')
   }
   if (endpoint === 'minimax/h3-max/reference-to-video') {
     input.aspect_ratio ??= 'adaptive'
