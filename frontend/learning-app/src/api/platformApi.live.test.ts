@@ -18,8 +18,11 @@ describe.skipIf(!url)('platformApi (live)', () => {
     expect(engines.map((e) => e.id)).toContain('claude-code')
     const before = await api.loadParentConversation()
     const events: TurnStreamEvent[] = []
+    // A nonce in the reply proves this is THIS turn's completion, not a
+    // replayed one from the session's history.
+    const nonce = `PING-${Math.random().toString(36).slice(2, 8)}`
     const result = await api.sendParentTurn(
-      { messages: [{ role: 'user', text: 'Reply with exactly one short friendly line, then call suggest_actions with two buttons.' }], conversationId: 'main' },
+      { messages: [{ role: 'user', text: `Reply with exactly one short friendly line that includes the word ${nonce}, then call suggest_actions with two buttons.` }], conversationId: 'main' },
       (e) => events.push(e),
     )
     expect(result.error).toBeUndefined()
@@ -28,6 +31,14 @@ describe.skipIf(!url)('platformApi (live)', () => {
     expect(events.some((e) => e.type === 'tool_call' || e.type === 'delta')).toBe(true)
     const after = await api.loadParentConversation()
     expect((after?.messages?.length ?? 0)).toBeGreaterThan(before?.messages?.length ?? 0)
+    // Replay guard: the reply must be the LAST assistant message in the
+    // rebuilt history, right after our own message -- an older completion
+    // taken by mistake would sit earlier.
+    const msgs = after?.messages ?? []
+    const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
+    const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant')
+    expect(lastUser?.text).toContain(nonce)
+    expect(lastAssistant?.text).toBe(result.reply)
     const steer = await api.steerParent('main', 'anything')
     expect(steer.steered).toBe(false) // nothing is running now
 
