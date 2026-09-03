@@ -92,6 +92,8 @@ export const standaloneApi: FamilyApi = {
 
   childActivity: () => getJSON<Activity | null>('/api/child/activity'),
   handoff: (dir, resume) => sendJSON('POST', '/api/parent/handoff', { dir, resume }),
+  // The family server starts fresh by sending the kickoff with an empty history.
+  resetChildConversation: async () => {},
   sendChildTurn: ({ messages, conversationId }, onEvent) =>
     runTurn('child', { messages, conversation_id: conversationId }, conversationId, onEvent),
   steerChild: (conversationId, message) => sendJSON('POST', '/api/child/steer', { conversation_id: conversationId, message }),

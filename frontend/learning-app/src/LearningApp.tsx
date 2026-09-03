@@ -61,7 +61,7 @@ import {
   type VoiceStatus,
 } from './stores'
 import PlatformChat, { type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
-import ChildPlatformChat, { submitToChildChat, type ChildKickoff } from './platform/ChildPlatformChat'
+import ChildPlatformChat, { forgetChildChat, submitToChildChat, type ChildKickoff } from './platform/ChildPlatformChat'
 import { api, backend } from './api'
 import { VoiceSettings } from './voice/VoiceSettings'
 import { readReminderSoundPref, persistReminderSoundPref, playReminderChime } from './notifySound'
@@ -2506,6 +2506,10 @@ export default function LearningApp() {
   const performHandoff = (dir: string, greetingText: string, resume: boolean) => {
     const myGeneration = ++handoffGenerationRef.current
     api.handoff(dir, resume)
+      // "Start fresh" on the platform means a new conversation for the
+      // activity, not a kickoff appended to the old one. Rotate it before
+      // the child screen opens, so the screen opens the new session.
+      .then((data) => (data.new_session && backend === 'platform' ? api.resetChildConversation(dir).then(() => { forgetChildChat(dir); return data }) : data))
       .then((data) => {
         if (!data.dir) return
         // A newer handoff has started since this one was fired (a different
@@ -2531,9 +2535,18 @@ export default function LearningApp() {
     const greetingText = `set up "${title}" for me to work on`
     if (childActivity?.dir === dir) {
       setPendingChildEntry({ dir, greetingText })
-    } else {
-      performHandoff(dir, greetingText, false)
+      return
     }
+    if (backend === 'platform') {
+      // On the platform every activity keeps its own conversation, so an
+      // activity she worked on before deserves the same continue-or-fresh
+      // question as the current one; only a never-opened one is silently fresh.
+      api.loadChildConversation(dir)
+        .then((c) => { if ((c?.messages?.length ?? 0) > 0) setPendingChildEntry({ dir, greetingText }); else performHandoff(dir, greetingText, false) })
+        .catch(() => performHandoff(dir, greetingText, false))
+      return
+    }
+    performHandoff(dir, greetingText, false)
   }
 
   // Runs the actual handoff once the parent has answered continue-vs-fresh.
@@ -3839,7 +3852,7 @@ export default function LearningApp() {
               <div className="fl-signoff-card" onClick={(e) => e.stopPropagation()}>
                 <div className="fl-signoff-icon"><BookOpen size={22} /></div>
                 <h2 id="fl-continue-title">Continue {childName || 'her'} chat, or start fresh?</h2>
-                <p>You're about to switch to {childName || 'your child'}'s screen. Should Quill pick up in the same ongoing conversation, or begin a brand-new one for this?</p>
+                <p>You're about to switch to {childName || 'your child'}'s screen. Should Quill pick up where that conversation left off, or begin a brand-new one? Starting fresh means Quill forgets the earlier chat about this activity; her saved work on the pages stays.</p>
                 <div className="fl-signoff-actions">
                   <button className="fl-ghost-btn" type="button" onClick={() => confirmChildEntry(false)}>Start fresh</button>
                   <button className="primary-button" type="button" onClick={() => confirmChildEntry(true)}>Continue her chat</button>

@@ -1301,3 +1301,17 @@ mattered (JSXGraph for figures, self-contained pages, `SQ.choose` buttons,
 `<div class="q">`); notify_user has a rule (upset, or stuck a long time);
 the handoff opening message is named; sections reordered to identity →
 answers → activity → showing things → format.
+
+### 2026-09-03 — continue vs fresh in Child Mode; the goal in the prompt
+
+On the platform every activity keeps its own server-side conversation, so
+"Start fresh" must rotate it: `performHandoff` calls
+`resetChildConversation` (`POST …/sparkquill-child/conversation/new` with the
+activity's key) before the child screen opens, and `forgetChildChat` makes
+the host open the key's new session rather than the tab still on the old one.
+The continue-or-fresh question is asked for the current activity and for any
+activity that already has messages; a never-opened activity starts silently.
+The activity's title, goal, pages and persona are rendered into the child
+prompt from activity.json at prompt time (`ChildPromptVariables`), so the
+goal no longer rides on the kickoff message or on the model reading the
+manifest first.

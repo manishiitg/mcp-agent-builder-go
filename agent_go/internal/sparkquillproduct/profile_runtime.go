@@ -113,7 +113,7 @@ func ParentPromptVariables(s FamilyState) map[string]string {
 // ChildPromptVariables computes the child prompt's Product variables for
 // one activity. interests is the trimmed content of memory/interests.md,
 // which the child's sandbox cannot read itself.
-func ChildPromptVariables(s FamilyState, activityDir, interests string) map[string]string {
+func ChildPromptVariables(s FamilyState, activityDir, interests string, manifest *ActivityManifest) map[string]string {
 	name := "there"
 	if s.Child != nil && strings.TrimSpace(s.Child.Name) != "" {
 		name = strings.TrimSpace(s.Child.Name)
@@ -129,6 +129,24 @@ func ChildPromptVariables(s FamilyState, activityDir, interests string) map[stri
 		"GRADE_FOR_FORMATTING": "a school student",
 		"ACTIVITY_DIR":         strings.Trim(strings.TrimSpace(activityDir), "/"),
 		"INTERESTS_NOTE":       "",
+		"ACTIVITY_TITLE":       "this activity",
+		"ACTIVITY_GOAL":        "(none was written — help her with whatever the pages hold)",
+		"ACTIVITY_PERSONA":     "warm, patient study buddy",
+		"ACTIVITY_ITEMS":       "none — this is an instruction-only activity: the goal is the whole description, so make up each question yourself, one at a time, adapting to how she does",
+	}
+	if manifest != nil {
+		if t := strings.TrimSpace(manifest.Title); t != "" {
+			vars["ACTIVITY_TITLE"] = "\"" + t + "\""
+		}
+		if g := strings.TrimSpace(manifest.Goal); g != "" {
+			vars["ACTIVITY_GOAL"] = g
+		}
+		if p := strings.TrimSpace(manifest.Persona); p != "" {
+			vars["ACTIVITY_PERSONA"] = p
+		}
+		if len(manifest.Items) > 0 {
+			vars["ACTIVITY_ITEMS"] = strings.Join(manifest.Items, ", ") + " (in this order; jump to the one she asks for)"
+		}
 	}
 	if s.Child != nil && strings.TrimSpace(s.Child.Grade) != "" {
 		grade := strings.TrimSpace(s.Child.Grade)
@@ -224,7 +242,17 @@ func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIU
 			return nil, err
 		}
 		interests := loader.read(ctx, rt.UserID, path.Join(familyRoot, MemoryFolder, "interests.md"))
-		return ChildPromptVariables(state, activityRoot, interests), nil
+		// The activity's own facts (goal, pages, persona) go straight into the
+		// prompt: they steer the whole conversation, so they must not depend
+		// on the model remembering to read the manifest first.
+		var manifest *ActivityManifest
+		if raw := loader.read(ctx, rt.UserID, path.Join(activityRoot, "activity.json")); strings.TrimSpace(raw) != "" {
+			var m ActivityManifest
+			if json.Unmarshal([]byte(raw), &m) == nil {
+				manifest = &m
+			}
+		}
+		return ChildPromptVariables(state, activityRoot, interests, manifest), nil
 	})
 }
 

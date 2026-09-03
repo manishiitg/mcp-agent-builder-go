@@ -39,6 +39,16 @@ let sceneRenderer: ((html: string) => ReactNode) | null = null
 let activeSubmit: ((text: string) => void) | null = null
 // One tab per activity for this page load (keyed by the activity's slug).
 const openedTabs = new Map<string, Promise<{ tabId: string; sessionId: string }>>()
+// Activities whose conversation was just reset: open the key's new session
+// instead of the tab that still points at the old one.
+const freshSlugs = new Set<string>()
+
+/** After "Start fresh": drop what this page knows about the activity's chat so it opens the new conversation. */
+export function forgetChildChat(dir: string): void {
+  const slug = activitySlug(dir)
+  openedTabs.delete(slug)
+  freshSlugs.add(slug)
+}
 
 /** Sends text into the child's chat as if she typed it. False when no chat is open. */
 export function submitToChildChat(text: string): boolean {
@@ -156,7 +166,8 @@ export default function ChildPlatformChat({ activityDir, title, childName, theme
       useAppStore.getState().setAgentMode('multi-agent')
       await waitForChatStoreHydration()
       const chatStore = useChatStore.getState()
-      const existing = Object.values(chatStore.chatTabs).find((tab) => tab.metadata?.agentProfileId === CHILD_PROFILE_ID && tab.metadata?.agentProfileConversationKey === slug)
+      const fresh = freshSlugs.delete(slug)
+      const existing = fresh ? undefined : Object.values(chatStore.chatTabs).find((tab) => tab.metadata?.agentProfileId === CHILD_PROFILE_ID && tab.metadata?.agentProfileConversationKey === slug)
       const profile = await agentApi.getAgentProfile(CHILD_PROFILE_ID).catch(() => null) as ProfileDeclaration | null
       renders = readRenders(profile)
       setPresentationKinds((profile?.tools ?? []).map((t) => t.presentation?.kind).filter((k): k is string => typeof k === 'string' && k.length > 0))

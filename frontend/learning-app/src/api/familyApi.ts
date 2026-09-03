@@ -100,6 +100,8 @@ export interface FamilyApi {
   // ---- child conversation --------------------------------------------------
   childActivity(): Promise<Activity | null>
   handoff(dir: string, resume: boolean): Promise<{ new_session?: boolean; dir?: string; goal?: string }>
+  /** Forgets the child's conversation for an activity, so the next turn starts a new one ("Start fresh"). */
+  resetChildConversation(activityDir: string): Promise<void>
   sendChildTurn(req: { messages: TurnMessage[]; conversationId: string }, onEvent: (e: TurnStreamEvent) => void): Promise<TurnResult>
   steerChild(conversationId: string, message: string): Promise<{ steered?: boolean }>
   watchChild(activityDir: string, onEvent: (e: TurnStreamEvent) => void): () => void

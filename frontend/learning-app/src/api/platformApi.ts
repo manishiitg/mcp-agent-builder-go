@@ -278,6 +278,11 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
 
     childActivity: () => ws.currentActivity(),
     handoff: (dir, resume) => ws.handoff(dir, resume),
+    resetChildConversation: async (activityDir) => {
+      const key = conversationKeyFor(CHILD_PROFILE, activityDir)
+      await request('POST', `/api/agent-profiles/${CHILD_PROFILE}/conversation/new`, { conversation_key: key })
+      conversations.delete(`${CHILD_PROFILE}/${key}`)
+    },
     sendChildTurn: ({ messages, conversationId }, onEvent) => sendTurn(CHILD_PROFILE, conversationKeyFor(CHILD_PROFILE, conversationId), lastUserText(messages), onEvent),
     steerChild: (conversationId, message) => steer(CHILD_PROFILE, conversationKeyFor(CHILD_PROFILE, conversationId), message),
     watchChild: (activityDir, onEvent) => watch(CHILD_PROFILE, conversationKeyFor(CHILD_PROFILE, activityDir), onEvent),
