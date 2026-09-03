@@ -10,12 +10,12 @@ export function ProductSuggestions({ events, onSubmit, hidden }: { events: Polli
   const actions = hidden ? [] : latestSuggestions(events)
   if (actions.length === 0) return null
   return (
-    <div className="flex flex-wrap gap-2 px-4 pb-3 pt-1" aria-label="Suggested next steps">
+    <div className="flex flex-wrap gap-1.5 px-4 pb-2 pt-0.5" aria-label="Suggested next steps">
       {actions.map((a, i) => (
         <button
           key={`${i}-${a.label}`}
           type="button"
-          className="rounded-full border border-border bg-card px-4 py-1.5 text-sm font-semibold text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="rounded-full border border-border bg-background px-3 py-1 text-xs font-medium text-foreground/85 transition-colors hover:border-ring hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={() => onSubmit(a.message)}
         >
           {a.label}

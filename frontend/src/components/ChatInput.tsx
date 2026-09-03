@@ -3385,7 +3385,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
   // Product chats use the roomier project layout; workflow mode keeps the
   // existing toolbar alignment.
-  const inputPadX = isProductSurface ? 'px-4 sm:px-6' : isMultiAgentMode ? 'px-3' : 'px-4'
+  const inputPadX = isProductSurface ? 'px-3' : isMultiAgentMode ? 'px-3' : 'px-4'
 
   // For view-only (restored) tabs, show a minimal indicator instead of the full input form
   if (isViewOnly) {
@@ -3394,7 +3394,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const jobName = activeTab?.metadata?.scheduledJobName
     const botPlatform = activeTab?.metadata?.botPlatform
     return (
-      <div data-tour="chat-input-area" data-testid="tour-chat-input-area" className={`${inputPadX} py-2`}>
+      <div data-tour="chat-input-area" data-testid="tour-chat-input-area" className={`${inputPadX} ${isProductSurface ? 'py-1' : 'py-2'}`}>
         <div className="relative flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground">
           <History className="w-3.5 h-3.5" />
           <span>
@@ -3427,7 +3427,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
   return (
     <TooltipProvider>
-      <div className={isProductSurface ? 'border-t border-border bg-background py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.12)]' : 'space-y-2'} data-product-chat-input={isProductSurface || undefined}>
+      <div className={isProductSurface ? 'border-t border-border bg-background py-1.5 shadow-[0_-8px_24px_rgba(15,23,42,0.08)]' : 'space-y-2'} data-product-chat-input={isProductSurface || undefined}>
       {/* Pasted-text Attachments */}
       {chatPastedAttachments.length > 0 && (
         <div className={inputPadX}>
@@ -3592,7 +3592,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
       {/* Input Form */}
       <div data-tour="chat-input-area" data-testid="tour-chat-input-area" className={`${inputPadX} ${isProductSurface ? 'py-2' : 'py-2'}`}>
-        <form onSubmit={handleSubmit} className="relative space-y-2">
+        <form onSubmit={handleSubmit} className={isProductSurface ? 'relative' : 'relative space-y-2'}>
           {/* The mic's banner (download progress, "Listening" with the live
               transcript) portals here, in normal flow directly above the
               composer box, so it can never be clipped by a container. */}
@@ -3601,7 +3601,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             // Keep the customer composer visually steady while events stream.
             // The former ring-4 plus catch-all `transition` made a harmless
             // focus hand-off look like a pulsing purple border on redraws.
-            ? 'space-y-1 rounded-2xl border border-border bg-card p-2 shadow-sm transition-colors duration-150 focus-within:border-ring'
+            ? 'space-y-0.5 rounded-2xl border border-border bg-card px-1.5 py-1 shadow-sm transition-colors duration-150 focus-within:border-ring'
             : 'space-y-1 rounded-xl border border-slate-700/80 bg-[#101513] p-1.5 shadow-sm transition focus-within:border-slate-500'}>
             {showLiveDelivery && liveMessageDelivery && (
               <div className={`flex min-w-0 items-center gap-1.5 text-[11px] ${liveDeliveryClass}`}>
@@ -3678,7 +3678,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
               onDrop={handleTextareaDrop}
               rows={isProductSurface ? 1 : undefined}
               placeholder={placeholder}
-              className={`${isProductSurface ? '!min-h-[36px] max-h-[100px] !border-0 !bg-transparent !px-2 !py-1.5 text-sm text-slate-100 !shadow-none focus-visible:!ring-0 placeholder:text-sm placeholder:text-slate-400' : '!min-h-[36px] max-h-[100px] !border-0 !bg-transparent !py-1.5 !px-2 text-xs !shadow-none focus-visible:!ring-0 placeholder:text-xs'} resize-none overflow-y-auto leading-[1.3] ${
+              className={`${isProductSurface ? '!min-h-[32px] max-h-[100px] !border-0 !bg-transparent !px-1.5 !py-1 text-sm text-foreground !shadow-none focus-visible:!ring-0 placeholder:text-sm placeholder:text-muted-foreground' : '!min-h-[36px] max-h-[100px] !border-0 !bg-transparent !py-1.5 !px-2 text-xs !shadow-none focus-visible:!ring-0 placeholder:text-xs'} resize-none overflow-y-auto leading-[1.3] ${
                 isDraggingFiles ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50/30 dark:bg-blue-900/10' : ''
               }`}
               disabled={inputDisabled}
