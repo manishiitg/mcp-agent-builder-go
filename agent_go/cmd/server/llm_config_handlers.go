@@ -1492,10 +1492,11 @@ func lockedPresetLLMConfig(cfg *workflowtypes.PresetLLMConfig) *workflowtypes.Pr
 	}
 	// A coding-agent provider (Cursor, Claude Code, Codex, Pi) carries its own
 	// role profile -- Builder/High, Medium, Low and Pulse models chosen for
-	// that provider. Locking to such a provider means locking to that
-	// profile, not flattening every role onto one model: Cursor's High
-	// reasoning is grok-4.6, Medium composer-2.5, Low auto, and the tiers
-	// keep meaning something.
+	// that provider (GetCodingAgentDefaultTierModels). Locking to such a
+	// provider means locking to that profile, not flattening every role onto
+	// one hardcoded model, so the tiers keep meaning something. Cursor's
+	// profile is all-auto as of 2026-09-03: a live RTS run hit
+	// quota_exhausted on the previously-pinned grok-4.6 with no fallback.
 	if _, ok := llmproviders.GetCodingAgentDefaultTierModels(llmproviders.Provider(defProvider)); ok {
 		out.Mode = workflowtypes.LLMConfigModeProviderProfile
 		out.Provider = defProvider

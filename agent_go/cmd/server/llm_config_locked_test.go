@@ -72,9 +72,10 @@ func TestResolveLockedLLMHonoursProfileBindingsAndFallsBackOtherwise(t *testing.
 // A workflow's saved llm_config is what the Builder chat, scheduled runs and
 // step tiers actually use, so the lock must rewrite it. Locking to a
 // coding-agent provider (Cursor) means locking to that provider's role
-// profile -- Builder/High/Pulse grok-4.6, Medium and Low auto -- not
-// flattening every role onto one model; the saved config is never mutated
-// and passes through untouched off-lock.
+// profile -- all tiers on Cursor's auto routing as of 2026-09-03 (a live RTS
+// run hit quota_exhausted on the previously-pinned grok-4.6 with no
+// fallback) -- not flattening every role onto one hardcoded model; the saved
+// config is never mutated and passes through untouched off-lock.
 func TestLockedPresetLLMConfigLocksToThePublishedProvidersProfile(t *testing.T) {
 	t.Setenv("LLM_CONFIG_LOCKED", "true")
 	t.Setenv("DEFAULT_PUBLISHED_LLMS", cursorOnlyPublishedList)
@@ -97,20 +98,18 @@ func TestLockedPresetLLMConfigLocksToThePublishedProvidersProfile(t *testing.T) 
 	if !ok || builder == nil || tiers == nil {
 		t.Fatal("provider profile must resolve")
 	}
-	if builder.Provider != "cursor-cli" || builder.ModelID != "grok-4.6" {
-		t.Fatalf("builder = %+v, want cursor-cli/grok-4.6", builder)
+	if builder.Provider != "cursor-cli" || builder.ModelID != "auto" {
+		t.Fatalf("builder = %+v, want cursor-cli/auto", builder)
 	}
-	if tiers.Tier1.ModelID != "grok-4.6" || tiers.Tier2.ModelID != "auto" || tiers.Tier3.ModelID != "auto" {
-		t.Fatalf("tiers = %+v/%+v/%+v, want grok-4.6 / auto / auto", tiers.Tier1, tiers.Tier2, tiers.Tier3)
+	if tiers.Tier1.ModelID != "auto" || tiers.Tier2.ModelID != "auto" || tiers.Tier3.ModelID != "auto" {
+		t.Fatalf("tiers = %+v/%+v/%+v, want auto / auto / auto", tiers.Tier1, tiers.Tier2, tiers.Tier3)
 	}
 	if saved.BuilderLLM.Provider != "claude-code" {
 		t.Fatal("the saved config must not be mutated")
 	}
 	// The profile's own models are published by implication.
-	for _, m := range []string{"grok-4.6", "auto", "cursor-cli"} {
-		if !isAllowedDefaultLLM("cursor-cli", m) {
-			t.Fatalf("cursor-cli/%s must be allowed under the lock", m)
-		}
+	if !isAllowedDefaultLLM("cursor-cli", "auto") {
+		t.Fatal("cursor-cli/auto must be allowed under the lock")
 	}
 	if isAllowedDefaultLLM("cursor-cli", "gpt-5") || isAllowedDefaultLLM("cursor-cli", "composer-2.5") || isAllowedDefaultLLM("openai", "gpt-5.2") {
 		t.Fatal("models outside the published provider's profile must stay refused")
