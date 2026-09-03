@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/services"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
@@ -110,9 +111,10 @@ func CreateWorkspaceAdvancedToolExecutorsWithSession(userID, sessionID string) (
 // CreateWorkspaceAdvancedToolExecutorsWithSessionAndEnv creates workspace advanced tool executors
 // with session support and additional environment variables (e.g., secrets).
 // The extraEnvVars are injected into the shell environment alongside MCP_API_URL, MCP_API_TOKEN, etc.
-// Returns (executors, envMap) — the envMap is the same map reference stored as Client.ExtraEnv,
-// so callers can update MCP_API_URL/MCP_SESSION_ID in-place and the changes propagate to all
-// subsequent executor calls (Go maps are reference types).
+// Returns (executors, envMap). The client keeps its OWN copy of envMap
+// (workspace.WithExtraEnv clones), so in-place writes to the returned map do
+// not reach the executors; use SetSessionShellEnv / DeleteSessionShellEnv,
+// which update every live client registered for the session.
 func CreateWorkspaceAdvancedToolExecutorsWithSessionAndEnv(userID, sessionID string, extraEnvVars map[string]string) (map[string]func(ctx context.Context, args map[string]any) (string, error), map[string]string) {
 	wsURL := getWorkspaceAPIURL()
 	env := getMCPExtraEnv(sessionID)
@@ -129,9 +131,59 @@ func CreateWorkspaceAdvancedToolExecutorsWithSessionAndEnv(userID, sessionID str
 		workspace.WithExtraEnv(env),
 	)
 	log.Printf("[SESSION_CLIENT_DEBUG] Created session-aware workspace client=%p sessionID=%s MCP_API_URL=%s", client, sessionID, env["MCP_API_URL"])
+	registerSessionShellClient(sessionID, client)
 	executors := workspace.NewAdvancedExecutor(client)
 	attachWorkspaceAdvancedLLMExecutors(executors, wsURL)
 	return executors, env
+}
+
+// Live shell clients per session, so a secret created mid-turn can be pushed
+// into the shell env of the turn that is already running. Each turn creates a
+// fresh client; only the most recent few per session are kept, which bounds
+// memory without a session-end hook (older clients belong to finished turns).
+const sessionShellClientsKept = 8
+
+var sessionShellClients = struct {
+	mu sync.Mutex
+	m  map[string][]*workspace.Client
+}{m: make(map[string][]*workspace.Client)}
+
+func registerSessionShellClient(sessionID string, client *workspace.Client) {
+	if sessionID == "" || client == nil {
+		return
+	}
+	sessionShellClients.mu.Lock()
+	defer sessionShellClients.mu.Unlock()
+	list := append(sessionShellClients.m[sessionID], client)
+	if len(list) > sessionShellClientsKept {
+		list = list[len(list)-sessionShellClientsKept:]
+	}
+	sessionShellClients.m[sessionID] = list
+}
+
+// SetSessionShellEnv sets one env var on every live shell client of a session
+// and reports how many were updated. Used by the secret tools so a
+// set_workflow_secret call is visible to execute_shell_command in the same
+// turn instead of from the next message on.
+func SetSessionShellEnv(sessionID, key, value string) int {
+	sessionShellClients.mu.Lock()
+	clients := append([]*workspace.Client(nil), sessionShellClients.m[sessionID]...)
+	sessionShellClients.mu.Unlock()
+	for _, c := range clients {
+		c.SetExtraEnv(key, value)
+	}
+	return len(clients)
+}
+
+// DeleteSessionShellEnv removes one env var from every live shell client of a session.
+func DeleteSessionShellEnv(sessionID, key string) int {
+	sessionShellClients.mu.Lock()
+	clients := append([]*workspace.Client(nil), sessionShellClients.m[sessionID]...)
+	sessionShellClients.mu.Unlock()
+	for _, c := range clients {
+		c.DeleteExtraEnv(key)
+	}
+	return len(clients)
 }
 
 // CreateWorkspaceAdvancedToolExecutorsWithURL creates workspace advanced tool executors

@@ -292,13 +292,16 @@ func (c *Client) blockRecursiveGitBundle(ctx context.Context, params ExecuteShel
 
 // ExecuteShellCommand executes a shell command using the REST API: POST /api/execute
 func (c *Client) ExecuteShellCommand(ctx context.Context, params ExecuteShellCommandParams) (ShellCommandResult, error) {
+	// One consistent view of the client env for this request; SetExtraEnv may
+	// run concurrently (a secret created by a tool call in the same turn).
+	clientEnv := c.extraEnvSnapshot()
 	// Debug: log ExtraEnv keys, MCP_API_URL value, and client pointer for identity tracking
-	if len(c.ExtraEnv) > 0 {
-		keys := make([]string, 0, len(c.ExtraEnv))
-		for k := range c.ExtraEnv {
+	if len(clientEnv) > 0 {
+		keys := make([]string, 0, len(clientEnv))
+		for k := range clientEnv {
 			keys = append(keys, k)
 		}
-		log.Printf("[SHELL_DEBUG] Client=%p ExtraEnv keys: %v (count=%d) MCP_API_URL=%s MCP_SESSION_ID=%s", c, keys, len(c.ExtraEnv), c.ExtraEnv["MCP_API_URL"], c.ExtraEnv["MCP_SESSION_ID"])
+		log.Printf("[SHELL_DEBUG] Client=%p ExtraEnv keys: %v (count=%d) MCP_API_URL=%s MCP_SESSION_ID=%s", c, keys, len(clientEnv), clientEnv["MCP_API_URL"], clientEnv["MCP_SESSION_ID"])
 	} else {
 		log.Printf("[SHELL_DEBUG] Client=%p ExtraEnv is EMPTY", c)
 	}
@@ -360,11 +363,11 @@ func (c *Client) ExecuteShellCommand(ctx context.Context, params ExecuteShellCom
 			params.WorkingDirectory = sessionCfg.WorkingDir
 		} else if c.DefaultWorkingDir != "" {
 			params.WorkingDirectory = c.DefaultWorkingDir
-		} else if dir, ok := c.ExtraEnv["_DEFAULT_WORKING_DIR"]; ok && dir != "" {
+		} else if dir, ok := clientEnv["_DEFAULT_WORKING_DIR"]; ok && dir != "" {
 			params.WorkingDirectory = dir
 		}
 	}
-	if params.WorkingDirectory == "" && isWorkflowStepShellRequest(c.ExtraEnv, sessionEnv, params.ExtraEnv) {
+	if params.WorkingDirectory == "" && isWorkflowStepShellRequest(clientEnv, sessionEnv, params.ExtraEnv) {
 		log.Printf("[SHELL] Refusing workflow-step shell request with no cwd: session=%s cmd=%s", sessionID, redactedCommandForLog)
 		return ShellCommandResult{}, fmt.Errorf(
 			"WORKFLOW STEP CONFIG ERROR: execute_shell_command has no working directory for session %q; refusing workspace-root fallback",
@@ -462,10 +465,10 @@ func (c *Client) ExecuteShellCommand(ctx context.Context, params ExecuteShellCom
 	}
 
 	// Build an isolated environment for this request. Parallel Pulse reviewers
-	// share a Client, so aliasing c.ExtraEnv here would let concurrent requests
+	// share a Client, so aliasing the client env here would let concurrent requests
 	// write RUNLOOP_* and MCP shortcut variables into the same map.
 	params.ExtraEnv = mergeShellCommandEnv(
-		c.ExtraEnv,
+		clientEnv,
 		sessionEnv,
 		params.ExtraEnv,
 	)

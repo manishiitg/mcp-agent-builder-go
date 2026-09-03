@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
@@ -51,8 +52,9 @@ type Client struct {
 	HTTPClient        *http.Client
 	FolderGuard       *FolderGuardConfig
 	UserID            string            // User ID for auth/database scoping
-	ExtraEnv          map[string]string // Extra env vars to inject into shell commands (e.g., MCP_API_URL, MCP_API_TOKEN)
-	DefaultWorkingDir string            // Default working directory for shell commands (relative to docs-dir)
+	ExtraEnv          map[string]string // Extra env vars to inject into shell commands (e.g., MCP_API_URL, MCP_API_TOKEN). Guarded by extraEnvMu; read via extraEnvSnapshot.
+	extraEnvMu        sync.RWMutex
+	DefaultWorkingDir string // Default working directory for shell commands (relative to docs-dir)
 }
 
 type internalContextKey string
@@ -120,6 +122,44 @@ func WithExtraEnv(env map[string]string) ClientOption {
 	}
 }
 
+// SetExtraEnv adds or replaces one shell env var on a live client. This is how
+// a secret created mid-turn (set_workflow_secret) reaches the shell commands of
+// the SAME turn: WithExtraEnv deliberately clones its input, so the map handed
+// to the client at turn start is a snapshot and in-place writes to the caller's
+// map never arrived (a shell run 3s after setting a secret saw no SECRET_* var,
+// RTS 2026-09-03).
+func (c *Client) SetExtraEnv(key, value string) {
+	c.extraEnvMu.Lock()
+	defer c.extraEnvMu.Unlock()
+	if c.ExtraEnv == nil {
+		c.ExtraEnv = make(map[string]string)
+	}
+	c.ExtraEnv[key] = value
+}
+
+// DeleteExtraEnv removes one shell env var from a live client.
+func (c *Client) DeleteExtraEnv(key string) {
+	c.extraEnvMu.Lock()
+	defer c.extraEnvMu.Unlock()
+	delete(c.ExtraEnv, key)
+}
+
+// ExtraEnvValue reads one shell env var under the lock.
+func (c *Client) ExtraEnvValue(key string) (string, bool) {
+	c.extraEnvMu.RLock()
+	defer c.extraEnvMu.RUnlock()
+	v, ok := c.ExtraEnv[key]
+	return v, ok
+}
+
+// extraEnvSnapshot returns a private copy for one request, so concurrent
+// SetExtraEnv calls can never race a request that is being assembled.
+func (c *Client) extraEnvSnapshot() map[string]string {
+	c.extraEnvMu.RLock()
+	defer c.extraEnvMu.RUnlock()
+	return cloneEnvMap(c.ExtraEnv)
+}
+
 func cloneEnvMap(env map[string]string) map[string]string {
 	if env == nil {
 		return nil
@@ -163,7 +203,8 @@ func (c *Client) sessionIDFromContext(ctx context.Context) string {
 			}
 		}
 	}
-	return strings.TrimSpace(c.ExtraEnv["MCP_SESSION_ID"])
+	sid, _ := c.ExtraEnvValue("MCP_SESSION_ID")
+	return strings.TrimSpace(sid)
 }
 
 // resolveEffectiveFolderGuard returns the effective folder guard for the current request.

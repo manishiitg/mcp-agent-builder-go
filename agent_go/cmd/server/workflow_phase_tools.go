@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"log"
 	"strings"
 	"time"
@@ -262,12 +263,19 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 
 			builderSession := workshopSession
 			afterUpsert := func(ctx context.Context, name, value string) error {
+				// The Workshop side (steps) reads a live map; the chat agent's own
+				// shell client took a snapshot at turn start, so push the value
+				// there too or a shell command later in this same turn misses it.
+				if n := virtualtools.SetSessionShellEnv(sessionID, "SECRET_"+name, value); n > 0 {
+					log.Printf("[SECRETS] Pushed SECRET_%s into %d live shell client(s) for session %s", name, n, sessionID)
+				}
 				if builderSession == nil {
 					return nil
 				}
 				return builderSession.AttachSecretToWorkflow(ctx, name, value)
 			}
 			afterDelete := func(ctx context.Context, name string) error {
+				virtualtools.DeleteSessionShellEnv(sessionID, "SECRET_"+name)
 				if builderSession == nil {
 					return nil
 				}
