@@ -563,17 +563,25 @@ function isToolBatchEvent(event: PollingEvent): boolean {
 function countRealToolCalls(events: PollingEvent[]): number {
   const startIDs = new Set<string>()
   let starts = 0
+  let idlessStartsPending = 0
   for (const event of events) {
     if (event.type !== 'tool_call_start') continue
     starts += 1
     const id = textField(toolCallField(event, 'tool_call_id'))
     if (id) startIDs.add(id)
+    else idlessStartsPending += 1
   }
   let orphans = 0
   for (const event of events) {
     if (event.type !== 'tool_call_end' && event.type !== 'tool_call_error') continue
     const id = textField(toolCallField(event, 'tool_call_id'))
-    if (id && !startIDs.has(id)) orphans += 1
+    if (id) {
+      if (!startIDs.has(id)) orphans += 1
+    } else if (idlessStartsPending > 0) {
+      idlessStartsPending -= 1 // pairs with an id-less start, in order
+    } else {
+      orphans += 1
+    }
   }
   return starts + orphans
 }

@@ -461,6 +461,16 @@ describe('buildTranscriptItems', () => {
     expect((items[1] as Extract<TranscriptItem, { kind: 'tools' }>).toolCount).toBe(1)
   })
 
+  it('folds an id-less tool end with no start into the batch too', () => {
+    const items = buildTranscriptItems([
+      evt({ id: 'm1', session_id: 's1', type: 'agent_message' }),
+      evt({ id: 't2', session_id: 's1', type: 'tool_call_end', data: { data: { tool_name: 'execute_shell_command' } } }),
+      evt({ id: 'm2', session_id: 's1', type: 'agent_message' }),
+    ])
+    expect(items.map(i => i.kind)).toEqual(['event', 'tools', 'event'])
+    expect((items[1] as Extract<TranscriptItem, { kind: 'tools' }>).toolCount).toBe(1)
+  })
+
   it('omits token usage because cost and context have dedicated UI', () => {
     const items = buildTranscriptItems([
       evt({ id: 'm1', session_id: 's1', type: 'agent_message' }),

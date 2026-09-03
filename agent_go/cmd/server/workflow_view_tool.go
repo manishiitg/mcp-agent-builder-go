@@ -90,7 +90,7 @@ func (api *StreamingAPI) registerOpenWorkspaceViewTool(registrar definitionToolR
 	}
 	description := "Open one of the workspace views on the right side of the user's screen, the same views as the toolbar above the chat. " +
 		"Use it when what you are talking about is on one of them: after you build or update the report, open `report`; when the user asks about spend, open `costs`; " +
-		"after adding a schedule, open `schedules`. Opening a view that is already on screen does nothing; to reload one you changed, use refresh_workspace_view. Views:\n" + strings.Join(lines, "\n")
+		"after adding a schedule, open `schedules`. Opening a view that is already on screen does nothing; to reload one you changed, use refresh_workspace_view. What each view contains, in detail: builder-reference/references/workspace-views.md. Views:\n" + strings.Join(lines, "\n")
 	params := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
