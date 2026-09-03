@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// PLAT-055. These pin the four behaviours that make the merged turn different
+// PLAT-055. These pin the four behaviors that make the merged turn different
 // from the learnings turn it replaced: routing (C), per-step file ownership (D),
 // a measured size signal (E), and compaction (F). Each one exists because its
 // absence produced a specific observed failure.
@@ -62,7 +62,7 @@ func TestReflectionTurnNamesRealDBTables(t *testing.T) {
 	}
 }
 
-// PLAT-058. The skill is one shared, topic-organised artifact that every step
+// PLAT-058. The skill is one shared, topic-organized artifact that every step
 // improves — NOT a per-step file set.
 //
 // An earlier revision told each step to own `references/<step-id>.md`. On its
@@ -87,7 +87,7 @@ func TestReflectionTurnTreatsSkillAsOneSharedTopicOrganisedArtifact(t *testing.T
 	for _, want := range []string{
 		"one skill for the whole workflow",
 		"shared by every step",
-		"organised by **topic**",
+		"organized by **topic**",
 		"topic file that owns it",
 		"never for a step, a step id, or a run",
 		"index, not a content home",
@@ -153,7 +153,7 @@ func TestReflectionTurnRequiresCompactionOverDatedAppends(t *testing.T) {
 // PLAT-058. Cleanup duty is qualitative and unconditional — every turn, on any
 // file, at any size. A byte threshold is a poor proxy for quality (linkedin's
 // cdp-browser.md is a healthy 23 KB covering all browser automation for that
-// workflow) and per-step sizes are meaningless now that the skill is organised
+// workflow) and per-step sizes are meaningless now that the skill is organized
 // by topic rather than by step.
 func TestReflectionTurnRequiresCleanupJudgmentOnEveryFileItTouches(t *testing.T) {
 	msg := BuildStepReflectionTurn(reflectionInput())

@@ -13,7 +13,7 @@ func msg(role string) llmtypes.MessageContent {
 
 // TestUserTurnsAreTheInvariantWorthGuarding.
 //
-// Assistant and tool entries are legitimately rewritten, summarised and trimmed
+// Assistant and tool entries are legitimately rewritten, summarized and trimmed
 // by normal persistence, so a drop in their count proves nothing. User turns
 // only ever grow — a session cannot un-ask a question — which is what makes a
 // shrink detectable as a partial rebuild rather than ordinary cleaning.
@@ -54,7 +54,7 @@ func TestAThinRebuildDoesNotReplaceAFullerRecord(t *testing.T) {
 	}
 	// The guard's comparison, isolated from workspace IO.
 	if !(messageUserTurnCount(thin) < conversationUserTurnCount(onDisk)) {
-		t.Error("a 2-turn rebuild was not recognised as lossy against a 20-turn record")
+		t.Error("a 2-turn rebuild was not recognized as lossy against a 20-turn record")
 	}
 }
 

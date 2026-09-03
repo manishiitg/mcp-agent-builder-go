@@ -68,7 +68,7 @@ func handleWhatsAppMessage(w http.ResponseWriter, r *http.Request) {
 		cid = "whatsapp"
 	}
 
-	sess, err := agentsession.New(ctx, agentsession.Config{
+	sess, err := newAgentSession(ctx, agentsession.Config{
 		Provider:     provider,
 		WorkingDir:   workDir,
 		SystemPrompt: whatsappSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule),

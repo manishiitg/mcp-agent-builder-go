@@ -39,6 +39,10 @@
         "to": "workspace-server"
       },
       {
+        "from": "resources/lib",
+        "to": "lib"
+      },
+      {
         "from": "../agent_go/configs",
         "to": "configs"
       },

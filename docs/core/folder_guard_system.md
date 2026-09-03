@@ -80,6 +80,15 @@ Workflow mode dynamically configures the folder guard for **each individual step
 
 ---
 
+### Per-profile strict mode
+
+An agent profile can ask for a deny-by-default sandbox instead of the
+allow-by-default one (`runtime.sandbox.mode: strict` in product.yaml, with
+`network: disabled` to cut outbound network). The folder guard paths are the
+same; only the isolator profile changes (`security.Isolator.StrictAllowlist`
+and `AllowNetwork`), carried in `FolderGuardConfig.StrictAllowlist` /
+`DenyNetwork`. See `docs/core/product_yaml_design_guide.md`.
+
 ## Threat Model
 
 **Protected Against:**

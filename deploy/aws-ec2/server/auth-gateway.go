@@ -206,7 +206,95 @@ func (g *gateway) agentToken() (string, error) {
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
+// verifyAgentToken checks an HS256 JWT issued by the agent API (or by
+// agentToken above — same secret) and returns its user id. Only what the
+// gateway needs: signature, expiry, a non-empty user_id. The agent still
+// runs its own full validation afterwards.
+func (g *gateway) verifyAgentToken(token string) (string, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return "", false
+	}
+	mac := hmac.New(sha256.New, g.secret)
+	_, _ = mac.Write([]byte(parts[0] + "." + parts[1]))
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || !hmac.Equal(sig, mac.Sum(nil)) {
+		return "", false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", false
+	}
+	var claims struct {
+		UserID string `json:"user_id"`
+		Exp    int64  `json:"exp"`
+	}
+	if json.Unmarshal(payload, &claims) != nil || claims.UserID == "" || claims.Exp <= time.Now().Unix() {
+		return "", false
+	}
+	return claims.UserID, true
+}
+
+// bearerToken is the credential a request carries: an Authorization header,
+// or ?token= for the places a browser cannot set a header (SSE, WebSocket
+// upgrades, file links).
+func bearerToken(r *http.Request) string {
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		return strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
+	}
+	return strings.TrimSpace(r.URL.Query().Get("token"))
+}
+
+// agentPublicPath mirrors the agent API's own unauthenticated routes
+// (auth_middleware.go shouldSkipAuth): what a browser needs before it has a
+// token. Everything else needs one when the password gate is off.
+func agentPublicPath(path string) bool {
+	for _, p := range []string{
+		"/api/auth/login", "/api/auth/register", "/api/auth/mode", "/api/auth/start", "/api/auth/callback",
+		"/api/auth/desktop/exchange", "/api/auth/providers", "/api/health", "/api/capabilities",
+		"/api/oauth/callback",
+	} {
+		if path == p {
+			return true
+		}
+	}
+	return strings.HasPrefix(path, "/api/shared/") || strings.HasPrefix(path, "/api/downloads/")
+}
+
+// requireUserToken is the per-user gate used when the shared password gate
+// is off: the request must carry a valid app JWT, whose user id is stamped
+// onto X-User-ID so the workspace API never trusts a client-chosen header.
+// Returns false after writing the 401.
+func (g *gateway) requireUserToken(w http.ResponseWriter, r *http.Request) bool {
+	token := bearerToken(r)
+	userID, ok := g.verifyAgentToken(token)
+	if !ok {
+		w.Header().Set(authRequiredHeader, apiLoginURL(r))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = fmt.Fprint(w, `{"error":"authentication_required"}`)
+		return false
+	}
+	if r.Header.Get("Authorization") == "" {
+		r.Header.Set("Authorization", "Bearer "+token)
+	}
+	r.Header.Set("X-User-ID", userID)
+	return true
+}
+
 func (g *gateway) serveAgent(w http.ResponseWriter, r *http.Request) {
+	// With the shared password gate off, every user signs in to the app
+	// itself and arrives with their own JWT. The gateway then never mints
+	// its service identity: an unauthenticated request is refused here
+	// (apart from the login/mode/health routes the app needs beforehand),
+	// so nobody can act as the fixed "video-studio" user any more.
+	if g.disablePasswordGate {
+		if !agentPublicPath(r.URL.Path) && !g.requireUserToken(w, r) {
+			return
+		}
+		g.agent.ServeHTTP(w, r)
+		return
+	}
 	// An explicit bearer token wins. Public file links and browser SSE cannot
 	// attach a custom header, so the agent API also supports ?token=. Preserve
 	// that token as a bearer credential instead of replacing it with the
@@ -301,6 +389,12 @@ func (g *gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (g *gateway) route(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/api/wp"):
+		// The workspace API has no auth of its own beyond X-User-ID. Behind
+		// the password gate the cookie covered it; without that gate the
+		// user's JWT must, and its user id is what the header carries.
+		if g.disablePasswordGate && !g.requireUserToken(w, r) {
+			return
+		}
 		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/api/wp")
 		if r.URL.Path == "" {
 			r.URL.Path = "/"

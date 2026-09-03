@@ -155,6 +155,98 @@ adapter") — acknowledged there, still not done.
    explicit port *from* learning-app, so two dictation implementations (356
    vs 958 lines) are now diverging.
 
+### Revisit trigger — status 2026-09-02
+
+Trigger (a) below is now met: `internal/agentsession` no longer writes
+`MCP_API_URL` / `MCP_API_TOKEN` / `MCP_BRIDGE_API_URL` / `MCP_BRIDGE_BINARY`
+into the process environment. Its one shared executor is handed to every
+agent as explicit `mcpagent` configuration (`MCPRuntimeConfig.APIBaseURL`,
+`APIToken`, `BridgeAPIBaseURL`, `CodingRuntimeConfig.BridgeBinary`), and
+mcpagent now prefers explicit values over the `MCP_*` variables, so a second
+executor in the same process cannot clobber it. Remedy 5 (voice) is also
+done: one engine (`pkg/voicestt`) serves both apps, including WhatsApp voice
+notes. Remedies 1, 2 and 4 landed the same evening: the parent session now
+carries the embedded skills through `agentsession.Config.Skills` (a live
+codex-cli turn lists all thirteen; `seedSkills` still writes the files for
+`cat` and for `skills/_shared`), `reservedTopLevel` now covers `_users`,
+`Workflow`, `pulse`, `memories`, `config`, `chat_history`, `Chats` and
+`Downloads`, and `cmd/family-server/characterization_test.go` pins parent
+and child turns (prompt, tools, working dir, persistence), handoff,
+the child shell's activity confinement through the real sandbox, PIN
+handling, streaming, WhatsApp mode routing, and the reserved folders — all
+driven through a session seam (`turn_session.go`) with no model. Remedy 3
+(folder-guard docs vs code) is still open. One finding worth knowing: the
+strict macOS profile leaves `/var` readable, so a workspace placed under
+`/var` (as `t.TempDir()` is) is not confined; real installs under `$HOME`
+are. Step 2's first slice landed the same night: `pkg/whatsapptransport` is the
+one WhatsApp transport (session store, per-phone Account: connect, pair by
+QR, send text/documents, react, download media; text extraction; dedupe).
+family-server is its first consumer — its bot keeps only routing and media
+policy (self-chat rule, inbox naming, `@child`/`@parent`) and no longer
+imports whatsmeow's client. whatsmeow was upgraded at the same time (April →
+August 2026 revision, which raised agent_go to Go 1.26): the old revision was
+refused by WhatsApp as "client outdated", so pairing had been impossible for
+both bots; verified live — a pairing attempt now yields a QR. Slice 2 (2026-09-03) then
+made it one connector, not two: `pkg/whatsappbot` sits on the transport and
+owns everything both bots did alike — session store, pairing and QR state,
+reconnects, dedupe, the universal drop rules, `@mention` routing with a
+per-chat memory of the active route, acknowledgement reactions, replies
+with retry, self-chat sends — and calls the product through small
+interfaces (`Handler`, `AccessPolicy`, `Router` + `MentionMatcher`,
+`RouteStore`, `CommandHandler`, `RouteObserver`). SparkQuill is now a
+two-row route table (`@child`/`@parent`, matched anywhere in the text,
+persisted as the routing-mode file) plus its media and turn policy;
+AgentWorks' `WhatsAppService` keeps the `BotConnector` adapter, the owner
+and link-code policy, the workflow commands and the `@slug` route table, and
+nothing of the protocol. Together the two files lost about 1,400 lines
+(`git diff --stat`: 541 added, 1,368 removed). Behaviour differences worth
+knowing: AgentWorks now de-duplicates redelivered messages like SparkQuill
+did, and a pairing attempt's timeout now only covers the wait for the first
+QR code (WhatsApp then paces the attempt itself), so the QR no longer dies
+after 30 s while the settings page polls. Verified live for SparkQuill
+(start, pairing QR, status); the AgentWorks side is covered by its service
+tests and compiles, but was not exercised against a phone. Pulse followed on
+2026-09-03 and turned out not to be "Pulse" at all: SparkQuill's check-in is
+a product schedule (cron or cadence, a fixed list of messages sent one at a
+time into the product conversation), which AgentWorks' Pulse review/fix
+lifecycle is not. `pkg/productschedule` holds the definition, validation and
+timing rule (cron with timezone, or cadence hours with a preferred hour, plus
+a quiet rule) and a standalone runner with per-message status;
+`agentprofiles.Profile.Schedules` lets a product.yaml declare them (singleton
+conversations only); `cmd/server/product_schedules.go` runs them on the
+AgentWorks server for every user with the product, with per-user enable
+overrides and the same run-history file workflow schedules use, listed and
+controlled through the existing `/api/scheduler/jobs` routes as
+`entity_type: "product"`. family-server's Pulse is now one such schedule on
+the standalone runner (`GET /api/pulse/status` shows each check's state),
+verified live with a manual run. The platform side has unit tests but was
+not exercised against a real product turn. The decision itself stands; the
+migration plan is at step 2 with only secrets remaining (recommended:
+drop it).
+
+Step 3 landed on 2026-09-03 as well: `profiles:` in product.yaml (one shared
+loader, `agentprofiles.LoadProductManifest`, replacing the three per-product
+copies), a per-profile prompt source, and `runtime.sandbox` (`mode: strict`,
+`network: disabled`, `read_only:`) plumbed from the profile through the
+session folder guard to the workspace shell isolator, which already had the
+deny-by-default seatbelt SparkQuill's child shell used. Verified with a real
+sandbox-exec run: a socket connect is refused by the kernel under
+strict/no-network and reaches the port under strict/network. Nothing on the
+SparkQuill side moved yet; step 4 writes its product.yaml against this.
+
+Decisions taken the same day, which fix the shape of steps 3-5:
+
+- **SparkQuill stays a standalone app.** The cutover target is a
+  single-product desktop build of the platform, not a surface inside
+  AgentWorks. Families never log into the shared server.
+- **The child is a PIN on the parent's account**, as today, not a user of
+  their own. The child profile is therefore a second profile of the same
+  product under the parent's user folder, gated by the existing PIN handoff;
+  the sharing model does not need to cover it.
+- **The RTS box is redeployed only at the end.** It keeps its pre-migration
+  build until the cutover; that deploy carries the shared WhatsApp connector,
+  the whatsmeow upgrade and product schedules together.
+
 ### Revisit trigger
 
 Reopen this decision when **either**: (a) `internal/agentsession` no longer

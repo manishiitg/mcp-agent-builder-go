@@ -6,6 +6,7 @@ import {
   LoaderCircle,
   Play,
   ShieldCheck,
+  Share2,
   Activity,
   BellRing,
   CalendarClock,
@@ -26,7 +27,9 @@ import { getBackupDotClass } from '../backupStatus'
 import { getPublishDotClass } from '../publishStatus'
 import { getNotificationDotClass } from '../notificationStatus'
 import { loadWorkflowNotificationInfo, type WorkflowNotificationState } from '../../../services/workflow-notifications'
-import WorkflowAccessPopup from '../WorkflowAccessPopup'
+import UsersAdminPanel from '../../admin/UsersAdminPanel'
+import WorkflowSharePopup from '../WorkflowSharePopup'
+import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestStore'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip'
 import { hasWorkflowWriteAccess, hasWorkflowOwnerAccess } from '../../../utils/workflowPermissions'
 import { sendWorkflowMessageToChat } from '../../../utils/reportHumanInputChat'
@@ -300,7 +303,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   className = ''
 }) => {
   const canWriteWorkflow = useAuthStore(state => hasWorkflowWriteAccess(state.user, state.isMultiUserMode))
-  const canManageAccess = useAuthStore(state => state.isMultiUserMode && hasWorkflowOwnerAccess(state.user, state.isMultiUserMode))
+  const canManageAccess = useAuthStore(state => state.isMultiUserMode && (state.user?.is_admin === true || hasWorkflowOwnerAccess(state.user, state.isMultiUserMode)))
 
   // Workspace store for opening folders
 
@@ -347,6 +350,14 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [publishState, setPublishState] = useState<string>('not_configured')
   const [notificationState, setNotificationState] = useState<WorkflowNotificationState | 'loading'>('loading')
   const [showAccessPopup, setShowAccessPopup] = useState(false)
+  const [showSharePopup, setShowSharePopup] = useState(false)
+  // Share is for this workflow's owners (or an admin), multi-user mode only.
+  const isMultiUser = useAuthStore(state => state.isMultiUserMode)
+  const isAdminUser = useAuthStore(state => state.user?.is_admin === true)
+  const myWorkflowAccess = useWorkflowManifestStore(state =>
+    workspacePath ? state.workflows.find(w => w.workspace_path === normalizeWorkspacePath(workspacePath))?.my_access : undefined,
+  )
+  const canShareWorkflow = isMultiUser && !!workspacePath && (isAdminUser || myWorkflowAccess === 'owner' || myWorkflowAccess === 'write')
   const [workflowScheduleStats, setWorkflowScheduleStats] = useState<WorkflowScheduleStats>(EMPTY_WORKFLOW_SCHEDULE_STATS)
   const [manualPulseStarting, setManualPulseStarting] = useState(false)
   const [openGroups, setOpenGroups] = useState<Record<ToolbarGroupId, boolean>>(() => readOpenGroups())
@@ -849,7 +860,22 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
           </div>
           )}
 
-        {/* Workflow Access (multi-user mode only, owners only) */}
+        {/* Share this workflow (owners and admins, multi-user mode only) */}
+        {canShareWorkflow && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => setShowSharePopup(true)}
+                className="p-1.5 rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+                aria-label="Share workflow"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom"><p>Share this workflow</p></TooltipContent>
+          </Tooltip>
+        )}
+        {/* Users & access (multi-user mode only, admins only) */}
         {canManageAccess && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -860,18 +886,25 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 <ShieldCheck className="w-3.5 h-3.5" />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom"><p>Automation Access</p></TooltipContent>
+            <TooltipContent side="bottom"><p>Users &amp; access</p></TooltipContent>
           </Tooltip>
         )}
 
         </TooltipProvider>
       </div>
     </div>
-    {/* Workflow Access Popup (multi-user owners only) */}
-    <WorkflowAccessPopup
+    {/* Users & access (admins only) */}
+    <UsersAdminPanel
       isOpen={showAccessPopup}
       onClose={() => setShowAccessPopup(false)}
     />
+    {workspacePath && (
+      <WorkflowSharePopup
+        isOpen={showSharePopup}
+        onClose={() => setShowSharePopup(false)}
+        workspacePath={normalizeWorkspacePath(workspacePath) ?? workspacePath}
+      />
+    )}
     </>
   )
 }

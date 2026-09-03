@@ -103,7 +103,9 @@ func getEnabledProviderNames() []string {
 	providersEnv := os.Getenv("AUTH_PROVIDERS")
 	if providersEnv == "" {
 		// Default: if AUTH_USERS is set, enable simple provider
-		if os.Getenv("AUTH_USERS") != "" {
+		// Password login is on whenever there is anyone to log in: AUTH_USERS
+		// in the environment, or accounts in config/users.json.
+		if os.Getenv("AUTH_USERS") != "" || userDirectoryHasPasswordUsers() {
 			return []string{"simple"}
 		}
 		return nil
@@ -166,6 +168,16 @@ func (p *SimpleProvider) ExchangeCode(ctx context.Context, code, redirectURI str
 }
 
 func (p *SimpleProvider) ValidateCredentials(username, password string) (*ExternalUser, error) {
+	// The user directory (config/users.json) is checked first; AUTH_USERS
+	// remains as the bootstrap fallback until its users are imported.
+	if rec := validateDirectoryCredentials(username, password); rec != nil {
+		return &ExternalUser{
+			ExternalID: rec.ID,
+			Username:   rec.Username,
+			Email:      rec.Email,
+			Provider:   "simple",
+		}, nil
+	}
 	user := ValidateHardcodedUser(username, password)
 	if user == nil {
 		return nil, fmt.Errorf("invalid credentials")
@@ -180,7 +192,7 @@ func (p *SimpleProvider) ValidateCredentials(username, password string) (*Extern
 }
 
 func (p *SimpleProvider) IsConfigured() bool {
-	return IsHardcodedUserMode()
+	return IsHardcodedUserMode() || userDirectoryHasPasswordUsers()
 }
 
 // --- Cognito Provider ---

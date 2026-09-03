@@ -26,7 +26,7 @@ func TestPlatformVersionPrefersInjectedValue(t *testing.T) {
 	}
 }
 
-// TestPlatformVersionIsStableAcrossCalls pins the sync.Once behaviour. It is
+// TestPlatformVersionIsStableAcrossCalls pins the sync.Once behavior. It is
 // called on every concern write, so a per-call ReadBuildInfo would be wasteful,
 // and a value that changed mid-process would make first_seen_platform_version
 // meaningless.

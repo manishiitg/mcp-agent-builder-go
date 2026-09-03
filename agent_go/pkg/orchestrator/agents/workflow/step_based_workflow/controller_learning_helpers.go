@@ -132,7 +132,7 @@ func validateDeclaredExecutionModeChange(mode string, reason string) error {
 	if strings.TrimSpace(mode) == "" || strings.TrimSpace(reason) != "" {
 		return nil
 	}
-	return fmt.Errorf("declared_execution_mode=%q requires declared_execution_mode_reason: moving a step between scripted and agentic changes how it executes for every future run — scripted freezes the behaviour into main.py, agentic pays for judgment on every run. State what makes this step deterministic (or not), citing the owning finding and the evidence.%s",
+	return fmt.Errorf("declared_execution_mode=%q requires declared_execution_mode_reason: moving a step between scripted and agentic changes how it executes for every future run — scripted freezes the behavior into main.py, agentic pays for judgment on every run. State what makes this step deterministic (or not), citing the owning finding and the evidence.%s",
 		strings.TrimSpace(mode), reasonEscapeHatch)
 }
 

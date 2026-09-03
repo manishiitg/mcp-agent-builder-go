@@ -145,6 +145,11 @@ func ExecuteShellCommand(c *gin.Context) {
 			BlockedWritePaths: req.FolderGuard.BlockedWritePaths,
 			WorkDir:           workingDir,
 			BaseDir:           docsDir,
+			// An agent profile's runtime.sandbox policy: deny-by-default and,
+			// optionally, no outbound network (macOS seatbelt enforces both;
+			// the Linux path applies the folder rules only).
+			StrictAllowlist: req.FolderGuard.StrictAllowlist,
+			AllowNetwork:    !req.FolderGuard.DenyNetwork,
 		}
 
 		// Debug: log isolator configuration for troubleshooting mount namespace issues

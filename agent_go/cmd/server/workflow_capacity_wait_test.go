@@ -83,7 +83,7 @@ func TestQuotaGateOnlyAppliesToSchedulesThatActuallyUseClaudeCode(t *testing.T) 
 		BuilderLLM:    &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-sonnet-5"},
 	}}}
 	if !scheduleUsesClaudeCode(claude) {
-		t.Error("a claude-code schedule was not recognised by the gate")
+		t.Error("a claude-code schedule was not recognized by the gate")
 	}
 
 	codex := &ScheduleContext{Capabilities: WorkflowCapabilities{LLMConfig: &workflowtypes.PresetLLMConfig{

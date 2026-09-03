@@ -30,10 +30,25 @@ func workspaceProxyHandler() http.Handler {
 	log.Printf("[WORKSPACE PROXY] Proxying /api/wp/* → %s", wsURL)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isWorkflowWorkspaceProxyWrite(r) && !currentUserCanWriteWorkflows(r) {
-			writeWorkflowPermissionDenied(w, "write")
-			return
+		if isWorkflowWorkspaceProxyWrite(r) {
+			if !currentUserCanWriteWorkflows(r) {
+				writeWorkflowPermissionDenied(w, "write")
+				return
+			}
+			// Inside an existing workflow's folder only its owners may
+			// write; a new folder under Workflow/ is creation, covered by
+			// the account tier above.
+			if folder := workflowFolderFromWorkspaceProxyPath(workspaceProxyRelativePath(r)); folder != "" {
+				if level, manifest := workflowAccessForWorkspacePath(r.Context(), GetUserFromContext(r.Context()), folder); manifest != nil && level != WorkflowAccessOwner && level != WorkflowAccessWrite {
+					writeWorkflowPermissionDenied(w, "owner")
+					return
+				}
+			}
 		}
+		// The workspace API scopes per-user paths by X-User-ID and has no
+		// auth of its own; it must carry the identity this server verified,
+		// never whatever the browser put in the header.
+		r.Header.Set("X-User-ID", GetUserIDFromContext(r.Context()))
 		// Strip /api/wp prefix: /api/wp/api/documents → /api/documents
 		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/api/wp")
 		if r.URL.Path == "" {
@@ -45,6 +60,16 @@ func workspaceProxyHandler() http.Handler {
 	})
 }
 
+// workspaceProxyRelativePath is the decoded path below /api/wp, without a
+// leading slash: "api/documents/Workflow/<folder>/plan.json".
+func workspaceProxyRelativePath(r *http.Request) string {
+	path := strings.TrimPrefix(r.URL.Path, "/api/wp")
+	if decoded, err := url.PathUnescape(path); err == nil {
+		path = decoded
+	}
+	return strings.TrimPrefix(path, "/")
+}
+
 func isWorkflowWorkspaceProxyWrite(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
@@ -52,11 +77,7 @@ func isWorkflowWorkspaceProxyWrite(r *http.Request) bool {
 		return false
 	}
 
-	path := strings.TrimPrefix(r.URL.Path, "/api/wp")
-	if decoded, err := url.PathUnescape(path); err == nil {
-		path = decoded
-	}
-	path = strings.TrimPrefix(path, "/")
+	path := workspaceProxyRelativePath(r)
 
 	return strings.HasPrefix(path, "api/documents/Workflow/") ||
 		path == "api/documents/Workflow" ||

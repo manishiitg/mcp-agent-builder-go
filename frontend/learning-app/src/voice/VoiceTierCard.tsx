@@ -80,7 +80,7 @@ export function VoiceTierCard({
           <span className="fl-voice-progress-fill" style={{ width: `${pct}%` }} />
         </div>
       )}
-      {testable && tier.installed && !tier.installing && <MicTestButton tier={tier.id} />}
+      {testable && tier.installed && !tier.installing && <MicTestButton />}
       {tier.install_error && <p className="fl-voice-tier-error">{tier.install_error}</p>}
       {!tier.available && tier.unavailable_reason && (
         <p className="fl-voice-tier-why">{tier.unavailable_reason}</p>

@@ -2367,9 +2367,40 @@ export interface AuthUser {
   can_manage_workflow_access?: boolean
   workflow_permissions_enabled?: boolean
   // null/undefined means unrestricted -- the deployment's own enabledProductSurfaces
-  // (and every workflow) applies. A non-empty array narrows further, per-user.
+  // (and every workflow) applies. An array narrows to exactly those products,
+  // per-user; an EMPTY array means none (a read-only account with nothing
+  // enabled).
   allowed_products?: string[] | null
   allowed_workflow_ids?: string[] | null
+  // Account level (docs/design/user_accounts_and_workflow_sharing.md):
+  // admins manage users and products; can_create=false is the read-only user.
+  is_admin?: boolean
+  can_create?: boolean
+}
+
+/** One account as the admin page sees it (never the password hash). */
+export interface AdminUser {
+  id: string
+  username: string
+  email?: string
+  provider: string
+  has_password: boolean
+  admin: boolean
+  can_create: boolean
+  products: string[]
+  disabled: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+export interface AdminUserWrite {
+  username?: string
+  email?: string
+  password?: string
+  admin?: boolean
+  can_create?: boolean
+  products?: string[]
+  disabled?: boolean
 }
 
 export interface AuthResponse {
@@ -2491,6 +2522,55 @@ export const authApi = {
   deleteWorkflowUserPermission: async (userKey: string): Promise<void> => {
     await api.delete(`/api/workflow/user-permissions?user_key=${encodeURIComponent(userKey)}`)
   },
+
+  // --- account management (config/users.json; admins only) ---
+  listAdminUsers: async (): Promise<{ users: AdminUser[]; products: string[] }> => {
+    const response = await api.get('/api/admin/users')
+    return response.data
+  },
+  createAdminUser: async (user: AdminUserWrite): Promise<AdminUser> => {
+    const response = await api.post('/api/admin/users', user)
+    return response.data
+  },
+  updateAdminUser: async (id: string, patch: AdminUserWrite): Promise<AdminUser> => {
+    const response = await api.put(`/api/admin/users/${encodeURIComponent(id)}`, patch)
+    return response.data
+  },
+  deleteAdminUser: async (id: string): Promise<void> => {
+    await api.delete(`/api/admin/users/${encodeURIComponent(id)}`)
+  },
+  changeOwnPassword: async (currentPassword: string, newPassword: string): Promise<void> => {
+    await api.post('/api/auth/password', { current_password: currentPassword, new_password: newPassword })
+  },
+
+  // --- per-workflow sharing (workflow_access.go) ---
+  listUserDirectory: async (): Promise<{ users: WorkflowAccessUser[] }> => {
+    const response = await api.get('/api/users/directory')
+    return response.data
+  },
+  getWorkflowAccess: async (workspacePath: string): Promise<WorkflowAccessInfo> => {
+    const response = await api.get(`/api/workflow/access?workspace_path=${encodeURIComponent(workspacePath)}`)
+    return response.data
+  },
+  setWorkflowAccess: async (workspacePath: string, owners: string[], readers: string[]): Promise<WorkflowAccessInfo> => {
+    const response = await api.put('/api/workflow/access', { workspace_path: workspacePath, owners, readers })
+    return response.data
+  },
+}
+
+export interface WorkflowAccessUser {
+  id: string
+  username: string
+  email?: string
+}
+
+export interface WorkflowAccessInfo {
+  workspace_path: string
+  owners: WorkflowAccessUser[]
+  readers: WorkflowAccessUser[]
+  my_access: 'owner' | 'write' | 'read' | 'none'
+  /** Nothing recorded yet: open to every member until a grant is saved. */
+  legacy?: boolean
 }
 
 export interface WorkflowUserPermission {

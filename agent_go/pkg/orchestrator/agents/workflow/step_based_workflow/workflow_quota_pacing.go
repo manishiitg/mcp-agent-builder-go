@@ -84,7 +84,7 @@ func decideQuotaPacing(accountKey string, thresholdPercent int, now time.Time) q
 }
 
 // waitForQuotaPacing sleeps out a pacing decision, or returns early if the run
-// is cancelled. A paced run must still stop when Stop is clicked (PLAT-130).
+// is canceled. A paced run must still stop when Stop is clicked (PLAT-130).
 func waitForQuotaPacing(ctx context.Context, wait time.Duration) error {
 	if wait <= 0 {
 		return nil

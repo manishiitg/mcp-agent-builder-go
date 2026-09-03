@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,12 +16,12 @@ import (
 const maxVoiceClipBytes = 25 << 20 // 25 MB
 
 // POST /api/voice/transcribe — multipart form with an "audio" file part.
-// Transcribes a mic recording from the app's own composer entirely on-device,
-// reusing the SAME Parakeet pipeline that already handles WhatsApp voice
-// notes (transcribeAudioFile in voice_transcribe.go): identical engine,
-// identical model, just a different entry point. Parakeet reads whatever
-// container MediaRecorder produced (webm/opus in Chromium, mp4 in Safari)
-// directly, so no format conversion is needed on either side.
+// Transcribes one complete recording entirely on-device through the SAME
+// pipeline that handles WhatsApp voice notes (transcribeAudioFile in
+// voice_transcribe.go): identical engine, identical model, just a different
+// entry point. Live dictation uses the /api/voice/stream WebSocket instead;
+// this stays as the curl-able batch path and for any client that already has
+// a finished file.
 func handleVoiceTranscribe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -39,8 +38,8 @@ func handleVoiceTranscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// Keep the browser's own extension so ffmpeg can sniff the container it
-	// actually got, rather than us guessing wrong and failing the convert.
+	// Keep the client's own extension so the converter can sniff the
+	// container it actually got, rather than us guessing wrong and failing.
 	ext := filepath.Ext(hdr.Filename)
 	if ext == "" {
 		ext = ".webm"
@@ -73,28 +72,4 @@ func handleVoiceTranscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"text": text})
-}
-
-// POST /api/voice/warm — fire-and-forget: starts loading Parakeet into the
-// persistent worker's memory if it isn't warm already. The frontend calls
-// this the MOMENT recording starts, not after it ends, so a cold worker
-// (unloaded after voiceWorkerIdleTimeout — see voice_worker.go — 15 minutes
-// of no voice use) pays its load cost while the parent is still talking
-// instead of on their first live-preview tick, where it previously showed up
-// as several seconds of dead air with no captions and no visible reason why.
-func handleVoiceWarm(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if sharedVoiceWorker.IsWarm(parakeetModel) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "warm"})
-		return
-	}
-	go func() {
-		if err := warmParakeet(context.Background()); err != nil {
-			log.Printf("[voice] on-demand warm-up failed: %v", err)
-		}
-	}()
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "warming"})
 }

@@ -214,6 +214,64 @@ The API response shape is a compatibility wrapper around:
 - in-memory runtime state
 - per-workflow run history
 
+## Product Schedules
+
+A product can declare recurring jobs of its own in `product.yaml`, under
+`profile.schedules`. They are not workflow schedules: there is no manifest,
+no run folder and no Pulse review. Each one runs the product's agent profile
+for a user by sending its messages one at a time into that user's product
+conversation, the same conversation the product surface shows.
+
+```yaml
+profile:
+  runtime:
+    conversation:
+      mode: singleton          # required: schedules run in the one product chat
+  schedules:
+    - id: daily-checkin
+      name: Daily check-in
+      description: Review yesterday and send a summary
+      enabled: true            # the product default; each user can override
+      cron_expression: "0 8 * * *"
+      timezone: Asia/Kolkata
+      messages:
+        - Review what changed since your last check-in and note anything worth flagging.
+        - Send the summary with notify_user.
+```
+
+The definition and the timing rule live in `agent_go/pkg/productschedule`
+(`Schedule`, `Validate`, `Decide`). Besides cron there is a cadence form
+(`cadence_hours` with an optional `preferred_hour`) and a quiet rule
+(`quiet_minutes`, `max_deferral_hours`) for products that run on their own
+and know when the user was last active; the platform runs cron schedules and
+ignores the quiet rule.
+
+On the AgentWorks server `cmd/server/product_schedules.go` runs them:
+
+- **Who**: every enabled directory user whose product access includes the
+  product (admins and unrestricted members included), or the single local
+  user when the server is not multi-user.
+- **State**: `_users/<id>/chat_history/product-schedules.json` holds each
+  user's enable override and run bookkeeping (last run, status, counts).
+  A schedule that has never run waits for its next cron occurrence rather
+  than firing on first start.
+- **Run history**: `schedule-runs.json` next to the product conversation
+  (`_users/<id>/Chats/...`), the same file and shape workflow schedules use.
+- **Execution**: one session, the product conversation's own, one
+  `startSessionInternal` call per message, strictly sequential; a failing
+  message stops the run. One run per (user, schedule) at a time.
+- **API**: product schedules appear in `GET /api/scheduler/jobs` with
+  `entity_type: "product"` and ids of the form `product:<profile>:<schedule>`.
+  `GET /jobs/{id}`, `/enable`, `/disable`, `/trigger`, `/stop` and `/runs`
+  work on them for the calling user. `PUT` and `DELETE` are refused: a
+  product declares its schedules, users only switch them on or off.
+
+SparkQuill's Pulse is the first schedule expressed this way (in its
+standalone family server it runs through `productschedule.Runner` with the
+parent's cadence settings, the quiet rule and per-check status at
+`GET /api/pulse/status`); when SparkQuill becomes a hosted product its
+`schedules:` block is the same definition.
+
 ## UI Surfaces
 
 The current frontend scheduling surfaces are:

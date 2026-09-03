@@ -31,16 +31,18 @@ type AuthResponse struct {
 
 // UserInfo represents public user information
 type UserInfo struct {
-	ID                      string `json:"id"`
-	Username                string `json:"username"`
-	Email                   string `json:"email,omitempty"`
-	Provider                string `json:"provider,omitempty"`
+	ID                      string   `json:"id"`
+	Username                string   `json:"username"`
+	Email                   string   `json:"email,omitempty"`
+	Provider                string   `json:"provider,omitempty"`
 	WorkflowAccess          string   `json:"workflow_access,omitempty"`
 	CanRunWorkflows         bool     `json:"can_run_workflows"`
 	CanWriteWorkflows       bool     `json:"can_write_workflows"`
 	CanManageWorkflowAccess bool     `json:"can_manage_workflow_access"`
 	AllowedProducts         []string `json:"allowed_products,omitempty"`
 	AllowedWorkflowIDs      []string `json:"allowed_workflow_ids,omitempty"`
+	IsAdmin                 bool     `json:"is_admin"`
+	CanCreate               bool     `json:"can_create"`
 }
 
 // AuthModeResponse represents the response for GET /api/auth/mode
@@ -209,6 +211,13 @@ func (api *StreamingAPI) handleRegister(w http.ResponseWriter, r *http.Request) 
 // handleLogin handles user login (for credentials-based providers)
 func (api *StreamingAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	// Password login can be internet-facing (the Video Studio gateway with
+	// its shared-password gate off), so an address that keeps failing is
+	// held off for a while instead of being allowed to grind on argon2.
+	if !loginLimiter.allow(clientIPOf(r)) {
+		http.Error(w, `{"error": "Too many failed logins from this address; try again later"}`, http.StatusTooManyRequests)
+		return
+	}
 
 	// In single-user mode, return a token for the default user (no login required)
 	if !IsMultiUserMode() {
@@ -261,9 +270,11 @@ func (api *StreamingAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 	extUser, err := provider.ValidateCredentials(req.Username, req.Password)
 	if err != nil {
 		log.Printf("[AUTH] Login failed for user %s via provider %s: %v", req.Username, providerName, err)
+		loginLimiter.fail(clientIPOf(r))
 		http.Error(w, `{"error": "Invalid credentials"}`, http.StatusUnauthorized)
 		return
 	}
+	loginLimiter.reset(clientIPOf(r))
 
 	// Generate a deterministic user ID if not provided
 	userID := extUser.ExternalID
@@ -272,6 +283,11 @@ func (api *StreamingAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 		userID = hex.EncodeToString(hash[:16])
 	}
 
+	if rec := directoryUserFor(userID, extUser.Username, extUser.Email); rec != nil && rec.Disabled {
+		log.Printf("[AUTH] Login refused for disabled user %s", extUser.Username)
+		http.Error(w, `{"error": "This account is disabled"}`, http.StatusForbidden)
+		return
+	}
 	// Generate JWT token with provider information
 	token, err := GenerateJWTWithProvider(userID, extUser.Username, extUser.Email, extUser.Provider)
 	if err != nil {
@@ -405,6 +421,13 @@ func (api *StreamingAPI) handleAuthCallback(w http.ResponseWriter, r *http.Reque
 		userID = hex.EncodeToString(hash[:16])
 	}
 
+	// First SSO login creates the account record with nothing enabled
+	// (unless ADMIN_USERS names it); an admin switches it on.
+	if rec := ensureDirectoryUserForExternal(userID, extUser); rec != nil && rec.Disabled {
+		log.Printf("[AUTH] OAuth login refused for disabled user %s", extUser.Username)
+		http.Error(w, `{"error": "This account is disabled"}`, http.StatusForbidden)
+		return
+	}
 	// Generate JWT token with provider information
 	token, err := GenerateJWTWithProvider(userID, extUser.Username, extUser.Email, extUser.Provider)
 	if err != nil {
@@ -537,6 +560,9 @@ func (api *StreamingAPI) handleGetCurrentUser(w http.ResponseWriter, r *http.Req
 	for key, value := range productAccessResponseFields(user) {
 		response[key] = value
 	}
+	acc := userAccessForClaims(user)
+	response["is_admin"] = acc.Admin
+	response["can_create"] = acc.CanCreate
 	json.NewEncoder(w).Encode(response)
 }
 

@@ -1764,7 +1764,7 @@ func RecordPulseFindingDispositionsTx(
 		// a reviewer slot rediscovering that it is not, and re-defers it.
 		//
 		// Only this one pairing is rejected. A harness finding that is resolved,
-		// acknowledged, or awaiting_verification is legitimate — the behaviour can
+		// acknowledged, or awaiting_verification is legitimate — the behavior can
 		// stop, be disproven, or be worked around from inside the workflow.
 		if disposition.Disposition == FindingDispositionQueuedForEngineering {
 			var issueKind string

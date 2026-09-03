@@ -284,10 +284,23 @@ profile:
       browser: required
       secrets: required
       # Streaming microphone dictation. This product-level capability gates
-      # the mic control in the shared composer. Keep it disabled until the
-      # EC2 deployment includes the CGO-enabled Sherpa ONNX voice runtime.
-      # Typed chat remains fully available.
-      voice: disabled
+      # the mic control in the shared composer. preferred, not required: the
+      # composer works fine by typing, and a user without a mic or on a
+      # machine where the STT model has not finished downloading should not
+      # be blocked.
+      #
+      # The engine only exists in a CGO build (pkg/voicestt/engine_nocgo.go is
+      # the stub); the EC2 release builds the agent with cgo through
+      # deploy/aws-ec2/build/Dockerfile.linux-amd64-cgo for exactly this
+      # reason. A CGO_ENABLED=0 build answers the mic with 503. The speech
+      # model (~690MB, English, with a punctuation post-pass) is a one-time
+      # download the composer offers on first use.
+      voice: preferred
+  # schedules: a product may declare recurring jobs here (id, name,
+  # cron_expression, timezone, enabled, messages[]); the platform runs them
+  # for every user with the product, one message at a time, in the product
+  # conversation. Requires runtime.conversation.mode: singleton, which this
+  # per-project product is not -- see docs/workflow/workflow_scheduling.md.
   built_in: true
 
 branding:

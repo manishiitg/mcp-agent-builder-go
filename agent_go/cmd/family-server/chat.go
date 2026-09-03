@@ -267,7 +267,7 @@ func childSystemPrompt(child *Child, parentLabel string, activityDir string) str
 	// differently from what the parent pictured: a child genuinely stuck, out
 	// of time, or facing a question that turned out to be wrong met a wall
 	// built the day before. The teaching sense those modes encoded is kept
-	// here as default behaviour instead, applied with judgment.
+	// here as default behavior instead, applied with judgment.
 	criticalRule := "HOW TO HANDLE ANSWERS — this is your judgment, not a setting. Read the activity's goal for what the parent " +
 		"actually wants, then teach the way a good tutor sitting beside her would.\n" +
 		"- YOUR DEFAULT: do not hand over answers. Your FIRST reply to any problem is (a) one short encouraging line and (b) ONE " +
@@ -346,7 +346,7 @@ func childSystemPrompt(child *Child, parentLabel string, activityDir string) str
 		"- show_scene renders a small, freshly-written HTML snippet inline in your reply — for moments the activity's fixed file can't cover. This is NOT just for narrative/game activities: reach for it in a plain worksheet or revision session too, e.g. a quick interactive check question on what you just explained, a diagram of the exact shape/process she's stuck on, a mini drill for extra practice on a skill that's shaky — anything a static page and plain text genuinely can't do as well. Real CSS animation and actual JavaScript are both available (it genuinely runs) — build real interactivity when it fits: something she clicks and gets a response from, a tiny running score, a small simulation, not just something that plays on its own. Use the capability you actually have; don't default to plain and static. Keep it small and self-contained (inline CSS/JS, no external assets), and if anything repeats on a timer, give it a real stopping point — the scene stays alive in her chat history long after this turn. Use it whenever a visual or interactive moment genuinely helps — don't default to plain text out of caution.\n" +
 		"- WHENEVER A SCENE ASKS HER SOMETHING, PUT THE ANSWERS ON IT AS BUTTONS. Two to four `SQ.choose` buttons, e.g. `<button onclick=\\\"SQ.choose('Investigate Saturn', this)\\\">Investigate Saturn</button>` — you see exactly which she picked, and each disables itself the instant it's tapped so a slow reply can't be mistaken for a missed tap and answered twice. Never a `<details>` reveal, never a button that does nothing further. She can always still type instead; the buttons are there so she doesn't HAVE to. Measured on a real session: ten scenes in a row shipped with no button at all, so every single answer had to be typed out — by the end her replies had decayed into fragments and she asked to stop. A tap is the difference between playing and doing homework. If a scene poses a question and you can name a few plausible answers, it gets buttons.\n" +
 		"- find_image fetches a real picture (Wikimedia Commons) into her activity folder when SEEING the thing is the point — what a plateau actually looks like, where the Tropic of Cancer falls, how the digestive system is arranged. Two ways to show it: put `<img src=\"FILENAME\" alt=\"...\">` in a show_scene snippet for a one-off look, or add it into one of her activity's own files (diff_patch_workspace_file, then open_file) when it belongs with the material for good. Use the exact filename it returns, print the credit it gives you underneath, and draw it yourself instead whenever the point is a relationship or a process rather than a real thing.\n" +
-		"- DRAWING A MATHS/SCIENCE FIGURE — an angle, a circle, a labelled triangle, a graph, a number line — read skills/_shared/diagrams.md and declare it with JSXGraph, which is available inside show_scene and inside any page you write. NEVER hand-write SVG coordinates for geometry: SVG's y-axis points down, arc flags invert, and angle labels land on top of lines, so a hand-computed figure is usually subtly wrong — and a wrong figure teaches her the wrong thing. In ∠ABC the vertex is the MIDDLE letter, B; keep it that way in what you draw and in what you say.\n" +
+		"- DRAWING A MATHS/SCIENCE FIGURE — an angle, a circle, a labeled triangle, a graph, a number line — read skills/_shared/diagrams.md and declare it with JSXGraph, which is available inside show_scene and inside any page you write. NEVER hand-write SVG coordinates for geometry: SVG's y-axis points down, arc flags invert, and angle labels land on top of lines, so a hand-computed figure is usually subtly wrong — and a wrong figure teaches her the wrong thing. In ∠ABC the vertex is the MIDDLE letter, B; keep it that way in what you draw and in what you say.\n" +
 		"- Save her own work and attempts under " + activityDir + "/attempts/.\n" +
 		"- ANY new HTML file you write here — a similar-but-different example, a harder or easier version she asked for, a fresh practice problem — follows skills/_shared/html-design.md just like the activity's own original file does: the same shared look, the same visual-engagement rule (real CSS animation, not just static cards), the same section/question id scheme. Confirmed live: these came out as bare, unstyled HTML with zero animation, every time — because nothing ever pointed this specific case back at that design system; it's easy to treat a quick in-conversation file as a lesser, un-designed scrap. It isn't; she sees it exactly like anything else. If you already read that file earlier in THIS conversation and are genuinely confident you still have its actual rules — not just a vague sense of \"make it nice\" — you don't need to re-read it every single time; but re-read it rather than guess the moment you're not sure, since guessing wrong is exactly how this broke before.\n" +
 		"\n" +
@@ -641,12 +641,13 @@ func runParentTurn(ctx context.Context, s familyState, convID string, messages [
 	defer markAgentTurnStart("parent")()
 	trace.locked()
 
-	sess, err := agentsession.New(ctx, agentsession.Config{
+	sess, err := newAgentSession(ctx, agentsession.Config{
 		Provider:        provider,
 		ModelID:         selectedModelID(s, provider),
 		ReasoningEffort: selectedReasoningEffort(s.FastMode, provider),
 		WorkingDir:      workDir,
 		SystemPrompt:    parentSystemPrompt(s.Child, s.ParentLabel, s.Pulse, s.Schedule),
+		Skills:          embeddedSkills(),
 		// Stable SessionID = the conversation id, so the SAME warm tmux session
 		// is reused across turns within this process. SessionHandle restores the
 		// coding agent's own `--resume` state across process restarts (loaded from

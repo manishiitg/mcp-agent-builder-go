@@ -1848,6 +1848,25 @@ export interface CapabilitiesResponse {
   local_mode?: boolean;
   runtime_debug?: boolean;
   terminal_live_attach?: boolean;
+  /** Streaming microphone dictation (agent_go/pkg/voicestt, voicestt.Status).
+   * `available` is a build-time fact (false in a CGO_ENABLED=0 build);
+   * `installed` means the model is on disk; `ready` flips once it has loaded. */
+  voice?: VoiceEngineStatus;
+}
+
+/** Mirrors voicestt.Status — also what GET /api/voice/status returns. */
+export interface VoiceEngineStatus {
+  available: boolean;
+  installed: boolean;
+  downloading: boolean;
+  got_bytes: number;
+  total_bytes: number;
+  loading: boolean;
+  ready: boolean;
+  active_streams: number;
+  error?: string;
+  model_dir: string;
+  size_mb: number;
 }
 
 
@@ -2945,7 +2964,7 @@ export interface ScheduledJob {
   id: string
   name: string
   description: string
-  entity_type: 'workflow' | 'chat' | 'multi-agent'
+  entity_type: 'workflow' | 'chat' | 'multi-agent' | 'product'
   preset_query_id?: string
   workspace_path?: string
   workflow_id?: string
@@ -3107,6 +3126,8 @@ export interface WorkflowManifest {
   execution_defaults: WorkflowExecutionDefaults
   ownership: WorkflowOwnership
   schedules: WorkflowScheduleEntry[]
+  /** Who owns and who may read this workflow (workflow_access.go). */
+  access?: { owners: string[]; readers: string[] }
   created_at?: string
   updated_at?: string
   run_retention_count?: number
@@ -3207,6 +3228,9 @@ export interface WorkflowScheduleEntry {
 export interface DiscoveredWorkflow {
   workspace_path: string
   manifest: WorkflowManifest
+  /** The signed-in user's level on this workflow: owner/write may edit and
+   * share, read gets the read-only session. Absent on older servers. */
+  my_access?: 'owner' | 'write' | 'read'
 }
 
 export interface ListWorkflowManifestsResponse {

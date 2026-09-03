@@ -201,6 +201,12 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// A disabled account is refused even with a still-valid token, so an
+		// admin switching someone off takes effect now, not at token expiry.
+		if directoryUserIsDisabled(claims) {
+			http.Error(w, `{"error": "This account is disabled"}`, http.StatusForbidden)
+			return
+		}
 		// Token is valid, add claims to context
 		ctx := context.WithValue(r.Context(), UserContextKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))

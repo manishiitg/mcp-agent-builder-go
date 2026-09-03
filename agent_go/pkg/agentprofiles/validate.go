@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/productschedule"
 )
 
 var (
@@ -42,6 +44,13 @@ func Validate(profile Profile) error {
 	case "", ProfileScopeProject, ProfileScopeGlobal:
 	default:
 		return fmt.Errorf("invalid profile scope %q (want %q, %q, or empty)", scope, ProfileScopeProject, ProfileScopeGlobal)
+	}
+
+	if err := productschedule.ValidateAll(profile.Schedules); err != nil {
+		return fmt.Errorf("profile %q schedules: %w", profile.ID, err)
+	}
+	if len(profile.Schedules) > 0 && strings.ToLower(strings.TrimSpace(profile.Runtime.Conversation.Mode)) != ConversationModeSingleton {
+		return fmt.Errorf("profile %q schedules: schedules run in the product's single conversation, so runtime.conversation.mode must be %q", profile.ID, ConversationModeSingleton)
 	}
 
 	seenSkills := make(map[string]struct{}, len(profile.Skills))
@@ -152,6 +161,25 @@ func validateRuntime(runtime RuntimePolicy) error {
 	}
 	if mode := strings.ToLower(strings.TrimSpace(runtime.Approvals.Mode)); mode != "" && mode != "provider_auto" && mode != "approve_all" {
 		return fmt.Errorf("invalid runtime approvals.mode %q", runtime.Approvals.Mode)
+	}
+	switch mode := strings.ToLower(strings.TrimSpace(runtime.Sandbox.Mode)); mode {
+	case "", SandboxModeFolder, SandboxModeStrict:
+	default:
+		return fmt.Errorf("invalid runtime sandbox.mode %q (want %q or %q)", runtime.Sandbox.Mode, SandboxModeFolder, SandboxModeStrict)
+	}
+	switch network := strings.ToLower(strings.TrimSpace(runtime.Sandbox.Network)); network {
+	case "", SandboxNetworkAllowed, SandboxNetworkOff:
+	default:
+		return fmt.Errorf("invalid runtime sandbox.network %q (want %q or %q)", runtime.Sandbox.Network, SandboxNetworkAllowed, SandboxNetworkOff)
+	}
+	if runtime.Sandbox.NetworkDisabled() && !runtime.Sandbox.IsStrict() {
+		return fmt.Errorf("runtime sandbox.network %q requires sandbox.mode %q", SandboxNetworkOff, SandboxModeStrict)
+	}
+	for _, folder := range runtime.Sandbox.ReadOnly {
+		clean := strings.TrimSpace(folder)
+		if clean == "" || strings.HasPrefix(clean, "/") || strings.Contains(clean, "..") {
+			return fmt.Errorf("invalid runtime sandbox.read_only entry %q (workspace-relative folder expected)", folder)
+		}
 	}
 	if mode := strings.ToLower(strings.TrimSpace(runtime.APITransport.Mode)); mode != "" && mode != "bridge_shell" && mode != "native_shell" && mode != "disabled" {
 		return fmt.Errorf("invalid runtime api_transport.mode %q", runtime.APITransport.Mode)

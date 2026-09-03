@@ -93,6 +93,12 @@ linters:
       - ".*_generated\\.go$"
 
     rules:
+      # Video Studio's prompts are product copy that must match the wording of
+      # its (unlinted) skill markdown, which is written with "dialogue",
+      # "authorised" and friends; tests compare the two verbatim.
+      - path: internal/videoproduct/
+        linters: [misspell]
+
       # Relaxed rules for test files
       - path: _test\.go
         linters:
