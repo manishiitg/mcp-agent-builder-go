@@ -59,8 +59,8 @@ func TestLLMDiscoveryHTTPShowsCursorLoginRequired(t *testing.T) {
 
 func TestClaudeCodeDiscoveryOptionsIncludeManualNewModels(t *testing.T) {
 	options := discoveryModelOptions("claude-code")
-	if !containsLLMCapabilityString(options, "claude-fable-5") {
-		t.Fatalf("claude-code options = %v, want claude-fable-5", options)
+	if !containsLLMCapabilityString(options, "claude-fable-5-1") {
+		t.Fatalf("claude-code options = %v, want claude-fable-5-1", options)
 	}
 	if !containsLLMCapabilityString(options, "claude-opus-5") {
 		t.Fatalf("claude-code options = %v, want claude-opus-5", options)
@@ -281,8 +281,8 @@ func TestPiCLIIsPublishedAsCodingAgent(t *testing.T) {
 	if candidate.Usable {
 		t.Fatal("usable = true, want false when pi/npx runtime is missing")
 	}
-	if len(candidate.Options) != len(piFallbackModels()) || candidate.Options[0] != "google/gemini-3.7-flash" {
-		t.Fatalf("options = %v, want curated Pi shortlist starting with google/gemini-3.7-flash", candidate.Options)
+	if len(candidate.Options) != len(piFallbackModels()) || candidate.Options[0] != "google/gemini-3.8-flash" {
+		t.Fatalf("options = %v, want curated Pi shortlist starting with google/gemini-3.8-flash", candidate.Options)
 	}
 	foundOpenRouter := false
 	for _, option := range candidate.Options {

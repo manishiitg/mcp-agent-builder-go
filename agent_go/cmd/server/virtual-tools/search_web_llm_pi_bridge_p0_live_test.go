@@ -39,7 +39,7 @@ func TestSearchWebLLMPiBridgeP0(t *testing.T) {
 
 	modelID := strings.TrimSpace(os.Getenv("SEARCH_WEB_LLM_PI_P0_MODEL"))
 	if modelID == "" {
-		modelID = "google/gemini-3.7-flash"
+		modelID = "google/gemini-3.8-flash"
 	}
 	model, err := llm.InitializeLLM(llm.Config{
 		Provider: llm.ProviderPiCLI,

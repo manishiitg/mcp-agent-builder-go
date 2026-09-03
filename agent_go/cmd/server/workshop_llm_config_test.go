@@ -78,9 +78,9 @@ func TestWorkshopResolveLLMConfigExpandsCodingAgentMode(t *testing.T) {
 		t.Fatal("expected Claude Code coding-agent defaults")
 	}
 	if defaults.Builder.ModelID != "claude-sonnet-5" ||
-		defaults.High.ModelID == "claude-fable-5" ||
-		defaults.Medium.ModelID == "claude-fable-5" ||
-		defaults.Low.ModelID == "claude-fable-5" ||
+		defaults.High.ModelID == "claude-fable-5-1" ||
+		defaults.Medium.ModelID == "claude-fable-5-1" ||
+		defaults.Low.ModelID == "claude-fable-5-1" ||
 		defaults.Pulse.ModelID != "claude-opus-5" {
 		t.Fatalf("sonnet 5 should be the builder default and opus 5 the pulse default, got defaults: %+v", defaults)
 	}

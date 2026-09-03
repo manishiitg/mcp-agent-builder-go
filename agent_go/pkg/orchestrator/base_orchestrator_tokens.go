@@ -151,13 +151,13 @@ func normalizeClaudeCodePricingModel(modelLower, originalModelID string) string 
 	case "sonnet", "claude-sonnet":
 		return "claude-sonnet-5"
 	case "fable", "claude-fable":
-		return "claude-fable-5"
+		return "claude-fable-5-1"
 	}
 
 	modelKey := pricingAliasKey(modelLower)
 	switch {
 	case strings.Contains(modelKey, "fable-5"):
-		return "claude-fable-5"
+		return "claude-fable-5-1"
 	case strings.Contains(modelKey, "opus-5") || strings.Contains(modelKey, "5-opus"):
 		return "claude-opus-5"
 	case strings.Contains(modelKey, "opus-4-8") || strings.Contains(modelKey, "4-8-opus"):

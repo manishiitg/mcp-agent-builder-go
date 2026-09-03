@@ -8,7 +8,7 @@ import (
 
 func TestParsePiCLIModelList(t *testing.T) {
 	output := `provider       model                          context  max-out  thinking  images
-google         gemini-3.7-flash               1.0M     65.5K    yes       yes
+google         gemini-3.8-flash               1.0M     65.5K    yes       yes
 google         gemini-3.5-flash               1.0M     65.5K    yes       yes
 google         gemma-4-26b-a4b-it             262.1K   32.8K    yes       yes
 google-vertex  gemini-3.5-flash               1.0M     65.5K    yes       yes
@@ -21,11 +21,11 @@ kimi-coding    k3                             1.0M     131K     yes       yes
 	if len(models) != 7 {
 		t.Fatalf("models len = %d, want 7: %#v", len(models), models)
 	}
-	if models[0].ModelID != "google/gemini-3.7-flash" {
+	if models[0].ModelID != "google/gemini-3.8-flash" {
 		t.Fatalf("first model id = %q", models[0].ModelID)
 	}
 	if !models[0].IsDefault {
-		t.Fatal("google/gemini-3.7-flash should be marked default")
+		t.Fatal("google/gemini-3.8-flash should be marked default")
 	}
 	if models[0].ContextWindow != 1_000_000 {
 		t.Fatalf("context = %d, want 1000000", models[0].ContextWindow)
@@ -87,7 +87,7 @@ func TestPiFallbackModelsKeepProviderShortlistsSmall(t *testing.T) {
 func TestPiFallbackModelsIncludeCurrentProviderCatalog(t *testing.T) {
 	models := piFallbackModels()
 	for _, modelID := range []string{
-		"google/gemini-3.7-flash",
+		"google/gemini-3.8-flash",
 		"google/gemini-3.5-flash-lite",
 	} {
 		found := false
@@ -101,8 +101,8 @@ func TestPiFallbackModelsIncludeCurrentProviderCatalog(t *testing.T) {
 			t.Fatalf("Pi shortlist missing provider catalog model %q: %#v", modelID, models)
 		}
 	}
-	if models[0].ModelID != "google/gemini-3.7-flash" || !models[0].IsDefault {
-		t.Fatalf("first Pi model = %#v, want Gemini 3.7 Flash default", models[0])
+	if models[0].ModelID != "google/gemini-3.8-flash" || !models[0].IsDefault {
+		t.Fatalf("first Pi model = %#v, want Gemini 3.8 Flash default", models[0])
 	}
 }
 
@@ -188,14 +188,14 @@ func TestProviderModelMetadataIncludesClaudeCodeSonnet5(t *testing.T) {
 func TestMergePiModelEntriesKeepsCuratedModelsFirst(t *testing.T) {
 	curated := piFallbackModels()
 	listed := []dynamicModelEntry{
-		{ModelID: "google/gemini-3.7-flash", Group: "Google"},
+		{ModelID: "google/gemini-3.8-flash", Group: "Google"},
 		{ModelID: "anthropic/claude-sonnet-4-6", Group: "Anthropic"},
 	}
 	merged := mergePiModelEntries(curated, listed)
 	if len(merged) != len(curated)+1 {
 		t.Fatalf("merged len = %d, want %d", len(merged), len(curated)+1)
 	}
-	if merged[0].ModelID != "google/gemini-3.7-flash" || !merged[0].IsDefault {
+	if merged[0].ModelID != "google/gemini-3.8-flash" || !merged[0].IsDefault {
 		t.Fatalf("first merged model = %#v, want curated default first", merged[0])
 	}
 	if merged[len(merged)-1].ModelID != "anthropic/claude-sonnet-4-6" {
