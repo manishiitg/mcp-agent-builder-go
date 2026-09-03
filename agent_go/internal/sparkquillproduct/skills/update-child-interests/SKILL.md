@@ -23,8 +23,8 @@ of guessed.
 2. **Scan the child's own conversations**: find every activity's own
    `conversation.json` (e.g. `find . -maxdepth 4 -name conversation.json`,
    skipping `materials/`, `reports/`, `memory/`, `conversations/`, `archive/` —
-   an archived activity was already checked before it aged out, so there's
-   nothing new to find there) and read the ones you haven't checked since last
+   an activity the parent put away was already checked while it was live, so
+   there's nothing new to find there) and read the ones you haven't checked since last
    time, looking for genuine engagement signals — not what the PARENT said
    (that's preferences.md's job):
    - Clear enthusiasm about a topic (asked follow-up questions, said it was

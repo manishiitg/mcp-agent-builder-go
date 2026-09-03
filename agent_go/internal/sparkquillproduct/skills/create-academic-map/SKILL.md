@@ -14,9 +14,8 @@ learning, AND how the parent can help them learn it better.
    - Note generated work: walk the top-level Subject folders (everything except
      `materials/`, `reports/`, `memory/`, `conversations/`, `inbox/`, `skills/`,
      `archive/`) for activity folders — each has an `activity.json` (which topic
-     study material / tests exist for). `archive/` holds activities untouched for a
-     while, retired out of this map on purpose to keep it a snapshot of what's
-     actually current — skip it here (the Progress Report's cumulative Overall
+     study material / tests exist for). `archive/` holds activities the parent asked to put away, kept out of
+     this map on purpose so it stays a snapshot of what's current — skip it here (the Progress Report's cumulative Overall
      section is where lifetime totals live, and it does still include it).
    - Check for real attempt evidence per topic: read each activity's own
      `attempts/*.json` (the child's saved answers) and skim its `conversation.json`

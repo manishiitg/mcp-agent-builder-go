@@ -18,8 +18,8 @@ section rather than pad it.
      tripped her up, any celebrate moments and why. This is the real signal — a list
      of activity titles and dates is not enough. For "Right now"/"How she's
      doing"/"What to work on next" you only need what's recent — don't bother with
-     anything under `archive/` (activities Pulse has retired for being untouched a
-     while) for these sections.
+     anything under `archive/` (activities the parent asked to put away) for
+     these sections.
    - Each activity's `attempts/*.json` — what she's actually completed, and what the
      attempt shows.
    - The `<Subject>/<Topic>/` activity folders and `materials/` — what exists, so you
@@ -27,7 +27,7 @@ section rather than pad it.
    - For the **Overall** section you need the FULL history, not just the recent few:
      skim across the whole workspace INCLUDING `archive/` — lifetime totals (topics
      attempted, tests completed, star total) must never quietly shrink just because
-     an old activity aged out of the routine views.
+     the parent put an old activity away.
    - Never invent a score, a percentage, or a diagnosis that isn't directly backed by
      something you read.
 

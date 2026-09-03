@@ -51,8 +51,8 @@ Never write status fields into `backup.json`.
 5. **Upload — one command does it all**, including creating the repo the first
    time:
    `hf upload <repo_id> . . --repo-type dataset --private --exclude "archive/*" --token "$SECRET_HF_TOKEN" --commit-message "backup <date>"`
-   **Always exclude `archive/`** — retired/archived activities (see `archive.go`)
-   don't need to ride along on every backup; the parent can back those up
+   **Always exclude `archive/`** — activities the parent put away don't need
+   to ride along on every backup; the parent can back those up
    separately if they ever want to. Never upload secrets — the secrets store and
    the parent PIN hash live outside the workspace already; keep it that way.
 

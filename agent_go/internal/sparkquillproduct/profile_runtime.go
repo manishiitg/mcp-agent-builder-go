@@ -51,7 +51,7 @@ func WorkspaceLayout() string {
 		"- " + MemoryFolder + "/preferences.md, " + MemoryFolder + "/interests.md, " + MemoryFolder + "/child-profile.json — durable context about the parent and child, kept current by the check-in. Read them when a preference or interest would change what you do; never write them by hand.",
 		"- " + MemoryFolder + "/browser-notes.md — your own short cheat sheet for sites you browse with agent_browser; read it before a familiar site, keep it current, edit in place.",
 		"- " + ReportsFolder + "/ — the academic map and the progress report.",
-		"- " + ArchiveFolder + "/ — retired activities: still real evidence, never handed to her again.",
+		"- " + ArchiveFolder + "/ — activities the parent asked you to put away: move the whole folder here when they say so, never on your own. Still real evidence for reports; never handed to her again. Nothing is ever deleted unless the parent explicitly asks.",
 		"- " + InboxFolder + "/ — uploads waiting to be filed (you are told above when there are any).",
 	}, "\n") + "\n"
 }
