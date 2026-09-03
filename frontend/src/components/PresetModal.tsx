@@ -3,50 +3,26 @@ import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { Textarea } from './ui/Textarea';
 import { Card } from './ui/Card';
-import { ChevronDown, Folder, Loader2, Plus, Settings, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import { Folder, Loader2, Plus, Settings, Trash2, X } from 'lucide-react';
 import { FolderSelectionDialog } from './FolderSelectionDialog';
 import { ToolSelectionSection } from './ToolSelectionSection';
-import { WorkflowProviderCredentialField } from './WorkflowProviderCredentialField';
+
 import ConfirmationDialog from './ui/ConfirmationDialog';
 import type { CustomPreset } from '../types/preset';
-import type { PlannerFile, PresetLLMConfig, AgentLLMConfig, AgentLLMFallback, LLMProvider } from '../services/api-types';
+import type { PlannerFile, PresetLLMConfig, AgentLLMConfig, AgentLLMFallback } from '../services/api-types';
 import { useLLMStore } from '../stores/useLLMStore';
 import { useModeStore } from '../stores/useModeStore';
 
 import LLMSelectionDropdown from './LLMSelectionDropdown';
-import LLMRoleSelector from './LLMRoleSelector';
-import WorkflowLLMTierPreview from './WorkflowLLMTierPreview';
+
+
 import type { LLMOption } from '../types/llm';
 import ModalPortal from './ui/ModalPortal';
 import { getWorkflowLLMOptions, getWorkflowLLMTierDefaults, getWorkflowProviderOptions } from '../utils/workflowLLMTierDefaults';
-import { llmOptionMatchesRef, llmOptionsKey } from '../utils/llmConfigDisplay';
+import { llmOptionMatchesRef } from '../utils/llmConfigDisplay';
 import { mergeCdpPorts } from '../utils/cdpSetup';
 import { useChatStore } from '../stores/useChatStore';
 
-type WorkflowLLMRoleKey = 'tier1' | 'tier2' | 'tier3' | 'builder' | 'maintenance' | 'pulse';
-
-type WorkflowLLMRoleRow = {
-  key: WorkflowLLMRoleKey;
-  label: string;
-  description: string;
-  value: AgentLLMConfig | null;
-  defaultValue: AgentLLMConfig | null;
-  onSelect: (llm: LLMOption) => void;
-  onReset: () => void;
-  fallbacks?: AgentLLMFallback[];
-  setFallbacks?: React.Dispatch<React.SetStateAction<AgentLLMFallback[]>>;
-};
-
-function agentLLMUsesProvider(config: AgentLLMConfig | null | undefined, provider: string): boolean {
-  return config?.provider === provider || Boolean(config?.fallbacks?.some(fallback => fallback.provider === provider));
-}
-
-function sameAgentLLM(left: AgentLLMConfig | null | undefined, right: AgentLLMConfig | null | undefined): boolean {
-  if (!left || !right) return left === right;
-  return left.provider === right.provider
-    && left.model_id === right.model_id
-    && llmOptionsKey(left.options) === llmOptionsKey(right.options);
-}
 
 interface PresetModalProps {
   isOpen: boolean;
@@ -102,10 +78,9 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
   const [tier2Fallbacks, setTier2Fallbacks] = useState<AgentLLMFallback[]>([]);
   const [tier3Fallbacks, setTier3Fallbacks] = useState<AgentLLMFallback[]>([]);
   const [showWorkflowLLMAdvanced, setShowWorkflowLLMAdvanced] = useState(false);
-  const [expandedWorkflowLLMRole, setExpandedWorkflowLLMRole] = useState<WorkflowLLMRoleKey | null>(null);
   // Each credential field owns its own entry/saved state; the parent only needs
   // to know whether one still holds unsaved text, so it can block its submit.
-  const [unsavedCredentialProvider, setUnsavedCredentialProvider] = useState<string | null>(null);
+  const [unsavedCredentialProvider] = useState<string | null>(null);
   const [isSavingPreset, setIsSavingPreset] = useState(false);
 
   const { selectedModeCategory, getAgentModeFromCategory } = useModeStore();
@@ -164,15 +139,6 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
     model_id: llm.model,
     ...(hasLLMOptions(llm.options) ? { options: llm.options } : {}),
   }), []);
-  const toAgentLLMFallback = useCallback((llm: LLMOption): AgentLLMFallback => {
-    const config = toAgentLLMConfig(llm);
-    return {
-      ...(config.published_llm_id ? { published_llm_id: config.published_llm_id } : {}),
-      provider: config.provider,
-      model_id: config.model_id,
-      ...(hasLLMOptions(config.options) ? { options: config.options } : {}),
-    };
-  }, [toAgentLLMConfig]);
   const findLLMOptionForConfig = useCallback((config?: AgentLLMConfig | null): LLMOption | null => {
     if (!config?.provider || !config?.model_id) return null;
     if (config.published_llm_id) {
@@ -181,10 +147,6 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
     }
     return workflowLLMOptions.find(llm => llmOptionMatchesRef(llm, config)) || null;
   }, [workflowLLMOptions]);
-  const llmConfigKey = (llm: { provider?: string; model_id?: string; published_llm_id?: string; options?: Record<string, unknown> }) =>
-    llm.published_llm_id ? `id:${llm.published_llm_id}` : `model:${llm.provider}/${llm.model_id}/${llmOptionsKey(llm.options)}`;
-  const llmOptionKey = (llm: LLMOption) =>
-    llm.id ? `id:${llm.id}` : `model:${llm.provider}/${llm.model}/${llmOptionsKey(llm.options)}`;
 
   // Non-workflow presets still use the same explicit role contract.
   const handleLLMSelect = useCallback((llm: LLMOption) => {
@@ -238,77 +200,20 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
   const effectiveBuilderLLM = useMemo<AgentLLMConfig | null>(() => builderLLM || workflowDefaultTierLLMs?.builder || effectiveTier1LLM || defaultAgentLLM, [builderLLM, workflowDefaultTierLLMs, effectiveTier1LLM, defaultAgentLLM]);
   const effectiveMaintenanceLLM = useMemo<AgentLLMConfig | null>(() => maintenanceLLM || workflowDefaultTierLLMs?.maintenance || effectiveTier1LLM || defaultAgentLLM, [maintenanceLLM, workflowDefaultTierLLMs, effectiveTier1LLM, defaultAgentLLM]);
   const effectivePulseLLM = useMemo<AgentLLMConfig | null>(() => pulseLLM || workflowDefaultTierLLMs?.pulse || defaultAgentLLM, [pulseLLM, workflowDefaultTierLLMs, defaultAgentLLM]);
-  const selectedWorkflowLLMOption = useMemo(() => {
-    if (llmConfig && currentLLMOption) return currentLLMOption;
-    const selected = effectiveBuilderLLM || effectiveTier1LLM || defaultAgentLLM;
-    if (!selected) return currentLLMOption;
-    return findLLMOptionForConfig(selected) || currentLLMOption;
-  }, [currentLLMOption, defaultAgentLLM, effectiveBuilderLLM, effectiveTier1LLM, findLLMOptionForConfig, llmConfig]);
 
-  const formatAgentLLMConfig = useCallback((config?: AgentLLMConfig | null) => {
-    if (!config?.provider || !config?.model_id) return 'Not resolved';
-    return `${config.provider}/${config.model_id}`;
-  }, []);
 
-  const workflowCredentialPath = editingPreset ? selectedFolder?.filepath : undefined;
   // Clears any half-typed credential when the modal opens or switches
   // automations, so one workflow's entry can never be submitted against another.
-  const credentialResetKey = `${isOpen ? 'open' : 'closed'}:${editingPreset?.id ?? 'new'}`;
 
   // Whether any resolved role or fallback runs on a given coding-CLI provider.
   // A provider reached only through a fallback still needs its credential, so
   // the fallback lists are part of the check.
-  const usesCodingProvider = useCallback((providerId: string) => {
-    return selectedWorkflowLLMOption?.provider === providerId
-      || [effectiveTier1LLM, effectiveTier2LLM, effectiveTier3LLM, effectiveBuilderLLM, effectiveMaintenanceLLM, effectivePulseLLM]
-        .some(config => agentLLMUsesProvider(config, providerId))
-      || [...tier1Fallbacks, ...tier2Fallbacks, ...tier3Fallbacks].some(fallback => fallback.provider === providerId);
-  }, [effectiveBuilderLLM, effectiveMaintenanceLLM, effectivePulseLLM, effectiveTier1LLM, effectiveTier2LLM, effectiveTier3LLM, selectedWorkflowLLMOption?.provider, tier1Fallbacks, tier2Fallbacks, tier3Fallbacks]);
 
-  const usesClaudeCode = useMemo(() => usesCodingProvider('claude-code'), [usesCodingProvider]);
-  const usesCursorCLI = useMemo(() => usesCodingProvider('cursor-cli'), [usesCodingProvider]);
 
   const hasAdvancedWorkflowLLMConfig = useCallback((presetLLM?: PresetLLMConfig | null) => {
     return presetLLM?.mode === 'explicit';
   }, []);
 
-  const handleSharedWorkflowLLMSelect = useCallback((llm: LLMOption) => {
-    const defaults = getWorkflowLLMTierDefaults(llm, providerManifest);
-    setLlmConfig({ schema_version: 2, mode: 'provider_profile', provider: llm.provider as LLMProvider });
-    setTier1LLM(defaults.tier1);
-    setTier2LLM(defaults.tier2);
-    setTier3LLM(defaults.tier3);
-    setBuilderLLM(defaults.builder);
-    setMaintenanceLLM(defaults.maintenance);
-    setPulseLLM(defaults.pulse);
-    setTier1Fallbacks([]);
-    setTier2Fallbacks([]);
-    setTier3Fallbacks([]);
-    setExpandedWorkflowLLMRole(null);
-  }, [providerManifest]);
-
-  const useManagedWorkflowLLMDefaults = useCallback(() => {
-    const provider = selectedWorkflowLLMOption?.provider || currentLLMOption?.provider;
-    if (provider) {
-      setLlmConfig({ schema_version: 2, mode: 'provider_profile', provider: provider as LLMProvider });
-    }
-    setShowWorkflowLLMAdvanced(false);
-    setExpandedWorkflowLLMRole(null);
-    setBuilderLLM(null);
-    setMaintenanceLLM(null);
-    setPulseLLM(null);
-    setTier1LLM(null);
-    setTier2LLM(null);
-    setTier3LLM(null);
-    setTier1Fallbacks([]);
-    setTier2Fallbacks([]);
-    setTier3Fallbacks([]);
-  }, [currentLLMOption?.provider, selectedWorkflowLLMOption?.provider]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    setExpandedWorkflowLLMRole(null);
-  }, [editingPreset?.id, isOpen]);
 
   useEffect(() => {
     if (editingPreset) {
@@ -431,11 +336,6 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
     setWorkflowFolderEdited(true);
   }, []);
 
-  const handleWorkflowFolderNameChange = useCallback((value: string) => {
-    setWorkflowFolderEdited(true);
-    const folderName = sanitizeWorkflowFolderName(value);
-    setSelectedFolder(makeWorkflowFolder(folderName));
-  }, [makeWorkflowFolder, sanitizeWorkflowFolderName]);
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -598,131 +498,6 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
     }
   }, [editingPreset, onDeleteWorkflow]);
 
-  const executionLLMRows: WorkflowLLMRoleRow[] = [
-    {
-      key: 'tier1', label: 'High reasoning', description: 'First runs and complex execution.',
-      value: effectiveTier1LLM, defaultValue: workflowDefaultTierLLMs?.tier1 || defaultAgentLLM,
-      onSelect: llm => setTier1LLM(toAgentLLMConfig(llm)),
-      onReset: () => { setTier1LLM(null); setTier1Fallbacks([]); },
-      fallbacks: tier1Fallbacks, setFallbacks: setTier1Fallbacks,
-    },
-    {
-      key: 'tier2', label: 'Medium reasoning', description: 'Execution after useful learnings exist.',
-      value: effectiveTier2LLM, defaultValue: workflowDefaultTierLLMs?.tier2 || defaultAgentLLM,
-      onSelect: llm => setTier2LLM(toAgentLLMConfig(llm)),
-      onReset: () => { setTier2LLM(null); setTier2Fallbacks([]); },
-      fallbacks: tier2Fallbacks, setFallbacks: setTier2Fallbacks,
-    },
-    {
-      key: 'tier3', label: 'Low reasoning', description: 'Validation and mature learned tasks.',
-      value: effectiveTier3LLM, defaultValue: workflowDefaultTierLLMs?.tier3 || defaultAgentLLM,
-      onSelect: llm => setTier3LLM(toAgentLLMConfig(llm)),
-      onReset: () => { setTier3LLM(null); setTier3Fallbacks([]); },
-      fallbacks: tier3Fallbacks, setFallbacks: setTier3Fallbacks,
-    },
-  ];
-  const supportLLMRows: WorkflowLLMRoleRow[] = [
-    {
-      key: 'builder', label: 'Builder', description: 'Chat, planning, evaluation design, and coordination.',
-      value: effectiveBuilderLLM, defaultValue: workflowDefaultTierLLMs?.builder || workflowDefaultTierLLMs?.tier1 || defaultAgentLLM,
-      onSelect: llm => setBuilderLLM(toAgentLLMConfig(llm)), onReset: () => setBuilderLLM(null),
-    },
-    {
-      key: 'maintenance', label: 'Maintenance', description: 'Harden, Goal Advisor, and deeper health reviews.',
-      value: effectiveMaintenanceLLM, defaultValue: workflowDefaultTierLLMs?.maintenance || workflowDefaultTierLLMs?.tier1 || defaultAgentLLM,
-      onSelect: llm => setMaintenanceLLM(toAgentLLMConfig(llm)), onReset: () => setMaintenanceLLM(null),
-    },
-    {
-      key: 'pulse', label: 'Pulse', description: 'Scheduled post-run QA and routine coordination.',
-      value: effectivePulseLLM, defaultValue: workflowDefaultTierLLMs?.pulse || defaultAgentLLM,
-      onSelect: llm => setPulseLLM(toAgentLLMConfig(llm)), onReset: () => setPulseLLM(null),
-    },
-  ];
-  const allWorkflowLLMRows = [...executionLLMRows, ...supportLLMRows];
-  const isWorkflowLLMRoleCustomized = (row: WorkflowLLMRoleRow) => !sameAgentLLM(row.value, row.defaultValue) || Boolean(row.fallbacks?.length);
-  const customizedWorkflowLLMRoleCount = allWorkflowLLMRows.filter(isWorkflowLLMRoleCustomized).length;
-
-  const renderWorkflowLLMRoleRow = (row: WorkflowLLMRoleRow) => {
-    const expanded = expandedWorkflowLLMRole === row.key;
-    const customized = isWorkflowLLMRoleCustomized(row);
-    const fallbacks = row.fallbacks ?? [];
-    const setFallbacks = row.setFallbacks;
-    return (
-      <div key={row.key} className="border-t border-gray-200 first:border-t-0 dark:border-gray-700">
-        <button
-          type="button"
-          onClick={() => setExpandedWorkflowLLMRole(expanded ? null : row.key)}
-          className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-gray-500/10"
-          aria-expanded={expanded}
-        >
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-medium text-gray-800 dark:text-gray-100">{row.label}</span>
-              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${customized
-                ? 'bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
-                : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
-              }`}>
-                {customized ? 'Customized' : 'Provider default'}
-              </span>
-            </div>
-            <div className="mt-0.5 truncate text-[11px] text-gray-500 dark:text-gray-400">{row.description}</div>
-          </div>
-          <div className="min-w-0 max-w-[45%] text-right">
-            <div className="truncate font-mono text-[11px] text-gray-700 dark:text-gray-200" title={formatAgentLLMConfig(row.value)}>
-              {formatAgentLLMConfig(row.value)}
-            </div>
-            {fallbacks.length > 0 && <div className="text-[10px] text-gray-400">{fallbacks.length} fallback{fallbacks.length === 1 ? '' : 's'}</div>}
-          </div>
-          <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform ${expanded ? 'rotate-180' : ''}`} />
-        </button>
-        {expanded && (
-          <div className="space-y-3 border-t border-gray-100 bg-white px-3 py-3 dark:border-gray-700 dark:bg-gray-900/40">
-            <LLMRoleSelector
-              availableLLMs={workflowLLMOptions}
-              value={row.value}
-              onLLMSelect={row.onSelect}
-              disabled={false}
-            />
-            {customized && (
-              <button type="button" onClick={row.onReset} className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400">
-                Reset this role to provider default
-              </button>
-            )}
-            {setFallbacks && (
-              <details className="rounded-md border border-gray-200 bg-gray-50 px-2.5 py-2 dark:border-gray-700 dark:bg-gray-800/60">
-                <summary className="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-300">
-                  Fallbacks{fallbacks.length > 0 ? ` (${fallbacks.length})` : ''}
-                </summary>
-                <div className="mt-2 space-y-2">
-                  {fallbacks.map((fallback, index) => (
-                    <span key={`${row.key}-fallback-${index}`} className="mr-1 inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-xs dark:bg-gray-700">
-                      {fallback.provider}/{fallback.model_id.split('/').pop()}
-                      <button type="button" onClick={() => setFallbacks(previous => previous.filter((_, itemIndex) => itemIndex !== index))} className="text-gray-400 hover:text-red-500" aria-label={`Remove ${row.label} fallback`}>
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                  <LLMSelectionDropdown
-                    availableLLMs={workflowLLMOptions.filter(llm => {
-                      const key = llmOptionKey(llm);
-                      return !(row.value && llmConfigKey(row.value) === key) && !fallbacks.some(fallback => llmConfigKey(fallback) === key);
-                    })}
-                    selectedLLM={null}
-                    onLLMSelect={llm => setFallbacks(previous => [...previous, toAgentLLMFallback(llm)])}
-                    onRefresh={loadDefaultsFromBackend}
-                    disabled={false}
-                    inModal={true}
-                    openDirection="down"
-                    placeholder="+ Add fallback"
-                  />
-                </div>
-              </details>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  };
 
   if (!isOpen) return null;
 
@@ -784,222 +559,31 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
         <form id="preset-form" onSubmit={handleSubmit} className="space-y-6">
           {/* Two Column Layout for both modes */}
           {effectiveAgentMode === 'workflow' ? (
-            /* Workflow Mode: Two Column Layout with LLM Config on Left */
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Left Column - Workflow Name and LLM Configuration */}
-              <div className="space-y-4">
-                {/* Workflow Name */}
-                <div>
-                  <label htmlFor="preset-label" className="block text-sm font-medium mb-2">
-                    Automation Name
-                  </label>
-                  <Input
-                    id="preset-label"
-                    value={label}
-                    onChange={(e) => setLabel(e.target.value)}
-                    placeholder="Enter automation name..."
-                    required
-                  />
-                </div>
-
-                {/* LLM Configuration - in place of Query */}
-                <div>
-                  <label className="block text-sm font-medium mb-2 flex items-center gap-2">
-                    <Settings className="w-4 h-4" />
-                    Agent LLM Configuration
-                  </label>
-                  <div className="p-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md space-y-4">
-                    {!showWorkflowLLMAdvanced && (
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-2">
-                          Automation provider
-                        </label>
-                        <LLMSelectionDropdown
-                          availableLLMs={providerProfileOptions}
-                          selectedLLM={selectedWorkflowLLMOption}
-                          onLLMSelect={handleSharedWorkflowLLMSelect}
-                          onRefresh={loadDefaultsFromBackend}
-                          disabled={false}
-                          inModal={true}
-                          openDirection="down"
-                          title="Select automation provider"
-                          placeholder="Select a coding agent"
-                        />
-                        <WorkflowLLMTierPreview selectedLLM={selectedWorkflowLLMOption} providerManifest={providerManifest} />
-                        <div className="text-xs text-gray-500 mt-2">
-                          The coding agent provider manages Builder, Maintenance, Pulse, and execution-tier defaults.
-                          Those defaults update with the app as models change.
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setShowWorkflowLLMAdvanced(true)}
-                          className="mt-3 inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
-                        >
-                          <SlidersHorizontal className="w-3.5 h-3.5" />
-                          Advanced automation LLM setup
-                        </button>
-                      </div>
-                    )}
-
-                    {showWorkflowLLMAdvanced && (
-                      <>
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-xs font-medium text-gray-800 dark:text-gray-100">Customize only what you need</div>
-                            <div className="mt-0.5 text-[11px] leading-snug text-gray-500 dark:text-gray-400">
-                              All roles keep the coding-agent defaults until you change one. Open a row to edit it.
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={useManagedWorkflowLLMDefaults}
-                            className="shrink-0 text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
-                          >
-                            Use managed defaults
-                          </button>
-                        </div>
-                        <div className="space-y-3">
-                          <div>
-                            <div className="mb-1.5 flex items-center justify-between px-1">
-                              <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Execution</span>
-                              <span className="text-[10px] text-gray-400">The workflow chooses the tier automatically</span>
-                            </div>
-                            <div className="overflow-hidden rounded-md border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900/40">
-                              {executionLLMRows.map(renderWorkflowLLMRoleRow)}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Workflow agents</div>
-                            <div className="overflow-hidden rounded-md border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900/40">
-                              {supportLLMRows.map(renderWorkflowLLMRoleRow)}
-                            </div>
-                          </div>
-                          <div className="text-[11px] text-gray-500 dark:text-gray-400">
-                            {customizedWorkflowLLMRoleCount === 0
-                              ? 'No custom roles yet. Everything follows the current provider defaults.'
-                              : `${customizedWorkflowLLMRoleCount} customized role${customizedWorkflowLLMRoleCount === 1 ? '' : 's'}; all other roles use provider defaults.`}
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {usesClaudeCode && (
-                  <WorkflowProviderCredentialField
-                    provider="claude-code"
-                    inputId="claude-code-token"
-                    workflowCredentialPath={workflowCredentialPath}
-                    isFormBusy={isSavingPreset}
-                    resetKey={credentialResetKey}
-                    onDirtyChange={dirty => setUnsavedCredentialProvider(previous => (
-                      dirty ? 'claude-code' : previous === 'claude-code' ? null : previous
-                    ))}
-                    copy={{
-                      heading: 'Claude Code login for this automation',
-                      hint: (
-                        <>
-                          Use a token from <code className="rounded bg-background px-1 py-0.5 font-mono text-foreground">claude setup-token</code>, or leave this empty to use the saved Claude login.
-                        </>
-                      ),
-                      fallbackLabel: 'Using saved login',
-                      inputPlaceholder: 'Paste Claude Code token',
-                      replacePlaceholder: 'Paste a replacement token',
-                      noun: 'token',
-                      savedMessage: 'Workflow Claude Code token saved.',
-                      removedMessage: 'Workflow Claude Code token removed; saved Claude login will be used.',
-                    }}
-                  />
+            /* Workflow Mode: the name is the whole form. The folder is derived
+               from the name (see the effect above), and everything else --
+               LLM, servers, skills, secrets, browser -- is configured in the
+               workflow's own panel after creation. Existing values are kept
+               untouched on save. (LLM section removed 2026-09-03 at the
+               user's request: with a deployment-wide LLM lock it only
+               confused people.) */
+            <div className="mx-auto w-full max-w-lg space-y-4">
+              <div>
+                <label htmlFor="preset-label" className="block text-sm font-medium mb-2">
+                  Automation Name
+                </label>
+                <Input
+                  id="preset-label"
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  placeholder="Enter automation name..."
+                  autoFocus
+                  required
+                />
+                {!editingPreset && (
+                  <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    Saved under <span className="font-mono">{selectedFolder?.filepath || 'Workflow/workflow'}</span>. Models, secrets and connectors are set up inside the workflow.
+                  </p>
                 )}
-
-                {usesCursorCLI && (
-                  <WorkflowProviderCredentialField
-                    provider="cursor-cli"
-                    inputId="cursor-api-key"
-                    workflowCredentialPath={workflowCredentialPath}
-                    isFormBusy={isSavingPreset}
-                    resetKey={credentialResetKey}
-                    onDirtyChange={dirty => setUnsavedCredentialProvider(previous => (
-                      dirty ? 'cursor-cli' : previous === 'cursor-cli' ? null : previous
-                    ))}
-                    copy={{
-                      heading: 'Cursor login for this automation',
-                      hint: (
-                        <>
-                          Paste an API key from <code className="rounded bg-background px-1 py-0.5 font-mono text-foreground">cursor.com</code> settings, or leave this empty to use the saved Cursor login.
-                        </>
-                      ),
-                      fallbackLabel: 'Using saved login',
-                      inputPlaceholder: 'Paste Cursor API key',
-                      replacePlaceholder: 'Paste a replacement API key',
-                      noun: 'API key',
-                      savedMessage: 'Workflow Cursor API key saved.',
-                      removedMessage: 'Workflow Cursor API key removed; saved Cursor login will be used.',
-                    }}
-                  />
-                )}
-              </div>
-
-              {/* Right Column - Folder, Tools, and Options */}
-              <div className="space-y-4">
-                {/* Folder Selection - Required for workflow */}
-                <div>
-                  <label className="block text-sm font-medium mb-2">
-                    Workflow Folder <span className="text-red-500">*</span>
-                  </label>
-                  <div className="space-y-2">
-                    <div className="flex overflow-hidden rounded-md border border-gray-300 bg-white focus-within:ring-2 focus-within:ring-blue-500 dark:border-gray-600 dark:bg-gray-700">
-                      <div className="flex flex-shrink-0 items-center gap-2 border-r border-gray-200 bg-gray-50 px-3 text-sm text-gray-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400">
-                        <Folder className="h-4 w-4" />
-                        Workflow/
-                      </div>
-                      <input
-                        type="text"
-                        value={(selectedFolder?.filepath || 'Workflow/').replace(/^Workflow\//i, '')}
-                        onChange={(e) => handleWorkflowFolderNameChange(e.target.value)}
-                        disabled={!!editingPreset}
-                        className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm text-gray-900 outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:text-gray-100"
-                        aria-label="Workflow folder name"
-                        required
-                      />
-                    </div>
-                    <div className="flex items-center justify-between gap-3 text-xs text-gray-500 dark:text-gray-400">
-                      <span className="min-w-0 truncate">
-                        {editingPreset
-                          ? 'Folder path cannot be changed while editing.'
-                          : `Default folder: ${selectedFolder?.filepath || 'Workflow/workflow'}`}
-                      </span>
-                      {!editingPreset && (
-                        <button
-                          type="button"
-                          data-folder-button
-                          onClick={handleSelectFolders}
-                          className="flex-shrink-0 text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
-                        >
-                          Choose existing
-                        </button>
-                      )}
-                    </div>
-                    {!editingPreset && selectedFolder && workflowFolderEdited && (
-                      <div className="flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setWorkflowFolderEdited(false);
-                            setSelectedFolder(makeWorkflowFolder(sanitizeWorkflowFolderName(label)));
-                          }}
-                          className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-                        >
-                          Reset to automation name
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* MCP servers, skills, secrets, and browser mode moved to the
-                    workflow panel (their values are preserved on save); this
-                    dialog is name, folder, and LLM configuration only. */}
               </div>
             </div>
           ) : (
