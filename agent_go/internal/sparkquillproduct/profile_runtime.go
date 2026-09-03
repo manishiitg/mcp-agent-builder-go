@@ -24,21 +24,12 @@ type Child struct {
 	Language string `json:"language,omitempty"`
 }
 
-// ScheduleEntry is one recurring weekly commitment.
-type ScheduleEntry struct {
-	Day   string `json:"day"`
-	Start string `json:"start"`
-	End   string `json:"end"`
-	Label string `json:"label"`
-}
-
 // FamilyState is family.json.
 type FamilyState struct {
-	Child       *Child          `json:"child,omitempty"`
-	ParentLabel string          `json:"parent_label,omitempty"`
-	PinHash     string          `json:"pin_hash,omitempty"`
-	WatchSites  []string        `json:"watch_sites,omitempty"`
-	Schedule    []ScheduleEntry `json:"schedule,omitempty"`
+	Child       *Child   `json:"child,omitempty"`
+	ParentLabel string   `json:"parent_label,omitempty"`
+	PinHash     string   `json:"pin_hash,omitempty"`
+	WatchSites  []string `json:"watch_sites,omitempty"`
 }
 
 // The family workspace layout. Tools, the inbox note and the prompt all read
@@ -94,7 +85,6 @@ func ParentPromptVariables(s FamilyState) map[string]string {
 		"CHILD_WHO":          who,
 		"CHILD_INFO_NUDGE":   "",
 		"PARENT_LABEL_NUDGE": "",
-		"SCHEDULE_NUDGE":     "",
 		"CONNECTOR_NOTE":     "",
 		"INBOX_NOTE":         "",
 		"WORKSPACE_LAYOUT":   WorkspaceLayout(),
@@ -106,11 +96,6 @@ func ParentPromptVariables(s FamilyState) map[string]string {
 	if strings.TrimSpace(s.ParentLabel) == "" {
 		vars["PARENT_LABEL_NUDGE"] = "IMPORTANT — you don't yet know what to call the parent when you talk ABOUT them to " + name +
 			" (\"your mom\" vs \"your dad\" vs a name). Early on, warmly ask once and save the answer with set_parent_label. Don't block other work on this.\n"
-	}
-	if len(s.Schedule) == 0 {
-		vars["SCHEDULE_NUDGE"] = "You don't yet know " + name + "'s recurring weekly schedule (school hours, tuition, sports practice). If the conversation is about planning, study time, or when she's free, ask about her class schedule and save what you learn with set_child_schedule. Not urgent otherwise.\n"
-	} else {
-		vars["SCHEDULE_NUDGE"] = "You already have some of " + name + "'s recurring weekly schedule saved. If the parent mentions a NEW recurring commitment in conversation, capture it with set_child_schedule right then — an exact duplicate is silently skipped. Don't proactively ask for more.\n"
 	}
 	if sites := cleanSites(s.WatchSites); len(sites) > 0 {
 		vars["CONNECTOR_NOTE"] = "The parent has asked you to keep an eye on these website(s): " + strings.Join(sites, ", ") +
@@ -174,7 +159,6 @@ func cleanSites(sites []string) []string {
 func RegisterAgentProfileRuntime(registry *agentprofiles.Registry, workspaceAPIURL string) error {
 	factories := map[string]agentprofiles.ToolFactory{
 		"sparkquill.set-child-profile":        setChildProfileFactory(workspaceAPIURL),
-		"sparkquill.set-child-schedule":       setChildScheduleFactory(workspaceAPIURL),
 		"sparkquill.set-parent-label":         setParentLabelFactory(workspaceAPIURL),
 		"sparkquill.create-learning-activity": createLearningActivityFactory(workspaceAPIURL),
 		"sparkquill.open-file":                openFileFactory(workspaceAPIURL, false),

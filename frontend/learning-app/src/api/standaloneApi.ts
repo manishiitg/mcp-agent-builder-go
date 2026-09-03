@@ -3,8 +3,8 @@
 import { FAMILY_API } from '../apiBase'
 import type { ApiEngine, Activity, VoiceStatus } from '../stores/types'
 import type {
-  FamilyApi, FastMode, FileContent, ModelInfo, PulseConfig, PulseConfigPatch, ScheduleEntry, SetupState,
-  StoredConversation, TreeResponse, TurnResult, TurnStreamEvent, UploadResult, WeekResponse,
+  FamilyApi, FastMode, FileContent, ModelInfo, PulseConfig, PulseConfigPatch, SetupState,
+  StoredConversation, TreeResponse, TurnResult, TurnStreamEvent, UploadResult,
   WhatsAppStatus, WhatsAppVoiceTranscription,
 } from './familyApi'
 
@@ -120,8 +120,6 @@ export const standaloneApi: FamilyApi = {
     return d?.data ?? null
   },
   activities: () => getJSON<Activity[]>('/api/activities'),
-  week: (offset) => getJSON<WeekResponse>(`/api/week?offset=${offset}`),
-  saveSchedule: async (entries: ScheduleEntry[]) => { await fetch(`${FAMILY_API}/api/child-schedule`, { method: 'POST', headers: json, body: JSON.stringify({ entries }) }) },
 
   models: async () => {
     const d = await getJSON<ModelInfo>('/api/models')

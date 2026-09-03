@@ -57,11 +57,6 @@ export type FileContent = { path?: string; is_text?: boolean; content?: string; 
 export type TreeResponse = TreeNode[] | { nodes?: TreeNode[]; total_size?: number }
 export type UploadResult = { name?: string; path?: string; error?: string }
 
-export type ScheduleEntry = { day: string; start: string; end: string; label: string }
-export type WeekActivityEntry = { date: string; activity_dir: string; title: string; duration_seconds?: number }
-export type WeekDeadline = { title: string; subject?: string; due_date?: string; kind?: string }
-export type WeekDay = { date: string; weekday: string; schedule?: ScheduleEntry[]; activities?: WeekActivityEntry[]; deadlines?: WeekDeadline[] }
-export type WeekResponse = { week_start: string; week_end: string; days: WeekDay[]; upcoming_deadlines?: WeekDeadline[] }
 
 export type ModelInfo = { provider: string; selected: string; default: string; models: { id: string; label: string }[] }
 export type FastMode = { enabled: boolean; child_enabled: boolean }
@@ -121,8 +116,6 @@ export interface FamilyApi {
   saveState(key: string, data: unknown): Promise<void>
   loadState(key: string): Promise<unknown>
   activities(): Promise<Activity[]>
-  week(offset: number): Promise<WeekResponse>
-  saveSchedule(entries: ScheduleEntry[]): Promise<void>
 
   /** The composer's quick menus for both modes (the product's `commands:`). */
   commands(): Promise<{ parent: QuickCommand[]; child: QuickCommand[] }>

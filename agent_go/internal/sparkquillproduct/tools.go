@@ -104,8 +104,6 @@ func (w familyWorkspace) saveFamily(ctx context.Context, state FamilyState) erro
 		profile, _ := encodeJSON(state.Child)
 		_ = w.write(ctx, "memory/child-profile.json", profile)
 	}
-	schedule, _ := encodeJSON(map[string]interface{}{"entries": state.Schedule})
-	_ = w.write(ctx, "memory/child-schedule.json", schedule)
 	return nil
 }
 
@@ -170,65 +168,6 @@ func setChildProfileFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 				}
 				emitInteraction(runtime, "family_updated", map[string]interface{}{"child": state.Child})
 				return jsonResult(map[string]interface{}{"status": "ok", "name": state.Child.Name, "grade": state.Child.Grade, "board": state.Child.Board})
-			},
-		}, nil
-	}
-}
-
-func setChildScheduleFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
-	return func(runtime agentprofiles.ToolRuntimeContext, _ json.RawMessage) (agentprofiles.ToolSpec, error) {
-		ws := newFamilyWorkspace(workspaceAPIURL, runtime, runtime.WorkspacePath)
-		return agentprofiles.ToolSpec{
-			Name: "set_child_schedule", Category: toolCategory,
-			Description: "Save one or more recurring weekly commitments to the child's schedule — school hours, tuition, sports practice — once the parent tells you, or you notice one from context. ADDS to the existing schedule (never replaces it); an entry that exactly matches one already saved is silently skipped, so it is safe to call even if you are not sure it is new.",
-			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-				"entries": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
-					"day":   map[string]interface{}{"type": "string", "description": "e.g. Monday"},
-					"start": map[string]interface{}{"type": "string", "description": "24h local time, e.g. 08:00"},
-					"end":   map[string]interface{}{"type": "string", "description": "24h local time, e.g. 14:30"},
-					"label": map[string]interface{}{"type": "string", "description": "e.g. School, Football practice"},
-				}, "required": []string{"day", "start", "end", "label"}}},
-			}, "required": []string{"entries"}},
-			Execute: func(ctx context.Context, args map[string]interface{}) (string, error) {
-				raw, _ := args["entries"].([]interface{})
-				var added []ScheduleEntry
-				for _, item := range raw {
-					m, ok := item.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					e := ScheduleEntry{Day: stringArg(m, "day"), Start: stringArg(m, "start"), End: stringArg(m, "end"), Label: stringArg(m, "label")}
-					if e.Day == "" || e.Start == "" || e.End == "" || e.Label == "" {
-						continue
-					}
-					added = append(added, e)
-				}
-				if len(added) == 0 {
-					return "", fmt.Errorf("no valid entries provided — each needs day, start, end, and label")
-				}
-				state, err := ws.loadFamily(ctx)
-				if err != nil {
-					return "", err
-				}
-				newCount := 0
-				for _, e := range added {
-					dup := false
-					for _, ex := range state.Schedule {
-						if ex == e {
-							dup = true
-							break
-						}
-					}
-					if !dup {
-						state.Schedule = append(state.Schedule, e)
-						newCount++
-					}
-				}
-				if err := ws.saveFamily(ctx, state); err != nil {
-					return "", err
-				}
-				emitInteraction(runtime, "family_updated", map[string]interface{}{"schedule": state.Schedule})
-				return jsonResult(map[string]interface{}{"status": "ok", "added": newCount, "total_entries": len(state.Schedule)})
 			},
 		}, nil
 	}

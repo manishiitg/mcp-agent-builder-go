@@ -300,8 +300,6 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     saveState: (key, data) => ws.writeJSON(ws.stateFile(key), { key, data }),
     loadState: async (key) => (await ws.readJSON<{ data?: unknown }>(ws.stateFile(key)))?.data ?? null,
     activities: () => ws.activities(),
-    week: (offset) => ws.week(offset),
-    saveSchedule: (entries) => ws.saveSchedule(entries),
 
     models: async () => null as ModelInfo | null,
     saveModel: async () => {},

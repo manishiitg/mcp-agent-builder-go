@@ -108,28 +108,17 @@ func TestFamilyStateToolsWriteFamilyJSONAndMirrors(t *testing.T) {
 	if _, err := label.Execute(ctx, map[string]interface{}{"label": "mom"}); err != nil {
 		t.Fatal(err)
 	}
-	schedule := build(t, setChildScheduleFactory(url), rt)
-	entry := map[string]interface{}{"day": "Monday", "start": "08:00", "end": "14:00", "label": "School"}
-	out, err := schedule.Execute(ctx, map[string]interface{}{"entries": []interface{}{entry, entry}})
-	if err != nil || !strings.Contains(out, `"added":1`) {
-		t.Fatalf("schedule = %s err = %v", out, err)
-	}
-	out, _ = schedule.Execute(ctx, map[string]interface{}{"entries": []interface{}{entry}})
-	if !strings.Contains(out, `"added":0`) || !strings.Contains(out, `"total_entries":1`) {
-		t.Fatalf("duplicate entry must be skipped: %s", out)
-	}
-
 	var state FamilyState
 	if err := json.Unmarshal([]byte(fake.files["_users/u1/Chats/SparkQuill/family.json"]), &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.Child == nil || state.Child.Name != "Maya" || state.Child.Grade != "6" || state.Child.Board != "CBSE" || state.ParentLabel != "mom" || len(state.Schedule) != 1 {
+	if state.Child == nil || state.Child.Name != "Maya" || state.Child.Grade != "6" || state.Child.Board != "CBSE" || state.ParentLabel != "mom" {
 		t.Fatalf("family.json = %+v", state)
 	}
-	if !strings.Contains(fake.files["_users/u1/Chats/SparkQuill/memory/child-profile.json"], `"Maya"`) || !strings.Contains(fake.files["_users/u1/Chats/SparkQuill/memory/child-schedule.json"], `"School"`) {
+	if !strings.Contains(fake.files["_users/u1/Chats/SparkQuill/memory/child-profile.json"], `"Maya"`) {
 		t.Fatalf("memory mirrors missing: %v", fake.files)
 	}
-	if k := sink.kinds(); len(k) != 5 || k[0] != "family_updated" {
+	if k := sink.kinds(); len(k) != 3 || k[0] != "family_updated" {
 		t.Fatalf("events = %v", k)
 	}
 	if vars := ParentPromptVariables(state); vars["CHILD_WHO"] != "Maya, Grade 6 (CBSE)" || vars["CHILD_INFO_NUDGE"] != "" {

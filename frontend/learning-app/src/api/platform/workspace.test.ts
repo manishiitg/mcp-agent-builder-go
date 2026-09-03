@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FamilyWorkspace, computeWeek, documentsURL, familyRelative, workspacePath } from './workspace'
+import { FamilyWorkspace, documentsURL, familyRelative, workspacePath } from './workspace'
 
 function fakeRequester(files: Record<string, string>, listing: unknown[] = []) {
   const calls: { method: string; path: string; body?: unknown }[] = []
@@ -79,30 +79,5 @@ describe('FamilyWorkspace', () => {
     await ws.writeJSON(ws.stateFile('scene:room/1'), { key: 'k', data: { score: 3 } })
     expect(Object.keys(fake.files)).toContain('Chats/SparkQuill/state/scene_room_1.json')
     expect((await ws.readJSON<{ data: unknown }>('state/scene_room_1.json'))?.data).toEqual({ score: 3 })
-  })
-
-  it('saves the schedule into family.json and the memory mirror', async () => {
-    const fake = fakeRequester({ 'Chats/SparkQuill/family.json': JSON.stringify({ child: { name: 'Maya' } }) })
-    const ws = new FamilyWorkspace(fake.request)
-    await ws.saveSchedule([{ day: 'Monday', start: '08:00', end: '14:00', label: 'School' }])
-    expect(JSON.parse(fake.files['Chats/SparkQuill/family.json'])).toEqual({ child: { name: 'Maya' }, schedule: [{ day: 'Monday', start: '08:00', end: '14:00', label: 'School' }] })
-    expect(JSON.parse(fake.files['Chats/SparkQuill/memory/child-schedule.json']).entries).toHaveLength(1)
-  })
-})
-
-describe('computeWeek', () => {
-  it('builds a Monday-based week with schedule, log and deadlines placed on their days', () => {
-    const now = new Date(2026, 8, 3, 12) // Thursday 3 Sep 2026
-    const week = computeWeek(0, now,
-      [{ day: 'Monday', start: '08:00', end: '14:00', label: 'School' }],
-      [{ date: '2026-09-02', activity_dir: 'activities/a', title: 'A' }],
-      [{ title: 'Test', due_date: '2026-09-05', kind: 'test' }, { title: 'Later', due_date: '2026-10-01' }])
-    expect(week.week_start).toBe('2026-08-31')
-    expect(week.week_end).toBe('2026-09-06')
-    expect(week.days[0].schedule).toHaveLength(1)
-    expect(week.days[2].activities).toHaveLength(1)
-    expect(week.days[5].deadlines?.[0].title).toBe('Test')
-    expect(week.upcoming_deadlines).toHaveLength(1)
-    expect(computeWeek(1, now, [], [], []).week_start).toBe('2026-09-07')
   })
 })
