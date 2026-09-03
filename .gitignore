@@ -49,6 +49,8 @@ bin/*
 # class of problem the secret* negations above already had to solve.
 !frontend/src/components/WorkflowProviderCredentialField.tsx
 !frontend/src/utils/maskCredentialPreview.ts
+# Same again for *password*: a change-your-own-password form, no password in it.
+!frontend/src/components/topbar/ChangePasswordDialog.tsx
 
 # Binary files
 *.exe
