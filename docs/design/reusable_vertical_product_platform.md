@@ -291,6 +291,10 @@ Decisions taken the same day, which fix the shape of steps 3-5:
   their own. The child profile is therefore a second profile of the same
   product under the parent's user folder, gated by the existing PIN handoff;
   the sharing model does not need to cover it.
+- **The PIN handoff stays SparkQuill's own.** The platform gets no generic
+  "switch profile behind a PIN" concept; the PIN hash lives in the family's
+  `family.json`, the verify step in the product's runtime, and the mode
+  switch in the SparkQuill surface.
 - **The RTS box is redeployed only at the end.** It keeps its pre-migration
   build until the cutover; that deploy carries the shared WhatsApp connector,
   the whatsmeow upgrade and product schedules together.
