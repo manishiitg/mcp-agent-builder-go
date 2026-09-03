@@ -42,17 +42,26 @@ Do not guess a fal.ai model slug from memory or pattern-match one that
 A run whose model ID cannot be confirmed is a blocker to report, not a guess
 to make.
 
+**Video Studio reference-pack exception:** its system policy already selects
+`fal-ai/flux-2-max` for a new cinematic character/background master and
+`fal-ai/flux-2-max/edit` for an approved derivative. Verify those IDs and the
+live schema, then use them; do not ask the user to reselect a still-image
+model or silently substitute a cheaper route. A different still-image model
+requires the user's explicit approval.
+
 ## Authentication
 
 The user stores the fal.ai key as a workflow secret named `FAL_KEY` (via
 `set_workflow_secret`). The secret-injection mechanism prefixes every secret
-name with `SECRET_` in the shell environment, so the variable actually
-present is `$SECRET_FAL_KEY`, not `$FAL_KEY`. fal.ai's client reads the
+name with `SECRET_` in the shell environment, so the variable normally
+present is `$SECRET_FAL_KEY`, not `$FAL_KEY`. Some older Video Studio runtime
+paths supply the equivalent `$SECRET_FAL_AI_KEY`; accept it as a compatibility
+alias. fal.ai's client reads the
 unprefixed `FAL_KEY` by default, so bridge the two explicitly rather than
 assuming the client will find it on its own:
 
 ```bash
-export FAL_KEY="$SECRET_FAL_KEY"
+export FAL_KEY="${SECRET_FAL_KEY:-$SECRET_FAL_AI_KEY}"
 node generate.mjs
 ```
 
@@ -62,13 +71,13 @@ or pass it directly to the client instead of relying on ambient env:
 import { fal } from "@fal-ai/client";
 
 fal.config({
-  credentials: process.env.SECRET_FAL_KEY ?? process.env.FAL_KEY,
+  credentials: process.env.SECRET_FAL_KEY ?? process.env.SECRET_FAL_AI_KEY ?? process.env.FAL_KEY ?? process.env.FAL_AI_KEY,
 });
 ```
 
-Accept either name: `SECRET_FAL_KEY` is what the injection mechanism
-provides, but a key set directly in the environment as `FAL_KEY` is equally
-valid and should not be treated as missing. If neither is set, stop and
+Accept all four names: `SECRET_FAL_KEY` is what the current injection mechanism
+provides, `SECRET_FAL_AI_KEY` is an older equivalent, and a key set directly
+as `FAL_KEY` or `FAL_AI_KEY` is equally valid. If none is set, stop and
 report the blocker -- do not proceed without generation credentials, and
 never print or log the key value itself.
 
@@ -193,7 +202,9 @@ inline content, but an uploaded URL is the form that works everywhere.
 - Verify what was actually generated before treating a job as done: check
   duration, dimensions, and (for video) that the file is not silently
   truncated or corrupt, with `ffprobe` -- a completed job status is not proof
-  the asset is usable.
+  the asset is usable. This is the per-clip receipt, not the final full QA
+  suite: do not create a contact sheet or run the final quality report for a
+  normal preview.
 
 ## Cost awareness
 

@@ -112,7 +112,7 @@ var mcpBridgeVirtualToolCategories = map[string]bool{}
 
 // productEnabled reports whether a product's profiles and skills should be
 // loaded by this server. An unset AGENT_PRODUCTS preserves the shared-server
-// behaviour of loading every product. Dedicated deployments can set a
+// behavior of loading every product. Dedicated deployments can set a
 // comma-separated allowlist (for example, "video-studio") so unrelated
 // product startup failures cannot take down their agent API.
 func productEnabled(product string) bool {
@@ -333,6 +333,7 @@ type StreamingAPI struct {
 	config           ServerConfig
 	cliSecurityStore *clisecurity.Store
 	agentProfiles    *agentprofiles.Registry
+	productSchedules *ProductScheduleService
 
 	// internalQueryHandler is a narrow test seam for server-owned follow-up
 	// turns. Production dispatch falls back to handleQuery.
@@ -589,8 +590,6 @@ type StreamingAPI struct {
 	// Bot conversation manager for Slack/Discord/Telegram bot sessions
 	botManager *services.BotConversationManager
 
-	// Web simulator connector for testing bot flow without Slack
-	webSimulator    *services.WebSimulatorConnector
 	whatsappManager *services.WhatsAppServiceManager
 
 	// API token for bearer auth on per-tool endpoints (code execution mode)
@@ -1500,6 +1499,19 @@ func runServer(cmd *cobra.Command, args []string) {
 	if err := ValidateConfiguredAuthSecret(); err != nil {
 		log.Fatalf("[AUTH] FATAL: %v. Generate a random secret and add it to your deployment configuration.", err)
 	}
+	// Import AUTH_USERS into config/users.json and apply ADMIN_USERS once the
+	// workspace API (which stores that file) answers. Retried briefly because
+	// the workspace server usually starts in parallel with this one.
+	go func() {
+		for attempt := 0; attempt < 60; attempt++ {
+			if _, _, err := readFileFromWorkspace(context.Background(), userDirectoryFilePath()); err == nil {
+				bootstrapUserDirectory(context.Background())
+				return
+			}
+			time.Sleep(2 * time.Second)
+		}
+		log.Printf("[USERS] bootstrap skipped: workspace API not reachable")
+	}()
 
 	// Clean up stale agent-browser runtime state (dead PID files, sockets)
 	// to prevent "CDP response channel closed" errors on first browser use.
@@ -1902,6 +1914,17 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/auth/me", api.handleGetCurrentUser).Methods("GET")
 	apiRouter.HandleFunc("/auth/mode", api.handleGetAuthMode).Methods("GET")
 	apiRouter.HandleFunc("/auth/users", requireWorkflowOwnerAccess(api.handleListAuthUsers)).Methods("GET", "OPTIONS")
+	// Account management (docs/design/user_accounts_and_workflow_sharing.md):
+	// the user directory in config/users.json; admins only.
+	apiRouter.HandleFunc("/auth/password", api.handleChangeOwnPassword).Methods("POST", "OPTIONS")
+	// Per-workflow ownership and sharing (workflow_access.go).
+	apiRouter.HandleFunc("/workflow/access", api.handleGetWorkflowAccess).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/workflow/access", api.handleSetWorkflowAccess).Methods("PUT", "POST")
+	apiRouter.HandleFunc("/users/directory", api.handleUserDirectory).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/admin/users", requireAdmin(api.handleAdminListUsers)).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/admin/users", requireAdmin(api.handleAdminCreateUser)).Methods("POST")
+	apiRouter.HandleFunc("/admin/users/{id}", requireAdmin(api.handleAdminUpdateUser)).Methods("PUT", "OPTIONS")
+	apiRouter.HandleFunc("/admin/users/{id}", requireAdmin(api.handleAdminDeleteUser)).Methods("DELETE")
 	apiRouter.HandleFunc("/workflow/user-permissions", requireWorkflowOwnerAccess(api.handleListWorkflowUserPermissions)).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/user-permissions", requireWorkflowOwnerAccess(api.handleUpsertWorkflowUserPermission)).Methods("PUT", "POST", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/user-permissions", requireWorkflowOwnerAccess(api.handleDeleteWorkflowUserPermission)).Methods("DELETE")
@@ -1916,6 +1939,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/agent-profiles/{id}/query", api.handleAgentProfileChatQuery).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/agent-profiles/{id}/conversation", api.handleResolveAgentProfileConversation).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/agent-profiles/{id}/conversation/new", api.handleRotateAgentProfileConversation).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/agent-profiles/{id}/presentations/{presentationID}", api.handleAgentProfilePresentationDelete).Methods("DELETE", "OPTIONS")
 	apiRouter.HandleFunc("/health", api.handleHealth).Methods("GET")
 	apiRouter.HandleFunc("/capabilities", api.handleCapabilities).Methods("GET")
 	CLISecurityRoutes(apiRouter, api.cliSecurityStore)
@@ -2121,12 +2145,20 @@ func runServer(cmd *cobra.Command, args []string) {
 	// registered — mirroring how Browser/Secrets stay one shared implementation
 	// that products opt into via product.yaml rather than owning a copy.
 	apiRouter.HandleFunc("/voice/stream", api.handleVoiceStream).Methods("GET")
-	// Warm the engine at server startup, not on the first mic click. Loading
-	// blocks for ~1-2s locally with the model already cached, but on a first
-	// run it also downloads ~630MB — caught live: a user clicking the mic
-	// before this warmed sat looking at a silent button for 60+ seconds with
-	// no feedback, indistinguishable from broken.
-	go func() { _, _ = getVoiceEngine() }()
+	// First-run setup for the mic: the model is a one-time ~690MB download
+	// that the composer asks about explicitly instead of the first click
+	// silently waiting on it. status is what the progress bar polls.
+	apiRouter.HandleFunc("/voice/status", api.handleVoiceStatus).Methods("GET", "OPTIONS")
+	apiRouter.HandleFunc("/voice/warm", api.handleVoiceWarm).Methods("POST", "OPTIONS")
+	// Load the engine at server startup, not on the first mic click: loading
+	// takes ~1-2s, and a user clicking before it finished used to sit looking
+	// at a silent button. Only when the model is already on disk, though — a
+	// machine that never used voice is not made to download 690MB just
+	// because the server started; the composer offers that as an explicit
+	// first-time step (/voice/warm above).
+	if voiceManager.Status().Installed {
+		voiceManager.Warm()
+	}
 
 	// LLM Guidance API routes
 	apiRouter.HandleFunc("/sessions/{session_id}/llm-guidance", api.handleSetLLMGuidance).Methods("POST", "OPTIONS")
@@ -2264,12 +2296,6 @@ func runServer(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// Register web simulator connector (always available, no config needed)
-	webSimulator := services.NewWebSimulatorConnector()
-	botManager.RegisterConnector(webSimulator)
-	api.webSimulator = webSimulator
-	log.Printf("✅ Web bot simulator enabled")
-
 	// Register WhatsApp connector unless explicitly disabled. Each workspace
 	// user gets a separate WhatsApp Web client and session DB under the
 	// session directory, so users can pair their own bot accounts independently.
@@ -2305,7 +2331,6 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Register bot routes
 	BotRoutes(router, api)
-	BotSimulatorRoutes(router, api)
 	if api.whatsappManager != nil {
 		WhatsAppRoutes(router, api.whatsappManager)
 	}
@@ -2335,6 +2360,11 @@ func runServer(cmd *cobra.Command, args []string) {
 	}
 
 	// Register scheduler routes
+	productScheduleSvc := NewProductScheduleService(api, profileRegistry)
+	api.productSchedules = productScheduleSvc
+	if os.Getenv("SCHEDULER_ENABLED") != "false" {
+		go productScheduleSvc.Start(schedulerCtx)
+	}
 	SchedulerRoutes(router, schedulerSvc)
 
 	// Workflow API routes
@@ -3205,9 +3235,16 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 	// Dominion never point SelectedFolder at "Workflow/" themselves.
 	if strings.HasPrefix(req.SelectedFolder, "Workflow/") {
 		if manifest, exists, manifestErr := ReadWorkflowManifest(r.Context(), req.SelectedFolder); manifestErr == nil && exists {
-			if !userAllowedWorkflowID(GetUserFromContext(r.Context()), manifest.ID) {
+			claims := GetUserFromContext(r.Context())
+			level := workflowAccessForManifest(claims, manifest)
+			if !userAllowedWorkflowID(claims, manifest.ID) || level == WorkflowAccessNone {
 				http.Error(w, "You don't have access to this workflow", http.StatusForbidden)
 				return
+			}
+			// Shared read-only: the same PLAT-262 session a read-only
+			// account gets, but decided per workflow (workflow_access.go).
+			if level == WorkflowAccessRead {
+				currentUserIsReadOnly = true
 			}
 		}
 	}
@@ -4978,13 +5015,20 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					// already has.
 					profileRoot := agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder)
 					profileWrite := strings.TrimSuffix(profileRoot, "/") + "/"
-					profileReadOnly := append([]string{"skills/", "subagents/", "Downloads/"}, workflowReadOnlyFolders...)
+					sandbox := resolvedProfile.Definition.Runtime.Sandbox
+					profileReadOnly := agentProfileReadOnlyFolders(sandbox, workflowReadOnlyFolders)
 					workspaceExecutors = wrapExecutorsWithPlanFolderGuard(workspaceExecutors, profileRoot, profileReadOnly, perUserChatHistory)
 					workspace.SetSessionWorkingDir(sessionID, profileRoot)
 					workspace.SetSessionFolderGuard(sessionID,
 						append([]string{profileWrite, perUserChatHistory}, profileReadOnly...),
 						[]string{profileWrite, perUserChatHistory},
 					)
+					if sandbox.IsStrict() {
+						// The profile asked for the deny-by-default shell: only the
+						// paths above, system binaries and scratch exist for the
+						// command, with network cut when the policy says so.
+						workspace.SetSessionSandbox(sessionID, true, sandbox.NetworkDisabled())
+					}
 					if hostDownloads := common.GrantSessionCDPHostDownloadsReadWrite(sessionID, hostDownloadsBrowserMode(req)); hostDownloads != "" {
 						log.Printf("[AGENT PROFILE FOLDER GUARD] Added read-write CDP host Downloads: %s", hostDownloads)
 					}
@@ -5144,7 +5188,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					if !isWorkflowPhase {
 						if resolvedProfile != nil && !isGlobalScopedProfile(resolvedProfile) {
 							profileRoot := agentProfileRuntimeWorkspace(currentUserID, req.SelectedFolder)
-							profileReadOnly := append([]string{"skills/", "subagents/", "Downloads/"}, workflowReadOnlyFolders...)
+							profileReadOnly := agentProfileReadOnlyFolders(resolvedProfile.Definition.Runtime.Sandbox, workflowReadOnlyFolders)
 							return wrapExecutorsWithPlanFolderGuard(execs, profileRoot, profileReadOnly)
 						}
 						additionalFolders := append([]string{}, resolvedGrants.WriteFolders...)
@@ -5633,7 +5677,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				// eval, output, ask, debugger, runner — anything that is not
 				// "run" collapses to "workshop". An old client or persisted
 				// session cannot introduce a value this misses, which is what
-				// enumeration risked: an unrecognised mode reaches
+				// enumeration risked: an unrecognized mode reaches
 				// MaterializeReferenceSkill and yields NO reference surface
 				// at all.
 				if req.ExecutionOptions != nil && req.ExecutionOptions.WorkshopMode != "" {

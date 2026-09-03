@@ -1,75 +1,89 @@
 import React, { useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
-  BrainCircuit,
-  BookOpen,
-  FileText,
-  DollarSign,
-  Files,
-  FolderOpen,
-  LayoutDashboard,
-  KeyRound,
-  Monitor,
-  Route,
   Cloud,
   Globe,
   LoaderCircle,
   Play,
-  Database,
-  Table2,
   ShieldCheck,
+  Share2,
   Activity,
   BellRing,
   CalendarClock,
-  ClipboardCheck,
-  RefreshCw,
-  Puzzle,
-  Server,
-  X,
+  Gauge,
 } from 'lucide-react'
 import ModalPortal from '../../ui/ModalPortal'
 import { useWorkflowStore, type RunFolder } from '../../../stores/useWorkflowStore'
-import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestStore'
+import { WORKSPACE_VIEWS, type WorkspaceViewId } from '../workspaceViews'
 import { useChatStore } from '../../../stores/useChatStore'
 import { useAuthStore } from '../../../stores/useAuthStore'
-import type {
-  PulseFinalCommandState,
-  PulseModuleState,
-  PulseRunMode,
-  PulseReviewFocus,
-  PulseShadowSignalObservation,
-  ScheduledJob,
-  VariablesManifest,
-} from '../../../services/api-types'
+import type { ScheduledJob, VariablesManifest } from '../../../services/api-types'
 import type { PlanningResponse } from '../../../utils/stepConfigMatching'
 import type { WorkflowExecutionStatus } from '../hooks/useWorkflowExecution'
 import type { ExecutionOptions } from '../../../services/api-types'
 import { agentApi } from '../../../services/api'
 import { schedulerApi } from '../../../api/scheduler'
-import WorkflowBackupPopup from '../WorkflowBackupPopup'
 import { getBackupDotClass } from '../backupStatus'
-import WorkflowPublishPopup from '../WorkflowPublishPopup'
 import { getPublishDotClass } from '../publishStatus'
-import WorkflowNotificationPopup from '../WorkflowNotificationPopup'
-import { PulseWorkspace } from '../PulseWorkspace'
 import { getNotificationDotClass } from '../notificationStatus'
 import { loadWorkflowNotificationInfo, type WorkflowNotificationState } from '../../../services/workflow-notifications'
-import WorkflowAccessPopup from '../WorkflowAccessPopup'
+import UsersAdminPanel from '../../admin/UsersAdminPanel'
+import WorkflowSharePopup from '../WorkflowSharePopup'
+import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestStore'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip'
-import { WORKFLOW_SOUL_REFRESH_EVENT } from '../SoulViewer'
 import { hasWorkflowWriteAccess, hasWorkflowOwnerAccess } from '../../../utils/workflowPermissions'
-import { useAppStore } from '../../../stores/useAppStore'
-import {
-  PULSE_FIXED_COMMANDS,
-  PULSE_MODULE_COMMANDS,
-} from './pulseSections'
 import { sendWorkflowMessageToChat } from '../../../utils/reportHumanInputChat'
 
 // Execution phase ID - special phase that should be displayed separately
 const EXECUTION_PHASE_ID = 'execution'
 const WORKFLOW_SCHEDULE_TOOLBAR_LIMIT = 10_000
 
-type WorkspaceView = 'flow' | 'report' | 'files' | 'costs' | 'execution-logs' | 'learnings' | 'knowledgebase' | 'database' | 'evaluation' | 'schedules' | 'skills' | 'mcp' | 'secrets' | 'folders' | 'browser' | 'llm'
+// Product-tour / test hooks on specific toolbar buttons. Kept here rather
+// than in the view registry because they describe this toolbar's buttons,
+// not the views themselves.
+// The toolbar is three labeled groups (Views, Pulse, Setup). Each label is a
+// toggle: collapsed, the group shows only its label and current state; open,
+// its icons unfold next to it. Which groups are open is a per-browser
+// preference shared by all workflows.
+const TOOLBAR_OPEN_GROUPS_KEY = 'workflow-toolbar-open-groups'
+type ToolbarGroupId = 'views' | 'pulse' | 'setup'
+const readOpenGroups = (): Record<ToolbarGroupId, boolean> => {
+  const fallback: Record<ToolbarGroupId, boolean> = { views: true, pulse: false, setup: false }
+  try {
+    const raw = localStorage.getItem(TOOLBAR_OPEN_GROUPS_KEY)
+    const stored = raw ? { ...fallback, ...JSON.parse(raw) as Partial<Record<ToolbarGroupId, boolean>> } : fallback
+    return Object.values(stored).some(Boolean) ? stored : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function ToolbarGroup({ label, open, onToggle, title, children, ...rest }: {
+  label: string
+  open: boolean
+  onToggle: () => void
+  title: string
+  children: React.ReactNode
+} & Record<`data-${string}`, string | undefined>) {
+  return (
+    <div {...rest} className="inline-flex h-full items-center gap-0.5 px-1 first:pl-0.5 last:pr-0.5">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        title={title}
+        className={`inline-flex h-6 items-center rounded px-2 text-[11px] font-medium outline-none transition-colors hover:bg-background/70 ${open ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+      >
+        <span>{label}</span>
+      </button>
+      {open && children}
+    </div>
+  )
+}
+
+const CAPABILITY_BUTTON_ATTRS: Partial<Record<WorkspaceViewId, { 'data-tour': string; 'data-testid': string }>> = {
+  bots: { 'data-tour': 'bot-connector', 'data-testid': 'tour-bot-connector' },
+}
 
 type WorkflowScheduleStats = {
   total: number
@@ -251,18 +265,6 @@ function CompactToolbarMenuItem({ icon, label, detail, active = false, trailingA
   )
 }
 
-function formatPulseTimestamp(value?: string): string {
-  if (!value) return ''
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
 interface WorkflowToolbarProps {
   status: WorkflowExecutionStatus
   hasPlan: boolean
@@ -283,10 +285,9 @@ interface WorkflowToolbarProps {
   // workflow chat tabs + new-chat share one row with the status/tools instead of
   // sitting in a separate bar below.
   chatTabsSlot?: React.ReactNode
-  // Used by cross-workflow decision links. This is intentionally one-shot:
-  // opening a decision must surface Pulse, but normal re-renders must not keep
-  // reopening a modal the user deliberately closed.
-  openPulseOnMount?: boolean
+  // Whether Pulse review is enabled for this workflow -- owned by the host
+  // (shared with the pane's PulseView), just read here for the badge.
+  monitorOn: boolean
   className?: string
 }
 
@@ -298,11 +299,11 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   variablesManifest,
   isLoadingWorkspaceState = false,
   chatTabsSlot,
-  openPulseOnMount = false,
+  monitorOn,
   className = ''
 }) => {
   const canWriteWorkflow = useAuthStore(state => hasWorkflowWriteAccess(state.user, state.isMultiUserMode))
-  const canManageAccess = useAuthStore(state => state.isMultiUserMode && hasWorkflowOwnerAccess(state.user, state.isMultiUserMode))
+  const canManageAccess = useAuthStore(state => state.isMultiUserMode && (state.user?.is_admin === true || hasWorkflowOwnerAccess(state.user, state.isMultiUserMode)))
 
   // Workspace store for opening folders
 
@@ -325,87 +326,50 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   })))
 
   const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
-  const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
+  const lastCanvasView = useWorkflowStore(state => state.lastCanvasView)
   const showWorkspacePane = useWorkflowStore(state => state.showWorkspacePane)
-  const setWorkflowWorkspaceView = useWorkflowStore(state => state.setWorkflowWorkspaceView)
-  const setCanvasViewMode = useWorkflowStore(state => state.setCanvasViewMode)
-  const setShowWorkspacePane = useWorkflowStore(state => state.setShowWorkspacePane)
+  const openWorkspaceView = useWorkflowStore(state => state.openWorkspaceView)
 
-  const openWorkspaceView = useCallback((view: WorkspaceView) => {
-    if (view === 'flow' || view === 'report') setCanvasViewMode(view)
-    setWorkflowWorkspaceView(view)
-    setShowWorkspacePane(true)
-    useAppStore.getState().setWorkspaceMinimized(view !== 'files')
-  }, [setCanvasViewMode, setShowWorkspacePane, setWorkflowWorkspaceView])
+  // No explicit view means the pane is on whichever canvas view was last open.
+  const activeWorkspaceView: WorkspaceViewId = workflowWorkspaceView ?? lastCanvasView
 
-  const isInspectorView = workflowWorkspaceView === 'costs'
-    || workflowWorkspaceView === 'execution-logs'
-    || workflowWorkspaceView === 'learnings'
-    || workflowWorkspaceView === 'knowledgebase'
-    || workflowWorkspaceView === 'database'
-    || workflowWorkspaceView === 'evaluation'
-    || workflowWorkspaceView === 'schedules'
-    || workflowWorkspaceView === 'skills'
-    || workflowWorkspaceView === 'mcp'
-    || workflowWorkspaceView === 'secrets'
-    || workflowWorkspaceView === 'folders'
-    || workflowWorkspaceView === 'browser'
-    || workflowWorkspaceView === 'llm'
-  const activeWorkspaceView: WorkspaceView = workflowWorkspaceView === 'files' || isInspectorView
-    ? workflowWorkspaceView
-    : canvasViewMode === 'flow' ? 'flow' : 'report'
+  // Button clusters come from the view registry, in registry order. The
+  // Plan button is the one view that hides itself until a plan exists.
+  const workspaceViewDefinitions = useMemo(
+    () => WORKSPACE_VIEWS.filter(view => view.toolbarGroup === 'views' && (view.id !== 'flow' || hasPlan)),
+    [hasPlan],
+  )
+  const capabilityViewDefinitions = useMemo(
+    () => WORKSPACE_VIEWS.filter(view => view.toolbarGroup === 'capabilities'),
+    [],
+  )
 
-  const workspaceViewDefinitions = useMemo(() => ([
-    ['report', LayoutDashboard, 'Report', true],
-    ['flow', Route, 'Plan', hasPlan],
-    ['costs', DollarSign, 'Costs', true],
-    ['execution-logs', FileText, 'Execution logs', true],
-    ['learnings', BookOpen, 'Learnings', true],
-    ['knowledgebase', Database, 'Knowledgebase', true],
-    ['database', Table2, 'Database', true],
-    ['files', Files, 'Files', true],
-  ] as const).filter(([, , , visible]) => visible), [hasPlan])
-
-  const pulseConfig = useWorkflowManifestStore(useShallow((s) => {
-    const wf = s.workflows.find((w) => w.workspace_path === workspacePath)
-    return {
-      enabled: wf?.manifest.pulse?.enabled,
-      legacyEnabled: wf?.manifest.schedules?.some((schedule) => schedule.pulse_review_only && schedule.enabled),
-    }
-  }))
-  const monitorOn = !!(pulseConfig.enabled || pulseConfig.legacyEnabled)
-  const updateWorkflowManifest = useWorkflowManifestStore((s) => s.updateWorkflow)
-  const [monitorSaving, setMonitorSaving] = useState(false)
-  const toggleMonitor = useCallback(async () => {
-    if (!workspacePath || monitorSaving) return
-    setMonitorSaving(true)
-    try {
-      await updateWorkflowManifest(workspacePath, { pulse_enabled: !monitorOn })
-    } catch (err) {
-      console.error('[WorkflowToolbar] Failed to toggle Pulse review schedule:', err)
-    } finally {
-      setMonitorSaving(false)
-    }
-  }, [workspacePath, monitorOn, monitorSaving, updateWorkflowManifest])
-  const [showMonitorHelp, setShowMonitorHelp] = useState(false)
-  const [pulseModuleStates, setPulseModuleStates] = useState<PulseModuleState[]>([])
-  const [pulseFinalCommandStates, setPulseFinalCommandStates] = useState<PulseFinalCommandState[]>([])
-  const [pulseGateMode, setPulseGateMode] = useState<PulseRunMode | null>(null)
-  const [pulseReviewFocuses, setPulseReviewFocuses] = useState<PulseReviewFocus[]>([])
-  const [pulseReviewFocusSelections, setPulseReviewFocusSelections] = useState<PulseReviewFocus[]>([])
-  const [pulseLoopClosureObservation, setPulseLoopClosureObservation] = useState<PulseShadowSignalObservation | null>(null)
-  const [pulseStatusLoading, setPulseStatusLoading] = useState(false)
-  const [pulseStatusError, setPulseStatusError] = useState<string | null>(null)
-  // Backup popup state
-  const [showBackupPopup, setShowBackupPopup] = useState(false)
+  // Backup/publish/notify status dots -- lightweight polls independent of
+  // whether the pane is showing that view.
   const [backupState, setBackupState] = useState<string>('loading')
-  const [showPublishPopup, setShowPublishPopup] = useState(false)
   const [publishState, setPublishState] = useState<string>('not_configured')
-  const [showNotifications, setShowNotifications] = useState(false)
   const [notificationState, setNotificationState] = useState<WorkflowNotificationState | 'loading'>('loading')
   const [showAccessPopup, setShowAccessPopup] = useState(false)
+  const [showSharePopup, setShowSharePopup] = useState(false)
+  // Share is for this workflow's owners (or an admin), multi-user mode only.
+  const isMultiUser = useAuthStore(state => state.isMultiUserMode)
+  const isAdminUser = useAuthStore(state => state.user?.is_admin === true)
+  const myWorkflowAccess = useWorkflowManifestStore(state =>
+    workspacePath ? state.workflows.find(w => w.workspace_path === normalizeWorkspacePath(workspacePath))?.my_access : undefined,
+  )
+  const canShareWorkflow = isMultiUser && !!workspacePath && (isAdminUser || myWorkflowAccess === 'owner' || myWorkflowAccess === 'write')
   const [workflowScheduleStats, setWorkflowScheduleStats] = useState<WorkflowScheduleStats>(EMPTY_WORKFLOW_SCHEDULE_STATS)
   const [manualPulseStarting, setManualPulseStarting] = useState(false)
+  const [openGroups, setOpenGroups] = useState<Record<ToolbarGroupId, boolean>>(() => readOpenGroups())
+  const toggleGroup = useCallback((group: ToolbarGroupId) => {
+    setOpenGroups(current => {
+      const next = { ...current, [group]: !current[group] }
+      // Closing the last open group is a no-op.
+      if (!Object.values(next).some(Boolean)) return current
+      try { localStorage.setItem(TOOLBAR_OPEN_GROUPS_KEY, JSON.stringify(next)) } catch { /* preference only */ }
+      return next
+    })
+  }, [])
 
   const runPulseNow = useCallback(async () => {
     if (!workspacePath || manualPulseStarting) return
@@ -431,85 +395,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     }
   }, [manualPulseStarting, workspacePath])
 
-  const refreshPulseModuleStates = useCallback(async (showLoading = true) => {
-    if (!workspacePath) {
-      setPulseModuleStates([])
-      setPulseFinalCommandStates([])
-      setPulseGateMode(null)
-      setPulseReviewFocuses([])
-      setPulseReviewFocusSelections([])
-      setPulseLoopClosureObservation(null)
-      setPulseStatusError(null)
-      return
-    }
-    if (showLoading) setPulseStatusLoading(true)
-    setPulseStatusError(null)
-    try {
-      const resp = await agentApi.getPulseModuleState(workspacePath)
-      if (!resp.success) {
-        throw new Error(resp.error || 'Failed to load Pulse status')
-      }
-      setPulseModuleStates(resp.modules || [])
-      setPulseFinalCommandStates(resp.commands || [])
-      setPulseGateMode(resp.gate_mode || null)
-      setPulseReviewFocuses(resp.review_focus_history || [])
-      setPulseReviewFocusSelections(resp.review_focus_selections || [])
-      setPulseLoopClosureObservation(
-        (resp.shadow_signal_observations || []).find(observation => observation.detector === 'loop_closure') || null
-      )
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load Pulse status'
-      setPulseStatusError(message)
-    } finally {
-      if (showLoading) setPulseStatusLoading(false)
-    }
-  }, [workspacePath])
-
-  const openedInitialPulseRef = useRef(false)
-  useEffect(() => {
-    if (!openPulseOnMount || openedInitialPulseRef.current) return
-    openedInitialPulseRef.current = true
-    setShowMonitorHelp(true)
-    void refreshPulseModuleStates()
-  }, [openPulseOnMount, refreshPulseModuleStates])
-
-  useEffect(() => {
-    if (!showMonitorHelp) return
-    void refreshPulseModuleStates()
-    const timer = window.setInterval(() => { void refreshPulseModuleStates(false) }, 5_000)
-    return () => window.clearInterval(timer)
-  }, [showMonitorHelp, refreshPulseModuleStates])
-
-  const pulseModuleStateByModule = useMemo(() => {
-    return new Map(pulseModuleStates.map(state => [state.module, state]))
-  }, [pulseModuleStates])
-
-  const pulseFinalCommandStateByCommand = useMemo(() => {
-    return new Map(pulseFinalCommandStates.map(state => [state.command, state]))
-  }, [pulseFinalCommandStates])
-
-  const pulseOverview = useMemo(() => {
-    const timestamps = [
-      ...pulseModuleStates.map(state => state.updated_at || state.last_ran_at || state.last_checked_at),
-      ...pulseFinalCommandStates.map(state => state.updated_at || state.finished_at || state.started_at),
-      pulseLoopClosureObservation?.observed_at,
-    ].filter((value): value is string => !!value)
-    const latestTimestamp = timestamps.reduce((latest, value) => {
-      const time = new Date(value).getTime()
-      return Number.isNaN(time) || time <= latest ? latest : time
-    }, 0)
-    const recordedModuleStates = PULSE_MODULE_COMMANDS
-      .map(command => pulseModuleStateByModule.get(command.id))
-      .filter((state): state is PulseModuleState => !!state)
-    const recordedFinalStates = PULSE_FIXED_COMMANDS
-      .map(command => pulseFinalCommandStateByCommand.get(command.id))
-      .filter((state): state is PulseFinalCommandState => !!state)
-    return {
-      recorded: recordedModuleStates.length + recordedFinalStates.length,
-      total: PULSE_MODULE_COMMANDS.length + PULSE_FIXED_COMMANDS.length,
-      latest: latestTimestamp > 0 ? formatPulseTimestamp(new Date(latestTimestamp).toISOString()) : '',
-    }
-  }, [pulseFinalCommandStateByCommand, pulseFinalCommandStates, pulseLoopClosureObservation, pulseModuleStateByModule, pulseModuleStates])
 
   const updateWorkflowScheduleStats = useCallback((jobs: ScheduledJob[]) => {
     const normalizedWorkspacePath = normalizeWorkspacePath(workspacePath)
@@ -602,27 +487,21 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
     void refreshNotificationState()
   }, [refreshNotificationState])
 
-  const closeAllPopups = useCallback(() => {
-    setShowBackupPopup(false)
-    setShowPublishPopup(false)
-    setShowNotifications(false)
-    setShowMonitorHelp(false)
-  }, [])
-  
-  // Close popups only when switching between two concrete workflows.
-  // Preset refreshes can briefly unset workspacePath; treating that as a switch
-  // closes every toolbar popup even though the user is still on the same workflow.
-  const prevWorkspacePathRef = useRef<string | null>(workspacePath ?? null)
+  // Backup/publish/notify each load richer status than this toolbar's own
+  // lightweight poll while their pane view is open; catch the dot up once the
+  // user navigates away, rather than leaving it stale until workspacePath
+  // next changes.
+  const prevWorkspaceViewRef = useRef(workflowWorkspaceView)
   useEffect(() => {
-    if (!workspacePath) {
-      return
+    const prev = prevWorkspaceViewRef.current
+    if (prev !== workflowWorkspaceView) {
+      if (prev === 'backup') void refreshBackupState()
+      if (prev === 'publish') void refreshPublishState()
+      if (prev === 'notify') void refreshNotificationState()
     }
-    if (prevWorkspacePathRef.current && prevWorkspacePathRef.current !== workspacePath) {
-      closeAllPopups()
-    }
-    prevWorkspacePathRef.current = workspacePath
-  }, [workspacePath, closeAllPopups])
-  
+    prevWorkspaceViewRef.current = workflowWorkspaceView
+  }, [workflowWorkspaceView, refreshBackupState, refreshPublishState, refreshNotificationState])
+
   // Main workflow execution phase for the canvas toolbar
   const targetExecutionPhaseId = EXECUTION_PHASE_ID
   
@@ -795,10 +674,18 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       {/* Right side - View controls */}
       <div data-tour="workflow-tools" data-testid="tour-workflow-tools" className="ml-auto flex shrink-0 items-center gap-1">
         <TooltipProvider delayDuration={150}>
+          {/* One continuous pill: Views | Pulse | Setup, separated by dividers. */}
+          {(workspacePath || canWriteWorkflow) && (
+          <div className="inline-flex h-8 items-center divide-x divide-border rounded-lg border border-border bg-muted/60 py-0.5 shadow-sm">
           {workspacePath && (
-            <>
-              <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
-                {workspaceViewDefinitions.map(([view, Icon, label]) => {
+            <ToolbarGroup
+              label="Views"
+              open={openGroups.views}
+              onToggle={() => toggleGroup('views')}
+              title={openGroups.views ? 'Hide views' : 'Show views: report, plan, costs, logs, learnings, knowledgebase, database, files'}
+            >
+              <div className="inline-flex items-center gap-0.5">
+                {workspaceViewDefinitions.map(({ id: view, icon: Icon, label }) => {
                   const active = view === activeWorkspaceView
                   const viewButton = (
                     <button
@@ -830,38 +717,40 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   )
                 })}
               </div>
-
-            </>
+            </ToolbarGroup>
           )}
 
           {/* Pulse is the operational hub for monitoring, schedules, backup,
               publishing, and notifications. */}
           {workspacePath && (
-            <div className="inline-flex h-8 items-center rounded-lg border border-border bg-background/90 shadow-sm backdrop-blur-sm">
+            <ToolbarGroup
+              label="Pulse"
+              open={openGroups.pulse}
+              onToggle={() => toggleGroup('pulse')}
+              title={openGroups.pulse ? 'Hide Pulse tools' : 'Show Pulse tools: status, evaluation, schedules, run now, backup, publish, notify'}
+            >
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
                     type="button"
-                    onClick={() => setShowMonitorHelp(true)}
-                    className="inline-flex h-full items-center gap-1.5 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted"
+                    onClick={() => openWorkspaceView('pulse')}
+                    className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
+                    aria-label="Pulse status"
                   >
                     <Activity className={`h-3.5 w-3.5 ${monitorOn ? 'text-primary' : ''}`} />
-                    <span className={monitorOn ? 'text-foreground' : ''}>Pulse</span>
-                    <span className={`text-[10px] font-semibold tracking-wide ${monitorOn ? 'text-primary' : 'text-muted-foreground/60'}`}>{monitorOn ? 'ON' : 'OFF'}</span>
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom"><p>Pulse status and module cadence</p></TooltipContent>
               </Tooltip>
-              <span className="h-4 w-px bg-border" aria-hidden="true" />
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
                     type="button"
                     onClick={() => openWorkspaceView('evaluation')}
-                    className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
                     aria-label="Evaluation"
                   >
-                    <ClipboardCheck className="h-3.5 w-3.5" />
+                    <Gauge className="h-3.5 w-3.5" />
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom"><p>Evaluation results</p></TooltipContent>
@@ -871,7 +760,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   <button
                     type="button"
                     onClick={() => openWorkspaceView('schedules')}
-                    className="relative flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    className="relative flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
                     aria-label="Schedules"
                   >
                     <CalendarClock className="h-3.5 w-3.5" />
@@ -886,7 +775,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                     type="button"
                     onClick={runPulseNow}
                     disabled={!canWriteWorkflow || manualPulseStarting}
-                    className="flex h-full w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                    className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                     aria-label="Run Pulse now"
                   >
                     {manualPulseStarting
@@ -896,10 +785,97 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 </TooltipTrigger>
                 <TooltipContent side="bottom"><p>Run Pulse on the latest retained run</p></TooltipContent>
               </Tooltip>
-            </div>
+              <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => openWorkspaceView('backup')}
+                    className="relative flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
+                    aria-label="Backup"
+                  >
+                    <Cloud className="h-3.5 w-3.5" />
+                    <span className={`absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full border border-background ${getBackupDotClass(backupState)}`} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom"><p>Backup</p></TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => openWorkspaceView('publish')}
+                    className="relative flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
+                    aria-label="Publish"
+                  >
+                    <Globe className="h-3.5 w-3.5" />
+                    <span className={`absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full border border-background ${getPublishDotClass(publishState)}`} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom"><p>Publish</p></TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    data-testid="workflow-notification-settings-button"
+                    onClick={() => openWorkspaceView('notify')}
+                    className="relative flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
+                    aria-label="Notify"
+                  >
+                    <BellRing className="h-3.5 w-3.5" />
+                    <span className={`absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full border border-background ${getNotificationDotClass(notificationState)}`} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom"><p>Notify</p></TooltipContent>
+              </Tooltip>
+            </ToolbarGroup>
           )}
 
-        {/* Workflow Access (multi-user mode only, owners only) */}
+        {/* Workflow capabilities — write-only (read users don't see this) */}
+        {canWriteWorkflow && (
+          <ToolbarGroup
+            label="Setup"
+            open={openGroups.setup}
+            onToggle={() => toggleGroup('setup')}
+            title={openGroups.setup ? 'Hide setup' : 'Show setup: skills, secrets, MCP servers, browser, LLM, bots, folders'}
+          >
+          <div className="inline-flex items-center gap-0.5">
+            {capabilityViewDefinitions.map(({ id, icon: Icon, label }) => {
+              const active = workflowWorkspaceView === id
+              return (
+                <Tooltip key={id}>
+                  <TooltipTrigger asChild>
+                    <button onClick={() => openWorkspaceView(id)} {...CAPABILITY_BUTTON_ATTRS[id]} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${active ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label={label} aria-pressed={active}>
+                      <Icon className="w-3.5 h-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom"><p>{label}</p></TooltipContent>
+                </Tooltip>
+              )
+            })}
+          </div>
+          </ToolbarGroup>
+        )}
+          </div>
+          )}
+
+        {/* Share this workflow (owners and admins, multi-user mode only) */}
+        {canShareWorkflow && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => setShowSharePopup(true)}
+                className="p-1.5 rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+                aria-label="Share workflow"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom"><p>Share this workflow</p></TooltipContent>
+          </Tooltip>
+        )}
+        {/* Users & access (multi-user mode only, admins only) */}
         {canManageAccess && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -910,213 +886,25 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                 <ShieldCheck className="w-3.5 h-3.5" />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom"><p>Automation Access</p></TooltipContent>
+            <TooltipContent side="bottom"><p>Users &amp; access</p></TooltipContent>
           </Tooltip>
-        )}
-
-        {/* Workflow capabilities — write-only (read users don't see this) */}
-        {canWriteWorkflow && (
-          <div className="inline-flex h-8 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5 shadow-sm">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={() => openWorkspaceView('skills')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'skills' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow skills" aria-pressed={workflowWorkspaceView === 'skills'}>
-                  <Puzzle className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom"><p>Workflow skills</p></TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={() => openWorkspaceView('secrets')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'secrets' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow secrets" aria-pressed={workflowWorkspaceView === 'secrets'}>
-                  <KeyRound className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom"><p>Workflow secrets</p></TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={() => openWorkspaceView('mcp')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'mcp' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow MCP servers" aria-pressed={workflowWorkspaceView === 'mcp'}>
-                  <Server className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom"><p>Workflow MCP servers</p></TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={() => openWorkspaceView('browser')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'browser' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Browser automation" aria-pressed={workflowWorkspaceView === 'browser'}>
-                  <Monitor className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom"><p>Browser automation</p></TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={() => openWorkspaceView('llm')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'llm' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Workflow LLM configuration" aria-pressed={workflowWorkspaceView === 'llm'}>
-                  <BrainCircuit className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom"><p>Workflow LLM configuration</p></TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button onClick={() => openWorkspaceView('folders')} className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${workflowWorkspaceView === 'folders' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`} aria-label="Attached folders" aria-pressed={workflowWorkspaceView === 'folders'}>
-                  <FolderOpen className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom"><p>Attached folders</p></TooltipContent>
-            </Tooltip>
-          </div>
         )}
 
         </TooltipProvider>
       </div>
     </div>
-    {/* Database-native Pulse workspace */}
-    {showMonitorHelp && (
-      <ModalPortal>
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => { setShowMonitorHelp(false) }}>
-          <div className="flex h-[calc(100vh-1rem)] w-[calc(100vw-1rem)] max-w-7xl flex-col overflow-hidden rounded-lg border bg-background shadow-xl sm:h-[calc(100vh-2rem)] sm:w-[calc(100vw-2rem)]" onClick={(e) => e.stopPropagation()}>
-            <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3.5 sm:px-5">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-primary/25 bg-primary/10 text-primary">
-                  <Activity className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-sm font-semibold text-foreground">Pulse</h2>
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${monitorOn ? 'border-primary/25 bg-primary/10 text-primary' : 'border-border bg-muted text-muted-foreground'}`}>
-                      {monitorOn ? 'On' : 'Off'}
-                    </span>
-                  </div>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
-                    <span>{pulseOverview.recorded}/{pulseOverview.total} statuses recorded</span>
-                    {pulseOverview.latest && <span>Updated {pulseOverview.latest}</span>}
-                  </div>
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                {monitorOn && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      window.dispatchEvent(new CustomEvent(WORKFLOW_SOUL_REFRESH_EVENT))
-                      void refreshPulseModuleStates()
-                    }}
-                    disabled={pulseStatusLoading}
-                    className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-60"
-                    aria-label="Refresh Pulse status"
-                    title="Refresh Pulse status"
-                  >
-                    <RefreshCw className={`h-3.5 w-3.5 ${pulseStatusLoading ? 'animate-spin' : ''}`} />
-                  </button>
-                )}
-                <button onClick={() => { setShowMonitorHelp(false) }} className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label="Close">
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <div className="p-3 sm:p-4">
-                {workspacePath && (
-                  <PulseWorkspace
-                    workspacePath={workspacePath}
-                    moduleStates={pulseModuleStates}
-                    finalCommandStates={pulseFinalCommandStates}
-                    reviewFocuses={pulseReviewFocuses}
-                    reviewFocusSelections={pulseReviewFocusSelections}
-                    statusError={pulseStatusError}
-                  />
-                )}
-              </div>
-            </div>
-
-            {/* Pulse control and related workflow operations */}
-            <div className="flex shrink-0 flex-col gap-3 border-t bg-background px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-              <div className="flex min-w-0 items-center gap-3">
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={monitorOn}
-                  onClick={() => { void toggleMonitor() }}
-                  disabled={monitorSaving}
-                  className={`relative inline-flex h-5 w-9 flex-none items-center rounded-full p-0 transition-colors disabled:opacity-50 ${monitorOn ? 'bg-primary' : 'bg-muted-foreground/30'}`}
-                  aria-label="Toggle Pulse"
-                >
-                  <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${monitorOn ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
-                </button>
-                <div className="min-w-0">
-                  <div className="text-xs font-medium text-foreground">{monitorOn ? 'Reviews scheduled runs' : 'Pulse is off'}</div>
-                  <div className="truncate text-[11px] text-muted-foreground">{monitorOn ? 'Pulse Gate runs after each normal scheduled run.' : 'Turn on to review completed scheduled runs.'}</div>
-                </div>
-              </div>
-              <div className="inline-flex h-8 items-center overflow-hidden rounded-lg border border-border bg-muted/30">
-                <button
-                  type="button"
-                  onClick={() => { setShowMonitorHelp(false); setShowBackupPopup(true) }}
-                  className="relative inline-flex h-full items-center gap-1.5 px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  <Cloud className="h-3.5 w-3.5" />
-                  Backup
-                  <span className={`h-1.5 w-1.5 rounded-full ${getBackupDotClass(backupState)}`} />
-                </button>
-                <span className="h-4 w-px bg-border" aria-hidden="true" />
-                <button
-                  type="button"
-                  onClick={() => { setShowMonitorHelp(false); setShowPublishPopup(true) }}
-                  className="relative inline-flex h-full items-center gap-1.5 px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  <Globe className="h-3.5 w-3.5" />
-                  Publish
-                  <span className={`h-1.5 w-1.5 rounded-full ${getPublishDotClass(publishState)}`} />
-                </button>
-                <span className="h-4 w-px bg-border" aria-hidden="true" />
-                <button
-                  type="button"
-                  data-testid="workflow-notification-settings-button"
-                  onClick={() => { setShowMonitorHelp(false); setShowNotifications(true) }}
-                  className="relative inline-flex h-full items-center gap-1.5 px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  <BellRing className="h-3.5 w-3.5" />
-                  Notify
-                  <span className={`h-1.5 w-1.5 rounded-full ${getNotificationDotClass(notificationState)}`} />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </ModalPortal>
-    )}
-
-    {/* Backup Popup (dedicated remote backup status + strategy) */}
-    <WorkflowBackupPopup
-      isOpen={showBackupPopup}
-      onClose={() => { setShowBackupPopup(false); refreshBackupState() }}
-      workspacePath={workspacePath || null}
-      onStateLoaded={setBackupState}
-    />
-
-    {/* Publish Popup (share HTML to a public URL) */}
-    <WorkflowPublishPopup
-      isOpen={showPublishPopup}
-      onClose={() => { setShowPublishPopup(false); refreshPublishState() }}
-      workspacePath={workspacePath || null}
-      onStateLoaded={setPublishState}
-    />
-
-    {/* Agentic notification status + builder-driven setup */}
-    <WorkflowNotificationPopup
-      isOpen={showNotifications}
-      onClose={() => { setShowNotifications(false); void refreshNotificationState() }}
-      workspacePath={workspacePath || null}
-      onStateLoaded={setNotificationState}
-    />
-
-    {/* Workflow Access Popup (multi-user owners only) */}
-    <WorkflowAccessPopup
+    {/* Users & access (admins only) */}
+    <UsersAdminPanel
       isOpen={showAccessPopup}
       onClose={() => setShowAccessPopup(false)}
     />
+    {workspacePath && (
+      <WorkflowSharePopup
+        isOpen={showSharePopup}
+        onClose={() => setShowSharePopup(false)}
+        workspacePath={normalizeWorkspacePath(workspacePath) ?? workspacePath}
+      />
+    )}
     </>
   )
 }

@@ -272,10 +272,6 @@ const shouldRetainEvent = (event: PollingEvent): boolean => {
     'batch_execution_end',
     'batch_execution_canceled',
     'todo_task_route_selected',
-    'todo_task_item_created',
-    'todo_task_item_updated',
-    'todo_task_item_completed',
-    'todo_task_status_update',
     'todo_task_step_completed',
     'learn_code_script_execution',
     // Delegation structural events - must survive for sub-agent cards

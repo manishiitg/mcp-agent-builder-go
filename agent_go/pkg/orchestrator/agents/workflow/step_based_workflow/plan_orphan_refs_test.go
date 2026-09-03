@@ -50,14 +50,14 @@ func TestResolvePlanOrphanStepRefs_ResolvesSharedRouteRef(t *testing.T) {
 		t.Fatalf("resolvePlanOrphanStepRefs: %v", err)
 	}
 
-	todoTask, ok := plan.Steps[0].(*TodoTaskPlanStep)
+	orchestratorStep, ok := plan.Steps[0].(*OrchestratorPlanStep)
 	if !ok {
 		t.Fatalf("expected todo_task step, got %T", plan.Steps[0])
 	}
-	if len(todoTask.PredefinedRoutes) != 1 {
-		t.Fatalf("expected 1 predefined route, got %d", len(todoTask.PredefinedRoutes))
+	if len(orchestratorStep.PredefinedRoutes) != 1 {
+		t.Fatalf("expected 1 predefined route, got %d", len(orchestratorStep.PredefinedRoutes))
 	}
-	route := todoTask.PredefinedRoutes[0]
+	route := orchestratorStep.PredefinedRoutes[0]
 	if route.SubAgentStep == nil {
 		t.Fatal("expected orphan_step_ref to resolve into sub_agent_step")
 	}

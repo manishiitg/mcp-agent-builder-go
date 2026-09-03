@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import {
   Loader2,
   AlertCircle,
@@ -15,6 +16,7 @@ import ConnectionIcon from './ConnectionIcon'
 import { brandSlugFor } from './brandSlug'
 import { descriptionFor } from './catalog'
 import { useMCPStore } from '../../stores'
+import { READ_ONLY_TITLE, useCanWriteWorkflow } from '../../hooks/useCanWriteWorkflow'
 import { useToolSelectionStore } from '../../stores/useToolSelectionStore'
 import MCPConfigPopup from '../MCPConfigPopup'
 
@@ -68,11 +70,23 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
     refreshTools,
     serverLogs,
     fetchServerLogs,
-  } = useMCPStore()
+  } = useMCPStore(useShallow(state => ({
+    toolList: state.toolList,
+    isLoadingTools: state.isLoadingTools,
+    toolsError: state.toolsError,
+    getServerGroups: state.getServerGroups,
+    refreshTools: state.refreshTools,
+    serverLogs: state.serverLogs,
+    fetchServerLogs: state.fetchServerLogs,
+  })))
 
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set())
   const [loadingLogs, setLoadingLogs] = useState<Set<string>>(new Set())
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
+  // Connect/disconnect and the JSON-config import write shared MCP config
+  // immediately; add-to-workflow changes this workflow's selection. All
+  // disable for read-only users. Browsing, tool lists, and logs stay open.
+  const readOnly = !useCanWriteWorkflow()
   const loadServerTools = useToolSelectionStore(state => state.loadServerTools)
   const getServerTools = useToolSelectionStore(state => state.getServerTools)
   const toggleToolsDisclosure = (serverName: string) => {
@@ -90,10 +104,9 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>(compact ? 'available' : 'all')
   // Local to this instance -- deliberately independent of the store's global
-  // showConfigEditor/showMCPDetails (which the top-menu modal in
-  // MCPServersSection.tsx owns and whose onClose reopens that modal). Reusing
-  // that global flag here would either double-render the popup or incorrectly
-  // pop the top-menu modal open when this is embedded in a workflow panel.
+  // showConfigEditor/showMCPDetails flags, which were owned by the (since
+  // removed) top-menu MCP modal. Reusing a global flag here would let two
+  // embedded browsers fight over one popup.
   const [showJsonConfig, setShowJsonConfig] = useState(false)
 
   const toggleLogs = async (serverName: string) => {
@@ -198,8 +211,9 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
           <button
             type="button"
             onClick={() => setShowJsonConfig(true)}
-            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-2 text-xs font-medium text-gray-500 transition-colors hover:border-gray-400 hover:text-gray-900 dark:border-gray-700 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:text-gray-100"
-            title="Add a custom MCP server by pasting its JSON config"
+            disabled={readOnly}
+            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-2 text-xs font-medium text-gray-500 transition-colors hover:border-gray-400 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:text-gray-100"
+            title={readOnly ? READ_ONLY_TITLE : 'Add a custom MCP server by pasting its JSON config'}
           >
             <Code2 className="h-3.5 w-3.5" />
             <span>Add via JSON</span>
@@ -295,12 +309,13 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
                   {onToggleServer && connection === 'connected' && (
                     <button
                       onClick={() => onToggleServer(serverName)}
-                      className={`flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                      disabled={readOnly}
+                      className={`flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                         isSelectedServer(selectedServers || [], serverName)
                           ? 'border-blue-500/40 bg-blue-500/10 text-blue-600 hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-500 dark:text-blue-300'
                           : 'border-gray-300 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-gray-100'
                       }`}
-                      title={`${isSelectedServer(selectedServers || [], serverName) ? 'Remove' : 'Add'} ${serverName} for this workflow`}
+                      title={readOnly ? READ_ONLY_TITLE : `${isSelectedServer(selectedServers || [], serverName) ? 'Remove' : 'Add'} ${serverName} for this workflow`}
                     >
                       {isSelectedServer(selectedServers || [], serverName) ? (
                         <>
@@ -346,6 +361,7 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
                     requiresOAuth={requiresOAuth}
                     connection={connection}
                     variant="icon"
+                    readOnly={readOnly}
                     onAuthChange={() => {
                       // Refresh on disconnect too — the card's status text
                       // reads from the store, so skipping this left it

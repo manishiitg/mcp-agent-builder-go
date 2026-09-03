@@ -6,7 +6,6 @@ import {
   useEdgesState,
   useReactFlow,
   BackgroundVariant,
-  ReactFlowProvider,
   type NodeChange,
   type OnNodeDrag
 } from '@xyflow/react'
@@ -24,29 +23,21 @@ import {
 } from '../nodes/HandoffNodeWrappers'
 import { getExecutionModeVisuals } from '../nodes/executionModeVisuals'
 import { edgeTypes } from '../edges'
-import Workspace from '../../Workspace'
-import { WorkflowToolbar } from './WorkflowToolbar'
 import { VariablesSidebar } from './VariablesSidebar'
 import { BatchProgressHeader } from '../BatchProgressHeader'
-import {
-  ReportView,
-} from '../ReportViewer'
 import {
   REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
   isReportPreviewDevice,
   readReportPreviewPreference,
   type ReportPreviewDevice,
 } from '../../../utils/reportPreviewPreference'
-import { usePlanData, type PlanChanges } from '../hooks/usePlanData'
-import { useEvaluationPlanData } from '../hooks/useEvaluationPlanData'
+import type { PlanChanges } from '../hooks/usePlanData'
 import { usePlanToFlow, type WorkflowNode, type WorkflowEdge, type WorkflowNodeData, type StepNodeData, type EvaluationStepNodeData } from '../hooks/usePlanToFlow'
 import type { VariablesNodeData } from '../nodes/VariablesNode'
-import { useWorkflowExecution } from '../hooks/useWorkflowExecution'
-import { useWorkspaceState } from '../hooks/useWorkspaceState'
-import { useWorkflowStore, type CanvasViewMode } from '../../../stores/useWorkflowStore'
+import { useWorkspaceViewData, type WorkflowImageExportFormat } from './workspaceViewData'
+import { useWorkflowStore } from '../../../stores/useWorkflowStore'
 import { useWorkspaceStore } from '../../../stores/useWorkspaceStore'
 import { useChatStore } from '../../../stores/useChatStore'
-import { useAppStore } from '../../../stores/useAppStore'
 import { agentApi } from '../../../services/api'
 import type { PlanStep, MessageSequenceItem } from '../../../utils/stepConfigMatching'
 import {
@@ -56,15 +47,6 @@ import {
 import type { VariablesManifest } from '../../../services/api-types'
 import { buildGroupFolderPath } from '../../../utils/workflowUtils'
 import { MarkdownRenderer } from '../../ui/MarkdownRenderer'
-import CostsPopup from '../CostsPopup'
-import ExecutionLogsPopup from '../ExecutionLogsPopup'
-import LearningsPopup from '../LearningsPopup'
-import KBPopup from '../KBPopup'
-import DatabasePopup from '../DatabasePopup'
-import { PulseEvalSummary } from '../PulseEvalSummary'
-import WorkflowScheduleRunsPanel from '../../scheduler/WorkflowScheduleRunsPanel'
-import WorkflowCapabilitiesPanel from '../WorkflowCapabilitiesPanel'
-import WorkflowFolderAccessPopup from '../WorkflowFolderAccessPopup'
 
 // Duration to show highlights before clearing (in ms)
 const HIGHLIGHT_DURATION = 4000
@@ -134,13 +116,11 @@ function enforceWorkflowHeaderClearance(nodes: WorkflowNode[]): WorkflowNode[] {
 
 import type { ExecutionOptions } from '../../../services/api-types'
 
-type WorkflowImageExportFormat = 'svg' | 'png' | 'jpeg'
-
 function isHorizontalWorkflowLayout(direction: 'LR' | 'TB'): boolean {
   return direction === 'LR'
 }
 
-interface WorkflowCanvasProps {
+export interface WorkflowCanvasProps {
   workspacePath: string | null
   presetQueryId: string | null
   currentPhase?: string
@@ -153,7 +133,6 @@ interface WorkflowCanvasProps {
   chatTabsSlot?: React.ReactNode  // Chat tab strip rendered inline in the toolbar (shared-toolbar mode)
   paneClassName?: string
   className?: string
-  viewMode?: CanvasViewMode
   hideToolbar?: boolean
   readOnly?: boolean
   /** Embed only the reusable read-only Plan canvas, without global workflow view switching. */
@@ -206,366 +185,6 @@ export function previewDeviceShellClass(device: PreviewDevice): string {
       ? 'w-full max-w-full'
     : 'w-full'
 }
-
-const WorkflowReportCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>(({
-  workspacePath,
-  presetQueryId,
-  currentPhase,
-  onStartPhase,
-  onCreatePlan,
-  showChatArea = false,
-  onToggleChatArea,
-  toolbarOnly = false,
-  sharedToolbar = false,
-  chatTabsSlot,
-  paneClassName = '',
-  className = '',
-  hideToolbar = false,
-  viewMode,
-}, ref) => {
-  const selectedRunFolder = useWorkflowStore(state => state.selectedRunFolder)
-  const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
-  const paneMode = viewMode || canvasViewMode
-  // In Mobile the report sits in a narrow 480px column; when chat is focused we
-  // keep the report mobile-framed so it fits. Laptop keeps its desktop report
-  // beside a separate compact chat column, so it needs no report-width cap.
-  const reportPreviewDevice = usePreviewDevice(workspacePath)
-  const reportFocusTier: 'mobile' | undefined =
-    useWorkflowStore(state => state.focusedPane === 'chat' && reportPreviewDevice === 'mobile')
-      ? 'mobile'
-      : undefined
-  const documentPreviewShellClassName =
-    reportPreviewDevice !== 'desktop'
-      ? `${previewDeviceShellClass(reportPreviewDevice)} h-full overflow-hidden`
-      : 'h-full w-full'
-  const planData = usePlanData(workspacePath)
-  const plan = planData.plan
-  const loadPlanRefresh = planData.refresh
-  const { status } = useWorkflowExecution()
-  const {
-    state: workspaceState,
-    loading: isLoadingWorkspaceState,
-    refresh: refreshWorkspaceState,
-  } = useWorkspaceState(workspacePath, selectedRunFolder)
-
-  const variablesManifest = workspaceState?.variables_manifest || null
-  const runFoldersForToolbar = React.useMemo(() => {
-    if (!workspaceState?.run_folders) return []
-    return workspaceState.run_folders.map(f => ({ name: f.name }))
-  }, [workspaceState?.run_folders])
-
-  const handleStartPhase = useCallback((phaseId: string, executionOptions?: ExecutionOptions) => {
-    if (onStartPhase) {
-      onStartPhase(phaseId, executionOptions)
-    }
-  }, [onStartPhase])
-
-  const handleRefresh = useCallback(async () => {
-    await Promise.all([
-      loadPlanRefresh(),
-      refreshWorkspaceState(),
-    ])
-  }, [loadPlanRefresh, refreshWorkspaceState])
-
-  useImperativeHandle(ref, () => ({
-    refresh: async () => {
-      await handleRefresh()
-      return null
-    },
-    getStepCount: () => plan?.steps?.length ?? 0,
-    focusStep: () => {
-      // Report mode has no flow nodes to focus.
-    },
-  }), [handleRefresh, plan])
-
-  return (
-    <div className={`flex flex-col h-full ${className} ${sharedToolbar && showChatArea ? 'contents' : ''}`}>
-      {!hideToolbar && (
-        <div className={sharedToolbar && showChatArea ? 'col-start-1 row-start-1 md:col-span-2' : ''}>
-          <WorkflowToolbar
-            status={status}
-            hasPlan={Boolean(plan?.steps?.length)}
-            plan={plan || undefined}
-            currentPhase={currentPhase}
-            workspacePath={workspacePath}
-            presetQueryId={presetQueryId}
-            runFolders={runFoldersForToolbar}
-            variablesManifest={variablesManifest}
-            isLoadingWorkspaceState={isLoadingWorkspaceState}
-            onStartPhase={handleStartPhase}
-            onCreatePlan={onCreatePlan || (() => {})}
-            showChatArea={showChatArea}
-            onToggleChatArea={onToggleChatArea}
-            onExport={() => window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_EXPORT_EVENT))}
-            chatTabsSlot={chatTabsSlot}
-          />
-        </div>
-      )}
-
-      <div data-tour="workflow-canvas-pane" data-testid="tour-workflow-canvas-pane" className={`${sharedToolbar && showChatArea ? 'flex-1 col-start-1 row-start-2 md:col-start-2' : 'flex-1'} ${paneClassName} min-h-0`}>
-        {toolbarOnly ? null : (
-          <div className="h-full min-h-0 relative">
-            {workspacePath && <ReportView workspacePath={workspacePath} focusTier={reportFocusTier} />}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-})
-
-WorkflowReportCanvasInner.displayName = 'WorkflowReportCanvasInner'
-
-const WorkflowFilesCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>(({
-  workspacePath,
-  presetQueryId,
-  currentPhase,
-  onStartPhase,
-  onCreatePlan,
-  showChatArea = false,
-  onToggleChatArea,
-  toolbarOnly = false,
-  sharedToolbar = false,
-  chatTabsSlot,
-  paneClassName = '',
-  className = '',
-  hideToolbar = false,
-}, ref) => {
-  const selectedRunFolder = useWorkflowStore(state => state.selectedRunFolder)
-  const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
-  const planData = usePlanData(workspacePath)
-  const plan = planData.plan
-  const loadPlanRefresh = planData.refresh
-  const { status } = useWorkflowExecution()
-  const {
-    state: workspaceState,
-    loading: isLoadingWorkspaceState,
-    refresh: refreshWorkspaceState,
-  } = useWorkspaceState(workspacePath, selectedRunFolder)
-
-  const variablesManifest = workspaceState?.variables_manifest || null
-  const runFoldersForToolbar = React.useMemo(() => {
-    if (!workspaceState?.run_folders) return []
-    return workspaceState.run_folders.map(f => ({ name: f.name }))
-  }, [workspaceState?.run_folders])
-
-  const handleStartPhase = useCallback((phaseId: string, executionOptions?: ExecutionOptions) => {
-    onStartPhase?.(phaseId, executionOptions)
-  }, [onStartPhase])
-
-  const handleRefresh = useCallback(async () => {
-    await Promise.all([
-      loadPlanRefresh(),
-      refreshWorkspaceState(),
-    ])
-  }, [loadPlanRefresh, refreshWorkspaceState])
-
-  const handleCloseFiles = useCallback(() => {
-    useAppStore.getState().setWorkspaceMinimized(true)
-    useWorkflowStore.getState().setWorkflowWorkspaceView(canvasViewMode)
-  }, [canvasViewMode])
-
-  useImperativeHandle(ref, () => ({
-    refresh: async () => {
-      await handleRefresh()
-      return null
-    },
-    getStepCount: () => plan?.steps?.length ?? 0,
-    focusStep: () => {},
-  }), [handleRefresh, plan])
-
-  return (
-    <div className={`flex flex-col h-full ${className} ${sharedToolbar && showChatArea ? 'contents' : ''}`}>
-      {!hideToolbar && (
-        <div className={sharedToolbar && showChatArea ? 'col-start-1 row-start-1 md:col-span-2' : ''}>
-          <WorkflowToolbar
-            status={status}
-            hasPlan={Boolean(plan?.steps?.length)}
-            plan={plan || undefined}
-            currentPhase={currentPhase}
-            workspacePath={workspacePath}
-            presetQueryId={presetQueryId}
-            runFolders={runFoldersForToolbar}
-            variablesManifest={variablesManifest}
-            isLoadingWorkspaceState={isLoadingWorkspaceState}
-            onStartPhase={handleStartPhase}
-            onCreatePlan={onCreatePlan || (() => {})}
-            showChatArea={showChatArea}
-            onToggleChatArea={onToggleChatArea}
-            chatTabsSlot={chatTabsSlot}
-          />
-        </div>
-      )}
-
-      <div data-tour="workflow-canvas-pane" data-testid="tour-workflow-canvas-pane" className={`${sharedToolbar && showChatArea ? 'flex-1 col-start-1 row-start-2 md:col-start-2' : 'flex-1'} ${paneClassName} min-h-0`}>
-        {toolbarOnly ? null : (
-          <div className="relative flex h-full min-h-0 flex-col bg-background">
-            <div className="min-h-0 flex-1">
-              <Workspace
-                minimized={false}
-                onToggleMinimize={handleCloseFiles}
-                hideMinimizeControl
-              />
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-})
-
-WorkflowFilesCanvasInner.displayName = 'WorkflowFilesCanvasInner'
-
-const INSPECTOR_WORKSPACE_VIEWS = new Set([
-  'costs',
-  'execution-logs',
-  'learnings',
-  'knowledgebase',
-  'database',
-  'evaluation',
-  'schedules',
-  'skills',
-  'mcp',
-  'secrets',
-  'folders',
-  'browser',
-  'llm',
-])
-
-const WorkflowInspectorCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>(({
-  workspacePath,
-  presetQueryId,
-  currentPhase,
-  onStartPhase,
-  onCreatePlan,
-  showChatArea = false,
-  onToggleChatArea,
-  toolbarOnly = false,
-  sharedToolbar = false,
-  chatTabsSlot,
-  paneClassName = '',
-  className = '',
-  hideToolbar = false,
-}, ref) => {
-  const selectedRunFolder = useWorkflowStore(state => state.selectedRunFolder)
-  const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
-  const planData = usePlanData(workspacePath)
-  const plan = planData.plan
-  const loadPlanRefresh = planData.refresh
-  const { status } = useWorkflowExecution()
-  const {
-    state: workspaceState,
-    loading: isLoadingWorkspaceState,
-    refresh: refreshWorkspaceState,
-  } = useWorkspaceState(workspacePath, selectedRunFolder)
-
-  const variablesManifest = workspaceState?.variables_manifest || null
-  const runFoldersForToolbar = React.useMemo(() => {
-    if (!workspaceState?.run_folders) return []
-    return workspaceState.run_folders.map(f => ({ name: f.name }))
-  }, [workspaceState?.run_folders])
-  const runFolderNames = React.useMemo(
-    () => runFoldersForToolbar.map(folder => folder.name),
-    [runFoldersForToolbar],
-  )
-
-  const handleRefresh = useCallback(async () => {
-    await Promise.all([loadPlanRefresh(), refreshWorkspaceState()])
-  }, [loadPlanRefresh, refreshWorkspaceState])
-
-  useImperativeHandle(ref, () => ({
-    refresh: async () => {
-      await handleRefresh()
-      return null
-    },
-    getStepCount: () => plan?.steps?.length ?? 0,
-    focusStep: () => {},
-  }), [handleRefresh, plan])
-
-  const closeInspector = useCallback(() => {
-    useWorkflowStore.getState().setShowWorkspacePane(false)
-  }, [])
-
-  const inspector = workflowWorkspaceView === 'costs' ? (
-    <CostsPopup
-      isOpen
-      embedded
-      onClose={closeInspector}
-      workspacePath={workspacePath}
-      runFolders={runFolderNames}
-      selectedRunFolder={selectedRunFolder}
-    />
-  ) : workflowWorkspaceView === 'execution-logs' ? (
-    <ExecutionLogsPopup
-      isOpen
-      embedded
-      onClose={closeInspector}
-      workspacePath={workspacePath}
-      runFolder={selectedRunFolder}
-      runFolders={runFolderNames}
-      onRefreshRunFolders={refreshWorkspaceState}
-    />
-  ) : workflowWorkspaceView === 'learnings' ? (
-    <LearningsPopup
-      isOpen
-      embedded
-      onClose={closeInspector}
-      workspacePath={workspacePath}
-      plan={plan}
-    />
-  ) : workflowWorkspaceView === 'knowledgebase' ? (
-    <KBPopup isOpen embedded onClose={closeInspector} workspacePath={workspacePath} />
-  ) : workflowWorkspaceView === 'evaluation' ? (
-    <div className="h-full overflow-y-auto">
-      <PulseEvalSummary workspacePath={workspacePath || ''} className="min-h-full rounded-none border-0" />
-    </div>
-  ) : workflowWorkspaceView === 'schedules' ? (
-    <WorkflowScheduleRunsPanel
-      embedded
-      workflowScope={{ presetQueryId: presetQueryId || undefined, workspacePath: workspacePath || undefined }}
-      onClose={closeInspector}
-    />
-  ) : workflowWorkspaceView === 'skills' || workflowWorkspaceView === 'mcp' || workflowWorkspaceView === 'secrets' || workflowWorkspaceView === 'browser' || workflowWorkspaceView === 'llm' ? (
-    <WorkflowCapabilitiesPanel section={workflowWorkspaceView} workspacePath={workspacePath} />
-  ) : workflowWorkspaceView === 'folders' ? (
-    <WorkflowFolderAccessPopup isOpen embedded workspacePath={workspacePath} onClose={closeInspector} />
-  ) : (
-    <DatabasePopup isOpen embedded onClose={closeInspector} workspacePath={workspacePath} />
-  )
-
-  return (
-    <div className={`flex h-full flex-col ${className} ${sharedToolbar && showChatArea ? 'contents' : ''}`}>
-      {!hideToolbar && (
-        <div className={sharedToolbar && showChatArea ? 'col-start-1 row-start-1 md:col-span-2' : ''}>
-          <WorkflowToolbar
-            status={status}
-            hasPlan={Boolean(plan?.steps?.length)}
-            plan={plan || undefined}
-            currentPhase={currentPhase}
-            workspacePath={workspacePath}
-            presetQueryId={presetQueryId}
-            runFolders={runFoldersForToolbar}
-            variablesManifest={variablesManifest}
-            isLoadingWorkspaceState={isLoadingWorkspaceState}
-            onStartPhase={(phaseId, options) => onStartPhase?.(phaseId, options)}
-            onCreatePlan={onCreatePlan || (() => {})}
-            showChatArea={showChatArea}
-            onToggleChatArea={onToggleChatArea}
-            chatTabsSlot={chatTabsSlot}
-          />
-        </div>
-      )}
-      <div
-        data-tour="workflow-canvas-pane"
-        data-testid="tour-workflow-canvas-pane"
-        className={`${sharedToolbar && showChatArea ? 'col-start-1 row-start-2 flex-1 md:col-start-2' : 'flex-1'} ${paneClassName} min-h-0 overflow-hidden border-l border-border`}
-      >
-        {toolbarOnly ? null : inspector}
-      </div>
-    </div>
-  )
-})
-
-WorkflowInspectorCanvasInner.displayName = 'WorkflowInspectorCanvasInner'
 
 function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2)
@@ -1123,10 +742,10 @@ function ReadOnlyStepDetailPanel({
   const type = step?.type || node.type || 'node'
   const routes = step?.type === 'routing' || step?.type === 'branch'
     ? step.routes
-    : step?.type === 'todo_task'
+    : (step?.type === 'todo_task' || step?.type === 'orchestrator')
       ? step.predefined_routes
       : undefined
-  const todoMessages = step?.type === 'todo_task' ? step.messages : undefined
+  const todoMessages = (step?.type === 'todo_task' || step?.type === 'orchestrator') ? step.messages : undefined
   const sequenceItems = (step ? (step as { items?: MessageSequenceItem[] }).items : undefined) || undefined
   const validationSchema = step?.validation_schema || ('validation_schema' in data ? data.validation_schema : undefined)
   const agentConfigs = step?.agent_configs
@@ -1358,24 +977,17 @@ export interface WorkflowCanvasRef {
   focusStep: (stepId: string) => void  // Alias for highlightStepNode
 }
 
+// The React Flow plan canvas. WorkspaceViewHost owns the toolbar, the pane
+// wrapper, and the shared data (read here through useWorkspaceViewData); this
+// component renders only the pane content for the flow view.
 const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>(({
   workspacePath,
   presetQueryId,
-  currentPhase,
-  onStartPhase,
   onCreatePlan,
   showChatArea = false,
-  onToggleChatArea,
   toolbarOnly = false,
-  sharedToolbar = false,
-  chatTabsSlot,
-  paneClassName = '',
-  className = '',
-  viewMode,
-  hideToolbar = false,
   readOnly = false,
   embeddedPlanOnly = false,
-  openPulseOnMount = false
 }, ref) => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -1399,16 +1011,15 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   const viewportStateRef = React.useRef<{ x: number; y: number; zoom: number } | null>(null)
   const viewportSaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Get workflow mode, layout direction, and canvas view mode
-  // Flow view is vertical-only.
+  // Flow view is vertical-only. WorkspaceViewHost only mounts this component
+  // for the Plan view, so there is no per-mode branching in here.
   const layoutDirection: 'LR' | 'TB' = 'TB'
-  const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
-  const effectiveCanvasViewMode = viewMode || canvasViewMode
   const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
   const selectedGroupIds = useWorkflowStore(state => state.selectedGroupIds)
   const setSelectedRunFolder = useWorkflowStore(state => state.setSelectedRunFolder)
 
-  const isBuilderWorkspace = workflowWorkspaceView === null || workflowWorkspaceView === 'builder'
+  // No explicit view: the default builder workspace.
+  const isBuilderWorkspace = workflowWorkspaceView === null
 
   // Generate localStorage key for viewport state (workspace-specific)
   const getViewportStorageKey = React.useCallback(() => {
@@ -1504,9 +1115,11 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     return null
   }, [getLayoutFilePath])
 
-  // Variables state
-  const [variablesManifest, setVariablesManifest] = React.useState<VariablesManifest | null>(null)
-  const [isLoadingVariables, setIsLoadingVariables] = React.useState(false)
+  // Toolbar data is loaded once by WorkspaceViewHost and shared through
+  // context; this canvas only reads it. The variables manifest lives there too
+  // because the toolbar shows it.
+  const viewData = useWorkspaceViewData()
+  const { variablesManifest, isLoadingVariables, setVariablesManifest } = viewData
   const [showVariablesSidebar, setShowVariablesSidebar] = React.useState(false)
   const [selectedFlowNode, setSelectedFlowNode] = React.useState<WorkflowNode | null>(null)
   const pendingPlanStepFocusRef = React.useRef<string | null>(null)
@@ -1516,24 +1129,18 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   const selectedRunFolder = useWorkflowStore(state => state.selectedRunFolder)
   // Device-width preview also constrains the plan/flow pane (centered shell).
   const previewDevice = usePreviewDevice(workspacePath)
-  // In Mobile, a chat-focused report stays mobile-framed to fit its narrow column.
-  // Laptop keeps the desktop report beside its own compact chat column.
-  const reportFocusTier: 'mobile' | undefined =
-    useWorkflowStore(state => state.focusedPane === 'chat' && previewDevice === 'mobile')
-      ? 'mobile'
-      : undefined
   // Changing the device width resizes the flow pane; re-fit the diagram after the
   // CSS width transition (~300ms) so it recenters into the new width.
   useEffect(() => {
-    if (embeddedPlanOnly || effectiveCanvasViewMode === 'report' || toolbarOnly || previewDevice === 'tablet') return
+    if (embeddedPlanOnly || toolbarOnly || previewDevice === 'tablet') return
     const t = setTimeout(() => {
       try { void fitView({ padding: FLOW_FIT_PADDING, duration: 350, minZoom: FLOW_FIT_MIN_ZOOM, maxZoom: FLOW_FIT_MAX_ZOOM }) } catch { /* ignore */ }
     }, 360)
     return () => clearTimeout(t)
-  }, [embeddedPlanOnly, previewDevice, effectiveCanvasViewMode, fitView, toolbarOnly])
+  }, [embeddedPlanOnly, previewDevice, fitView, toolbarOnly])
   // Highlight execution folder in workspace when selectedRunFolder changes
   // This ensures workspace shows the correct group folder during multi-group execution
-  const { highlightFile } = useWorkspaceStore()
+  const highlightFile = useWorkspaceStore(state => state.highlightFile)
   const prevSelectedRunFolderRef = useRef<string | null>(null)
   useEffect(() => {
     // Reset ref if selectedRunFolder is cleared
@@ -1573,28 +1180,31 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     }
   }, [selectedRunFolder, workspacePath, highlightFile])
 
-  // Load workflow data for the main canvas and append evaluation steps to it.
-  const planData = usePlanData(workspacePath)
-  const evalData = useEvaluationPlanData(workspacePath)
+  // Plan, evaluation plan, execution status, and workspace state come from the
+  // host so that switching views never re-runs their loaders.
+  const {
+    planData,
+    evalData,
+    workspace,
+    isRefreshingPlan,
+    setIsRefreshingPlan,
+    flowShell,
+    flowError,
+    registerExportHandler,
+  } = viewData
 
   const plan = planData.plan
   const evaluationPlan = evalData.evaluationPlan
-  const refreshEvaluationPlan = evalData.refresh
 
-  const [isRefreshingPlan, setIsRefreshingPlan] = React.useState(false)
   // A manual Plan refresh still uses the canonical plan loader, but it must
   // not replace the surrounding workflow surface with the initial-load screen.
   const loading = (planData.loading && !isRefreshingPlan) || evalData.loading
-  const error = planData.error
   const changes = planData.changes
 
   const loadPlanRefresh = planData.refresh
   const clearChanges = planData.clearChanges
   const setChanges = planData.setChanges
 
-  // *** NEW CONSOLIDATED API ***
-  // Load all workspace state (run folders, variables, phases, progress) in one call
-  // This replaces the old individual API calls and eliminates race conditions
   const {
     state: workspaceState,
     loading: isLoadingWorkspaceState,
@@ -1602,29 +1212,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     isRetrying: isRetryingWorkspaceState,
     retryCountdown: workspaceStateRetryCountdown,
     refresh: refreshWorkspaceState
-  } = useWorkspaceState(workspacePath, selectedRunFolder)
-
-  // Sync workspace state to local state for backward compatibility
-  // TODO: Eventually migrate all consumers to use workspaceState directly
-  React.useEffect(() => {
-    if (workspaceState) {
-      const manifest = workspaceState.variables_manifest || null
-      setVariablesManifest(manifest)
-      setIsLoadingVariables(false)
-
-    } else if (!isLoadingWorkspaceState) {
-      setVariablesManifest(null)
-      setIsLoadingVariables(false)
-    } else {
-      setIsLoadingVariables(isLoadingWorkspaceState)
-    }
-  }, [workspaceState, isLoadingWorkspaceState])
-
-  // Transform run folders for WorkflowToolbar (memoized to avoid repeated transformations)
-  const runFoldersForToolbar = React.useMemo(() => {
-    if (!workspaceState?.run_folders) return []
-    return workspaceState.run_folders.map(f => ({ name: f.name }))
-  }, [workspaceState?.run_folders])
+  } = workspace
 
   useEffect(() => {
     if (!isBuilderWorkspace || !workspaceState?.run_folders?.length) {
@@ -1690,40 +1278,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     setVariablesManifest(manifest)
     // Also update in workflow store for buildExecutionOptions to access
     setVariablesManifestInStore(manifest)
-  }, [setVariablesManifestInStore])
-
-  // Refresh handler - reloads plan, step config, and workspace state
-  const handleRefresh = useCallback(async () => {
-    if (!workspacePath) return
-
-    console.log('[WorkflowCanvas] Refreshing plan, step config, and workspace state...')
-
-    // Save current viewport state before refresh
-    // Only save if viewport has been initialized (not on first load)
-    const currentViewport = hasInitializedView.current ? viewportStateRef.current : null
-    console.log('[WorkflowCanvas] Saving viewport state before refresh:', currentViewport, 'hasInitializedView:', hasInitializedView.current)
-
-    await Promise.all([
-      loadPlanRefresh(),
-      refreshEvaluationPlan(),
-      refreshWorkspaceState()
-    ])
-
-    // Restore viewport state after refresh completes
-    // Only restore if we had a saved viewport (not on first load)
-    // Use a small delay to ensure nodes have been updated
-    if (currentViewport && hasInitializedView.current) {
-      setTimeout(() => {
-        console.log('[WorkflowCanvas] Restoring viewport state after refresh:', currentViewport)
-        setViewport(
-          { x: currentViewport.x, y: currentViewport.y, zoom: currentViewport.zoom },
-          { duration: 300 }
-        )
-      }, 100)
-    }
-
-    console.log('[WorkflowCanvas] Refresh completed')
-  }, [workspacePath, loadPlanRefresh, refreshEvaluationPlan, refreshWorkspaceState, setViewport])
+  }, [setVariablesManifest, setVariablesManifestInStore])
 
   // The in-canvas Plan control is intentionally narrower than the canvas-wide
   // refresh used by the toolbar and imperative API: it only reloads the plan.
@@ -1744,12 +1299,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     } finally {
       setIsRefreshingPlan(false)
     }
-  }, [isRefreshingPlan, loadPlanRefresh])
-
-  // Workflow execution
-  const {
-    status
-  } = useWorkflowExecution()
+  }, [isRefreshingPlan, loadPlanRefresh, setIsRefreshingPlan])
 
   // Current step and status from store (set by ChatArea polling when step_progress_updated events arrive)
   const stepStatusMap = useWorkflowStore(state => state.stepStatusMap)
@@ -1769,7 +1319,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   }, [edges])
 
   const handleExportImage = useCallback(async (format: WorkflowImageExportFormat) => {
-    if (toolbarOnly || effectiveCanvasViewMode !== 'flow') return
+    if (toolbarOnly) return
     setIsExportingImage(true)
     const previousViewport = getViewport()
     try {
@@ -1810,7 +1360,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
       setViewport(previousViewport, { duration: 0 })
       setIsExportingImage(false)
     }
-  }, [effectiveCanvasViewMode, fitView, getViewport, setViewport, toolbarOnly, workspacePath])
+  }, [fitView, getViewport, setViewport, toolbarOnly, workspacePath])
 
   // Map of parent node ID to child node IDs (for grouped movement)
   const nodeGroupsRef = React.useRef<Map<string, string[]>>(new Map())
@@ -1826,7 +1376,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   const currentOffsetsRef = React.useRef<Map<string, { parentId: string; dx: number; dy: number }>>(new Map())
 
   const saveCurrentLayout = useCallback(async (currentNodes: WorkflowNode[]) => {
-    if (toolbarOnly || effectiveCanvasViewMode !== 'flow') return
+    if (toolbarOnly) return
 
     const layoutPath = getLayoutFilePath()
     if (!layoutPath) return
@@ -1873,7 +1423,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     } catch (error) {
       console.error('[WorkflowCanvas] Failed to save custom layout:', error)
     }
-  }, [effectiveCanvasViewMode, getLayoutFilePath, layoutDirection, toolbarOnly])
+  }, [getLayoutFilePath, layoutDirection, toolbarOnly])
 
   // Build node groups: map parent nodes to their child nodes (validation, learning, evaluation, sub-agents)
   const buildNodeGroups = useCallback((currentNodes: WorkflowNode[]) => {
@@ -2263,18 +1813,18 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
       if (!detail?.stepId) return
       if (detail.workspacePath && workspacePath && detail.workspacePath !== workspacePath) return
       pendingPlanStepFocusRef.current = detail.stepId
-      if (!toolbarOnly && effectiveCanvasViewMode === 'flow' && showStepNode(detail.stepId)) {
+      if (!toolbarOnly && showStepNode(detail.stepId)) {
         pendingPlanStepFocusRef.current = null
       }
     }
 
     window.addEventListener(WORKFLOW_PLAN_STEP_FOCUS_EVENT, handlePlanStepFocus)
     return () => window.removeEventListener(WORKFLOW_PLAN_STEP_FOCUS_EVENT, handlePlanStepFocus)
-  }, [effectiveCanvasViewMode, showStepNode, toolbarOnly, workspacePath])
+  }, [showStepNode, toolbarOnly, workspacePath])
 
   useEffect(() => {
     const pendingStepID = pendingPlanStepFocusRef.current
-    if (!pendingStepID || toolbarOnly || effectiveCanvasViewMode !== 'flow' || nodes.length === 0) return
+    if (!pendingStepID || toolbarOnly || nodes.length === 0) return
 
     // Re-attempt after React Flow has received the newly enabled plan nodes.
     const timer = window.setTimeout(() => {
@@ -2283,7 +1833,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
       }
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [effectiveCanvasViewMode, nodes, showStepNode, toolbarOnly])
+  }, [nodes, showStepNode, toolbarOnly])
 
   useEffect(() => {
     pendingPlanStepFocusRef.current = null
@@ -2394,26 +1944,26 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
       if (varsNode) updateNode('variables', { position: varsNode.position })
       if (startNode) updateNode('start', { position: startNode.position })
     }
-  }, [nodes, initialNodes, updateNode, toolbarOnly, effectiveCanvasViewMode])
+  }, [nodes, initialNodes, updateNode, toolbarOnly])
 
   // Rebuild node groups when nodes change
   React.useEffect(() => {
     if (toolbarOnly) return // Skip when canvas is hidden
     hasInitializedView.current = false
-  }, [effectiveCanvasViewMode, toolbarOnly])
+  }, [toolbarOnly])
 
   React.useEffect(() => {
     if (toolbarOnly) return // Skip when canvas is hidden
     if (nodes.length > 0) {
       buildNodeGroups(nodes)
     }
-  }, [nodes, buildNodeGroups, toolbarOnly, effectiveCanvasViewMode])
+  }, [nodes, buildNodeGroups, toolbarOnly])
 
   // Update nodes when plan changes (only if nodes actually changed)
   React.useEffect(() => {
     // Skip node/edge updates when the flow canvas is hidden. The saved layout
-    // only applies to React Flow; report/toolbar-only views should not fetch it.
-    if (toolbarOnly || effectiveCanvasViewMode !== 'flow') return
+    // only applies to React Flow; a toolbar-only render should not fetch it.
+    if (toolbarOnly) return
 
     // Compare by reference first (fast path)
     if (prevNodesRef.current === initialNodes && prevEdgesRef.current === initialEdges) {
@@ -2776,7 +2326,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
       prevEdgesRef.current = initialEdges
     }
 
-  }, [initialNodes, initialEdges, setNodes, setEdges, focusNode, buildNodeGroups, loadSavedLayout, layoutDirection, updateNode, presetQueryId, toolbarOnly, effectiveCanvasViewMode])
+  }, [initialNodes, initialEdges, setNodes, setEdges, focusNode, buildNodeGroups, loadSavedLayout, layoutDirection, updateNode, presetQueryId, toolbarOnly])
 
   // Fit the full plan on first render so the workflow shape is visible by default.
   React.useEffect(() => {
@@ -2813,7 +2363,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
 
       return () => window.clearTimeout(fitTimer)
     }
-  }, [embeddedPlanOnly, nodes, fitView, getViewport, previewDevice, setViewport, toolbarOnly, effectiveCanvasViewMode])
+  }, [embeddedPlanOnly, nodes, fitView, getViewport, previewDevice, setViewport, toolbarOnly])
 
   // Track previous stepStatusMap to detect actual changes
   const prevStepStatusMapRef = React.useRef<Map<string, 'pending' | 'running' | 'completed' | 'failed'>>(new Map())
@@ -2864,7 +2414,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     
     // Update previous status map (for tracking changes)
     prevStepStatusMapRef.current = new Map(stepStatusMap)
-  }, [stepStatusMap, setNodes, toolbarOnly, effectiveCanvasViewMode])
+  }, [stepStatusMap, setNodes, toolbarOnly])
 
 
   useEffect(() => {
@@ -2892,23 +2442,23 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     setSelectedFlowNode(null)
   }, [])
 
-  // Handle start phase with execution options (for toolbar)
-  const handleStartPhase = useCallback((phaseId: string, executionOptions?: ExecutionOptions) => {
-    if (onStartPhase) {
-      onStartPhase(phaseId, executionOptions)
-    }
-  }, [onStartPhase])
+  // The toolbar (owned by WorkspaceViewHost) triggers image export through
+  // this registration: export needs the React Flow instance, which only
+  // exists inside this canvas.
+  useEffect(() => {
+    registerExportHandler(handleExportImage)
+    return () => registerExportHandler(null)
+  }, [registerExportHandler, handleExportImage])
 
-  // Unified loading state - wait for ALL data before showing canvas
-  // This ensures consistent state: plan, step_config, run folders, variables, phases, progress
-  const isFullyLoaded = !loading && !isLoadingWorkspaceState
+  // Unified loading state - wait for ALL data before showing canvas. The host
+  // derives the same shell state to hide the toolbar while this shows.
   const loadingMessages = []
   if (loading) loadingMessages.push('plan & step config')
   if (isLoadingWorkspaceState) loadingMessages.push('workspace state')
 
-  if (!isFullyLoaded) {
+  if (flowShell === 'loading') {
     return (
-      <div className={`flex items-center justify-center h-full bg-gray-50 dark:bg-gray-900 ${paneClassName} ${className}`}>
+      <div className="flex items-center justify-center h-full bg-gray-50 dark:bg-gray-900">
         <div className="flex flex-col items-center gap-3">
           <div className="w-8 h-8 border-2 border-gray-400 dark:border-gray-500 border-t-transparent rounded-full animate-spin" />
           <span className="text-sm text-gray-500 dark:text-gray-400">
@@ -2922,15 +2472,13 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     )
   }
 
-  // Error state - show errors from plan loading or workspace state loading
-  // Treat "plan.json not found" as "no plan" rather than an error (new workflows don't have plan.json yet)
-  const isPlanNotFoundError = error && /not found|does not exist|planning must be run first/i.test(error)
-  const effectiveError = isPlanNotFoundError ? null : error
-  const hasError = effectiveError || workspaceStateError
+  // Error state - show errors from plan loading or workspace state loading.
+  // "plan.json not found" is already treated as "no plan" by the host.
+  const effectiveError = flowError
 
-  if (hasError) {
+  if (flowShell === 'error') {
     return (
-      <div className={`flex items-center justify-center h-full bg-gray-50 dark:bg-gray-900 ${paneClassName} ${className}`}>
+      <div className="flex items-center justify-center h-full bg-gray-50 dark:bg-gray-900">
         <div className="flex flex-col items-center gap-3 text-center max-w-md">
           <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
             <span className="text-2xl">⚠️</span>
@@ -2976,28 +2524,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   const hasPlan = !!(plan && plan.steps && plan.steps.length > 0)
   if (!hasPlan) {
     return (
-      <div className={`flex flex-col h-full bg-gray-50 dark:bg-gray-900 ${className} ${sharedToolbar && showChatArea ? 'contents' : ''}`}>
-        {!hideToolbar && (
-          <div className={sharedToolbar && showChatArea ? 'col-start-1 row-start-1 md:col-span-2' : ''}>
-            <WorkflowToolbar
-              status={status}
-              hasPlan={false}
-              currentPhase={currentPhase}
-              workspacePath={workspacePath}
-              presetQueryId={presetQueryId}
-              runFolders={runFoldersForToolbar}
-              variablesManifest={variablesManifest}
-              isLoadingWorkspaceState={isLoadingWorkspaceState}
-              onStartPhase={handleStartPhase}
-              onCreatePlan={onCreatePlan || (() => {})}
-              showChatArea={showChatArea}
-              onToggleChatArea={onToggleChatArea}
-              chatTabsSlot={chatTabsSlot}
-              openPulseOnMount={openPulseOnMount}
-            />
-          </div>
-        )}
-        <div className={`${sharedToolbar && showChatArea ? 'flex-1 col-start-1 row-start-2 md:col-start-2' : 'flex-1'} ${paneClassName} flex min-h-0 items-center justify-center`}>
+      <div className="flex h-full min-h-0 items-center justify-center bg-gray-50 dark:bg-gray-900">
           <div className="flex flex-col items-center gap-4 text-center">
             <div className="w-16 h-16 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center">
               <span className="text-3xl">📋</span>
@@ -3019,45 +2546,14 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
               </button>
             )}
           </div>
-        </div>
       </div>
     )
   }
 
   return (
-    <div className={`flex flex-col h-full ${className} ${sharedToolbar && showChatArea ? 'contents' : ''}`} ref={reactFlowWrapper}>
-      {!hideToolbar && (
-        <div className={sharedToolbar && showChatArea ? 'col-start-1 row-start-1 md:col-span-2' : ''}>
-          <WorkflowToolbar
-            status={status}
-            hasPlan={true}
-            plan={plan || undefined}
-            currentPhase={currentPhase}
-            workspacePath={workspacePath}
-            presetQueryId={presetQueryId}
-            runFolders={runFoldersForToolbar}
-            variablesManifest={variablesManifest}
-            isLoadingWorkspaceState={isLoadingWorkspaceState}
-            onStartPhase={handleStartPhase}
-            onCreatePlan={onCreatePlan || (() => {})}
-            showChatArea={showChatArea}
-            onToggleChatArea={onToggleChatArea}
-            chatTabsSlot={chatTabsSlot}
-            openPulseOnMount={openPulseOnMount}
-            onExport={effectiveCanvasViewMode === 'report'
-              ? () => window.dispatchEvent(new CustomEvent(WORKFLOW_REPORT_EXPORT_EVENT))
-              : () => { void handleExportImage('png') }}
-          />
-        </div>
-      )}
-
-      <div data-tour="workflow-canvas-pane" data-testid="tour-workflow-canvas-pane" className={`${sharedToolbar && showChatArea ? 'flex-1 col-start-1 row-start-2 md:col-start-2' : 'flex-1'} ${paneClassName} min-h-0`}>
+    <div className="h-full min-h-0" ref={reactFlowWrapper}>
         {/* Canvas area — skip when toolbarOnly to avoid rendering 1000+ SVG nodes */}
-        {toolbarOnly ? null : effectiveCanvasViewMode === 'report' ? (
-          <div className="h-full min-h-0 relative">
-            {workspacePath && <ReportView workspacePath={workspacePath} focusTier={reportFocusTier} />}
-          </div>
-        ) : <div className="h-full min-h-0 relative flex">
+        {toolbarOnly ? null : <div className="h-full min-h-0 relative flex">
           <button
             type="button"
             onPointerDown={event => event.stopPropagation()}
@@ -3135,8 +2631,6 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
           />
         )}
       </div>}
-      </div>
-
     </div>
   )
 })
@@ -3144,38 +2638,8 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
 // Add display name for debugging
 WorkflowCanvasInner.displayName = 'WorkflowCanvasInner'
 
-// Keep Report out of the React Flow tree. Flow mode subscribes to step status,
-// node state, viewport, and layout updates; report mode only needs the toolbar
-// data plus its own report files, so it should not repaint on every chat event.
-export const WorkflowCanvasWithProvider = React.memo(forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((props, ref) => {
-  const canvasViewMode = useWorkflowStore(state => state.canvasViewMode)
-  const workflowWorkspaceView = useWorkflowStore(state => state.workflowWorkspaceView)
-  const effectiveCanvasViewMode = props.viewMode || canvasViewMode
-
-  if (!props.embeddedPlanOnly && workflowWorkspaceView === 'files') {
-    return <WorkflowFilesCanvasInner {...props} ref={ref} />
-  }
-
-  if (workflowWorkspaceView && INSPECTOR_WORKSPACE_VIEWS.has(workflowWorkspaceView)) {
-    return <WorkflowInspectorCanvasInner {...props} ref={ref} />
-  }
-
-  // Report and Pulse (log) are lightweight preview-pane views (no React Flow tree).
-  // Legacy saved Soul state opens Pulse; Goal context now lives inside the
-  // database-native Pulse workspace.
-  if (!props.embeddedPlanOnly && (effectiveCanvasViewMode === 'report' || effectiveCanvasViewMode === 'log' || effectiveCanvasViewMode === 'soul')) {
-    return <WorkflowReportCanvasInner {...props} ref={ref} />
-  }
-
-  return (
-    <ReactFlowProvider>
-      <WorkflowCanvasInner {...props} ref={ref} />
-    </ReactFlowProvider>
-  )
-}))
-
-WorkflowCanvasWithProvider.displayName = 'WorkflowCanvasWithProvider'
-
-export const WorkflowCanvas = WorkflowCanvasWithProvider
-
-export default WorkflowCanvasWithProvider
+// The flow canvas is one view among several. WorkspaceViewHost owns the
+// toolbar, the shared data, and the dispatch between views, and wraps this in
+// its own ReactFlowProvider so report mode never repaints on flow-only
+// store traffic.
+export { WorkflowCanvasInner }

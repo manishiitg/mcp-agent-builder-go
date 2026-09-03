@@ -1,7 +1,6 @@
 package voicestt
 
 import (
-	"encoding/binary"
 	"os"
 	"strings"
 	"testing"
@@ -25,7 +24,7 @@ func TestEngineTranscribesRealAudioLive(t *testing.T) {
 	}
 	defer engine.Close()
 
-	samples, sr, err := readWav16Mono(wavPath)
+	samples, sr, err := ReadWAV(wavPath)
 	if err != nil {
 		t.Fatalf("read wav: %v", err)
 	}
@@ -60,35 +59,14 @@ func TestEngineTranscribesRealAudioLive(t *testing.T) {
 	if !sawGrowth {
 		t.Fatal("transcript never grew across chunks — this decoded as one batch, not a stream")
 	}
+	expect := os.Getenv("VOICESTT_TEST_EXPECT")
+	if expect == "" {
+		expect = "yellow lamps"
+	}
 	lower := strings.ToLower(final.Text)
-	if !strings.Contains(lower, "yellow lamps") {
-		t.Fatalf("final transcript did not contain expected words from the known test clip: %q", final.Text)
+	if !strings.Contains(lower, strings.ToLower(expect)) {
+		t.Fatalf("final transcript did not contain %q: %q", expect, final.Text)
 	}
 	t.Logf("final transcript: %q", final.Text)
-}
-
-func readWav16Mono(path string) (samples []float32, sampleRate int, err error) {
-	b, err := os.ReadFile(path) //nolint:gosec // G304: test-only, path comes from an env var the test author controls.
-	if err != nil {
-		return nil, 0, err
-	}
-	sampleRate = int(binary.LittleEndian.Uint32(b[24:28]))
-	off := 12
-	var dataOff, dataLen int
-	for off+8 <= len(b) {
-		id := string(b[off : off+4])
-		sz := int(binary.LittleEndian.Uint32(b[off+4 : off+8]))
-		if id == "data" {
-			dataOff, dataLen = off+8, sz
-			break
-		}
-		off += 8 + sz + sz%2
-	}
-	n := dataLen / 2
-	samples = make([]float32, n)
-	for i := 0; i < n; i++ {
-		v := int16(binary.LittleEndian.Uint16(b[dataOff+i*2 : dataOff+i*2+2]))
-		samples[i] = float32(v) / 32768.0
-	}
-	return samples, sampleRate, nil
+	t.Logf("punctuated: %q", engine.Punctuate(final.Text))
 }

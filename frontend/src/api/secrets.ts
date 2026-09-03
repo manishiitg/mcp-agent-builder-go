@@ -86,7 +86,7 @@ export const secretsApi = {
     return response.data;
   },
 
-  listWorkflowSecrets: async (workspacePath: string): Promise<{ name: string }[]> => {
+  listWorkflowSecrets: async (workspacePath: string): Promise<{ name: string; encrypted_value?: string }[]> => {
     const response = await api.get('/api/secrets/workflow/stored', {
       params: { workspace_path: workspacePath },
     });

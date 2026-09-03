@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Checkbox } from '../ui/checkbox';
-import { KeyRound, Globe, Plus, Trash2 } from 'lucide-react';
+import { KeyRound, Globe, Plus, Trash2, Eye, EyeOff } from 'lucide-react';
 import { useSecretsStore } from '../../stores';
 import { secretsApi } from '../../api/secrets';
 
@@ -37,6 +37,31 @@ export const SecretSelectionSection: React.FC<SecretSelectionSectionProps> = ({
   const [workflowSecretValue, setWorkflowSecretValue] = useState('');
   const [workflowSecretError, setWorkflowSecretError] = useState<string | null>(null);
   const [savingWorkflowSecret, setSavingWorkflowSecret] = useState(false);
+  // Revealed automation-secret values, decrypted on demand and dropped again
+  // on hide so plaintext never sits in state longer than it is on screen.
+  const [revealedValues, setRevealedValues] = useState<Record<string, string>>({});
+  const [revealingName, setRevealingName] = useState<string | null>(null);
+
+  const toggleReveal = async (secret: { name: string; encrypted_value?: string }) => {
+    if (revealedValues[secret.name] !== undefined) {
+      setRevealedValues((current) => {
+        const next = { ...current };
+        delete next[secret.name];
+        return next;
+      });
+      return;
+    }
+    if (!secret.encrypted_value) return;
+    setRevealingName(secret.name);
+    try {
+      const { value } = await secretsApi.decrypt(secret.encrypted_value);
+      setRevealedValues((current) => ({ ...current, [secret.name]: value }));
+    } catch {
+      setWorkflowSecretError(`Could not read the value of ${secret.name}.`);
+    } finally {
+      setRevealingName(null);
+    }
+  };
 
   const normalizedWorkflowPath = workflowPath?.trim() || '';
   const workflowSecrets = normalizedWorkflowPath
@@ -198,7 +223,7 @@ export const SecretSelectionSection: React.FC<SecretSelectionSectionProps> = ({
         </div>
       )}
 
-      <div className={`border border-gray-200 dark:border-gray-700 rounded-md overflow-y-auto bg-white dark:bg-gray-800 ${fillAvailableHeight ? 'min-h-0 flex-1' : 'max-h-64'}`}>
+      <div className={`border border-gray-200 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 ${fillAvailableHeight ? 'min-h-0 flex-1 overflow-y-auto' : ''}`}>
         {sortedWorkflowSecrets.map((secret) => (
           <div key={`workflow-${secret.name}`} className="flex items-center gap-2 p-3 border-b border-gray-200 dark:border-gray-700 last:border-b-0 hover:bg-gray-100 dark:hover:bg-gray-700">
             <Checkbox
@@ -207,9 +232,23 @@ export const SecretSelectionSection: React.FC<SecretSelectionSectionProps> = ({
               onCheckedChange={() => toggleSecretName(secret.name)}
             />
             <label htmlFor={`workflow-secret-${secret.name}`} className="flex-1 flex min-w-0 items-center gap-2 text-sm cursor-pointer select-none text-gray-900 dark:text-gray-100">
-              <span className="min-w-0 truncate font-mono">{secret.name}</span>
+              <span className="min-w-0 flex-1 flex flex-col">
+                <span className="min-w-0 truncate font-mono">{secret.name}</span>
+                {revealedValues[secret.name] !== undefined && (
+                  <span className="mt-0.5 break-all font-mono text-xs text-gray-600 dark:text-gray-300">{revealedValues[secret.name]}</span>
+                )}
+              </span>
               <span className="ml-auto shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300">Automation</span>
             </label>
+            <button
+              type="button"
+              onClick={() => { void toggleReveal(secret) }}
+              disabled={!secret.encrypted_value || revealingName === secret.name}
+              className="shrink-0 p-1 text-gray-400 transition-colors hover:text-gray-700 dark:hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-40"
+              title={revealedValues[secret.name] !== undefined ? 'Hide value' : secret.encrypted_value ? 'Show value' : 'Value not available'}
+            >
+              {revealedValues[secret.name] !== undefined ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            </button>
             <button
               type="button"
               onClick={() => handleDeleteWorkflowSecret(secret.name)}

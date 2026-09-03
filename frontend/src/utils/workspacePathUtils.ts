@@ -6,6 +6,15 @@ import type { PlannerFile } from '../services/api-types'
  */
 
 /**
+ * Strip trailing slashes only -- for equality checks between workspace paths
+ * as stored (case preserved, leading slash preserved). Not the same as
+ * normalizePathForComparison below.
+ */
+export function normalizeWorkspacePath(path?: string | null): string {
+  return (path || '').replace(/\/+$/, '')
+}
+
+/**
  * Normalize a path for comparison (lowercase, remove leading/trailing slashes)
  */
 export function normalizePathForComparison(path: string): string {

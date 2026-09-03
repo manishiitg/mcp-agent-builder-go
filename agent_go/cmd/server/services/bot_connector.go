@@ -2758,11 +2758,9 @@ func isPlanRejectionResponse(text string) bool {
 	return false
 }
 
-// getThreadOffset returns the current message count for a thread (web simulator only)
-func (m *BotConversationManager) getThreadOffset(threadID ThreadID) int {
-	connector := m.GetConnector(threadID.Platform)
-	if wsc, ok := connector.(*WebSimulatorConnector); ok {
-		return wsc.GetThreadMessageCount(threadID.ThreadTS)
-	}
+// getThreadOffset returns the current message count for a thread. Only the
+// (since removed) web simulator ever tracked one; every real platform starts
+// at 0.
+func (m *BotConversationManager) getThreadOffset(_ ThreadID) int {
 	return 0
 }

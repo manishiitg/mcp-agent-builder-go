@@ -294,7 +294,7 @@ const (
 //
 // A terminal child always carries CompletedAt (both SetResult and SetError
 // stamp it), so the nil case is malformed rather than expected; it holds, which
-// preserves the pre-bound behaviour rather than risking a turn ending early.
+// preserves the pre-bound behavior rather than risking a turn ending early.
 func withinContinuationHandoffGrace(snapshot BackgroundAgentSnapshot, now time.Time) bool {
 	if snapshot.CompletedAt == nil {
 		return true

@@ -284,6 +284,12 @@ just lists whatever a user has actually scheduled — it doesn't require a
 product to declare any schedule of its own. Revisit if a second product ever
 wants a built-in schedule.
 
+> **Revisited 2026-09-03.** SparkQuill was that second product: its Pulse is
+> a recurring check-in, i.e. a product schedule. `profile.schedules` now
+> exists in `product.yaml` (`pkg/productschedule` for the definition,
+> `cmd/server/product_schedules.go` for the platform runner). See
+> `docs/workflow/workflow_scheduling.md`, "Product Schedules".
+
 **Resolved and shipped: remove the built-in Org Pulse job fully**, not
 rewrite or defer it. `builtinOrgPulseQuery`/`builtinOrgPulseMessages`
 (`agent_go/cmd/server/builtin_schedules.go`) was goal-alignment-centric end

@@ -6,15 +6,13 @@ import { Card } from './ui/Card';
 import { ChevronDown, Folder, Loader2, Plus, Settings, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import { FolderSelectionDialog } from './FolderSelectionDialog';
 import { ToolSelectionSection } from './ToolSelectionSection';
-import { SkillSelectionSection } from './skills/SkillSelectionSection';
-import { SecretSelectionSection } from './secrets/SecretSelectionSection';
 import { WorkflowProviderCredentialField } from './WorkflowProviderCredentialField';
 import ConfirmationDialog from './ui/ConfirmationDialog';
 import type { CustomPreset } from '../types/preset';
 import type { PlannerFile, PresetLLMConfig, AgentLLMConfig, AgentLLMFallback, LLMProvider } from '../services/api-types';
 import { useLLMStore } from '../stores/useLLMStore';
 import { useModeStore } from '../stores/useModeStore';
-import { agentApi } from '../services/api';
+
 import LLMSelectionDropdown from './LLMSelectionDropdown';
 import LLMRoleSelector from './LLMRoleSelector';
 import WorkflowLLMTierPreview from './WorkflowLLMTierPreview';
@@ -24,7 +22,6 @@ import { getWorkflowLLMOptions, getWorkflowLLMTierDefaults, getWorkflowProviderO
 import { llmOptionMatchesRef, llmOptionsKey } from '../utils/llmConfigDisplay';
 import { mergeCdpPorts } from '../utils/cdpSetup';
 import { useChatStore } from '../stores/useChatStore';
-import BrowserAutomationSettings from './BrowserAutomationSettings';
 
 type WorkflowLLMRoleKey = 'tier1' | 'tier2' | 'tier3' | 'builder' | 'maintenance' | 'pulse';
 
@@ -88,17 +85,12 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
   const [showFolderDialog, setShowFolderDialog] = useState(false);
   const [folderDialogPosition, setFolderDialogPosition] = useState({ top: 0, left: 0 });
   const [llmConfig, setLlmConfig] = useState<PresetLLMConfig | null>(null);
+  // Browser mode and CDP port are edited in the workflow panel now; this
+  // dialog only carries the saved values through.
   const [browserMode, setBrowserModeState] = useState<'none' | 'auto' | 'headless' | 'cdp'>('auto');
-  const enableBrowserAccess = browserMode === 'auto' || browserMode === 'headless' || browserMode === 'cdp';
   const [cdpPort, setCdpPort] = useState(9222);
-  const [cdpConnected, setCdpConnected] = useState<boolean | null>(null);
-  const [cdpError, setCdpError] = useState<string | null>(null);
-  const [cdpChecking, setCdpChecking] = useState(false);
   const [showDeleteWorkflowConfirm, setShowDeleteWorkflowConfirm] = useState(false);
   const [deletingWorkflow, setDeletingWorkflow] = useState(false);
-  const setBrowserMode = useCallback((mode: 'none' | 'auto' | 'headless' | 'cdp') => {
-    setBrowserModeState(mode)
-  }, [])
 
   const [builderLLM, setBuilderLLM] = useState<AgentLLMConfig | null>(null);
   const [maintenanceLLM, setMaintenanceLLM] = useState<AgentLLMConfig | null>(null);
@@ -162,34 +154,8 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
   }), []);
 
   // CDP connection check
-  const checkCdpConnection = useCallback(async (port: number) => {
-    setCdpChecking(true);
-    setCdpConnected(null);
-    setCdpError(null);
-    try {
-      const result = await agentApi.checkCdpPort(port);
-      setCdpConnected(result.connected);
-      setCdpError(result.connected ? null : result.error || null);
-    } catch {
-      setCdpConnected(false);
-      setCdpError('Unable to check the CDP port.');
-    } finally {
-      setCdpChecking(false);
-    }
-  }, []);
 
   // Auto-check CDP for both automatic and required-CDP modes.
-  useEffect(() => {
-    if ((browserMode !== 'auto' && browserMode !== 'cdp') || !enableBrowserAccess) {
-      setCdpConnected(null);
-      setCdpError(null);
-      return;
-    }
-    const timer = setTimeout(() => {
-      checkCdpConnection(cdpPort);
-    }, 500); // debounce
-    return () => clearTimeout(timer);
-  }, [browserMode, cdpPort, enableBrowserAccess, checkCdpConnection]);
 
   const hasLLMOptions = (options?: Record<string, unknown>) => Boolean(options && Object.keys(options).length > 0);
   const toAgentLLMConfig = useCallback((llm: LLMOption): AgentLLMConfig => ({
@@ -284,8 +250,6 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
     return `${config.provider}/${config.model_id}`;
   }, []);
 
-  // Draft create paths can collide with existing workflows, so only load scoped secrets for persisted workflows.
-  const workflowSecretPath = editingPreset ? selectedFolder?.filepath : undefined;
   const workflowCredentialPath = editingPreset ? selectedFolder?.filepath : undefined;
   // Clears any half-typed credential when the modal opens or switches
   // automations, so one workflow's entry can never be submitted against another.
@@ -1033,66 +997,9 @@ const PresetModal: React.FC<PresetModalProps> = React.memo(({
                   </div>
                 </div>
 
-                {/* MCP Server Selection */}
-                {availableServers.length > 0 ? (
-                    <ToolSelectionSection
-                      availableServers={availableServers}
-                      selectedServers={selectedServers}
-                      selectedTools={selectedTools}
-                      onServerChange={setSelectedServers}
-                      onToolChange={setSelectedTools}
-                      agentMode={effectiveAgentMode}
-                    />
-                  ) : (
-                    <div className="space-y-2">
-                      <label className="block text-sm font-medium text-gray-900 dark:text-gray-100">
-                        MCP Server Selection
-                      </label>
-                      <div className="p-3 border border-gray-200 dark:border-gray-700 rounded-md text-xs text-gray-500 dark:text-gray-400">
-                        No MCP servers configured. Add servers in the MCP settings sidebar.
-                      </div>
-                    </div>
-                )}
-
-                {/* Skills Selection - Workflow mode only */}
-                {effectiveAgentMode === 'workflow' && (
-                  <SkillSelectionSection
-                    selectedSkills={selectedSkills}
-                    onSkillChange={setSelectedSkills}
-                  />
-                )}
-
-                {/* Secrets Selection - Workflow mode only */}
-                {effectiveAgentMode === 'workflow' && (
-                  <SecretSelectionSection
-                    selectedSecrets={selectedSecrets}
-                    onSecretChange={setSelectedSecrets}
-                    selectedGlobalSecrets={selectedGlobalSecrets}
-                    onGlobalSecretChange={setSelectedGlobalSecrets}
-                    workflowPath={workflowSecretPath}
-                  />
-                )}
-
-                <BrowserAutomationSettings
-                  browserMode={browserMode}
-                  onBrowserModeChange={setBrowserMode}
-                  cdpPort={cdpPort}
-                  onCdpPortChange={setCdpPort}
-                  cdpConnected={cdpConnected}
-                  cdpError={cdpError}
-                  cdpChecking={cdpChecking}
-                  onCheckCdpConnection={checkCdpConnection}
-                />
-                {/* Agent Mode Display (read-only for workflow) */}
-                {hideAgentModeSelection && fixedAgentMode && (
-                  <div className="p-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Mode:</span>
-                      <span className="text-sm font-medium text-gray-900 dark:text-white">Automation</span>
-                      <span className="text-xs text-gray-500 dark:text-gray-400">- Todo-list execution</span>
-                    </div>
-                  </div>
-                )}
+                {/* MCP servers, skills, secrets, and browser mode moved to the
+                    workflow panel (their values are preserved on save); this
+                    dialog is name, folder, and LLM configuration only. */}
               </div>
             </div>
           ) : (

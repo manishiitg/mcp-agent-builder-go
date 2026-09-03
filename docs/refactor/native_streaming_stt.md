@@ -1,12 +1,20 @@
 # Native streaming speech-to-text
 
-**Status:** Working and confirmed with a real microphone in the running app
-(2026-08-02). Live dictation now uses the native helper end to end: preview
-text appears while speaking, punctuated and identical to the committed text.
-The Python/MLX path remains the automatic fallback whenever the helper binary
-is absent, so machines without it are unaffected — and it is still the only
-path for WhatsApp voice notes, which is what the removal work below depends
-on. Not yet shipped in a release build.
+**Status: SUPERSEDED (2026-09-02).** The Swift/CoreML voice helper this
+document designed, and the Python/MLX Parakeet worker it was replacing, are
+both gone. SparkQuill now runs the shared AgentWorks engine —
+`agent_go/pkg/voicestt` (sherpa-onnx + NVIDIA Nemotron streaming, in-process,
+CGO) — through the same `/api/voice/stream` WebSocket and the same frontend
+hook (`frontend/shared/voice/useVoiceDictation.ts`) as AgentWorks' composer
+and Video Studio, on macOS (Intel and Apple Silicon) and Linux alike. One
+engine, one model directory (`~/.agentworks/voice-models/`), one protocol.
+WhatsApp voice notes go through the same engine; container decoding
+(ogg/opus) is `voicestt.DecodeFile`, using macOS's afconvert or ffmpeg.
+Packaging: `scripts/build-darwin-voice-binary.sh` (desktop apps) and
+`deploy/aws-ec2/build/build-linux-agent.sh` (EC2) build with cgo and stage
+the native libraries beside the binary. What follows is kept as the record
+of why the earlier engines were tried and what was measured.
+
 **Date:** 2026-08-02
 **Repositories:** `mcp-agent-builder-go` (SparkQuill: `agent_go/cmd/family-server`,
 `frontend/learning-app`, `desktop-sparkquill`)

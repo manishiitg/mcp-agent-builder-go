@@ -56,7 +56,12 @@ type FolderGuardConfig struct {
 	// BlockedWritePaths denies WRITES only — reads pass through. Used for paths the agent
 	// must inspect but cannot modify (e.g. a workflow's planning/ subtree).
 	BlockedWritePaths []string `json:"blocked_write_paths,omitempty"`
-	EnforcementMode   string   `json:"enforcement_mode"` // "strict" | "warn" | "audit"
+	// StrictAllowlist switches the isolator to deny-by-default (see
+	// security.Isolator.StrictAllowlist); DenyNetwork removes outbound network
+	// in that mode. Both come from an agent profile's runtime.sandbox policy.
+	StrictAllowlist bool   `json:"strict_allowlist,omitempty"`
+	DenyNetwork     bool   `json:"deny_network,omitempty"`
+	EnforcementMode string `json:"enforcement_mode"` // "strict" | "warn" | "audit"
 }
 
 // IsPathBlocked checks if a path is in the blocked paths list

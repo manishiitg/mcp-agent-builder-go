@@ -184,15 +184,25 @@ function providerModelOptions(entry: ProviderManifestEntry): LLMOption[] {
   return options
 }
 
+// Providers whose catalog is not a usable pick list. Pi routes to many
+// upstream providers (Gemini, Z.AI, Kimi, DeepSeek, ...) and only the ones the
+// user has keyed and published actually work, so the workflow model picker
+// offers Pi's published entries only; the full catalog stays in the Pi
+// drill-in where entries get published.
+const PUBLISHED_ONLY_PROVIDERS = new Set<string>(['pi-cli'])
+
 export function getWorkflowLLMOptions(
   availableLLMs: LLMOption[],
   providerManifest: ProviderManifestEntry[] = [],
 ): LLMOption[] {
   const options: LLMOption[] = []
   const seen = new Set<string>()
+  const catalogModelIds = new Map<string, Set<string>>()
 
   providerManifest.forEach(entry => {
     if (entry.deprecated || entry.integration_kind === 'audio_provider') return
+    catalogModelIds.set(entry.id, new Set(entry.models.map(model => model.model_id)))
+    if (PUBLISHED_ONLY_PROVIDERS.has(entry.id)) return
     providerModelOptions(entry).forEach(option => {
       const key = `${option.provider}/${option.model}/${JSON.stringify(option.options ?? {})}`
       if (seen.has(key)) return
@@ -202,6 +212,13 @@ export function getWorkflowLLMOptions(
   })
 
   availableLLMs.forEach(option => {
+    // A published entry whose "model" is just the provider id (e.g. Cursor
+    // CLI / cursor-cli) is the old "let the CLI route" alias. Where the
+    // catalog still lists that id (claude-code does) it dedupes below; where
+    // the catalog moved on to a real default id (cursor-cli now uses "auto"),
+    // the alias would show up as a second, differently named copy of the
+    // default. Drop it: the catalog default already stands for it.
+    if (option.model === option.provider && !catalogModelIds.get(option.provider)?.has(option.model)) return
     const key = `${option.provider}/${option.model}/${JSON.stringify(option.options ?? {})}`
     if (seen.has(key)) return
     seen.add(key)

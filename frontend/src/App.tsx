@@ -4,7 +4,6 @@ import { useEffect, useCallback, useRef, useState, lazy, Suspense } from "react"
 import { ThemeProvider } from "./contexts/ThemeContext.tsx";
 import { UpdateProgressToast } from "./components/UpdateProgressToast";
 import { GlobalHumanFeedbackPrompt } from "./components/GlobalHumanFeedbackPrompt";
-import { FileContentViewer } from "./components/FileContentViewer";
 import { resetSessionId } from "./services/api";
 import { AuthWrapper } from "./components/AuthWrapper";
 import { isScheduledSession } from "./utils/workflowSessionKinds";
@@ -952,9 +951,6 @@ function App() {
                   />
                 </div>
             </div>
-
-            {/* File Content View - overlay when showing file content */}
-            <FileContentViewer />
           </div>
 
         </div>

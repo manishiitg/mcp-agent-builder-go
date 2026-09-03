@@ -1592,7 +1592,7 @@ func collectTerminalPlanStepTypes(value any, stepTypes map[string]string) {
 
 func isWorkflowPlanStepType(stepType string) bool {
 	switch strings.TrimSpace(stepType) {
-	case "regular", "human_input", "todo_task", "routing", "message_sequence":
+	case "regular", "human_input", "orchestrator", "todo_task", "routing", "message_sequence":
 		return true
 	default:
 		return false
@@ -1608,7 +1608,7 @@ func (api *StreamingAPI) canAccessTerminalSession(r *http.Request, sessionID str
 	currentUserID := GetUserIDFromContext(r.Context())
 	activeSession, exists := api.getActiveSession(sessionID)
 	if exists {
-		return activeSession.UserID == "" || activeSession.UserID == currentUserID
+		return sessionVisibleTo(activeSession.UserID, GetUserFromContext(r.Context()))
 	}
 	if api.eventStore == nil {
 		return currentUserID == GetDefaultUserID()
@@ -1629,7 +1629,7 @@ func (api *StreamingAPI) canUseSessionIDForQuery(r *http.Request, sessionID stri
 	currentUserID := GetUserIDFromContext(r.Context())
 	activeSession, exists := api.getActiveSession(sessionID)
 	if exists {
-		return activeSession.UserID == "" || activeSession.UserID == currentUserID
+		return sessionVisibleTo(activeSession.UserID, GetUserFromContext(r.Context()))
 	}
 	if api.eventStore != nil {
 		if owner := api.eventStore.GetSessionOwner(sessionID); owner != "" {

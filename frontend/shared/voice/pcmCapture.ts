@@ -1,0 +1,118 @@
+/**
+ * Raw-PCM microphone capture at 16kHz mono, matching the sample rate
+ * pkg/voicestt.SampleRate expects server-side. Ported from the SparkQuill
+ * learning-app's proven implementation (frontend/learning-app/src/voice/nativePcm.ts)
+ * — that app is a separate Vite project frontend/src cannot import from, so
+ * this is a copy, not a shared module.
+ *
+ * Requesting the AudioContext at 16000Hz directly (rather than capturing at
+ * the device's native 44.1/48kHz and resampling in JS) lets the browser/OS
+ * audio driver do the resampling, which is both simpler and higher quality
+ * than a hand-rolled resampler.
+ */
+
+/** 160ms at 16kHz — small enough for responsive partials, large enough to
+ * not spam the websocket with a message per render quantum. */
+export const PCM_CHUNK_SAMPLES = 2560
+export const PCM_SAMPLE_RATE = 16000
+
+// Registered from a Blob URL rather than a served file: an AudioWorklet module
+// must be fetched by URL, and inlining it is immune to asset-path differences
+// between dev and packaged builds.
+const WORKLET_SOURCE = `
+class PcmCollector extends AudioWorkletProcessor {
+  process(inputs) {
+    const channel = inputs[0] && inputs[0][0]
+    // A copy is required: the render quantum's buffer is reused by the audio
+    // thread the moment this returns, so posting it directly would deliver
+    // whatever the next quantum overwrote it with.
+    if (channel) this.port.postMessage(new Float32Array(channel))
+    return true
+  }
+}
+registerProcessor('pcm-collector', PcmCollector)
+`
+
+export type PcmCapture = { stop: () => void }
+
+// Contexts whose worklet module is already registered, so a capture started
+// after ensurePcmWorklet() does not pay the module load twice.
+const registered = new WeakSet<AudioContext>()
+
+/** Registers the PCM worklet on `ctx`. Safe to call early and concurrently
+ *  with the microphone prompt — that overlap is where the visible startup
+ *  delay used to go (measured: ~3s from socket open to first chunk). */
+export async function ensurePcmWorklet(ctx: AudioContext): Promise<void> {
+  if (registered.has(ctx)) return
+  const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }))
+  try {
+    await ctx.audioWorklet.addModule(url)
+    registered.add(ctx)
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+/**
+ * Streams `stream`'s audio to `onChunk` as PCM16 little-endian bytes, in
+ * PCM_CHUNK_SAMPLES-sample slices. The caller owns both the AudioContext and
+ * the MediaStream (and is responsible for closing/stopping them).
+ */
+export async function startPcmCapture(
+  ctx: AudioContext,
+  stream: MediaStream,
+  onChunk: (pcm16: ArrayBuffer) => void,
+): Promise<PcmCapture> {
+  await ensurePcmWorklet(ctx)
+  if (ctx.state === 'suspended') {
+    // Created outside a user gesture, or the tab was backgrounded: without
+    // this the worklet never runs and nothing is ever sent.
+    await ctx.resume()
+  }
+
+  const source = ctx.createMediaStreamSource(stream)
+  const node = new AudioWorkletNode(ctx, 'pcm-collector')
+
+  // The worklet emits one render quantum (128 frames, ~8ms) at a time — far
+  // too small to be worth a websocket send each. Coalesce up to a real chunk
+  // first.
+  let pending: number[] = []
+  node.port.onmessage = (event: MessageEvent<Float32Array>) => {
+    const samples = event.data
+    for (let i = 0; i < samples.length; i++) pending.push(samples[i])
+    while (pending.length >= PCM_CHUNK_SAMPLES) {
+      const slice = pending.splice(0, PCM_CHUNK_SAMPLES)
+      onChunk(floatTo16BitPCM(slice))
+    }
+  }
+
+  source.connect(node)
+  // AudioWorkletNode must be connected to a destination for its process()
+  // callback to run in some browsers, even though this capture path never
+  // wants to play the audio back. muted via gain 0 rather than connecting
+  // straight to ctx.destination, which would echo the mic to the speakers.
+  const silence = ctx.createGain()
+  silence.gain.value = 0
+  node.connect(silence)
+  silence.connect(ctx.destination)
+
+  return {
+    stop: () => {
+      node.port.onmessage = null
+      try { source.disconnect() } catch { /* already disconnected */ }
+      try { node.disconnect() } catch { /* already disconnected */ }
+      try { silence.disconnect() } catch { /* already disconnected */ }
+    },
+  }
+}
+
+function floatTo16BitPCM(samples: number[]): ArrayBuffer {
+  const buffer = new ArrayBuffer(samples.length * 2)
+  const view = new DataView(buffer)
+  for (let i = 0; i < samples.length; i++) {
+    const clamped = Math.max(-1, Math.min(1, samples[i]))
+    const int16 = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff
+    view.setInt16(i * 2, int16, true) // little-endian, matches decodePCM16 server-side
+  }
+  return buffer
+}

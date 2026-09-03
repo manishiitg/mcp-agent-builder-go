@@ -845,6 +845,33 @@ export interface ChannelRoute {
   send_full_details?: boolean
 }
 
+// Shape of GET/PUT /api/whatsapp/routing entries. Same idea as ChannelRoute
+// but workshop_mode is an untyped string on this endpoint.
+export interface WhatsAppRoute {
+  workflow_id: string
+  workspace_path?: string
+  workshop_mode?: string
+  send_full_details?: boolean
+}
+
+// Shape of GET /api/whatsapp/status. enabled = connector started at server
+// startup; paired = device identity stored; connected = live WS.
+export interface WhatsAppStatus {
+  enabled: boolean
+  paired: boolean
+  connected: boolean
+  own_jid: string
+  qr_available: boolean
+  qr_expires_at?: string
+  link_code?: string
+  link_code_expires_at?: string
+  bound_chat_count?: number
+  owner_user_id?: string
+  owner_email?: string
+  owner_username?: string
+  owner_paired_at?: string
+}
+
 export interface SlackConfig {
   enabled: boolean
   bot_token?: string  // Masked in GET response
@@ -1821,6 +1848,25 @@ export interface CapabilitiesResponse {
   local_mode?: boolean;
   runtime_debug?: boolean;
   terminal_live_attach?: boolean;
+  /** Streaming microphone dictation (agent_go/pkg/voicestt, voicestt.Status).
+   * `available` is a build-time fact (false in a CGO_ENABLED=0 build);
+   * `installed` means the model is on disk; `ready` flips once it has loaded. */
+  voice?: VoiceEngineStatus;
+}
+
+/** Mirrors voicestt.Status — also what GET /api/voice/status returns. */
+export interface VoiceEngineStatus {
+  available: boolean;
+  installed: boolean;
+  downloading: boolean;
+  got_bytes: number;
+  total_bytes: number;
+  loading: boolean;
+  ready: boolean;
+  active_streams: number;
+  error?: string;
+  model_dir: string;
+  size_mb: number;
 }
 
 
@@ -2216,6 +2262,44 @@ export interface ExecutionLogsResponse {
   success: boolean;
   steps: Record<string, StepExecutionLogs>; // key is step ID or name (e.g. "step-1")
   token_usage?: TokenUsageFile;
+  pulse_reviews?: PulseReviewRunLog[];
+}
+
+export interface PulseReviewTranscriptEvent {
+  timestamp: string;
+  type: 'user_message' | 'assistant_message' | 'tool_call' | string;
+  role?: string;
+  text?: string;
+  tool_call?: Record<string, unknown>;
+}
+
+export interface PulseBackgroundAgentLog {
+  agent_id: string;
+  name: string;
+  kind?: string;
+  parent_execution_id?: string;
+  status: string;
+  result?: string;
+  error?: string;
+  duration?: string;
+  started_at?: string;
+  completed_at?: string;
+  transcript_path?: string;
+  transcript_status?: string;
+  provider?: string;
+  model_id?: string;
+  events?: PulseReviewTranscriptEvent[];
+}
+
+export interface PulseReviewRunLog {
+  run_id: string;
+  session_id: string;
+  schedule_id?: string;
+  trigger_source?: string;
+  status?: string;
+  started_at: string;
+  completed_at?: string;
+  agents: PulseBackgroundAgentLog[];
 }
 
 
@@ -2658,56 +2742,6 @@ export interface AllDelegationLogsResponse {
   by_model: Record<string, ChatModelUsage>;
 }
 
-// ============================================================================
-// Bot Simulator Types
-// ============================================================================
-
-export interface SimulatorMessageBlock {
-  type: string;
-  text?: string;
-  buttons?: SimulatorMessageButton[];
-}
-
-export interface SimulatorMessageButton {
-  text: string;
-  value: string;
-  style?: string;
-  action_id: string;
-}
-
-export interface SimulatorMessage {
-  id: string;
-  text: string;
-  blocks?: SimulatorMessageBlock[];
-  is_bot: boolean;
-  timestamp: string;
-}
-
-export interface SimulatorThreadInfo {
-  thread_id: string
-  preview: string
-  created_at: string
-  message_count: number
-}
-
-export interface SimulatorSendResponse {
-  type: 'conversation' | 'follow_up';
-  response?: string;          // text reply for conversation
-  thread_id: string;
-  session_id?: string;        // internal chat session ID (for follow_up)
-  bot_session_id?: string;    // set when awaiting user confirmation
-  thread_offset?: number;     // current thread message count (for polling init)
-}
-
-export interface SimulatorMessagesResponse {
-  messages: SimulatorMessage[];
-  total: number;
-}
-
-export interface SimulatorInteractResponse {
-  success: boolean;
-}
-
 // Workflow plan changelog (History view "Plan edits" feed)
 export interface PlanChangelogFieldChange {
   step_id: string
@@ -2930,7 +2964,7 @@ export interface ScheduledJob {
   id: string
   name: string
   description: string
-  entity_type: 'workflow' | 'chat' | 'multi-agent'
+  entity_type: 'workflow' | 'chat' | 'multi-agent' | 'product'
   preset_query_id?: string
   workspace_path?: string
   workflow_id?: string
@@ -3092,6 +3126,8 @@ export interface WorkflowManifest {
   execution_defaults: WorkflowExecutionDefaults
   ownership: WorkflowOwnership
   schedules: WorkflowScheduleEntry[]
+  /** Who owns and who may read this workflow (workflow_access.go). */
+  access?: { owners: string[]; readers: string[] }
   created_at?: string
   updated_at?: string
   run_retention_count?: number
@@ -3192,6 +3228,9 @@ export interface WorkflowScheduleEntry {
 export interface DiscoveredWorkflow {
   workspace_path: string
   manifest: WorkflowManifest
+  /** The signed-in user's level on this workflow: owner/write may edit and
+   * share, read gets the read-only session. Absent on older servers. */
+  my_access?: 'owner' | 'write' | 'read'
 }
 
 export interface ListWorkflowManifestsResponse {

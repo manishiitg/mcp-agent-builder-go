@@ -4,6 +4,7 @@ import { skillsApi } from '../../api/skills'
 import type { Skill } from '../../types/skills'
 import SkillRow from './SkillRow'
 import SkillImportDialog from './SkillImportDialog'
+import { READ_ONLY_TITLE, useCanWriteWorkflow } from '../../hooks/useCanWriteWorkflow'
 
 interface SkillsManagerPanelProps {
   /** The embedded workflow-panel context: tighter spacing for a narrow side
@@ -23,6 +24,10 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showImportDialog, setShowImportDialog] = useState(false)
+  // Import and delete write the shared skills library immediately; the
+  // add/remove toggle changes this workflow's selection. All disable for
+  // read-only users.
+  const readOnly = !useCanWriteWorkflow()
 
   const loadSkills = useCallback(async () => {
     setIsLoading(true)
@@ -114,7 +119,9 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
                     <button
                       type="button"
                       onClick={() => onToggleSkill(folderName)}
-                      className="rounded-full p-0.5 text-primary/70 transition-colors hover:bg-red-500/15 hover:text-red-500"
+                      disabled={readOnly}
+                      title={readOnly ? READ_ONLY_TITLE : undefined}
+                      className="rounded-full p-0.5 text-primary/70 transition-colors hover:bg-red-500/15 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-primary/70"
                       aria-label={`Remove ${label} from this workflow`}
                     >
                       <X className="h-3 w-3" />
@@ -143,7 +150,9 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
           </button>
           <button
             onClick={() => setShowImportDialog(true)}
-            className="px-2.5 py-1 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/20 rounded-md transition-colors flex items-center gap-1.5"
+            disabled={readOnly}
+            title={readOnly ? READ_ONLY_TITLE : undefined}
+            className="px-2.5 py-1 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/20 rounded-md transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus className="w-3.5 h-3.5" />
             Import
@@ -187,7 +196,9 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
             </p>
             <button
               onClick={() => setShowImportDialog(true)}
-              className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary hover:bg-primary/90 rounded-md transition-colors flex items-center gap-2"
+              disabled={readOnly}
+              title={readOnly ? READ_ONLY_TITLE : undefined}
+              className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary hover:bg-primary/90 rounded-md transition-colors flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Plus className="w-4 h-4" />
               Import
@@ -206,6 +217,7 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
                 onDelete={() => handleDelete(skill.folder_name)}
                 selected={onToggleSkill ? (selectedSkills || []).includes(skill.folder_name) : undefined}
                 onToggleSelect={onToggleSkill ? () => onToggleSkill(skill.folder_name) : undefined}
+                readOnly={readOnly}
               />
             ))}
           </div>

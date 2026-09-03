@@ -83,22 +83,40 @@ func userProductAccessForClaims(claims *UserClaims) (UserProductAccess, bool) {
 	return userProductAccessForIdentity(claims.UserID, claims.Username, claims.Email)
 }
 
+// userProductPolicy is the one answer to "which products may this identity
+// open". The user directory wins when it knows the identity (see
+// accessForRecord: admins and members with no list are unrestricted, a
+// read-only account with no list gets NONE, an explicit list restricts to
+// it). Otherwise the legacy config/user-product-access.json applies, where
+// an absent entry or empty list means unrestricted. restricted=false means
+// "all products"; restricted=true with an empty list means "no products".
+func userProductPolicy(userID, username, email string) (products []string, restricted bool) {
+	if rec := directoryUserFor(userID, username, email); rec != nil {
+		acc := accessForRecord(rec)
+		return acc.Products, acc.ProductsRestricted
+	}
+	access, ok := userProductAccessForIdentity(userID, username, email)
+	if !ok || len(access.Products) == 0 {
+		return nil, false
+	}
+	return access.Products, true
+}
+
 // userAllowedProduct reports whether claims may use the given product
-// surface. A user with no explicit entry, or an entry with an empty
-// Products list, is unrestricted. An empty product name (the generic,
+// surface (see userProductPolicy). An empty product name (the generic,
 // profile-less AgentWorks chat path has no product) is always allowed here
 // -- workflow-level access is what actually gates that path, via
 // userAllowedWorkflowID.
 func userAllowedProduct(claims *UserClaims, product string) bool {
 	product = strings.TrimSpace(product)
-	if product == "" {
+	if product == "" || claims == nil {
 		return true
 	}
-	access, ok := userProductAccessForClaims(claims)
-	if !ok || len(access.Products) == 0 {
+	products, restricted := userProductPolicy(claims.UserID, claims.Username, claims.Email)
+	if !restricted {
 		return true
 	}
-	for _, allowed := range access.Products {
+	for _, allowed := range products {
 		if strings.EqualFold(strings.TrimSpace(allowed), product) {
 			return true
 		}
@@ -131,18 +149,20 @@ func userAllowedWorkflowID(claims *UserClaims, workflowID string) bool {
 // with an empty WorkflowIDs list) gets the list back unchanged, including a
 // nil input turning into a nil/empty output rather than panicking.
 func filterWorkflowManifestsForUser(claims *UserClaims, discovered []DiscoveredWorkflow) []DiscoveredWorkflow {
-	access, ok := userProductAccessForClaims(claims)
-	if !ok || len(access.WorkflowIDs) == 0 {
-		return discovered
-	}
 	filtered := make([]DiscoveredWorkflow, 0, len(discovered))
 	for _, workflow := range discovered {
 		if workflow.Manifest == nil {
 			continue
 		}
-		if userAllowedWorkflowID(claims, workflow.Manifest.ID) {
-			filtered = append(filtered, workflow)
+		if !userAllowedWorkflowID(claims, workflow.Manifest.ID) {
+			continue
 		}
+		level := workflowAccessForManifest(claims, workflow.Manifest)
+		if level == WorkflowAccessNone {
+			continue
+		}
+		workflow.MyAccess = level
+		filtered = append(filtered, workflow)
 	}
 	return filtered
 }
@@ -158,8 +178,13 @@ func productAccessResponseFields(claims *UserClaims) map[string]interface{} {
 		"allowed_products":     nil,
 		"allowed_workflow_ids": nil,
 	}
-	if ok && len(access.Products) > 0 {
-		out["allowed_products"] = access.Products
+	if claims != nil {
+		if products, restricted := userProductPolicy(claims.UserID, claims.Username, claims.Email); restricted {
+			if products == nil {
+				products = []string{}
+			}
+			out["allowed_products"] = products
+		}
 	}
 	if ok && len(access.WorkflowIDs) > 0 {
 		out["allowed_workflow_ids"] = access.WorkflowIDs

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -317,7 +318,8 @@ func shouldRefreshGeneratedVideoStudioPlan(content string) bool {
 	// the workflow, and nothing else brings it forward. Video Studio now exposes
 	// every production task as one message_sequence; refresh the older todo_task
 	// plans rather than leaving a hidden orchestrator in existing projects.
-	if strings.Contains(content, `"type": "todo_task"`) || strings.Contains(content, `"type":"todo_task"`) {
+	if strings.Contains(content, `"type": "todo_task"`) || strings.Contains(content, `"type":"todo_task"`) ||
+		strings.Contains(content, `"type": "orchestrator"`) || strings.Contains(content, `"type":"orchestrator"`) {
 		return true
 	}
 	required := []string{`"shortform-characters"`, `"shortform-look-sound"`, `"shortform-narration"`, `"longform-shotlist"`}
@@ -428,9 +430,10 @@ func showVideoFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 		projectRoot := profileWorkspaceRoot(runtime.UserID, runtime.WorkspacePath)
 		return agentprofiles.ToolSpec{
 			Name: "show_video", Category: "presentation_tools",
-			Description: "Present a playable project video in the Production panel. Call this as soon as a reviewable MP4 exists; include a passing quality-report.json only when marking it as an approved final. Repeating the same path updates the existing presentation.",
+			Description: "Present a playable project video in the Production panel. Call this as soon as a reviewable MP4 exists; include source_url when Fal returned its HTTPS CDN URL so the panel can start from that faster source and fall back to the durable project file. Include a passing quality-report.json only when marking it as an approved final. Repeating the same path updates the existing presentation.",
 			Parameters: map[string]interface{}{"type": "object", "properties": map[string]interface{}{
 				"path":           map[string]interface{}{"type": "string", "description": "Project-relative path to the exact video"},
+				"source_url":     map[string]interface{}{"type": "string", "description": "Optional HTTPS Fal CDN URL for fast preview playback; the project file remains required."},
 				"qa_report_path": map[string]interface{}{"type": "string", "description": "Optional project-relative passing quality-report.json. Omit for a review preview."},
 				"title":          map[string]interface{}{"type": "string"},
 				"note":           map[string]interface{}{"type": "string"},
@@ -451,6 +454,10 @@ func showVideoFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 					return "show_video requires a project-relative video path.", nil
 				}
 				reportPath, _ := args["qa_report_path"].(string)
+				sourceURL, err := falCDNVideoURL(stringArg(args, "source_url"))
+				if err != nil {
+					return "show_video source_url must be an HTTPS URL hosted on Fal's CDN.", nil
+				}
 				title, _ := args["title"].(string)
 				note, _ := args["note"].(string)
 				title = strings.TrimSpace(title)
@@ -475,7 +482,7 @@ func showVideoFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 					Activity:      presentationActivity(runtime.Presentation),
 					Payload: map[string]interface{}{
 						"path": videoPath, "qa_report_path": reportPath,
-						"note": strings.TrimSpace(note), "verdict": verdict,
+						"source_url": sourceURL, "note": strings.TrimSpace(note), "verdict": verdict,
 					},
 					Resources: []map[string]string{{"kind": "workspace.file", "path": videoPath, "role": "primary"}},
 				})
@@ -489,6 +496,25 @@ func showVideoFactory(workspaceAPIURL string) agentprofiles.ToolFactory {
 			},
 		}, nil
 	}
+}
+
+// falCDNVideoURL keeps presentation playback on an expected, HTTPS-only
+// provider origin. The local project MP4 remains mandatory for durable review,
+// QA, download, and a fallback if Fal's temporary CDN URL has expired.
+func falCDNVideoURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+		return "", errors.New("invalid Fal CDN URL")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host != "fal.media" && !strings.HasSuffix(host, ".fal.media") {
+		return "", errors.New("source is not hosted by Fal CDN")
+	}
+	return parsed.String(), nil
 }
 
 // RegisterAgentProfileRuntime connects Video Studio's product-owned workspace

@@ -355,7 +355,7 @@ type BackgroundAgentSnapshot struct {
 // nothing. The per-step progress records in question declare "orchestrator", so
 // the override never fires for them and their Kind is NOT workflow_step — while
 // their ids (workflow-full-<parent>-step-<n>-<token>) are exactly what
-// isWorkflowStepTrackingExecution recognises.
+// isWorkflowStepTrackingExecution recognizes.
 //
 // An earlier version of this predicate matched Kind=="workflow_step" only. It
 // therefore did not match the very records that caused this bug, and its test
@@ -505,8 +505,8 @@ func (r *BackgroundAgentRegistry) GetAll(sessionID string) []*BackgroundAgent {
 // Each is registered on OrchestratorAgentStart and settled on the matching end
 // event — but several real paths never deliver that end. A superseded or
 // abandoned evaluation stops emitting entirely, and a todo_task_orchestrator's
-// successful turn end is deliberately ignored in favour of a later
-// TodoTaskStepCompleted event that an abandoned run never sends.
+// successful turn end is deliberately ignored in favor of a later
+// OrchestratorStepCompleted event that an abandoned run never sends.
 //
 // That matters because HasRunningAgents treats BGAgentRunning as live
 // unconditionally and the registry never deletes entries, so one orphan pins
@@ -588,7 +588,7 @@ func (r *BackgroundAgentRegistry) CancelAgent(sessionID, agentID string) error {
 
 // CancelAll cancels all running background agents in a session
 // CancelAll cancels every running agent for a session and reports how many it
-// cancelled, how many carried no cancel func, and how many were already done.
+// canceled, how many carried no cancel func, and how many were already done.
 //
 // The counts exist because PLAT-130 was diagnosed twice from the same silent
 // teardown. "Stop was clicked and nothing visibly happened" is consistent with
@@ -970,7 +970,7 @@ func (api *StreamingAPI) isSessionBusyForAutoNotification(sessionID string) bool
 	// registering as a running child of the very turn that was blocking it.
 	//
 	// This is additive: it can only cause more queueing, never less, so the chat
-	// path keeps its existing behaviour exactly.
+	// path keeps its existing behavior exactly.
 	if api.sessionTurnInProgress(sessionID) {
 		return true
 	}
@@ -1851,7 +1851,7 @@ func workflowRunBackupDirective(snap BackgroundAgentSnapshot) string {
 	if snap.Kind != "workflow_run_tool" && snap.Metadata["type"] != "workflow_run" {
 		return ""
 	}
-	return "\n\nThe run is complete - now back up this workflow. Call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/backup-strategy.md\"}]), read workflow.json.backup, and use it as the backup contract. Perform backup and all Git commands directly in this parent workflow turn. Never delegate them through run_in_background, call_generic_agent, a reviewer, or another sub-agent: delegated agents intentionally cannot write the workflow .git directory. If backup is enabled, perform the configured destinations (git/github, object store, HuggingFace, etc.). If backup is missing or disabled, do not silently skip: set it up with the zero-config local-git default (a local git repo needs no credentials) and back up. Skip the push only when backup/status.json shows the current source is already backed up (unchanged source hash) — i.e. a Pulse pass or an earlier turn already captured this state. Always write backup/status.json with state, last attempt/success timestamps, destination results, errors, and the current source hash; do not write operational backup status into workflow.json."
+	return "\n\nThe run is complete - now back up this workflow. Call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/backup-strategy.md\"}]), read workflow.json.backup, and use it as the backup contract. Perform backup and all Git commands directly in this parent workflow turn. Never delegate them through run_in_background, call_generic_agent, a reviewer, or another sub-agent: delegated agents intentionally cannot write the workflow .git directory. If any configured destination covers db-sqlite, call create_workflow_database_snapshot first and stage its returned backup/database/db.sqlite snapshot plus backup/database/db.sqlite.sha256 checksum; never read or stage protected live db/db.sqlite. If backup is enabled, perform the configured destinations (git/github, object store, HuggingFace, etc.). If backup is missing or disabled, do not silently skip: set it up with the zero-config local-git default (a local git repo needs no credentials) and back up. Skip the push only when backup/status.json shows the current source is already backed up (unchanged source hash) — i.e. a Pulse pass or an earlier turn already captured this state. Always write backup/status.json with state, last attempt/success timestamps, destination results, errors, and the current source hash; do not write operational backup status into workflow.json."
 }
 
 // workflowRunCompletionDirective used to also append a goal-alignment
@@ -2375,7 +2375,7 @@ func (api *StreamingAPI) executeSyntheticTurn(sessionID, syntheticMsg string, pa
 			syntheticStatus = trackedExecutionStatusCanceled
 			switch {
 			case streamStalled:
-				// We cancelled this turn ourselves because it went silent, so
+				// We canceled this turn ourselves because it went silent, so
 				// the context error below would describe our own reaction
 				// rather than the cause. A stall is a failure, not a user stop.
 				syntheticStatus = trackedExecutionStatusFailed

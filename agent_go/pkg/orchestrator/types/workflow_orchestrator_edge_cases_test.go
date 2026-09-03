@@ -288,15 +288,15 @@ func TestWorkflowEdgeMessageSequenceItemsRequired(t *testing.T) {
 	}
 }
 
-// TestWorkflowEdgeTodoTaskAcceptsZeroPredefinedRoutes locks in the
-// documented behavior of validateTodoTaskStepFieldsTyped
+// TestWorkflowEdgeOrchestratorAcceptsZeroPredefinedRoutes locks in the
+// documented behavior of validateOrchestratorStepFieldsTyped
 // (planning_agent.go:4090): "Predefined routes are optional
 // (orchestrators can be generic-agent-only)". A todo_task with no
 // predefined sub-agents falls through to a generic execution agent
 // and the workflow still runs. This test asserts the engine accepts
 // the empty-routes plan AND actually completes the step, so a
 // future tightening that would reject empty routes breaks loudly.
-func TestWorkflowEdgeTodoTaskAcceptsZeroPredefinedRoutes(t *testing.T) {
+func TestWorkflowEdgeOrchestratorAcceptsZeroPredefinedRoutes(t *testing.T) {
 	wo, cleanup, ok := buildEdgeCaseOrchestrator(t)
 	if !ok {
 		return

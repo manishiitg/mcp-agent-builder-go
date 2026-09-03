@@ -19,15 +19,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/skip2/go-qrcode"
-	"go.mau.fi/whatsmeow"
-	waProto "go.mau.fi/whatsmeow/proto/waE2E"
-	"go.mau.fi/whatsmeow/store"
-	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
-	waLog "go.mau.fi/whatsmeow/util/log"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/whatsappbot"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/whatsapptransport"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
 
 	// Pure-Go SQLite driver (registered as "sqlite"). SQLite is an exception
@@ -59,86 +54,39 @@ import (
 // by deleting it and scanning a new QR.
 type WhatsAppService struct {
 	dbPath string
-	// selfChatPrefix (if non-empty) is prepended to every bot reply in the
-	// "Message Yourself" chat so the user can visually separate bot output
-	// from their own typing (both render as "from me"). Empty by default;
-	// set WHATSAPP_SELF_CHAT_PREFIX in .env to re-enable, e.g. "🤖 " or
-	// "[Runloop] ". Read once at StartListening so live-toggling requires
-	// a restart.
+
+	// selfChatPrefix is prepended to replies in the owner's own chat so the
+	// bot's messages are told apart from the owner's (WHATSAPP_SELF_CHAT_PREFIX).
 	selfChatPrefix string
 
-	mu               sync.RWMutex
-	container        *sqlstore.Container
-	device           *store.Device
-	client           *whatsmeow.Client
-	pairingMu        sync.Mutex
-	pairingStartedMu sync.Mutex
-	pairingStartedAt time.Time
-	// metaDB is a lightweight second connection to the same SQLite file
-	// holding non-whatsmeow metadata (currently the owner binding). Using
-	// one store keeps everything in a single file that Unpair can wipe
-	// atomically. WAL mode on the DSN lets whatsmeow and metaDB share the
-	// file without lock contention.
-	metaDB *sql.DB
+	mu sync.RWMutex
+	// conn is the shared connector (pkg/whatsappbot): session, pairing,
+	// reconnects, dedupe and "@slug" routing all live there. This service
+	// keeps only AgentWorks' policy: one workspace owner per phone, link
+	// codes for other chats, workflow routes and the bot-manager hand-off.
+	conn *whatsappbot.Connector
 
-	qrMu      sync.RWMutex
-	lastQR    string
-	qrExpires time.Time
+	// metaDB holds the owner, routes, active routes and access state in the
+	// same SQLite file as the session (table whatsapp_meta).
+	metaDB *sql.DB
 
 	messageHandler     BotMessageHandler
 	interactionHandler BotInteractionHandler
 	statusProvider     BotThreadStatusFunc
 
-	// Routing maps user-chosen slugs (e.g. "rca") to a workflow + mode.
-	// A message starting with "@<slug> ..." peels the slug, looks it up, and
-	// routes to the specified workflow instead of the default multi-agent
-	// chat. Editable from the frontend "Workflow routing" card; persisted in
-	// the whatsapp_meta table.
 	routingMu sync.RWMutex
 	routing   WhatsAppRouting
 
-	// activeRoutes remembers the workflow slug currently selected for each
-	// WhatsApp chat. Once a user sends "@slug message", later plain messages
-	// in the same chat continue to route to that workflow until they send
-	// "@slug deactivate".
 	activeRoutesMu sync.RWMutex
 	activeRoutes   map[string]string
-	// activeRouteHints throttles the "Active workflow..." reminder so it does
-	// not get appended to every bot reply in an active WhatsApp workflow chat.
+
 	activeRouteHints map[string]time.Time
 
 	accessMu    sync.RWMutex
 	accessState WhatsAppAccessState
 
-	// Owner binds the paired WhatsApp account to a specific workspace user.
-	// Every incoming message stamps this user's email + ID so the bot manager
-	// can route to that user's per-user chat history, memory, and schedules.
-	// Populated at pair time (whoever is authenticated when /api/whatsapp/pair
-	// is first called wins) and persisted inside the same SQLite file
-	// whatsmeow already uses (whatsapp_meta table) — single source of truth,
-	// Unpair deletes it along with everything else.
 	ownerMu sync.RWMutex
 	owner   *WhatsAppOwner
-}
-
-const whatsappPairingStartupTimeout = 30 * time.Second
-
-func (w *WhatsAppService) markPairingStarted() {
-	w.pairingStartedMu.Lock()
-	defer w.pairingStartedMu.Unlock()
-	w.pairingStartedAt = time.Now().UTC()
-}
-
-func (w *WhatsAppService) clearPairingStarted() {
-	w.pairingStartedMu.Lock()
-	defer w.pairingStartedMu.Unlock()
-	w.pairingStartedAt = time.Time{}
-}
-
-func (w *WhatsAppService) pairingStarted() time.Time {
-	w.pairingStartedMu.Lock()
-	defer w.pairingStartedMu.Unlock()
-	return w.pairingStartedAt
 }
 
 // WhatsAppOwner records which workspace user owns the paired WhatsApp
@@ -177,7 +125,7 @@ func (w *WhatsAppService) Name() string { return "whatsapp" }
 func (w *WhatsAppService) IsEnabled() bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.client != nil
+	return w.conn != nil && w.conn.Started()
 }
 
 // SupportsThreads returns false: WhatsApp has no Slack-style threads. Every
@@ -196,17 +144,8 @@ func (w *WhatsAppService) StartListening(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(w.dbPath), 0o700); err != nil {
 		return fmt.Errorf("whatsapp: mkdir session dir: %w", err)
 	}
-
-	// Self-chat reply prefix. Empty = no prefix (default). Mirrors OpenClaw's
-	// configurable messages.responsePrefix — timing + bubble rhythm usually
-	// makes bot replies obvious, but set this env var if you want explicit
-	// labeling. A trailing space is up to you; this is concatenated verbatim.
 	w.selfChatPrefix = os.Getenv("WHATSAPP_SELF_CHAT_PREFIX")
 
-	// Open the metadata side of the same SQLite file and load the owner
-	// binding (if any) so every incoming message can be tagged with the
-	// workspace user. No row = pairing hasn't been claimed yet; the first
-	// authenticated pair request claims it.
 	if err := w.openMetaStore(ctx); err != nil {
 		return err
 	}
@@ -215,168 +154,46 @@ func (w *WhatsAppService) StartListening(ctx context.Context) error {
 	w.loadActiveRoutes(ctx)
 	w.loadAccessState(ctx)
 
-	// Name shown in the paired phone's "Linked Devices" list. Keep this close
-	// to a normal browser name; arbitrary app names are more likely to be
-	// rejected by WhatsApp during the device-link flow.
-	store.SetOSInfo("Chrome", [3]uint32{120, 0, 0})
-
-	// Build the whatsmeow loggers. Default is silent; set WHATSAPP_DEBUG=true
-	// to see the underlying protocol exchange (QR flow, handshake, device-add
-	// IQ stanzas). This is what surfaces server-side reasons for errors like
-	// "can't link new devices" — otherwise the user-facing message on the
-	// phone is the only hint we get.
-	logger := waLog.Noop
-	clientLogger := waLog.Noop
-	if os.Getenv("WHATSAPP_DEBUG") == "true" {
-		logger = waLog.Stdout("WhatsApp-DB", "DEBUG", true)
-		clientLogger = waLog.Stdout("WhatsApp", "DEBUG", true)
+	debug := os.Getenv("WHATSAPP_DEBUG") == "true"
+	if debug {
 		log.Printf("[WHATSAPP] Verbose whatsmeow logging enabled (WHATSAPP_DEBUG=true)")
 	}
-
-	// Local SQLite file holding whatsmeow's Signal-protocol state. This is the
-	// only DB in the server — kept because whatsmeow can't function without a
-	// transactional key/session store. The file is agent-local (not in the
-	// workspace/ HTTP mount), so it's closer to a "protocol state cache" than
-	// shared infrastructure. WAL mode avoids blocking on concurrent reads.
-	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)", w.dbPath)
-	container, err := sqlstore.New(ctx, "sqlite", dsn, logger)
-	if err != nil {
-		return fmt.Errorf("whatsapp: open sqlstore: %w", err)
-	}
-
-	device, err := container.GetFirstDevice(ctx)
-	if err != nil {
-		return fmt.Errorf("whatsapp: get device: %w", err)
-	}
-
-	client := whatsmeow.NewClient(device, clientLogger)
-	client.AddEventHandler(w.handleEvent)
-
+	conn := whatsappbot.New(whatsappbot.Config{
+		DBPath:     w.dbPath,
+		AppName:    "Chrome",
+		AppVersion: [3]uint32{120, 0, 0},
+		Debug:      debug,
+		LogPrefix:  "[WHATSAPP]",
+		AutoPair:   true, // one phone per workspace user; offer the QR right away
+		Handler:    w,
+		Access:     w,
+		Router:     w,
+		Routes:     activeSlugStore{w},
+	})
 	w.mu.Lock()
-	w.container = container
-	w.device = device
-	w.client = client
+	w.conn = conn
 	w.mu.Unlock()
-
-	paired := device.ID != nil
-	log.Printf("[WHATSAPP] Service started (db=%s, paired=%v)", w.dbPath, paired)
-
-	go w.connectLoop(ctx)
+	if err := conn.Start(ctx); err != nil {
+		w.mu.Lock()
+		w.conn = nil
+		w.mu.Unlock()
+		return err
+	}
+	log.Printf("[WHATSAPP] Service started (db=%s, paired=%v)", w.dbPath, conn.IsPaired())
 	return nil
-}
-
-// connectLoop establishes the initial whatsmeow connection. If the store is
-// not yet paired it waits on the QR channel until the user scans; otherwise
-// it reconnects with the stored device identity. whatsmeow handles its own
-// reconnection on transient drops, so this runs once per start.
-func (w *WhatsAppService) connectLoop(ctx context.Context) {
-	w.mu.RLock()
-	client := w.client
-	w.mu.RUnlock()
-	if client == nil {
-		return
-	}
-
-	if client.Store.ID == nil {
-		if !w.pairingMu.TryLock() {
-			return
-		}
-		defer w.pairingMu.Unlock()
-		w.markPairingStarted()
-		defer w.clearPairingStarted()
-
-		w.mu.RLock()
-		client = w.client
-		w.mu.RUnlock()
-		if client == nil || client.Store.ID != nil {
-			return
-		}
-
-		qrChan, err := client.GetQRChannel(ctx)
-		if err != nil {
-			log.Printf("[WHATSAPP] GetQRChannel failed: %v", err)
-			return
-		}
-		connectDone := make(chan error, 1)
-		go func() {
-			connectDone <- client.Connect()
-		}()
-		select {
-		case err := <-connectDone:
-			if err == nil {
-				break
-			}
-			log.Printf("[WHATSAPP] Connect (pre-pair) failed: %v", err)
-			return
-		case <-time.After(whatsappPairingStartupTimeout):
-			log.Printf("[WHATSAPP] Connect (pre-pair) timed out before QR setup")
-			client.Disconnect()
-			return
-		case <-ctx.Done():
-			return
-		}
-
-		timeout := time.NewTimer(whatsappPairingStartupTimeout)
-		defer timeout.Stop()
-		timeoutC := timeout.C
-		for {
-			select {
-			case evt, ok := <-qrChan:
-				if !ok {
-					return
-				}
-				switch evt.Event {
-				case "code":
-					w.qrMu.Lock()
-					w.lastQR = evt.Code
-					w.qrExpires = time.Now().Add(evt.Timeout)
-					w.qrMu.Unlock()
-					timeoutC = nil
-					log.Printf("[WHATSAPP] QR code ready for pairing (expires in %s)", evt.Timeout)
-				case "success":
-					log.Printf("[WHATSAPP] Pairing successful")
-					w.qrMu.Lock()
-					w.lastQR = ""
-					w.qrExpires = time.Time{}
-					w.qrMu.Unlock()
-				case "timeout":
-					log.Printf("[WHATSAPP] QR timeout — request a new QR to pair again")
-					w.qrMu.Lock()
-					w.lastQR = ""
-					w.qrExpires = time.Time{}
-					w.qrMu.Unlock()
-				}
-			case <-timeoutC:
-				log.Printf("[WHATSAPP] QR code was not produced within %s; resetting pairing attempt", whatsappPairingStartupTimeout)
-				w.qrMu.Lock()
-				w.lastQR = ""
-				w.qrExpires = time.Time{}
-				w.qrMu.Unlock()
-				client.Disconnect()
-				return
-			case <-ctx.Done():
-				return
-			}
-		}
-	}
-
-	if err := client.Connect(); err != nil {
-		log.Printf("[WHATSAPP] Connect failed: %v", err)
-		return
-	}
-	if id := client.Store.ID; id != nil {
-		log.Printf("[WHATSAPP] Connected as %s", id.String())
-	}
 }
 
 // StopListening disconnects the client. The session DB is left intact so the
 // next StartListening resumes the paired state without re-scanning.
 func (w *WhatsAppService) StopListening() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.client != nil {
-		w.client.Disconnect()
+	conn := w.conn
+	w.conn = nil
+	w.mu.Unlock()
+	if conn != nil {
+		conn.Stop()
 	}
+	w.closeMetaStore()
 }
 
 // Unpair disconnects the client, drops the session DB, and re-initializes a
@@ -384,42 +201,17 @@ func (w *WhatsAppService) StopListening() {
 // After Unpair returns, the service is back in "unpaired" state — the next
 // pairing QR will be generated on the next reconnect.
 func (w *WhatsAppService) Unpair(ctx context.Context) error {
-	// Detach and tear down the current client first.
-	w.mu.Lock()
-	if w.client != nil {
-		w.client.Disconnect()
-	}
-	w.client = nil
-	w.device = nil
-	w.container = nil
-	w.mu.Unlock()
-
-	// Clear any QR state so the status endpoint doesn't briefly claim a stale QR.
-	w.qrMu.Lock()
-	w.lastQR = ""
-	w.qrExpires = time.Time{}
-	w.qrMu.Unlock()
-
-	// Close the metadata connection before removing the file, so no open
-	// handle blocks the delete on strict filesystems. clearOwner also drops
-	// the cached owner pointer — the row inside the DB goes away with the
-	// file.
-	w.closeMetaStore()
+	w.StopListening()
 	w.clearOwner()
 
-	// Delete the SQLite store (main file + WAL/SHM siblings). WAL mode leaves
-	// two extra files alongside the main one; wipe all three so the next
-	// StartListening gets a virgin store — and a fresh empty whatsapp_meta
-	// table with no owner binding.
+	// Delete the session DB (and WAL/SHM sidecars) so the next start is a
+	// clean pairing with no leftover device rows or owner binding.
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		path := w.dbPath + suffix
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("whatsapp: remove %s: %w", path, err)
 		}
 	}
-
-	// Re-start with a fresh store so the pairing QR flow can begin immediately
-	// — users don't need to restart the server to re-pair.
 	return w.StartListening(ctx)
 }
 
@@ -427,45 +219,27 @@ func (w *WhatsAppService) Unpair(ctx context.Context) error {
 // Empty code means no pairing flow is active (either already paired, or
 // StartListening has not been called).
 func (w *WhatsAppService) GetQR() (code string, expires time.Time) {
-	w.qrMu.RLock()
-	defer w.qrMu.RUnlock()
-	if w.lastQR != "" && !w.qrExpires.IsZero() && time.Now().After(w.qrExpires) {
-		return "", time.Time{}
+	if conn := w.connector(); conn != nil {
+		return conn.GetQR()
 	}
-	return w.lastQR, w.qrExpires
+	return "", time.Time{}
+}
+
+func (w *WhatsAppService) connector() *whatsappbot.Connector {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.conn
 }
 
 // EnsurePairingQR starts a fresh QR flow when the service is unpaired and the
 // previous code has expired or timed out. The new code arrives asynchronously;
 // callers should poll status until qr_available flips true.
 func (w *WhatsAppService) EnsurePairingQR(ctx context.Context) error {
-	if w.IsPaired() {
-		return nil
-	}
-	if code, expires := w.GetQR(); code != "" && !expires.IsZero() {
-		return nil
-	}
-
-	w.mu.RLock()
-	client := w.client
-	w.mu.RUnlock()
-	if client == nil {
+	conn := w.connector()
+	if conn == nil {
 		return fmt.Errorf("whatsapp: client not initialized")
 	}
-	if started := w.pairingStarted(); !started.IsZero() && time.Since(started) > whatsappPairingStartupTimeout {
-		log.Printf("[WHATSAPP] Pairing attempt has been waiting for %s; disconnecting stale client before retry", time.Since(started).Round(time.Second))
-		client.Disconnect()
-	}
-	if client.IsConnected() {
-		client.Disconnect()
-	}
-
-	w.qrMu.Lock()
-	w.lastQR = ""
-	w.qrExpires = time.Time{}
-	w.qrMu.Unlock()
-
-	go w.connectLoop(ctx)
+	conn.EnsureConnecting(ctx)
 	return nil
 }
 
@@ -473,31 +247,29 @@ func (w *WhatsAppService) EnsurePairingQR(ctx context.Context) error {
 // size in pixels. Returns (nil, nil) if no QR is available; an error only on
 // encoding failure.
 func (w *WhatsAppService) GetQRImagePNG(size int) ([]byte, error) {
-	code, _ := w.GetQR()
-	if code == "" {
+	conn := w.connector()
+	if conn == nil {
 		return nil, nil
 	}
 	if size <= 0 {
 		size = 384
 	}
-	return qrcode.Encode(code, qrcode.Medium, size)
+	return conn.GetQRImagePNG(size)
 }
 
 // IsPaired reports whether a device identity has been stored. Paired implies
 // a prior successful QR scan, but not that the client is currently connected
 // — use IsConnected for liveness.
 func (w *WhatsAppService) IsPaired() bool {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return w.client != nil && w.client.Store != nil && w.client.Store.ID != nil
+	conn := w.connector()
+	return conn != nil && conn.IsPaired()
 }
 
 // IsConnected reports whether the whatsmeow client is live on the WhatsApp
 // websocket right now.
 func (w *WhatsAppService) IsConnected() bool {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return w.client != nil && w.client.IsConnected()
+	conn := w.connector()
+	return conn != nil && conn.IsConnected()
 }
 
 // metaKeyOwner is the row key under which the owner binding JSON is stored
@@ -870,104 +642,48 @@ func extensionForWhatsAppMedia(mimeType, fallback string) string {
 	}
 }
 
-func (w *WhatsAppService) downloadIncomingMedia(ctx context.Context, msg *waProto.Message, owner *WhatsAppOwner, messageID, folderPath string) (*whatsappDownloadedMedia, error) {
-	if msg == nil || owner == nil {
+func (w *WhatsAppService) downloadIncomingMedia(ctx context.Context, msg *whatsappbot.Message, owner *WhatsAppOwner, folderPath string) (*whatsappDownloadedMedia, error) {
+	if msg == nil || owner == nil || !msg.HasMedia {
 		return nil, nil
 	}
-
-	w.mu.RLock()
-	client := w.client
-	w.mu.RUnlock()
-	if client == nil {
-		return nil, fmt.Errorf("whatsapp: client not initialized")
-	}
-
-	var (
-		downloadable whatsmeow.DownloadableMessage
-		kind         string
-		fileName     string
-		mimeType     string
-		caption      string
-		sizeBytes    uint64
-		fallbackExt  string
-	)
-
-	switch {
-	case msg.ImageMessage != nil:
-		downloadable = msg.ImageMessage
-		kind = "image"
-		mimeType = msg.ImageMessage.GetMimetype()
-		caption = msg.ImageMessage.GetCaption()
-		sizeBytes = msg.ImageMessage.GetFileLength()
-		fallbackExt = ".jpg"
-	case msg.DocumentMessage != nil:
-		downloadable = msg.DocumentMessage
-		kind = "document"
-		mimeType = msg.DocumentMessage.GetMimetype()
-		caption = msg.DocumentMessage.GetCaption()
-		fileName = msg.DocumentMessage.GetFileName()
-		sizeBytes = msg.DocumentMessage.GetFileLength()
-		fallbackExt = ".pdf"
-	case msg.VideoMessage != nil:
-		downloadable = msg.VideoMessage
-		kind = "video"
-		mimeType = msg.VideoMessage.GetMimetype()
-		caption = msg.VideoMessage.GetCaption()
-		sizeBytes = msg.VideoMessage.GetFileLength()
-		fallbackExt = ".mp4"
-	case msg.AudioMessage != nil:
-		downloadable = msg.AudioMessage
-		kind = "audio"
-		mimeType = msg.AudioMessage.GetMimetype()
-		sizeBytes = msg.AudioMessage.GetFileLength()
-		fallbackExt = ".ogg"
-	default:
-		return nil, nil
-	}
-
 	const maxWhatsAppUploadBytes = 10 * 1024 * 1024
-	if sizeBytes > maxWhatsAppUploadBytes {
-		return nil, fmt.Errorf("file is %.1fMB; WhatsApp bot uploads are limited to 10MB", float64(sizeBytes)/(1024*1024))
-	}
-
 	downloadCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	data, err := client.Download(downloadCtx, downloadable)
+	media, err := msg.Download(downloadCtx, maxWhatsAppUploadBytes)
 	if err != nil {
-		return nil, fmt.Errorf("download %s: %w", kind, err)
+		if errors.Is(err, whatsapptransport.ErrNoMedia) {
+			return nil, nil
+		}
+		return nil, err
 	}
-	if len(data) > maxWhatsAppUploadBytes {
-		return nil, fmt.Errorf("file is %.1fMB; WhatsApp bot uploads are limited to 10MB", float64(len(data))/(1024*1024))
-	}
-
-	fileName = sanitizeWhatsAppFileName(fileName)
+	fileName := sanitizeWhatsAppFileName(media.FileName)
 	if fileName == "" {
-		ext := extensionForWhatsAppMedia(mimeType, fallbackExt)
-		stableID := sanitizeWhatsAppFileName(messageID)
+		ext := extensionForWhatsAppMedia(media.MimeType, media.Ext)
+		stableID := sanitizeWhatsAppFileName(msg.ID)
 		if stableID == "" {
 			stableID = fmt.Sprintf("%d", time.Now().UnixNano())
 		}
-		fileName = fmt.Sprintf("whatsapp-%s-%s%s", kind, stableID, ext)
+		fileName = fmt.Sprintf("whatsapp-%s-%s%s", media.Kind, stableID, ext)
 	}
-
 	if strings.TrimSpace(folderPath) == "" {
 		folderPath = whatsappUserChatUploadFolder(owner.UserID)
 	}
 	wsClient := workspace.NewClient(workspaceAPIURL(), workspace.WithUserID(owner.UserID))
-	filePath, err := wsClient.UploadBinary(ctx, folderPath, fileName, data)
+	filePath, err := wsClient.UploadBinary(ctx, folderPath, fileName, media.Data)
 	if err != nil {
-		return nil, fmt.Errorf("upload %s to workspace: %w", kind, err)
+		return nil, fmt.Errorf("upload %s to workspace: %w", media.Kind, err)
 	}
+	mimeType := media.MimeType
 	if mimeType == "" {
 		mimeType = "application/octet-stream"
 	}
 	return &whatsappDownloadedMedia{
-		Kind:      kind,
+		Kind:      media.Kind,
 		FileName:  fileName,
 		FilePath:  filePath,
 		MimeType:  mimeType,
-		Caption:   strings.TrimSpace(caption),
-		SizeBytes: len(data),
+		Caption:   media.Caption,
+		SizeBytes: len(media.Data),
 	}, nil
 }
 
@@ -992,26 +708,6 @@ func appendWhatsAppMediaContext(text string, media *whatsappDownloadedMedia) str
 	}
 	sb.WriteString("\n\nUse the uploaded file path above when reading or analyzing the attachment.")
 	return sb.String()
-}
-
-func extractWhatsAppMediaCaption(m *waProto.Message) string {
-	if m == nil {
-		return ""
-	}
-	switch {
-	case m.ImageMessage != nil:
-		return strings.TrimSpace(m.ImageMessage.GetCaption())
-	case m.DocumentMessage != nil:
-		return strings.TrimSpace(m.DocumentMessage.GetCaption())
-	case m.VideoMessage != nil:
-		return strings.TrimSpace(m.VideoMessage.GetCaption())
-	default:
-		return ""
-	}
-}
-
-func hasDownloadableWhatsAppMedia(m *waProto.Message) bool {
-	return m != nil && (m.ImageMessage != nil || m.DocumentMessage != nil || m.VideoMessage != nil || m.AudioMessage != nil)
 }
 
 func whatsappUserChatUploadFolder(userID string) string {
@@ -1578,27 +1274,6 @@ func (w *WhatsAppService) shouldSendActiveRouteHint(chatJID, slug string) bool {
 	return true
 }
 
-func isWhatsAppDeactivateCommand(text string) bool {
-	switch strings.ToLower(strings.TrimSpace(text)) {
-	case "deactivate", "deactive", "off", "stop":
-		return true
-	default:
-		return false
-	}
-}
-
-func parseWhatsAppSlugPrefix(text string) (slug string, rest string, ok bool) {
-	trimmed := strings.TrimSpace(text)
-	if !strings.HasPrefix(trimmed, "@") {
-		return "", text, false
-	}
-	firstSpace := strings.IndexAny(trimmed, " \t\n")
-	if firstSpace < 0 {
-		return strings.ToLower(strings.TrimSpace(trimmed[1:])), "", true
-	}
-	return strings.ToLower(strings.TrimSpace(trimmed[1:firstSpace])), strings.TrimSpace(trimmed[firstSpace+1:]), true
-}
-
 func unknownWhatsAppWorkflowCommandMessage(slug string) string {
 	if slug = strings.TrimSpace(slug); slug != "" {
 		return fmt.Sprintf("Unknown @%s. Try @list, @switch <number>, @status, @sessions, @resume, @full, @concise, @done, or @off.", slug)
@@ -1677,12 +1352,10 @@ func (w *WhatsAppService) clearOwner() {
 // OwnJID returns the paired account's own phone-number JID (the
 // s.whatsapp.net one), or an empty JID if unpaired.
 func (w *WhatsAppService) OwnJID() types.JID {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	if w.client == nil || w.client.Store == nil || w.client.Store.ID == nil {
-		return types.JID{}
+	if conn := w.connector(); conn != nil {
+		return conn.OwnJID()
 	}
-	return *w.client.Store.ID
+	return types.JID{}
 }
 
 // OwnLID returns the paired account's LID ("hidden user") JID if one has
@@ -1691,12 +1364,10 @@ func (w *WhatsAppService) OwnJID() types.JID {
 // either as the chat JID depending on how the message was routed. Empty
 // when unpaired or when the account hasn't been given a LID.
 func (w *WhatsAppService) OwnLID() types.JID {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	if w.client == nil || w.client.Store == nil {
-		return types.JID{}
+	if conn := w.connector(); conn != nil {
+		return conn.OwnLID()
 	}
-	return w.client.Store.LID
+	return types.JID{}
 }
 
 // isSelfChat reports whether the given chat JID is the "Message Yourself"
@@ -1710,16 +1381,8 @@ func (w *WhatsAppService) OwnLID() types.JID {
 // Recent WhatsApp accounts can arrive on either depending on how the
 // message was routed through the multi-device / privacy protocol.
 func (w *WhatsAppService) isSelfChat(chat types.JID) bool {
-	if chat.User == "" {
-		return false
-	}
-	if own := w.OwnJID(); !own.IsEmpty() && chat.Server == types.DefaultUserServer && chat.User == own.User {
-		return true
-	}
-	if lid := w.OwnLID(); !lid.IsEmpty() && chat.Server == types.HiddenUserServer && chat.User == lid.User {
-		return true
-	}
-	return false
+	conn := w.connector()
+	return conn != nil && conn.IsSelfChat(chat)
 }
 
 func randomWhatsAppLinkCode() string {
@@ -1911,46 +1574,6 @@ func (w *WhatsAppService) handleDMAccessLinkCommand(ctx context.Context, text, c
 	return true
 }
 
-// handleEvent is the whatsmeow event dispatcher. We currently care about
-// inbound messages and log a few connection lifecycle transitions; other
-// event types (presence, receipts, history sync) are ignored.
-func (w *WhatsAppService) handleEvent(rawEvt interface{}) {
-	switch evt := rawEvt.(type) {
-	case *events.Message:
-		w.handleIncomingMessage(evt)
-	case *events.Connected:
-		_ = evt
-		log.Printf("[WHATSAPP] Connected")
-	case *events.Disconnected:
-		log.Printf("[WHATSAPP] Disconnected")
-	case *events.LoggedOut:
-		log.Printf("[WHATSAPP] Logged out (reason=%v) — session DB is now invalid; delete %s and re-pair", evt.Reason, w.dbPath)
-	case *events.ConnectFailure:
-		// Explicit rejection from the WhatsApp server — captured as a
-		// first-class event separate from Disconnected. The Reason code
-		// tells us exactly why (e.g. "bad-user-agent", "multi-device-mismatch",
-		// "client-outdated"). Surface it; this is the signal we usually care
-		// about when pairing silently fails.
-		log.Printf("[WHATSAPP] Connect failure: reason=%v message=%s", evt.Reason, evt.Message)
-	case *events.ClientOutdated:
-		log.Printf("[WHATSAPP] Client outdated — whatsmeow needs upgrading against the current WhatsApp server")
-	case *events.TemporaryBan:
-		log.Printf("[WHATSAPP] Temporary ban: code=%v expires=%s — account is restricted by WhatsApp", evt.Code, evt.Expire)
-	case *events.StreamError:
-		// Protocol-level stream error (often shown to the user as "can't link
-		// new devices"). Code is the XMPP-ish error code from WhatsApp's XML.
-		log.Printf("[WHATSAPP] Stream error: code=%s raw=%v", evt.Code, evt.Raw)
-	case *events.StreamReplaced:
-		log.Printf("[WHATSAPP] Stream replaced — another client took over this session")
-	case *events.PairSuccess:
-		log.Printf("[WHATSAPP] Pair success: id=%s platform=%s businessName=%s", evt.ID, evt.Platform, evt.BusinessName)
-	case *events.PairError:
-		// This is the one most likely to fire on the "can't link new devices"
-		// error. Logs the full reason returned by the WhatsApp server.
-		log.Printf("[WHATSAPP] Pair error: id=%s platform=%s error=%v", evt.ID, evt.Platform, evt.Error)
-	}
-}
-
 // handleIncomingMessage converts a whatsmeow message event into a
 // BotIncomingMessage and forwards it to the registered handler. Linked 1:1
 // DMs are accepted, including the owner's "Message Yourself" chat and inbound
@@ -1958,38 +1581,89 @@ func (w *WhatsAppService) handleEvent(rawEvt interface{}) {
 // broadcasts, status updates, and outgoing messages to other chats are
 // skipped. Also adds an "eyes" reaction mirror of the Slack ack UX so the
 // sender sees their message was received.
-func (w *WhatsAppService) handleIncomingMessage(evt *events.Message) {
-	info := evt.Info
-	// Trace entry so we can tell this handler fired at all; the debug fields
-	// tell us why a message was (or wasn't) forwarded when it silently
-	// disappears. Kept at log.Printf so it shows without WHATSAPP_DEBUG.
-	log.Printf("[WHATSAPP] handleIncomingMessage: chat=%s sender=%s fromMe=%v isGroup=%v category=%s type=%s",
-		info.Chat.String(), info.Sender.String(), info.IsFromMe, info.IsGroup, info.Category, info.Type)
-
-	if info.IsFromMe {
-		// Self-chat mode: allow messages the user sends in the "Message
-		// Yourself" chat — this is how the user talks to the bot when it's
-		// paired to their personal WhatsApp account. Any OTHER outgoing
-		// message (to contacts, groups, etc.) is ignored so we don't react to
-		// the user's regular WhatsApp usage.
-		if !w.isSelfChat(info.Chat) {
-			log.Printf("[WHATSAPP] skip: outgoing message to non-self chat %s", info.Chat.String())
-			return
-		}
+// Allow implements whatsappbot.AccessPolicy: the owner's own chat always
+// talks to the bot; any other DM must have been linked with a link code
+// ("@link 123456"), which is itself handled here.
+func (w *WhatsAppService) Allow(ctx context.Context, msg *whatsappbot.Message) bool {
+	info := msg.Event.Info
+	log.Printf("[WHATSAPP] incoming: chat=%s sender=%s fromMe=%v type=%s",
+		info.Chat.String(), info.Sender.String(), info.IsFromMe, info.Type)
+	if w.GetOwner() == nil {
+		log.Printf("[WHATSAPP] Dropping message from %s — pairing has no workspace-user owner; re-pair via the UI to claim", info.Sender.User)
+		return false
 	}
-	if info.IsGroup || info.Chat.Server == types.BroadcastServer {
-		log.Printf("[WHATSAPP] skip: group/broadcast chat %s (server=%s)", info.Chat.String(), info.Chat.Server)
+	chatJID := msg.Chat.String()
+	if w.handleDMAccessLinkCommand(ctx, msg.Text, chatJID, info) {
+		return false
+	}
+	if !w.isAllowedDM(info) {
+		log.Printf("[WHATSAPP] skip: unlinked DM chat=%s sender=%s identities=%v", chatJID, info.Sender.String(), whatsappDMIdentityCandidates(info))
+		return false
+	}
+	w.bindDMChat(info)
+	return true
+}
+
+// HandleCommand implements whatsappbot.CommandHandler ("@list", "@switch",
+// "@status", bot-session controls, "@off").
+func (w *WhatsAppService) HandleCommand(ctx context.Context, msg *whatsappbot.Message) bool {
+	owner := w.GetOwner()
+	if owner == nil {
+		return false
+	}
+	return w.handleWorkflowCommand(ctx, msg.Text, msg.Chat.String(), owner, msg.Event.Info)
+}
+
+// Resolve implements whatsappbot.Router: "@slug" names a configured
+// workflow route.
+func (w *WhatsAppService) Resolve(_ context.Context, _ string, token string) *whatsappbot.Route {
+	route := w.resolveSlugRoute(token)
+	if route == nil {
+		return nil
+	}
+	return &whatsappbot.Route{Key: strings.ToLower(token), Value: route}
+}
+
+// activeSlugStore persists the active "@slug" per chat in whatsapp_meta.
+type activeSlugStore struct{ w *WhatsAppService }
+
+func (s activeSlugStore) Active(chat string) string { return s.w.activeSlug(chat) }
+func (s activeSlugStore) Activate(chat, key string) { s.w.setActiveSlug(chat, key) }
+func (s activeSlugStore) Deactivate(chat string)    { s.w.clearActiveSlug(chat) }
+
+// RouteActivated implements whatsappbot.RouteObserver. A bare "@slug" is
+// acknowledged; "@slug <text>" just runs under the new route.
+func (w *WhatsAppService) RouteActivated(ctx context.Context, msg *whatsappbot.Message, route *whatsappbot.Route, continuing bool) {
+	if continuing {
 		return
 	}
-	if info.Chat.User == "status" {
-		log.Printf("[WHATSAPP] skip: status broadcast")
-		return
+	msg.React("👀")
+	if _, err := w.SendThreadMessage(ctx, ThreadID{Platform: "whatsapp", ChannelID: msg.Chat.String()}, fmt.Sprintf("Activated @%s for this chat. Send your next message normally. Type @%s deactivate to turn this off.", route.Key, route.Key)); err != nil {
+		log.Printf("[WHATSAPP] Failed to send activation acknowledgement for @%s: %v", route.Key, err)
 	}
-	text := extractWhatsAppText(evt.Message)
-	if text == "" {
-		text = extractWhatsAppMediaCaption(evt.Message)
-	}
+}
 
+// RouteDeactivated implements whatsappbot.RouteObserver ("@slug deactivate").
+func (w *WhatsAppService) RouteDeactivated(ctx context.Context, msg *whatsappbot.Message, key string) {
+	msg.React("👀")
+	if _, err := w.SendThreadMessage(ctx, ThreadID{Platform: "whatsapp", ChannelID: msg.Chat.String()}, fmt.Sprintf("Deactivated @%s. Plain WhatsApp messages will use the default chat again.", key)); err != nil {
+		log.Printf("[WHATSAPP] Failed to send deactivate acknowledgement for @%s: %v", key, err)
+	}
+}
+
+// RouteUnknown implements whatsappbot.RouteObserver: a bare unknown "@x"
+// gets the command help.
+func (w *WhatsAppService) RouteUnknown(ctx context.Context, msg *whatsappbot.Message, token string) {
+	msg.React("👀")
+	if _, err := w.SendThreadMessage(ctx, ThreadID{Platform: "whatsapp", ChannelID: msg.Chat.String()}, unknownWhatsAppWorkflowCommandMessage(token)); err != nil {
+		log.Printf("[WHATSAPP] Failed to send unknown @ command help for @%s: %v", token, err)
+	}
+}
+
+// HandleMessage implements whatsappbot.Handler: ingest any attachment into
+// the workspace, then hand the message to the bot manager with the routed
+// workflow (if any) preset.
+func (w *WhatsAppService) HandleMessage(ctx context.Context, msg *whatsappbot.Message) {
 	w.mu.RLock()
 	handler := w.messageHandler
 	w.mu.RUnlock()
@@ -1997,141 +1671,50 @@ func (w *WhatsAppService) handleIncomingMessage(evt *events.Message) {
 		log.Printf("[WHATSAPP] skip: no message handler registered")
 		return
 	}
-
-	// Reject messages until the pairing has been claimed by a workspace user.
-	// Without an owner binding we have no workspace user to route this
-	// conversation to (chat history, memory, schedules are per-user). In
-	// practice this path only fires when someone paired via the API without
-	// hitting the authenticated /api/whatsapp/pair route — rare but worth
-	// surfacing rather than silently dropping.
 	owner := w.GetOwner()
 	if owner == nil {
-		log.Printf("[WHATSAPP] Dropping message from %s — pairing has no workspace-user owner; re-pair via the UI to claim", info.Sender.User)
 		return
 	}
+	info := msg.Event.Info
+	chatJID := msg.Chat.String()
+	text := msg.Text
 
-	chatJID := info.Chat.String()
-	senderUser := info.Sender.User
-	senderName := info.PushName
-
-	if handled := w.handleDMAccessLinkCommand(context.Background(), text, chatJID, info); handled {
-		return
-	}
-	if !w.isAllowedDM(info) {
-		log.Printf("[WHATSAPP] skip: unlinked DM chat=%s sender=%s identities=%v", chatJID, info.Sender.String(), whatsappDMIdentityCandidates(info))
-		return
-	}
-	w.bindDMChat(info)
-
-	if handled := w.handleWorkflowCommand(context.Background(), text, chatJID, owner, info); handled {
-		return
-	}
-
-	// @<slug> workflow routing. If the first token looks like "@foo", look
-	// up "foo" in the routing map; on a hit we activate that workflow for
-	// this WhatsApp chat, strip the prefix, and route the rest of the message
-	// there. Later plain messages in the same chat continue to use that route
-	// until the user sends "@foo deactivate".
 	var presetRoute *ChannelRoute
 	routedSlug := ""
-	if slugToken, rest, ok := parseWhatsAppSlugPrefix(text); ok {
-		if route := w.resolveSlugRoute(slugToken); route != nil {
-			if isWhatsAppDeactivateCommand(rest) {
-				w.clearActiveSlug(chatJID)
-				_ = w.sendReaction(context.Background(), chatJID, info.Sender, info.ID, "👀")
-				if _, err := w.SendThreadMessage(context.Background(), ThreadID{Platform: "whatsapp", ChannelID: chatJID}, fmt.Sprintf("Deactivated @%s. Plain WhatsApp messages will use the default chat again.", slugToken)); err != nil {
-					log.Printf("[WHATSAPP] Failed to send deactivate acknowledgement for @%s: %v", slugToken, err)
-				}
-				return
-			}
-			w.setActiveSlug(chatJID, slugToken)
-			presetRoute = route
-			routedSlug = slugToken
-			text = rest
-			if text == "" && !hasDownloadableWhatsAppMedia(evt.Message) {
-				_ = w.sendReaction(context.Background(), chatJID, info.Sender, info.ID, "👀")
-				if _, err := w.SendThreadMessage(context.Background(), ThreadID{Platform: "whatsapp", ChannelID: chatJID}, fmt.Sprintf("Activated @%s for this chat. Send your next message normally. Type @%s deactivate to turn this off.", slugToken, slugToken)); err != nil {
-					log.Printf("[WHATSAPP] Failed to send activation acknowledgement for @%s: %v", slugToken, err)
-				}
-				return
-			}
-		}
-		if rest == "" && !hasDownloadableWhatsAppMedia(evt.Message) {
-			_ = w.sendReaction(context.Background(), chatJID, info.Sender, info.ID, "👀")
-			if _, err := w.SendThreadMessage(context.Background(), ThreadID{Platform: "whatsapp", ChannelID: chatJID}, unknownWhatsAppWorkflowCommandMessage(slugToken)); err != nil {
-				log.Printf("[WHATSAPP] Failed to send unknown @ command help for @%s: %v", slugToken, err)
-			}
-			return
-		}
+	if msg.Route != nil {
+		presetRoute, _ = msg.Route.Value.(*ChannelRoute)
+		routedSlug = msg.Route.Key
 	}
 
-	if presetRoute == nil {
-		activeSlug := w.activeSlug(chatJID)
-		if activeSlug != "" {
-			if route := w.resolveSlugRoute(activeSlug); route != nil {
-				presetRoute = route
-				routedSlug = activeSlug
-			} else {
-				w.clearActiveSlug(chatJID)
-			}
-		}
-	}
-
-	media, mediaErr := w.downloadIncomingMedia(context.Background(), evt.Message, owner, info.ID, whatsappWorkflowUploadFolder(presetRoute))
+	media, mediaErr := w.downloadIncomingMedia(ctx, msg, owner, whatsappWorkflowUploadFolder(presetRoute))
 	if mediaErr != nil {
 		log.Printf("[WHATSAPP] Failed to ingest media from %s: %v", info.Sender.User, mediaErr)
-		_ = w.sendReaction(context.Background(), chatJID, info.Sender, info.ID, "⚠️")
-		if _, err := w.SendThreadMessage(context.Background(), ThreadID{Platform: "whatsapp", ChannelID: chatJID}, fmt.Sprintf("I couldn't process that WhatsApp attachment: %v", mediaErr)); err != nil {
+		msg.React("⚠️")
+		if _, err := w.SendThreadMessage(ctx, ThreadID{Platform: "whatsapp", ChannelID: chatJID}, fmt.Sprintf("I couldn't process that WhatsApp attachment: %v", mediaErr)); err != nil {
 			log.Printf("[WHATSAPP] Failed to send media error acknowledgement: %v", err)
 		}
 		return
 	}
 	text = appendWhatsAppMediaContext(text, media)
 	if text == "" {
-		// Help diagnose silent drops — common for non-text messages (media,
-		// reactions, receipts) that still fire Message events.
-		msgType := "<nil>"
-		if evt.Message != nil {
-			switch {
-			case evt.Message.Conversation != nil:
-				msgType = "conversation-empty"
-			case evt.Message.ExtendedTextMessage != nil:
-				msgType = "extended-text-empty"
-			case evt.Message.ImageMessage != nil:
-				msgType = "image"
-			case evt.Message.AudioMessage != nil:
-				msgType = "audio"
-			case evt.Message.VideoMessage != nil:
-				msgType = "video"
-			case evt.Message.DocumentMessage != nil:
-				msgType = "document"
-			case evt.Message.ReactionMessage != nil:
-				msgType = "reaction"
-			case evt.Message.ProtocolMessage != nil:
-				msgType = "protocol"
-			default:
-				msgType = "other"
-			}
-		}
-		log.Printf("[WHATSAPP] skip: no text body or supported media (payload=%s)", msgType)
+		log.Printf("[WHATSAPP] skip: no text body or supported media (id=%s)", msg.ID)
 		return
 	}
 
-	if routedSlug != "" {
+	if routedSlug != "" && presetRoute != nil {
 		log.Printf("[WHATSAPP] Incoming message from %s (%s) → user=%s, routed via @%s to workflow %s: %s",
-			senderUser, chatJID, owner.UserID, routedSlug, presetRoute.WorkflowID, botTruncate(text, 80))
+			info.Sender.User, chatJID, owner.UserID, routedSlug, presetRoute.WorkflowID, botTruncate(text, 80))
 	} else {
 		log.Printf("[WHATSAPP] Incoming message from %s (%s) → user=%s: %s",
-			senderUser, chatJID, owner.UserID, botTruncate(text, 80))
+			info.Sender.User, chatJID, owner.UserID, botTruncate(text, 80))
 	}
 
-	// Eager ack with 👀 reaction — parity with the Slack UX. Best effort.
-	_ = w.sendReaction(context.Background(), chatJID, info.Sender, info.ID, "👀")
-
+	// 👀 the instant we accept it; the bot manager swaps/clears it as the run progresses.
+	msg.React("👀")
 	handler(BotIncomingMessage{
 		Platform:        "whatsapp",
-		UserID:          senderUser,
-		UserName:        senderName,
+		UserID:          info.Sender.User,
+		UserName:        info.PushName,
 		UserEmail:       owner.Email,  // binds the conversation to the workspace user
 		WorkspaceUserID: owner.UserID, // pre-resolved so bot manager skips email lookup
 		ChannelID:       chatJID,
@@ -2143,23 +1726,6 @@ func (w *WhatsAppService) handleIncomingMessage(evt *events.Message) {
 		IsThreadReply:   false,
 		IsMention:       true, // every DM effectively addresses the bot
 	})
-}
-
-// extractWhatsAppText pulls the plain text body from a whatsmeow message.
-// Supports simple conversation messages and extended text (which may include
-// link previews or mentions). Returns "" for anything else (images, voice,
-// reactions, etc.).
-func extractWhatsAppText(m *waProto.Message) string {
-	if m == nil {
-		return ""
-	}
-	if m.Conversation != nil {
-		return strings.TrimSpace(*m.Conversation)
-	}
-	if m.ExtendedTextMessage != nil && m.ExtendedTextMessage.Text != nil {
-		return strings.TrimSpace(*m.ExtendedTextMessage.Text)
-	}
-	return ""
 }
 
 // SendThreadMessage sends plain text to a WhatsApp chat (1:1 or group). The
@@ -2174,10 +1740,8 @@ func extractWhatsAppText(m *waProto.Message) string {
 // me"). Default is empty — timing + bubble rhythm is usually enough — and
 // the user can set the env var to "🤖 " or similar if they want labeling.
 func (w *WhatsAppService) SendThreadMessage(ctx context.Context, threadID ThreadID, message string) (string, error) {
-	w.mu.RLock()
-	client := w.client
-	w.mu.RUnlock()
-	if client == nil {
+	conn := w.connector()
+	if conn == nil {
 		return "", fmt.Errorf("whatsapp: client not initialized")
 	}
 	jid, err := types.ParseJID(threadID.ChannelID)
@@ -2212,12 +1776,11 @@ func (w *WhatsAppService) SendThreadMessage(ctx context.Context, threadID Thread
 	logBotOutboundMessage("whatsapp", threadID, "thread", message, len(parts), 0)
 	var lastID string
 	for _, part := range parts {
-		msg := &waProto.Message{Conversation: protoString(part)}
-		resp, err := client.SendMessage(ctx, jid, msg)
+		id, err := conn.SendTextID(ctx, jid, part)
 		if err != nil {
 			return lastID, fmt.Errorf("whatsapp: send: %w", err)
 		}
-		lastID = resp.ID
+		lastID = id
 	}
 	return lastID, nil
 }
@@ -2272,19 +1835,15 @@ func (w *WhatsAppService) sendReaction(ctx context.Context, channelID string, se
 	if channelID == "" || messageID == "" {
 		return nil
 	}
-	w.mu.RLock()
-	client := w.client
-	w.mu.RUnlock()
-	if client == nil || !client.IsConnected() {
+	conn := w.connector()
+	if conn == nil {
 		return nil
 	}
 	chatJID, err := types.ParseJID(channelID)
 	if err != nil {
 		return nil
 	}
-	reaction := client.BuildReaction(chatJID, senderJID, messageID, emoji)
-	_, err = client.SendMessage(ctx, chatJID, reaction)
-	return err
+	return conn.React(ctx, chatJID, senderJID, messageID, emoji)
 }
 
 // GetThreadHistory returns an empty slice. Unlike Slack's conversations API,
@@ -2298,35 +1857,15 @@ func (w *WhatsAppService) GetThreadHistory(ctx context.Context, threadID ThreadI
 // a DM or group subject for a group. Returns "" on any lookup failure so
 // callers can fall back to the JID itself.
 func (w *WhatsAppService) GetChannelName(ctx context.Context, channelID string) string {
-	w.mu.RLock()
-	client := w.client
-	w.mu.RUnlock()
-	if client == nil || channelID == "" {
+	conn := w.connector()
+	if conn == nil || channelID == "" {
 		return ""
 	}
 	jid, err := types.ParseJID(channelID)
 	if err != nil {
 		return ""
 	}
-	if jid.Server == types.GroupServer {
-		info, err := client.GetGroupInfo(ctx, jid)
-		if err == nil && info != nil {
-			return info.GroupName.Name
-		}
-		return ""
-	}
-	if client.Store != nil && client.Store.Contacts != nil {
-		info, err := client.Store.Contacts.GetContact(ctx, jid)
-		if err == nil {
-			if info.PushName != "" {
-				return info.PushName
-			}
-			if info.FullName != "" {
-				return info.FullName
-			}
-		}
-	}
-	return ""
+	return conn.ChatName(ctx, jid)
 }
 
 // SetMessageHandler registers the callback invoked on every inbound text
@@ -2608,5 +2147,3 @@ func splitLongText(s string, maxLen int) []string {
 	}
 	return out
 }
-
-func protoString(s string) *string { return &s }

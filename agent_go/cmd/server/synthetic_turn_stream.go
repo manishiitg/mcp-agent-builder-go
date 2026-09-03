@@ -47,10 +47,10 @@ func syntheticTurnIdleTimeout() time.Duration {
 // drainSyntheticTurnStream consumes a synthetic turn's text channel, applying
 // onChunk for each chunk. It reports why the turn stopped producing — an empty
 // reason when the stream closed normally — and whether it stopped because the
-// producer went silent rather than because the turn was cancelled.
+// producer went silent rather than because the turn was canceled.
 //
 // The two are distinguished because they mean opposite things to a reader of
-// the run history. A cancelled turn is a turn somebody stopped; a stalled one
+// the run history. A canceled turn is a turn somebody stopped; a stalled one
 // is a defect or a capacity wall. Collapsing both into "context canceled" is
 // how a stuck turn gets filed as a user action and never investigated.
 //
@@ -61,13 +61,13 @@ func syntheticTurnIdleTimeout() time.Duration {
 // it. The consuming goroutine blocked forever, and with it the deferred
 // cleanup that clears session-busy, releases the input lane, and records the
 // tracked execution — leaving a session that reports "running" indefinitely
-// with nothing executing behind it. Cancelling the session did not help
+// with nothing executing behind it. Canceling the session did not help
 // either: cancellation reaches the producer, but the loop was waiting on the
 // channel, not on the context.
 //
 // Both bounds are needed. The context covers a deliberate stop; the idle timer
 // covers a producer that has silently stopped without erroring, which is the
-// case a stalled tmux pane actually presents. Every rate-limit behaviour built
+// case a stalled tmux pane actually presents. Every rate-limit behavior built
 // on top of this — typed quota errors, suspend-and-resume — is unreachable
 // while a turn can hang here instead of returning.
 func drainSyntheticTurnStream(ctx context.Context, textChan <-chan string, onChunk func(string)) (reason string, stalled bool) {

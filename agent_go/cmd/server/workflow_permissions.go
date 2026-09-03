@@ -159,6 +159,20 @@ func workflowAccessForClaims(claims *UserClaims) WorkflowAccessLevel {
 }
 
 func workflowAccessForIdentity(userID, username, email string) WorkflowAccessLevel {
+	// The user directory (config/users.json) is authoritative for anyone it
+	// knows: an admin is owner, an account that may create is write, a
+	// read-only account is read. Identities it does not know fall through
+	// to the legacy env/file tiers below, unchanged.
+	if rec := directoryUserFor(userID, username, email); rec != nil {
+		switch {
+		case rec.Admin:
+			return WorkflowAccessOwner
+		case rec.CanCreate:
+			return WorkflowAccessWrite
+		default:
+			return WorkflowAccessRead
+		}
+	}
 	cfg := loadWorkflowPermissionConfig()
 	if !cfg.configured {
 		return WorkflowAccessOwner
@@ -190,7 +204,7 @@ func workflowPermissionInfo(access WorkflowAccessLevel) WorkflowPermissionInfo {
 		CanRunWorkflows:            true,
 		CanWriteWorkflows:          canWrite,
 		CanManageWorkflowAccess:    canManage,
-		WorkflowPermissionsEnabled: cfg.configured,
+		WorkflowPermissionsEnabled: cfg.configured || userDirectoryHasPasswordUsers(),
 	}
 }
 
@@ -202,9 +216,19 @@ func userInfoWithWorkflowPermissions(info UserInfo) UserInfo {
 	info.CanWriteWorkflows = perms.CanWriteWorkflows
 	info.CanManageWorkflowAccess = perms.CanManageWorkflowAccess
 
+	if products, restricted := userProductPolicy(info.ID, info.Username, info.Email); restricted {
+		info.AllowedProducts = products
+	}
 	if productAccess, ok := userProductAccessForIdentity(info.ID, info.Username, info.Email); ok {
-		info.AllowedProducts = productAccess.Products
 		info.AllowedWorkflowIDs = productAccess.WorkflowIDs
+	}
+	if rec := directoryUserFor(info.ID, info.Username, info.Email); rec != nil {
+		info.IsAdmin = rec.Admin
+		info.CanCreate = rec.Admin || rec.CanCreate
+	} else {
+		acc := userAccessForClaims(&UserClaims{UserID: info.ID, Username: info.Username, Email: info.Email})
+		info.IsAdmin = acc.Admin
+		info.CanCreate = acc.CanCreate
 	}
 	return info
 }

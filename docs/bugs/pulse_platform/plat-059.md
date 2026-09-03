@@ -48,7 +48,7 @@ isolation, and it is a standing cost someone has to be able to re-judge later.
   the ordinary way to say "consumes but does not contribute", and it needs no
   reason. Reserve the lock for a step that *does* have something to contribute
   and is deliberately frozen anyway.
-- The UI lock toggle was removed (`LearningsPopup.tsx`). Locking is a considered
+- The UI lock toggle was removed (`LearningsView.tsx`). Locking is a considered
   decision, not a click; state stays visible, and it is set through chat or
   Pulse — both of which carry the reason.
 

@@ -47,6 +47,9 @@ type messageSequenceSession struct {
 	Entries             []messageSequenceEntry    `json:"entries,omitempty"`
 
 	runtime *messageSequenceRuntime
+	// delegation is set when this sequence is a todo_task orchestrator running on
+	// the shared executor. Never serialized: it holds live runtime hooks.
+	delegation *messageSequenceDelegation
 }
 
 type messageSequenceRuntime struct {
@@ -71,6 +74,74 @@ type messageSequenceCallOptions struct {
 	ReentryMessage      string
 	ContinuationMessage string
 	Restart             bool
+	// Delegation turns this sequence into a todo_task orchestrator: the agent owns
+	// predefined routes and the sub-agent tools, every conversational turn is
+	// followed by a reconcile of the async children it launched, and the step
+	// cannot finish while a child is still running. nil for a plain sequence.
+	Delegation *messageSequenceDelegation
+}
+
+// messageSequenceDelegation is the seam that lets a todo_task orchestrator run on
+// the message_sequence executor instead of its own turn loop. The executor owns
+// the item queue, prevalidation repair loop, final validation gate, closing
+// reflection turn, session log, and stop/halt handling; the delegation hooks own
+// what is orchestrator-specific: which agent runs (the orchestrator agent type
+// with sub-agent tools — PLAT-027's progress bridge keys on that type), the
+// narrower folder guard, the orchestrator's own prompt variables, and the
+// todo_task execution-log shape ExecutionLogsPopup reads.
+type messageSequenceDelegation struct {
+	// ExecCtx owns the async children. Sub-agent tools exist only when it is set.
+	ExecCtx *SubAgentExecutionContext
+	// ReadPaths/WritePaths replace setupMessageSequenceFolderGuard for the
+	// orchestrator: execution folder + db, never the workflow root.
+	ReadPaths  []string
+	WritePaths []string
+	// CreateAgent builds the orchestrator agent once; the executor reuses it for
+	// every turn of the sequence.
+	CreateAgent func(ctx context.Context) (agents.OrchestratorAgent, error)
+	// TurnVars returns the orchestrator's template variables for one turn. The
+	// opening turn renders the full orchestrator user template; follow-up turns
+	// carry the item text verbatim.
+	TurnVars func(item MessageSequenceItem, message string, opening bool) map[string]string
+	// LogTurn persists one turn in the todo_task execution-log shape. turnNumber
+	// is 1-based.
+	LogTurn func(ctx context.Context, turnNumber int, executionLLM string, history []llmtypes.MessageContent, toolCalls []orchestrator.ToolCallEntry, llmCalls []orchestrator.LLMCallEntry, startedAt, completedAt time.Time)
+}
+
+// messageSequenceDelegationItemAllowed reports whether an item kind may run on an
+// orchestrator. Plan validation already rejects code/file items on a todo_task's
+// messages; this is the runtime backstop so a bypassed plan can never make the
+// orchestrator execute code items itself.
+func messageSequenceDelegationItemAllowed(item MessageSequenceItem) bool {
+	switch strings.TrimSpace(item.Type) {
+	case "", "user_message", "foreach", "prevalidation":
+		return true
+	}
+	return false
+}
+
+// lastAssistantText returns the full text of the most recent assistant message,
+// or "" when there is none. Unlike latestAssistantExecutionSummary it is not
+// truncated, so STATUS lines emitted after a completion batch are preserved.
+func lastAssistantText(history []llmtypes.MessageContent) string {
+	for i := len(history) - 1; i >= 0; i-- {
+		msg := history[i]
+		if msg.Role != llmtypes.ChatMessageTypeAI {
+			continue
+		}
+		var parts []string
+		for _, part := range msg.Parts {
+			if textContent, ok := part.(llmtypes.TextContent); ok {
+				if text := strings.TrimSpace(textContent.Text); text != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n")
+		}
+	}
+	return ""
 }
 
 func messageSequenceContinuationMessage(opts messageSequenceCallOptions) string {
@@ -289,6 +360,27 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 	// is deliberately unsupported; steps that produce external side effects must follow the
 	// same idempotency/deduplication contract as every other rerunnable workflow step.
 	isRoute := opts.Source == "orchestrator_reentry"
+	if opts.Delegation != nil {
+		if isRoute {
+			return "", nil, fmt.Errorf("step %q: a delegating sequence cannot be a route re-entry", step.GetID())
+		}
+		for _, item := range sequenceStep.Items {
+			if !messageSequenceDelegationItemAllowed(item) {
+				return "", nil, fmt.Errorf("orchestrator step %q message %q has type %q; an orchestrator runs only user_message, foreach, and prevalidation items — code/file work belongs in a sub-agent route", step.GetID(), item.ID, item.Type)
+			}
+		}
+		if opts.Delegation.ExecCtx != nil {
+			// The step must never return while a child it owns is still running,
+			// whatever the exit path (PLAT-082's failure-path backstop).
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := opts.Delegation.ExecCtx.cancelOutstandingAndWait(cleanupCtx); err != nil {
+					hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Orchestrator step %s could not fully stop owned sub-agents during cleanup: %v", step.GetID(), err))
+				}
+			}()
+		}
+	}
 	routeKey := hcpo.msgSeqRouteKey(stepPath, sequenceStep.GetID())
 	sessionRelPath := hcpo.messageSequenceSessionPath(stepPath, sequenceStep.GetID())
 	if isRoute {
@@ -359,16 +451,22 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 		// instructions), so it takes precedence. For a STANDALONE run we fall back to
 		// the step's own description so it is no longer silently dropped — matching the
 		// todo_task orchestrator, whose description is likewise its first user turn.
-		if reentry := strings.TrimSpace(opts.ReentryMessage); reentry != "" {
-			session.LastRuntimeContext = "Builder/orchestrator initial instruction:\n" + reentry
-		} else if desc := strings.TrimSpace(sequenceStep.GetDescription()); desc != "" {
-			session.LastRuntimeContext = "Step description (opening instruction):\n" + desc
+		session.delegation = opts.Delegation
+		if opts.Delegation == nil {
+			if reentry := strings.TrimSpace(opts.ReentryMessage); reentry != "" {
+				session.LastRuntimeContext = "Builder/orchestrator initial instruction:\n" + reentry
+			} else if desc := strings.TrimSpace(sequenceStep.GetDescription()); desc != "" {
+				session.LastRuntimeContext = "Step description (opening instruction):\n" + desc
+			}
+			// Show the validation schema on the opening turn — the same way regular
+			// and todo_task steps already surface it proactively — so a
+			// message_sequence step doesn't have to guess the output shape and only
+			// learn it reactively after a failed pre-validation attempt.
+			session.LastRuntimeContext = appendMessageSequenceValidationSchema(session.LastRuntimeContext, sequenceStep.ValidationSchema)
 		}
-		// Show the validation schema on the opening turn — the same way regular
-		// and todo_task steps already surface it proactively — so a
-		// message_sequence step doesn't have to guess the output shape and only
-		// learn it reactively after a failed pre-validation attempt.
-		session.LastRuntimeContext = appendMessageSequenceValidationSchema(session.LastRuntimeContext, sequenceStep.ValidationSchema)
+		// A delegating sequence renders its description, dependencies, human
+		// input, and validation schema through the orchestrator's own templates
+		// (TurnVars), so nothing is prepended here.
 		source = "configured_queue"
 	}
 
@@ -377,11 +475,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceStep(
 	}
 
 	for _, item := range plannedItems {
-		// Stop means stop. Every layer below is expected to surface a cancelled
+		// Stop means stop. Every layer below is expected to surface a canceled
 		// context as an item error, and the queue halts on any error — but that
 		// makes halting depend on a lower layer noticing, and a coding-CLI turn
 		// whose pane is torn down can return a plausible-looking result instead
-		// of an error. A cancelled run must never START another item, whatever
+		// of an error. A canceled run must never START another item, whatever
 		// the previous one reported (PLAT-130).
 		if haltErr := messageSequenceHaltedBeforeItem(ctx, sequenceStep.GetID(), item.ID); haltErr != nil {
 			// The line a live reverify greps for: it names the item that was NOT
@@ -830,8 +928,14 @@ func formatMessageSequencePrevalidationFeedback(itemID string, results *Workspac
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceUserMessage(ctx context.Context, step *MessageSequencePlanStep, item MessageSequenceItem, stepIndex int, stepPath string, session *messageSequenceSession) (string, error) {
+	delegation := session.delegation
 	writeAccess := hcpo.resolveMessageSequenceItemWriteAccess(getAgentConfigs(step), item)
-	readPaths, writePaths := hcpo.setupMessageSequenceFolderGuard(stepPath, step.GetID(), getAgentConfigs(step), writeAccess)
+	var readPaths, writePaths []string
+	if delegation != nil {
+		readPaths, writePaths = delegation.ReadPaths, delegation.WritePaths
+	} else {
+		readPaths, writePaths = hcpo.setupMessageSequenceFolderGuard(stepPath, step.GetID(), getAgentConfigs(step), writeAccess)
+	}
 	runtime, agentCtx, err := hcpo.getMessageSequenceRuntime(ctx, step, stepPath, session, readPaths, writePaths)
 	if err != nil {
 		return "", err
@@ -847,7 +951,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceUserMessage(ctx
 	// contract). Without this, parallel message_sequence steps race on SKILL.md.
 	// Scoped to Kind=="learning" only: locking every learnings-writable work
 	// turn would serialize whole parallel sequences.
-	if strings.TrimSpace(item.Kind) == "learning" && writeAccess.Learnings {
+	// Not for a delegating orchestrator: its reflection turn may launch children
+	// whose own learnings turns take this same mutex, and the parent waits for
+	// them inside the turn (reconcile) — holding the lock here would deadlock.
+	// The orchestrator never held it before the executor merge either.
+	if strings.TrimSpace(item.Kind) == "learning" && writeAccess.Learnings && delegation == nil {
 		learningsGlobalFileMutex.Lock()
 		defer learningsGlobalFileMutex.Unlock()
 	}
@@ -860,7 +968,12 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceUserMessage(ctx
 	if session.LastRuntimeContext != "" {
 		message = session.LastRuntimeContext + "\n\n## Next instruction\n" + message
 	}
-	templateVars := hcpo.buildMessageSequenceTemplateVars(step, item, stepIndex, stepPath, message, readPaths, writePaths, writeAccess)
+	var templateVars map[string]string
+	if delegation != nil {
+		templateVars = delegation.TurnVars(item, message, session.ExecutionTurnCount == 0)
+	} else {
+		templateVars = hcpo.buildMessageSequenceTemplateVars(step, item, stepIndex, stepPath, message, readPaths, writePaths, writeAccess)
+	}
 
 	turnCtx := agentCtx
 	if cab, ok := hcpo.GetContextAwareBridge().(*orchestrator.ContextAwareEventBridge); ok {
@@ -901,24 +1014,48 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeMessageSequenceUserMessage(ctx
 	}
 	loggedResult := formatMessageSequenceTurnLogResult(item, result, err)
 	executionLLM := agentConfigModelLabel(runtime.Agent.GetConfig())
-	var logErr error
+
+	// An orchestrator turn is not finished when the LLM call returns: children it
+	// launched are still running. Wait for them, feed the completion batch back
+	// into the same conversation, and let the orchestrator continue — on the
+	// error path too, so a failed turn never leaves children unaccounted for.
+	if delegation != nil && delegation.ExecCtx != nil {
+		reconcileHistory := history
+		if len(reconcileHistory) == 0 {
+			reconcileHistory = session.ConversationHistory
+		}
+		if rerr := hcpo.reconcileAsyncSubAgentCalls(ctx, step.GetID(), runtime.Agent, delegation.ExecCtx, &reconcileHistory); rerr != nil {
+			session.ConversationHistory = reconcileHistory
+			if err == nil {
+				err = fmt.Errorf("sub-agent reconciliation after item %q: %w", item.ID, rerr)
+			}
+		}
+		history = reconcileHistory
+		loggedHistory = history
+		if err == nil {
+			// The turn's outcome is whatever the orchestrator said after reading the
+			// completion batch, not the acknowledgement it emitted before it.
+			if final := lastAssistantText(history); final != "" {
+				result = final
+			}
+			loggedResult = formatMessageSequenceTurnLogResult(item, result, nil)
+		}
+	}
+
+	var toolCalls []orchestrator.ToolCallEntry
+	var llmCalls []orchestrator.LLMCallEntry
 	if cab, ok := hcpo.GetContextAwareBridge().(*orchestrator.ContextAwareEventBridge); ok {
 		timingCapture := cab.DrainTimingCaptureFor(turnCtx)
-		logErr = hcpo.saveExecutionConversationLogs(
-			stepIndex, step.GetID(), stepPath, 1, turnNumber,
-			loggedResult, executionLLM, loggedHistory, runtime.Agent,
-			timingCapture.ToolCalls, timingCapture.LLMCalls,
-			attemptStartedAt, attemptCompletedAt, attemptDuration,
-		)
-	} else {
-		logErr = hcpo.saveExecutionConversationLogs(
-			stepIndex, step.GetID(), stepPath, 1, turnNumber,
-			loggedResult, executionLLM, loggedHistory, runtime.Agent,
-			nil, nil,
-			attemptStartedAt, attemptCompletedAt, attemptDuration,
-		)
+		toolCalls, llmCalls = timingCapture.ToolCalls, timingCapture.LLMCalls
 	}
-	if logErr != nil {
+	if delegation != nil && delegation.LogTurn != nil {
+		delegation.LogTurn(ctx, turnNumber, executionLLM, loggedHistory, toolCalls, llmCalls, attemptStartedAt, attemptCompletedAt)
+	} else if logErr := hcpo.saveExecutionConversationLogs(
+		stepIndex, step.GetID(), stepPath, 1, turnNumber,
+		loggedResult, executionLLM, loggedHistory, runtime.Agent,
+		toolCalls, llmCalls,
+		attemptStartedAt, attemptCompletedAt, attemptDuration,
+	); logErr != nil {
 		hcpo.recordRunPersistenceError(context.Background(), step.GetID(), logErr)
 	}
 
@@ -1024,6 +1161,24 @@ func (hcpo *StepBasedWorkflowOrchestrator) getMessageSequenceRuntime(ctx context
 		return nil, ctx, fmt.Errorf("message_sequence session is nil")
 	}
 
+	if session.delegation != nil {
+		// The orchestrator agent carries its own MCP session, tool registry, and
+		// shared folder guard (set by executeOrchestratorStep); none of the sequence's
+		// per-session overrides apply to it.
+		if session.runtime != nil && session.runtime.Agent != nil {
+			return session.runtime, ctx, nil
+		}
+		if session.delegation.CreateAgent == nil {
+			return nil, ctx, fmt.Errorf("message_sequence delegation for step %q has no agent factory", step.GetID())
+		}
+		agent, err := session.delegation.CreateAgent(ctx)
+		if err != nil {
+			return nil, ctx, err
+		}
+		session.runtime = &messageSequenceRuntime{Agent: agent}
+		return session.runtime, ctx, nil
+	}
+
 	sessionID := hcpo.messageSequenceRuntimeSessionID(stepPath, step.GetID())
 	if session.runtime != nil && strings.TrimSpace(session.runtime.SessionID) != "" {
 		sessionID = strings.TrimSpace(session.runtime.SessionID)
@@ -1120,6 +1275,10 @@ func (hcpo *StepBasedWorkflowOrchestrator) closeMessageSequenceRuntime(session *
 	session.runtime = nil
 	if runtime.Agent != nil {
 		_ = runtime.Agent.Close()
+	}
+	if strings.TrimSpace(runtime.SessionID) == "" {
+		// A delegating (orchestrator) runtime has no sequence-owned session.
+		return
 	}
 	closeMessageSequenceCodingSession(runtime.Provider, runtime.SessionID, reason)
 	common.ClearSessionShellConfig(runtime.SessionID)
@@ -1610,9 +1769,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) summarizeMessageSequenceSession(sessi
 // messageSequenceHaltedBeforeItem reports why a message_sequence queue must not
 // start another item, or nil to proceed.
 //
-// PLAT-130. Clicking Stop on a schedule cancelled the run's context correctly,
+// PLAT-130. Clicking Stop on a schedule canceled the run's context correctly,
 // and the item loop already returned on any item error — yet a queued item
-// still fired, because "the context was cancelled" only becomes an error if
+// still fired, because "the context was canceled" only becomes an error if
 // some layer underneath converts it into one. Session teardown races that
 // conversion: a coding-CLI turn whose pane is being killed can return a
 // truncated-but-plausible result rather than a failure, and the queue reads
@@ -1623,7 +1782,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) summarizeMessageSequenceSession(sessi
 // Checking the context directly removes the dependency on that conversion. It
 // is deliberately a pre-item gate rather than a mid-item abort: an item already
 // in flight is left to unwind through its own error path, but no new work
-// begins once the run is cancelled.
+// begins once the run is canceled.
 func messageSequenceHaltedBeforeItem(ctx context.Context, stepID, itemID string) error {
 	if ctx == nil {
 		return nil

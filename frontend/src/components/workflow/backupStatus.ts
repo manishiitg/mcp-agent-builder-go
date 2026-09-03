@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 
 // Shared backup-status presentation helpers used by both the dedicated
-// WorkflowBackupPopup and the toolbar status dot, so the two never drift.
+// WorkflowBackupView and the toolbar status dot, so the two never drift.
 
 export type BackupState =
   | 'not_configured'

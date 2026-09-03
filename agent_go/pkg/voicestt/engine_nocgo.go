@@ -4,8 +4,6 @@ package voicestt
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 )
 
 // ModelFiles describes the files used by the native recognizer. It remains
@@ -17,16 +15,11 @@ type ModelFiles struct {
 	Tokens  string
 }
 
-// DefaultModelURLs documents the pinned native model assets. They are not
-// downloaded in a non-CGO build because the recognizer is unavailable.
-var DefaultModelURLs = map[string]string{
-	"encoder.int8.onnx": "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/encoder.int8.onnx",
-	"decoder.int8.onnx": "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/decoder.int8.onnx",
-	"joiner.int8.onnx":  "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/joiner.int8.onnx",
-	"tokens.txt":        "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/tokens.txt",
-}
-
 const SampleRate = 16000
+
+// Available is false here: NewEngine below always fails, so the composer must
+// not offer a mic control in this build. See engine.go for the CGO value.
+const Available = false
 
 // Engine and Stream deliberately preserve the public API. NewEngine returns
 // the diagnostic below before either can be used.
@@ -46,17 +39,8 @@ func NewEngine(string) (*Engine, error) {
 }
 
 func (*Engine) Close()                          {}
+func (*Engine) Punctuate(text string) string    { return text }
 func (*Engine) NewStream() *Stream              { return &Stream{} }
 func (*Stream) AcceptWaveform([]float32) Result { return Result{} }
 func (*Stream) Finish() Result                  { return Result{EndOfUtterance: true} }
 func (*Stream) Close()                          {}
-
-// DefaultModelDir remains stable for configuration and diagnostics even when
-// this particular build cannot load the native recognizer.
-func DefaultModelDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = os.TempDir()
-	}
-	return filepath.Join(home, ".agentworks", "voice-models", "nemotron-streaming")
-}

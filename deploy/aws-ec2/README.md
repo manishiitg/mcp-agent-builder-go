@@ -37,6 +37,43 @@ This release path connects as `video-studio`, writes only its own application
 directory, and restarts only its user services. It neither runs `sudo` nor
 touches infrastructure, the shared login password, or unrelated services.
 
+## Per-user accounts (since 2026-09-02)
+
+Visitors sign in with their own AgentWorks account instead of the shared
+gateway password. The gateway runs with `GATEWAY_DISABLE_PASSWORD_GATE=true`
+and verifies the app's own JWT on every `/api` and `/api/wp` request (401
+otherwise, apart from the login/mode/health routes), stamping `X-User-ID`
+from the token. Accounts live in `config/users.json` on the box and are
+managed by an admin in the app ("Users & access" in the workflow toolbar)
+— see `docs/design/user_accounts_and_workflow_sharing.md` and
+`docs/core/multi_user_authentication.md`.
+
+The switch-over on a box that ran the shared password is one script, run
+once as `video-studio` BEFORE deploying the release that carries accounts:
+
+```bash
+bash migrate-to-user-accounts.sh <admin-username>
+```
+
+It sets `MULTI_USER_MODE`, `ADMIN_USERS`, a bootstrap `AUTH_USERS` (initial
+password = the old `ACCESS_PASSWORD`; remove that line once the admin has
+logged in), `GATEWAY_DISABLE_PASSWORD_GATE`, and moves everything the shared
+identity owned (`_users/default`: projects, history, secrets) to the admin's
+own user id. Each user then gets their own projects tree; the admin adds
+users and ticks `video-studio` for them. `ACCESS_PASSWORD` must still be
+present (the gateway refuses to start without it) but is no longer asked for.
+
+The agent binary is built with cgo inside Docker (`build/build-linux-agent.sh`,
+image `video-studio-linux-amd64-builder`, created on first use). Video Studio's
+microphone dictation (`agent_go/pkg/voicestt`, `voice: preferred` in its
+`product.yaml`) links sherpa-onnx's native Linux libraries, which a plain
+`CGO_ENABLED=0` cross-build replaces with a stub that answers the mic with
+503. The libraries ship in `bin/lib` beside the binary. On the first start
+the first mic click offers a one-time ~690MB download (NVIDIA's Nemotron
+English streaming model plus a punctuation model) into
+`~/.agentworks/voice-models/`, with progress shown in the composer; pre-place
+the files there to skip it. Docker Desktop must be running on the deployer's machine.
+
 `deploy-aws-ec2.sh` is retained only as the original bootstrap installer; do
 not use it for normal releases.
 

@@ -320,12 +320,23 @@ function handleLiveStreamingEvent(
     // classification. Both are carried on StreamingChunkEvent — dropping them
     // here is what made block-provider output render as one run-on blob.
     const rawIsDelta = innerData?.is_delta ?? agentEvent?.is_delta
-    const rawSource = innerData?.source ?? agentEvent?.source
+    // Modern streaming packets put this on the typed chunk payload; a few
+    // retained/bridge envelopes preserve it in metadata instead. Either way,
+    // source is authoritative and must not be inferred from the screen text.
+    const rawSource = innerData?.source ?? agentEvent?.source ?? metadata?.source
     const chunkMeta = {
       isDelta: typeof rawIsDelta === 'boolean' ? rawIsDelta : undefined,
       source: typeof rawSource === 'string' ? rawSource : undefined,
     }
     if (ownedTerminalKeys.length > 0) {
+      return
+    } else if (chunkMeta.source?.trim().toLowerCase() === 'terminal' && scope.kind === 'session') {
+      // A terminal chunk is a complete tmux/pane frame, not assistant prose.
+      // Keeping it in streamingText made the chat render the previous Claude
+      // screen again after a follow-up message. Store it only in the dedicated
+      // snapshot channel; the product transcript deliberately never renders
+      // that channel as a chat response.
+      chatStore.setStreamingTerminalSnapshot(actualSessionId, chunkIndex, content)
       return
     } else if (scope.kind === 'delegation' && scope.id) {
       if (chunkIndex === 0 || chunkIndex === 1) chatStore.clearDelegationStreamingText(scope.id)
@@ -2145,37 +2156,41 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     startPolling(pollEvents)
   }, [startPolling, pollEvents])
 
-  // Product surfaces cannot rely on EventSource alone. Browsers cap concurrent
-  // HTTP/1.1 connections per origin, and other restored AgentWorks tabs may
-  // already occupy those slots with long-lived SSE streams. Keep a small,
-  // session-scoped catch-up loop while the clean product turn is running so
-  // progress and the final completion still arrive immediately. This reads the
-  // same AgentWorks event store; execution and active steering remain tmux-based.
-  const productCatchUpTimersRef = useRef<Record<string, number>>({})
-  const productCatchUpGenerationRef = useRef<Record<string, number>>({})
-  const productCatchUpMountedRef = useRef(true)
+  // No foreground chat can rely on EventSource alone. Browsers cap concurrent
+  // HTTP/1.1 connections per origin, and restored AgentWorks tabs may already
+  // occupy those slots with long-lived SSE streams. A queued EventSource does
+  // not reliably raise onerror, so the nominal SSE fallback never starts and a
+  // healthy tmux turn can look completely blank. Keep one small session-scoped
+  // catch-up loop for every submitted foreground turn. It reads the same event
+  // store and event IDs make concurrent SSE delivery harmlessly idempotent.
+  const foregroundCatchUpTimersRef = useRef<Record<string, number>>({})
+  const foregroundCatchUpGenerationRef = useRef<Record<string, number>>({})
+  const foregroundCatchUpMountedRef = useRef(true)
   useEffect(() => {
-    productCatchUpMountedRef.current = true
+    foregroundCatchUpMountedRef.current = true
     return () => {
-      productCatchUpMountedRef.current = false
-      Object.values(productCatchUpTimersRef.current).forEach(timer => window.clearTimeout(timer))
-      productCatchUpTimersRef.current = {}
-      productCatchUpGenerationRef.current = {}
+      foregroundCatchUpMountedRef.current = false
+      Object.values(foregroundCatchUpTimersRef.current).forEach(timer => window.clearTimeout(timer))
+      foregroundCatchUpTimersRef.current = {}
+      foregroundCatchUpGenerationRef.current = {}
     }
   }, [])
 
-  const startProductEventCatchUp = useCallback((sessionId: string) => {
-    if (!fullTurnStreaming) return
+  const startForegroundEventCatchUp = useCallback((sessionId: string) => {
+    // One loop per durable session is enough. The active-tab healing effect and
+    // the submission path may both request it in the same render window.
+    if (foregroundCatchUpTimersRef.current[sessionId] !== undefined) return
 
-    const generation = (productCatchUpGenerationRef.current[sessionId] || 0) + 1
-    productCatchUpGenerationRef.current[sessionId] = generation
-    const existingTimer = productCatchUpTimersRef.current[sessionId]
-    if (existingTimer !== undefined) window.clearTimeout(existingTimer)
+    const generation = (foregroundCatchUpGenerationRef.current[sessionId] || 0) + 1
+    foregroundCatchUpGenerationRef.current[sessionId] = generation
+    // Reserve the slot before the first async request so a concurrent caller
+    // cannot start a second immediate tick.
+    foregroundCatchUpTimersRef.current[sessionId] = -1
 
     const tick = async () => {
       if (
-        !productCatchUpMountedRef.current ||
-        productCatchUpGenerationRef.current[sessionId] !== generation
+        !foregroundCatchUpMountedRef.current ||
+        foregroundCatchUpGenerationRef.current[sessionId] !== generation
       ) return
 
       const store = useChatStore.getState()
@@ -2183,7 +2198,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       // Returning without clearing the timer entry leaked a dead generation into
       // the map; the loop is over for this session once its tab is gone.
       if (!tab) {
-        delete productCatchUpTimersRef.current[sessionId]
+        delete foregroundCatchUpTimersRef.current[sessionId]
         return
       }
 
@@ -2194,27 +2209,28 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         const freshStore = useChatStore.getState()
         const freshTab = Object.values(freshStore.chatTabs).find(candidate => candidate.sessionId === sessionId) || null
         processEventsResponse(response, sessionId, freshTab)
-        shouldContinue = !(
-          (response.session_status === 'completed' || response.session_status === 'error') &&
-          !response.has_running_background_agents
-        )
+        const terminalStatus = response.session_status === 'completed' ||
+          response.session_status === 'error' ||
+          response.session_status === 'stopped' ||
+          response.session_status === 'inactive'
+        shouldContinue = !(terminalStatus && !response.has_running_background_agents)
       } catch (error) {
-        logger.debug('ChatArea', `Product event catch-up failed for ${sessionId}; retrying`, error)
+        logger.debug('ChatArea', `Foreground event catch-up failed for ${sessionId}; retrying`, error)
       }
 
       if (
         shouldContinue &&
-        productCatchUpMountedRef.current &&
-        productCatchUpGenerationRef.current[sessionId] === generation
+        foregroundCatchUpMountedRef.current &&
+        foregroundCatchUpGenerationRef.current[sessionId] === generation
       ) {
-        productCatchUpTimersRef.current[sessionId] = window.setTimeout(tick, 750)
+        foregroundCatchUpTimersRef.current[sessionId] = window.setTimeout(tick, 750)
       } else {
-        delete productCatchUpTimersRef.current[sessionId]
+        delete foregroundCatchUpTimersRef.current[sessionId]
       }
     }
 
     void tick()
-  }, [fullTurnStreaming, processEventsResponse])
+  }, [processEventsResponse])
 
 
 
@@ -2404,6 +2420,21 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     // The function already uses getState() for fresh tab data (lines above), so the memo
     // only needs to recompute when tabsWithSessions or activeSessionIds actually change.
   }, [tabsWithSessions, activeSessionIds])
+
+  // Also heal turns that were already running when this component mounted or
+  // hot-reloaded. Submission starts the loop immediately, but restored tabs
+  // and a UI updated while tmux is mid-turn must not wait for another message
+  // before gaining the same transport fallback.
+  useEffect(() => {
+    const store = useChatStore.getState()
+    for (const tab of tabsWithActiveSessions) {
+      if (!tab.sessionId) continue
+      const freshTab = store.getTab(tab.tabId) || tab
+      if (freshTab.isStreaming || freshTab.hasRunningBgAgents) {
+        startForegroundEventCatchUp(tab.sessionId)
+      }
+    }
+  }, [tabsWithActiveSessions, startForegroundEventCatchUp])
 
   // SSE connection management — connect/disconnect based on active sessions
   // Falls back to polling if SSE connection fails (handled inside connectSSE's onError callback)
@@ -2659,7 +2690,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
               () => handleSSEFallback(tabSessionId),
             )
           }
-          startProductEventCatchUp(tabSessionId)
+          startForegroundEventCatchUp(tabSessionId)
           return true
         }
       } catch (error) {
@@ -3055,7 +3086,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             logger.error('ChatArea', 'Failed to refresh active sessions cache:', error)
             connectAfterRefresh()
           })
-        startProductEventCatchUp(responseSessionId)
+        startForegroundEventCatchUp(responseSessionId)
         return true
       } else if (response.status === 'live_input_delivered') {
         // Single-entry routing (tmux-transport CLI): the backend steered this
@@ -3079,6 +3110,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
             () => handleSSEFallback(sid)
           )
         }
+        if (sid) startForegroundEventCatchUp(sid)
         return true
       } else {
         console.log('[WF_DEBUG] ERROR: Backend non-started response', { status: response.status, message: response.message, response })
@@ -3095,7 +3127,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       return false
     }
 
-  }, [correctAgentMode, selectedModeCategory, getAgentModeFromCategory, isRequiredFolderSelected, finalResponse, effectiveServers, enabledTools, processedCompletionEventsRef, activeTab, scrollToBottom, getActiveSessions, resetStreamingState, connectSSE, handleSSEMessage, handleSSEStatus, buildExecutionOptions, handleSSEFallback, fullTurnStreaming, startProductEventCatchUp])
+  }, [correctAgentMode, selectedModeCategory, getAgentModeFromCategory, isRequiredFolderSelected, finalResponse, effectiveServers, enabledTools, processedCompletionEventsRef, activeTab, scrollToBottom, getActiveSessions, resetStreamingState, connectSSE, handleSSEMessage, handleSSEStatus, buildExecutionOptions, handleSSEFallback, fullTurnStreaming, startForegroundEventCatchUp])
 
   // Serialize the complete submission path by durable session. A restored chat
   // can receive a new React tab ID while an older request is still preparing;

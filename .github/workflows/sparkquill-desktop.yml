@@ -59,7 +59,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.x'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -96,21 +96,14 @@ jobs:
           go mod edit -replace=github.com/manishiitg/multi-llm-provider-go=../deps/multi-llm-provider-go
           go mod download
 
-      # --show-bin-path rather than a hardcoded .build/release: that path is a
-      # symlink to the HOST arch's output, so on this Intel runner copying it
-      # would silently ship an x86_64 binary inside an arm64 app.
-      - name: Build the native voice helper
-        working-directory: desktop-sparkquill/voice-helper
+      # cgo is REQUIRED: family-server links the shared speech engine's native
+      # libraries (agent_go/pkg/voicestt). A bare GOOS/GOARCH cross-build on
+      # this Intel runner would turn cgo off and ship the stub. The script
+      # also stages the dylibs into resources/lib, which extraResources
+      # carries into the app beside the server.
+      - name: Build family-server (with the speech engine)
         run: |
-          swift build -c release --arch arm64
-          BIN="$(swift build -c release --arch arm64 --show-bin-path)"
-          cp "$BIN/voice-helper" ../resources/voice-helper
-          file ../resources/voice-helper
-
-      - name: Build family-server
-        working-directory: agent_go
-        run: |
-          GOOS=darwin GOARCH=arm64 go build -o ../desktop-sparkquill/resources/family-server ./cmd/family-server/
+          bash scripts/build-darwin-voice-binary.sh agent_go/cmd/family-server desktop-sparkquill/resources/family-server arm64
 
       - name: Install Electron dependencies
         working-directory: desktop-sparkquill

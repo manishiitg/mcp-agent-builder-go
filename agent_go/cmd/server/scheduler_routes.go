@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/productschedule"
 )
 
 // ScheduledJobResponse is the API response for a scheduled job.
@@ -427,6 +430,16 @@ func listScheduledJobsHandler(svc *SchedulerService) http.HandlerFunc {
 			}
 		}
 
+		if entityTypeFilter == "" || entityTypeFilter == "product" {
+			if modeFilter == "" || modeFilter == "workshop" {
+				productJobs, err := productScheduleJobResponses(r, svc, enabledFilter)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				allJobs = append(allJobs, productJobs...)
+			}
+		}
 		total := len(allJobs)
 
 		// Pagination
@@ -469,6 +482,9 @@ func createScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 		if err := validateScheduleRequest(scheduleTypeOrDefault(req.ScheduleType), req.CronExpression, req.CalendarItems); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.WorkspacePath != "" && !requireWorkflowOwner(w, r, req.WorkspacePath) {
 			return
 		}
 		messagesForValidation := append([]string(nil), req.Messages...)
@@ -570,9 +586,15 @@ func getScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 
 		id := mux.Vars(r)["id"]
+		if handleProductScheduleJob(w, r, svc, id, "get") {
+			return
+		}
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if !requireWorkflowVisible(w, r, result.WorkspacePath) {
 			return
 		}
 
@@ -594,6 +616,9 @@ func updateScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 
 		id := mux.Vars(r)["id"]
+		if handleProductScheduleJob(w, r, svc, id, "update") {
+			return
+		}
 
 		var req UpdateScheduleRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -611,6 +636,9 @@ func updateScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if !requireWorkflowOwner(w, r, result.WorkspacePath) {
 			return
 		}
 
@@ -752,10 +780,16 @@ func deleteScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 
 		id := mux.Vars(r)["id"]
+		if handleProductScheduleJob(w, r, svc, id, "delete") {
+			return
+		}
 
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if !requireWorkflowOwner(w, r, result.WorkspacePath) {
 			return
 		}
 
@@ -780,10 +814,16 @@ func enableScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 
 		id := mux.Vars(r)["id"]
+		if handleProductScheduleJob(w, r, svc, id, "enable") {
+			return
+		}
 
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if !requireWorkflowOwner(w, r, result.WorkspacePath) {
 			return
 		}
 
@@ -814,10 +854,16 @@ func disableScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 
 		id := mux.Vars(r)["id"]
+		if handleProductScheduleJob(w, r, svc, id, "disable") {
+			return
+		}
 
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if !requireWorkflowOwner(w, r, result.WorkspacePath) {
 			return
 		}
 
@@ -846,10 +892,16 @@ func triggerScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 
 		id := mux.Vars(r)["id"]
+		if handleProductScheduleJob(w, r, svc, id, "trigger") {
+			return
+		}
 
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if !requireWorkflowVisible(w, r, result.WorkspacePath) {
 			return
 		}
 		trigResult, err := svc.TriggerNow(result.WorkspacePath, id)
@@ -871,9 +923,15 @@ func stopScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 
 		id := mux.Vars(r)["id"]
+		if handleProductScheduleJob(w, r, svc, id, "stop") {
+			return
+		}
 		result, err := findScheduleByIDAny(r.Context(), id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if !requireWorkflowVisible(w, r, result.WorkspacePath) {
 			return
 		}
 
@@ -927,6 +985,9 @@ func getScheduledJobRunsHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 
 		id := mux.Vars(r)["id"]
+		if handleProductScheduleJob(w, r, svc, id, "runs") {
+			return
+		}
 
 		limit := 50
 		offset := 0
@@ -1000,4 +1061,112 @@ func getScheduledJobRunsHandler(svc *SchedulerService) http.HandlerFunc {
 			"offset": offset,
 		})
 	}
+}
+
+// productScheduleJobResponses lists the requesting user's product schedules
+// in the same shape as workflow schedules.
+func productScheduleJobResponses(r *http.Request, svc *SchedulerService, enabledFilter string) ([]ScheduledJobResponse, error) {
+	if svc == nil || svc.api == nil || svc.api.productSchedules == nil {
+		return nil, nil
+	}
+	ps := svc.api.productSchedules
+	userID := productWorkspaceUserID(r.Context())
+	jobs, err := ps.JobsForUser(r.Context(), userID)
+	if err != nil {
+		return nil, err
+	}
+	var out []ScheduledJobResponse
+	for _, job := range jobs {
+		if enabledFilter != "" {
+			wantEnabled := enabledFilter == "true" || enabledFilter == "1"
+			if job.Effective().Enabled != wantEnabled {
+				continue
+			}
+		}
+		runsWorkspace, _ := ps.RunsWorkspace(r.Context(), job)
+		out = append(out, ps.jobResponse(job, runsWorkspace))
+	}
+	return out, nil
+}
+
+// handleProductScheduleJob serves the per-job scheduler routes for product
+// schedule ids ("product:<profile>:<schedule>"); false means the id is a
+// workflow schedule and the caller continues as before.
+func handleProductScheduleJob(w http.ResponseWriter, r *http.Request, svc *SchedulerService, id, action string) bool {
+	if _, _, ok := parseProductScheduleJobID(id); !ok {
+		return false
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if svc == nil || svc.api == nil || svc.api.productSchedules == nil {
+		http.Error(w, "product schedules are not available", http.StatusNotFound)
+		return true
+	}
+	ps := svc.api.productSchedules
+	ctx := r.Context()
+	userID := productWorkspaceUserID(ctx)
+	job, err := ps.Job(ctx, userID, id)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return true
+	}
+	respond := func(job productScheduleJob) {
+		runsWorkspace, _ := ps.RunsWorkspace(ctx, job)
+		_ = json.NewEncoder(w).Encode(ps.jobResponse(job, runsWorkspace))
+	}
+	switch action {
+	case "get":
+		respond(job)
+	case "enable", "disable":
+		updated, err := ps.SetEnabled(ctx, userID, id, action == "enable")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return true
+		}
+		respond(updated)
+	case "trigger":
+		sessionID, err := ps.Trigger(ctx, userID, id)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, productschedule.ErrAlreadyRunning) {
+				status = http.StatusConflict
+			}
+			http.Error(w, err.Error(), status)
+			return true
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"session_id": sessionID})
+	case "stop":
+		if !ps.Stop(userID, id) {
+			http.Error(w, "job is not running", http.StatusBadRequest)
+			return true
+		}
+		respond(job)
+	case "runs":
+		limit, offset := 50, 0
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		if v := r.URL.Query().Get("offset"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				offset = n
+			}
+		}
+		runsWorkspace, err := ps.RunsWorkspace(ctx, job)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return true
+		}
+		runs, total, err := ListScheduleRuns(ctx, runsWorkspace, id, limit, offset)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return true
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"runs": runs, "total": total, "limit": limit, "offset": offset})
+	default:
+		// A product declares its schedules in product.yaml; users only
+		// enable, disable and trigger them.
+		http.Error(w, "product schedules are declared by the product and cannot be edited here", http.StatusMethodNotAllowed)
+	}
+	return true
 }

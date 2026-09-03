@@ -30,7 +30,8 @@ import { startRestoredTransportTerminal } from '../utils/restoredTerminal'
 import { chromeCdpInstallCommand, chromeCdpLaunchCommand, chromeCdpVerifyCommand, chromeCdpZipUrl } from '../utils/cdpSetup'
 import { CHAT_TOOL_COMMAND_EVENT, chatToolCommandFromEvent } from '../utils/chatToolEvents'
 import { loadAgentProfileCapabilityEnabled, loadAgentProfileRuntime } from '../utils/agentProfileCapabilities'
-import { MicButton } from '../voice/MicButton'
+import { MicButton, type MicButtonHandle, type MicState } from '../voice/MicButton'
+import { useCapabilitiesStore } from '../stores/useCapabilitiesStore'
 import { hasActiveSessionWork } from '../utils/activitySessions'
 import { headerStatusLabel, statusTone } from '../utils/globalActivityMonitorStatus'
 import { shouldClearAcceptedChatDraft } from '../utils/chatSubmissionDraft'
@@ -556,19 +557,23 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const agentProfileWorkspace = activeTab?.metadata?.agentProfileWorkspace
   const agentProfileId = activeTab?.metadata?.agentProfileId
   const agentProfileVersion = activeTab?.metadata?.agentProfileVersion
-  // Mic control is gated per-profile (agentprofiles.RuntimeCapabilities.Voice)
-  // rather than hardcoded to any one product — see agentProfileCapabilities.ts.
-  // Checked only for product surfaces: AgentWorks' own generic chat has no
-  // agentProfileId at all, so this never fires an extra request there.
-  const [voiceCapabilityEnabled, setVoiceCapabilityEnabled] = useState(false)
+  // Mic control. On a product surface it is gated per-profile
+  // (agentprofiles.RuntimeCapabilities.Voice) rather than hardcoded to any one
+  // product — see agentProfileCapabilities.ts. AgentWorks' own composer has no
+  // agent profile, so there the gate is whether this server build carries the
+  // engine at all (capabilities.voice.available, false in a CGO_ENABLED=0
+  // build): the mic never appears where it would only answer 503.
+  const platformVoiceAvailable = useCapabilitiesStore(state => state.capabilities?.voice?.available ?? false)
+  const [profileVoiceEnabled, setProfileVoiceEnabled] = useState(false)
+  const voiceCapabilityEnabled = isProductSurface ? profileVoiceEnabled : platformVoiceAvailable
   useEffect(() => {
     if (!isProductSurface || !agentProfileId) {
-      setVoiceCapabilityEnabled(false)
+      setProfileVoiceEnabled(false)
       return
     }
     let cancelled = false
     void loadAgentProfileCapabilityEnabled(agentProfileId, 'voice', agentProfileVersion).then((enabled) => {
-      if (!cancelled) setVoiceCapabilityEnabled(enabled)
+      if (!cancelled) setProfileVoiceEnabled(enabled)
     })
     return () => { cancelled = true }
   }, [isProductSurface, agentProfileId, agentProfileVersion])
@@ -638,26 +643,25 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // Local state for immediate UI updates (prevents Zustand updates on every keystroke)
   const [localInputText, setLocalInputText] = useState(storedInputText)
 
-  // Text already in the composer when dictation STARTED, so each partial
-  // REPLACES only the dictated portion rather than appending on top of itself
-  // (a partial supersedes the previous partial, it does not follow it — the
-  // server sends the growing transcript of the current utterance, not
-  // deltas). A final transcript commits into that base for the next phrase.
-  // Reset explicitly on dictation start (not lazily on first partial): a
-  // lazy null-check would keep the PREVIOUS session's committed text as the
-  // base forever, silently discarding anything the user typed by hand
-  // between two separate mic sessions.
-  const dictationBaseTextRef = useRef(localInputText)
-  const handleDictationStart = useCallback(() => {
-    dictationBaseTextRef.current = localInputText
-  }, [localInputText])
-  const handleVoiceText = useCallback((text: string, final: boolean) => {
-    const base = dictationBaseTextRef.current
+  // Voice dictation (MicButton) delivers the whole utterance ONCE, on stop —
+  // the composer appends it to whatever was typed and leaves sending to the
+  // user (deliberately no auto-send in AgentWorks, unlike SparkQuill). While
+  // recording, Enter is routed to the mic (handleKeyDown) so it stops the
+  // dictation instead of submitting a half-typed draft. The live banner
+  // renders into micBannerHost, above the composer.
+  const micRef = useRef<MicButtonHandle>(null)
+  const micStateRef = useRef<MicState>('idle')
+  const [micBannerHost, setMicBannerHost] = useState<HTMLDivElement | null>(null)
+  const handleMicStateChange = useCallback((s: MicState) => { micStateRef.current = s }, [])
+  const handleVoiceText = useCallback((text: string) => {
+    const base = localInputText
     const joined = base && !base.endsWith(' ') && !base.endsWith('\n') ? `${base} ${text}` : `${base}${text}`
     setLocalInputText(joined)
     if (activeTabId) setTabConfig(activeTabId, { inputText: joined })
-    if (final) dictationBaseTextRef.current = joined
-  }, [activeTabId, setTabConfig])
+    // So Enter immediately sends — without this the composer stays unfocused
+    // after dictation and Enter does nothing.
+    textareaRef.current?.focus()
+  }, [localInputText, activeTabId, setTabConfig])
 
   const inputText = localInputText
   const inputOwnerTabIdRef = useRef(activeTabId)
@@ -2656,6 +2660,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault()
 
+      // Mid-dictation, Enter stops the dictation; the text lands in the
+      // composer and the user sends it with a second Enter.
+      if (micStateRef.current === 'recording') {
+        micRef.current?.stopDictation()
+        return
+      }
+
       // Check for slash commands
       const trimmedQuery = queryToSubmit?.trim() || ''
       if (executeSlashCommandFromQuery(trimmedQuery)) {
@@ -3562,7 +3573,11 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
       {/* Input Form */}
       <div data-tour="chat-input-area" data-testid="tour-chat-input-area" className={`${inputPadX} ${isProductSurface ? 'py-2' : 'py-2'}`}>
-        <form onSubmit={handleSubmit} className="space-y-2">
+        <form onSubmit={handleSubmit} className="relative space-y-2">
+          {/* The mic's banner (download progress, "Listening" with the live
+              transcript) portals here, in normal flow directly above the
+              composer box, so it can never be clipped by a container. */}
+          <div ref={setMicBannerHost} className="empty:hidden" />
           <div className={isProductSurface
             // Keep the customer composer visually steady while events stream.
             // The former ring-4 plus catch-all `transition` made a harmless
@@ -3737,12 +3752,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 {/* Server and LLM Selection — hidden in workflow phase chat (servers come from preset) */}
                 {(
                   <div data-tour="chat-input-tools" data-testid="tour-chat-input-tools" className="flex items-center gap-2">
-                      {voiceCapabilityEnabled && agentProfileId && (
+                      {voiceCapabilityEnabled && (
                         <MicButton
-                          profileId={agentProfileId}
+                          ref={micRef}
+                          profileId={isProductSurface ? (agentProfileId ?? '') : ''}
                           onText={handleVoiceText}
-                          onDictationStart={handleDictationStart}
-                          disabled={isStreaming || isSummarizing}
+                          onStateChange={handleMicStateChange}
+                          bannerHost={micBannerHost}
+                          shortcutEnabled={!scopedTabId}
+                          disabled={isSummarizing}
                         />
                       )}
                       <>

@@ -39,7 +39,8 @@ describe('intersectAllowedProductSurfaces', () => {
   it('passes the deployment list through unchanged when the user is unrestricted', () => {
     expect(intersectAllowedProductSurfaces(['dominion', 'agentworks'], null)).toEqual(['dominion', 'agentworks'])
     expect(intersectAllowedProductSurfaces(['dominion', 'agentworks'], undefined)).toEqual(['dominion', 'agentworks'])
-    expect(intersectAllowedProductSurfaces(['dominion', 'agentworks'], [])).toEqual(['dominion', 'agentworks'])
+    // An empty list is a read-only account with nothing enabled: no products.
+    expect(intersectAllowedProductSurfaces(['dominion', 'agentworks'], [])).toEqual([])
   })
 
   it('narrows to the explicit per-user allowlist, case-insensitively', () => {

@@ -14,7 +14,7 @@ import (
 
 // scheduleRunStatusWaitingForCapacity is a run that stopped without failing.
 //
-// PLAT-101. It is deliberately its own status rather than a flavour of
+// PLAT-101. It is deliberately its own status rather than a flavor of
 // "error". A failed run is finished and its remaining steps are abandoned; a
 // waiting run is mid-flight, holds completed steps whose side effects must not
 // be replayed, and will continue on its own. Collapsing the two is what made a
@@ -308,7 +308,7 @@ func (s *SchedulerService) quotaPacingForSchedule(ctx context.Context, sctx *Sch
 // inside a wrapped provider failure.
 const quotaExhaustedMarker = "[quota_exhausted]"
 
-// turnLevelCapacityWait recognises a run that hit the wall before any step ran.
+// turnLevelCapacityWait recognizes a run that hit the wall before any step ran.
 //
 // The step loop writes capacity_wait.json and returns a typed wait, so a wall
 // mid-run suspends cleanly. A wall on the orchestrator's OWN first turn reaches

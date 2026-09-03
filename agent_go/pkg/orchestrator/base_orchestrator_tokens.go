@@ -105,7 +105,7 @@ func resolvePricingProviderAndModel(provider, modelID string) (string, string) {
 		return "cursor-cli", normalizedModelID
 	case "pi-cli":
 		if normalizedModelLower == "" || normalizedModelLower == "auto" || normalizedModelLower == "pi-cli" {
-			return "pi-cli", "google/gemini-3.5-flash"
+			return "pi-cli", "google/gemini-3.8-flash"
 		}
 		return "pi-cli", normalizedModelID
 	default:

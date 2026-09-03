@@ -19,7 +19,6 @@ import type { PollingEvent, RuntimeSnapshot, TerminalSnapshot } from '../service
 import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { normalizeEventViewMode, useChatStore } from '../stores/useChatStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
-import { useAppStore } from '../stores/useAppStore'
 import { TERMINAL_REFRESH_REQUEST_EVENT } from '../utils/terminalRefresh'
 import { GEOMETRY_RECONNECT_AFTER_CLOSE, planGeometryChange, planLiveAttachClose, terminalGridChange, terminalGridNeedsReconnect, terminalReconnectDelayMs, terminalSnapshotCanReconnect, type GeometryChangeStep } from '../utils/terminalReconnect'
 import { terminalPayloadHasVisibleContent } from '../utils/terminalVisibleContent'
@@ -938,7 +937,7 @@ function findPlanStepByID(steps: PlanStep[] | undefined, stepID: string): PlanSt
     visited.add(step)
 
     if (step.id === stepID) return step
-    if (step.type !== 'todo_task') continue
+    if (step.type !== 'todo_task' && step.type !== 'orchestrator') continue
 
     if (step.todo_task_step) pending.push(step.todo_task_step)
     for (const route of step.predefined_routes || []) {
@@ -3370,12 +3369,10 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
     if (!selectedPlanStep) return
 
     // Match the existing Plan toolbar behavior before asking the mounted canvas
-    // to reveal the node and its read-only detail sidebar.
-    useAppStore.getState().setWorkspaceMinimized(true)
+    // to reveal the node and its read-only detail sidebar. openWorkspaceView
+    // shows the pane, sets the view, and minimizes the file workspace.
     const workflowStore = useWorkflowStore.getState()
-    workflowStore.setShowWorkspacePane(true)
-    workflowStore.setWorkflowWorkspaceView('flow')
-    workflowStore.setCanvasViewMode('flow')
+    workflowStore.openWorkspaceView('flow')
     workflowStore.setFocusedPane('preview')
     requestWorkflowPlanStepFocus({
       stepId: selectedPlanStep.id,
@@ -5072,6 +5069,9 @@ const TerminalCenterInner: React.FC<TerminalCenterProps> = ({ currentSessionId, 
                       events={selectedTerminalEventSource}
                       terminal={selectedTerminalView}
                       siblingTerminals={terminals}
+                      // The diagnostic terminal transcript is intentionally a
+                      // live inspection surface, unlike the product chats.
+                      autoScrollMode="follow-turn"
                       loading={selectedTerminalUsesSessionEvents
                         ? mainEventHydration.sessionId === currentSessionId && mainEventHydration.loading
                         : selectedTerminalEventPage.loading}

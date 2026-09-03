@@ -87,7 +87,7 @@ func Chat(ctx context.Context, provider, modelID, workingDir, systemPrompt strin
 		}
 	case "pi-cli":
 		llmProvider = llm.ProviderPiCLI
-		defaultModel = "google/gemini-3.5-flash"
+		defaultModel = "google/gemini-3.8-flash"
 		if workingDir != "" {
 			callOpts = append(callOpts, llm.WithPiWorkingDir(workingDir))
 		}

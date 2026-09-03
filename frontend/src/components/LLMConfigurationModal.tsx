@@ -9,6 +9,7 @@ import { APIProviderSection } from './llm/APIProviderSection'
 import { llmConfigService, type ModelMetadata, type ProviderManifestEntry } from '../services/llm-config-api'
 import { LibraryTab } from './llm/LibraryTab'
 import ModalPortal from './ui/ModalPortal'
+import { useCanWriteWorkflow } from '../hooks/useCanWriteWorkflow'
 
 interface LLMConfigurationModalProps {
   isOpen: boolean
@@ -85,6 +86,10 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
     providerManifestLoaded,
     loadProviderManifest,
   } = useLLMStore()
+
+  // Same read-only gate the workflow panel applies to these sections, so a
+  // read-tier user can't add keys or publish models through the modal either.
+  const readOnly = !useCanWriteWorkflow()
 
   const isProviderLocked = (provider: string) =>
     lockedProviders.includes('all') || lockedProviders.includes(provider)
@@ -541,6 +546,7 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
                     apiKeyStatus={apiKeyStatus[providerKey]}
                     apiKeyError={apiKeyErrors[providerKey]}
                     metadata={metadata}
+                    readOnly={readOnly}
                   />
                 )
               })()}
@@ -551,7 +557,7 @@ export default function LLMConfigurationModal({ isOpen, onClose }: LLMConfigurat
                 if (!sidebarItem) return null
                 const entry = getManifestEntry(sidebarItem.entry.id)
                 if (!entry) return <div className="text-sm text-muted-foreground py-8 text-center">Loading provider info...</div>
-                return <CodingAgentSection key={sidebarItem.tabId} provider={entry} groupFilter={sidebarItem.groupFilter} />
+                return <CodingAgentSection key={sidebarItem.tabId} provider={entry} groupFilter={sidebarItem.groupFilter} readOnly={readOnly} />
               })()}
             </div>
           </div>

@@ -35,6 +35,10 @@ type FolderGuardConfig struct {
 	WritePaths        []string `json:"write_paths"`
 	BlockedPaths      []string `json:"blocked_paths"`
 	BlockedWritePaths []string `json:"blocked_write_paths,omitempty"`
+	// StrictAllowlist / DenyNetwork carry an agent profile's sandbox policy
+	// to the workspace shell isolator (deny-by-default, optional no-network).
+	StrictAllowlist bool `json:"strict_allowlist,omitempty"`
+	DenyNetwork     bool `json:"deny_network,omitempty"`
 	// Source is which resolution branch produced this guard (session / ctx / client
 	// fallback). Internal only (never serialized); surfaced in denial logs so a
 	// denied write shows which guard layer decided, without logging every success.
@@ -183,6 +187,8 @@ func (c *Client) resolveEffectiveFolderGuard(ctx context.Context) *FolderGuardCo
 				ReadPaths:         clonePathList(readPaths),
 				BlockedPaths:      clonePathList(sessionCfg.BlockedPaths),
 				BlockedWritePaths: clonePathList(sessionCfg.BlockedWritePaths),
+				StrictAllowlist:   sessionCfg.StrictAllowlist,
+				DenyNetwork:       sessionCfg.DenyNetwork,
 				Source:            "session",
 			}
 		}

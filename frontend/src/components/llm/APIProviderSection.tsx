@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { Key, CheckCircle, AlertCircle, Loader2, BookOpen, Globe, MapPin, RefreshCw } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { Card } from '../ui/Card'
 import { ModelSelector } from '../ui/ModelSelector'
 import { ModelOptionsConfig } from './ModelOptionsConfig'
 import { useLLMStore } from '../../stores'
+import { READ_ONLY_TITLE } from '../../hooks/useCanWriteWorkflow'
 import type { ExtendedLLMConfiguration } from '../../services/api-types'
 import type { ModelMetadata, ProviderManifestEntry } from '../../services/llm-config-api'
 import { llmConfigService } from '../../services/llm-config-api'
@@ -17,6 +19,10 @@ interface APIProviderSectionProps {
   apiKeyStatus: 'idle' | 'testing' | 'valid' | 'invalid' | 'timeout'
   apiKeyError: string | null
   metadata?: ModelMetadata[]
+  /** The current user can't change workflow state: every write control
+   * disables. Kept separate from the admin `isLocked` so the two messages
+   * ("locked by admin" vs "read-only access") stay distinct. */
+  readOnly?: boolean
 }
 
 export function APIProviderSection({
@@ -27,6 +33,7 @@ export function APIProviderSection({
   apiKeyStatus,
   apiKeyError,
   metadata = [],
+  readOnly = false,
 }: APIProviderSectionProps) {
   const [apiKey, setApiKey] = useState(config.api_key || '')
   const [endpoint, setEndpoint] = useState(config.endpoint || '')
@@ -38,7 +45,12 @@ export function APIProviderSection({
   const [azureModels, setAzureModels] = useState<string[]>([])
   const [isFetchingModels, setIsFetchingModels] = useState(false)
 
-  const { saveLLM, testAPIKey: testAPIKeyFromStore, lockedProviders, llmConfigLocked } = useLLMStore()
+  const { saveLLM, testAPIKey: testAPIKeyFromStore, lockedProviders, llmConfigLocked } = useLLMStore(useShallow(state => ({
+    saveLLM: state.saveLLM,
+    testAPIKey: state.testAPIKey,
+    lockedProviders: state.lockedProviders,
+    llmConfigLocked: state.llmConfigLocked,
+  })))
   const isLocked = llmConfigLocked || lockedProviders.includes(provider.id)
   const isAzure = provider.id === 'azure'
   const isBedrock = provider.id === 'bedrock'
@@ -186,14 +198,14 @@ export function APIProviderSection({
               models={allModels}
               metadata={metadata}
               placeholder={`Select a ${provider.display_name} model`}
-              disabled={isLocked}
+              disabled={isLocked || readOnly}
             />
             {currentModelMetadata && (
               <ModelOptionsConfig
                 metadata={currentModelMetadata}
                 options={config.options || {}}
                 onChange={handleOptionsChange}
-                disabled={isLocked}
+                disabled={isLocked || readOnly}
               />
             )}
           </div>
@@ -211,7 +223,7 @@ export function APIProviderSection({
                 onChange={e => handleEndpointChange(e.target.value)}
                 placeholder="https://your-resource.openai.azure.com"
                 className="w-full px-3 py-2 border border-border rounded-md bg-background text-foreground focus:ring-2 focus:ring-primary"
-                disabled={isLocked}
+                disabled={isLocked || readOnly}
               />
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -224,7 +236,7 @@ export function APIProviderSection({
                     onChange={e => handleRegionChange(e.target.value)}
                     placeholder="eastus"
                     className="w-full px-3 py-2 text-sm border border-border rounded-md bg-background focus:ring-1 focus:ring-primary"
-                    disabled={isLocked}
+                    disabled={isLocked || readOnly}
                   />
                 </div>
                 <div>
@@ -235,7 +247,7 @@ export function APIProviderSection({
                     onChange={e => onUpdate({ ...config, options: { ...config.options, api_version: e.target.value } })}
                     placeholder="v1"
                     className="w-full px-3 py-2 text-sm border border-border rounded-md bg-background focus:ring-1 focus:ring-primary"
-                    disabled={isLocked}
+                    disabled={isLocked || readOnly}
                   />
                 </div>
               </div>
@@ -244,7 +256,7 @@ export function APIProviderSection({
                   variant="outline"
                   size="sm"
                   onClick={fetchAzureModels}
-                  disabled={isFetchingModels || isLocked}
+                  disabled={isFetchingModels || isLocked || readOnly}
                 >
                   {isFetchingModels ? (
                     <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Fetching...</>
@@ -266,7 +278,7 @@ export function APIProviderSection({
               <select
                 value={region || 'us-east-1'}
                 onChange={e => handleRegionChange(e.target.value)}
-                disabled={isLocked}
+                disabled={isLocked || readOnly}
                 className="w-full px-3 py-2 text-sm border border-border rounded-md bg-background focus:ring-1 focus:ring-primary disabled:opacity-50"
               >
                 {['us-east-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-1', 'ap-northeast-1'].map(r => (
@@ -302,12 +314,13 @@ export function APIProviderSection({
                     onChange={e => handleAPIKeyChange(e.target.value)}
                     placeholder={isLocked ? '••••••••••••••••' : `Enter your ${provider.display_name} API key`}
                     className="flex-1 px-3 py-2 border border-border rounded-md bg-background text-foreground focus:ring-2 focus:ring-primary"
-                    disabled={isLocked}
+                    disabled={isLocked || readOnly}
                   />
                   {!isLocked && (
                     <Button
                       onClick={() => onTestAPIKey(apiKey, config.model_id, config.options)}
-                      disabled={!apiKey.trim() || apiKeyStatus === 'testing'}
+                      disabled={readOnly || !apiKey.trim() || apiKeyStatus === 'testing'}
+                      title={readOnly ? READ_ONLY_TITLE : undefined}
                       size="sm"
                       variant="outline"
                     >
@@ -365,7 +378,7 @@ export function APIProviderSection({
                       autoFocus
                       onKeyDown={e => e.key === 'Enter' && handlePublishToLibrary()}
                     />
-                    <Button onClick={handlePublishToLibrary} size="sm" disabled={!publishName.trim() || isSubmitting}>
+                    <Button onClick={handlePublishToLibrary} size="sm" disabled={readOnly || !publishName.trim() || isSubmitting} title={readOnly ? READ_ONLY_TITLE : undefined}>
                       {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save'}
                     </Button>
                     <Button onClick={() => { setIsPublishing(false); setPublishName(''); setPublishError(null) }} size="sm" variant="ghost" disabled={isSubmitting}>
@@ -383,7 +396,8 @@ export function APIProviderSection({
                   onClick={() => { setPublishName(generateDefaultName()); setIsPublishing(true) }}
                   size="sm"
                   variant="outline"
-                  disabled={!config.model_id}
+                  disabled={readOnly || !config.model_id}
+                  title={readOnly ? READ_ONLY_TITLE : undefined}
                   className="w-full"
                 >
                   <BookOpen className="w-4 h-4 mr-2" />

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Check, ChevronRight, ExternalLink, FileText, Plus, Trash2, Wrench } from 'lucide-react'
 import type { Skill } from '../../types/skills'
+import { READ_ONLY_TITLE } from '../../hooks/useCanWriteWorkflow'
 
 interface SkillRowProps {
   skill: Skill
@@ -10,9 +11,11 @@ interface SkillRowProps {
   // expand/collapse click target so the two actions never conflict.
   selected?: boolean
   onToggleSelect?: () => void
+  /** Disables the toggle and delete for a user without write access. */
+  readOnly?: boolean
 }
 
-export default function SkillRow({ skill, onDelete, selected, onToggleSelect }: SkillRowProps) {
+export default function SkillRow({ skill, onDelete, selected, onToggleSelect, readOnly = false }: SkillRowProps) {
   const [expanded, setExpanded] = useState(false)
   const { frontmatter, folder_name, source_url } = skill
 
@@ -38,12 +41,13 @@ export default function SkillRow({ skill, onDelete, selected, onToggleSelect }: 
           <button
             type="button"
             onClick={onToggleSelect}
-            className={`flex shrink-0 items-center justify-center rounded-md border p-1 transition-colors ${
+            disabled={readOnly}
+            className={`flex shrink-0 items-center justify-center rounded-md border p-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
               selected
                 ? 'border-primary/40 bg-primary/15 text-primary hover:border-red-500/40 hover:bg-red-500/15 hover:text-red-500'
                 : 'border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100'
             }`}
-            title={`${selected ? 'Remove' : 'Add'} ${frontmatter.name} for this workflow`}
+            title={readOnly ? READ_ONLY_TITLE : `${selected ? 'Remove' : 'Add'} ${frontmatter.name} for this workflow`}
             aria-label={`${selected ? 'Remove' : 'Add'} ${frontmatter.name} for this workflow`}
           >
             {selected ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
@@ -99,7 +103,9 @@ export default function SkillRow({ skill, onDelete, selected, onToggleSelect }: 
             <button
               type="button"
               onClick={onDelete}
-              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:text-gray-400 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+              disabled={readOnly}
+              title={readOnly ? READ_ONLY_TITLE : undefined}
+              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-red-900/20 dark:hover:text-red-400"
             >
               <Trash2 className="h-3.5 w-3.5" />
               Delete

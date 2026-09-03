@@ -55,9 +55,6 @@ import type {
   WorkflowCostsResponse,
   WorkspaceStateResponse,
   CapabilitiesResponse,
-  SimulatorMessage,
-  SimulatorSendResponse,
-  SimulatorThreadInfo,
   ListWorkflowManifestsResponse,
   GetWorkflowManifestResponse,
   CreateWorkflowManifestRequest,
@@ -87,6 +84,8 @@ import type {
   PulseContextResponse,
   PulseEvalResultsResponse,
   OrgDashboardNotification,
+  WhatsAppRoute,
+  WhatsAppStatus,
 } from './api-types'
 import type { PlanStep, AgentConfigs } from '../utils/stepConfigMatching'
 
@@ -1410,65 +1409,24 @@ export const agentApi = {
     return apiResponse.data
   },
 
-  // --- Bot Simulator API ---
+  // --- Shared bot connector config ("_global": allowed_emails etc.) ---
 
-  // Send a message to the bot simulator (synchronous — returns analysis result or conversational reply)
-  // Pass thread_id to route follow-up messages into an existing thread/session
-  simulateBotMessage: async (message: string, threadId?: string): Promise<SimulatorSendResponse> => {
-    const response = await api.post('/api/bot/simulate/send', { message, thread_id: threadId })
+  getBotConfig: async (): Promise<{ delegation_tier_config?: Record<string, unknown>; default_servers?: string[]; default_skills?: string[]; allowed_emails?: string[] }> => {
+    const response = await api.get('/api/bot/config')
     return response.data
   },
 
-  // Get messages from a simulator thread
-  getSimulatorMessages: async (threadId: string, since: number = 0): Promise<{ messages: SimulatorMessage[]; total: number }> => {
-    const response = await api.get(`/api/bot/simulate/${threadId}/messages`, { params: { since } })
-    return response.data
-  },
-
-  // Send a button interaction to the simulator
-  simulateBotInteract: async (threadId: string, actionId: string, value: string): Promise<{ success: boolean }> => {
-    const response = await api.post(`/api/bot/simulate/${threadId}/interact`, { action_id: actionId, value })
-    return response.data
-  },
-
-  // Cleanup a simulator thread
-  clearSimulatorThread: async (threadId: string): Promise<{ success: boolean }> => {
-    const response = await api.delete(`/api/bot/simulate/${threadId}`)
-    return response.data
-  },
-
-  // Get bot simulator config
-  getSimulatorConfig: async (): Promise<{ delegation_tier_config?: Record<string, unknown>; default_servers?: string[]; default_skills?: string[] }> => {
-    const response = await api.get('/api/bot/simulate/config')
-    return response.data
-  },
-
-  // Save bot simulator config (delegation tier config + default servers/skills)
   saveBotConfig: async (config: {
     allowed_emails?: string[];
   }): Promise<{ success: boolean }> => {
-    const response = await api.post('/api/bot/simulate/config', config)
+    const response = await api.post('/api/bot/config', config)
     return response.data
   },
 
   // ── WhatsApp bot connector ────────────────────────────────────────────────
   // Status: is the connector enabled, paired, connected? When a pairing flow
   // is active, returns the QR expiration timestamp so the UI can auto-refresh.
-  getWhatsAppStatus: async (): Promise<{
-    enabled: boolean;
-    paired: boolean;
-    connected: boolean;
-    own_jid: string;
-    qr_available: boolean;
-    qr_expires_at?: string;
-    link_code?: string;
-    link_code_expires_at?: string;
-    bound_chat_count?: number;
-    owner_user_id?: string;
-    owner_email?: string;
-    owner_username?: string;
-    owner_paired_at?: string;
-  }> => {
+  getWhatsAppStatus: async (): Promise<WhatsAppStatus> => {
     const response = await api.get('/api/whatsapp/status')
     return response.data
   },
@@ -1503,18 +1461,14 @@ export const agentApi = {
 
   // Slug → workflow routing for incoming WhatsApp messages. A message that
   // starts with "@<slug> " routes to the workflow mapped for that slug.
-  getWhatsAppRouting: async (): Promise<{
-    routing: Record<string, { workflow_id: string; workspace_path?: string; workshop_mode?: string; send_full_details?: boolean }>;
-  }> => {
+  getWhatsAppRouting: async (): Promise<{ routing: Record<string, WhatsAppRoute> }> => {
     const response = await api.get('/api/whatsapp/routing')
     return response.data
   },
 
   updateWhatsAppRouting: async (
-    routing: Record<string, { workflow_id: string; workspace_path?: string; workshop_mode?: string; send_full_details?: boolean }>
-  ): Promise<{
-    routing: Record<string, { workflow_id: string; workspace_path?: string; workshop_mode?: string; send_full_details?: boolean }>;
-  }> => {
+    routing: Record<string, WhatsAppRoute>
+  ): Promise<{ routing: Record<string, WhatsAppRoute> }> => {
     const response = await api.put('/api/whatsapp/routing', { routing })
     return response.data
   },
@@ -1532,30 +1486,6 @@ export const agentApi = {
   // Load delegation tier config from workspace filesystem
   getDelegationTierConfig: async (): Promise<Record<string, unknown>> => {
     const response = await api.get('/api/delegation-tier-config')
-    return response.data
-  },
-
-  // Get available MCP servers and skills for bot config
-  getAvailableCapabilities: async (): Promise<{ servers: string[]; skills: { name: string; description?: string }[] }> => {
-    const response = await api.get('/api/bot/simulate/available-capabilities')
-    return response.data
-  },
-
-  // List all simulator threads
-  listSimulatorThreads: async (): Promise<{ threads: SimulatorThreadInfo[] }> => {
-    const response = await api.get('/api/bot/simulate/threads')
-    return response.data
-  },
-
-  // Get current simulator mode (threaded / non-threaded)
-  getSimulatorMode: async (): Promise<{ threaded: boolean }> => {
-    const response = await api.get('/api/bot/simulate/mode')
-    return response.data
-  },
-
-  // Set simulator mode (threaded / non-threaded)
-  setSimulatorMode: async (threaded: boolean): Promise<{ success: boolean; threaded: boolean }> => {
-    const response = await api.post('/api/bot/simulate/mode', { threaded })
     return response.data
   },
 
@@ -1626,8 +1556,16 @@ export const agentApi = {
     }
   },
 
+  deleteAgentProfilePresentation: async (profileId: string, presentationId: string, request: {
+    conversation_key: string
+    kind: 'media.video' | 'media.character'
+  }) => {
+    const response = await api.delete(`/api/agent-profiles/${encodeURIComponent(profileId)}/presentations/${encodeURIComponent(presentationId)}`, { data: request })
+    return response.data as { deleted: boolean; presentation_id: string }
+  },
+
   // List tables (schema + row count + sample) in a workflow's db/db.sqlite for
-  // the read-only DatabasePopup inspector.
+  // the read-only DatabaseView inspector.
   getWorkflowDBTables: async (dbPath: string) => {
     const response = await workspaceApi.get('/api/db/tables', { params: { db_path: dbPath } })
     return response.data as {
@@ -2429,9 +2367,40 @@ export interface AuthUser {
   can_manage_workflow_access?: boolean
   workflow_permissions_enabled?: boolean
   // null/undefined means unrestricted -- the deployment's own enabledProductSurfaces
-  // (and every workflow) applies. A non-empty array narrows further, per-user.
+  // (and every workflow) applies. An array narrows to exactly those products,
+  // per-user; an EMPTY array means none (a read-only account with nothing
+  // enabled).
   allowed_products?: string[] | null
   allowed_workflow_ids?: string[] | null
+  // Account level (docs/design/user_accounts_and_workflow_sharing.md):
+  // admins manage users and products; can_create=false is the read-only user.
+  is_admin?: boolean
+  can_create?: boolean
+}
+
+/** One account as the admin page sees it (never the password hash). */
+export interface AdminUser {
+  id: string
+  username: string
+  email?: string
+  provider: string
+  has_password: boolean
+  admin: boolean
+  can_create: boolean
+  products: string[]
+  disabled: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+export interface AdminUserWrite {
+  username?: string
+  email?: string
+  password?: string
+  admin?: boolean
+  can_create?: boolean
+  products?: string[]
+  disabled?: boolean
 }
 
 export interface AuthResponse {
@@ -2553,6 +2522,55 @@ export const authApi = {
   deleteWorkflowUserPermission: async (userKey: string): Promise<void> => {
     await api.delete(`/api/workflow/user-permissions?user_key=${encodeURIComponent(userKey)}`)
   },
+
+  // --- account management (config/users.json; admins only) ---
+  listAdminUsers: async (): Promise<{ users: AdminUser[]; products: string[] }> => {
+    const response = await api.get('/api/admin/users')
+    return response.data
+  },
+  createAdminUser: async (user: AdminUserWrite): Promise<AdminUser> => {
+    const response = await api.post('/api/admin/users', user)
+    return response.data
+  },
+  updateAdminUser: async (id: string, patch: AdminUserWrite): Promise<AdminUser> => {
+    const response = await api.put(`/api/admin/users/${encodeURIComponent(id)}`, patch)
+    return response.data
+  },
+  deleteAdminUser: async (id: string): Promise<void> => {
+    await api.delete(`/api/admin/users/${encodeURIComponent(id)}`)
+  },
+  changeOwnPassword: async (currentPassword: string, newPassword: string): Promise<void> => {
+    await api.post('/api/auth/password', { current_password: currentPassword, new_password: newPassword })
+  },
+
+  // --- per-workflow sharing (workflow_access.go) ---
+  listUserDirectory: async (): Promise<{ users: WorkflowAccessUser[] }> => {
+    const response = await api.get('/api/users/directory')
+    return response.data
+  },
+  getWorkflowAccess: async (workspacePath: string): Promise<WorkflowAccessInfo> => {
+    const response = await api.get(`/api/workflow/access?workspace_path=${encodeURIComponent(workspacePath)}`)
+    return response.data
+  },
+  setWorkflowAccess: async (workspacePath: string, owners: string[], readers: string[]): Promise<WorkflowAccessInfo> => {
+    const response = await api.put('/api/workflow/access', { workspace_path: workspacePath, owners, readers })
+    return response.data
+  },
+}
+
+export interface WorkflowAccessUser {
+  id: string
+  username: string
+  email?: string
+}
+
+export interface WorkflowAccessInfo {
+  workspace_path: string
+  owners: WorkflowAccessUser[]
+  readers: WorkflowAccessUser[]
+  my_access: 'owner' | 'write' | 'read' | 'none'
+  /** Nothing recorded yet: open to every member until a grant is saved. */
+  legacy?: boolean
 }
 
 export interface WorkflowUserPermission {

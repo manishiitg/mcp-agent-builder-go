@@ -311,7 +311,7 @@ func defaultCodingAgentE2EModel(provider string) string {
 	case "claude-code":
 		return "claude-sonnet-5"
 	case "pi-cli":
-		return "google/gemini-3.5-flash"
+		return "google/gemini-3.8-flash"
 	default:
 		return ""
 	}

@@ -7,9 +7,9 @@ import (
 )
 
 // voiceTranscriptionStatus is what the WhatsApp settings UI needs to render
-// the voice-transcription toggle: whether it's on, whether Parakeet is
-// actually installed, whether an install is in flight, and the last install
-// error if any.
+// the voice-transcription toggle: whether it's on, whether the speech model is
+// actually on disk, whether a download is in flight, and the last error if
+// any.
 type voiceTranscriptionStatus struct {
 	Enabled     bool   `json:"enabled"`
 	Installed   bool   `json:"installed"`
@@ -19,10 +19,9 @@ type voiceTranscriptionStatus struct {
 	Error       string `json:"error,omitempty"`
 }
 
-// voiceModelInstalled reports whether Parakeet (the shared MLX voice
-// environment, see voice_mlx_env.go) is ready to transcribe.
+// voiceModelInstalled reports whether the shared speech model is on disk.
 func voiceModelInstalled() bool {
-	return mlxVoiceInstalled()
+	return familyVoice.Status().Installed
 }
 
 // whatsAppVoiceEnabled resolves the parent's effective choice — see the
@@ -36,23 +35,23 @@ func whatsAppVoiceEnabled(s familyState) bool {
 }
 
 func currentVoiceTranscriptionStatus(s familyState) voiceTranscriptionStatus {
-	st := installStateFor(mlxVoiceInstallID)
+	st := familyVoice.Status()
 	return voiceTranscriptionStatus{
 		Enabled:     whatsAppVoiceEnabled(s),
-		Installed:   voiceModelInstalled(),
-		Installing:  st.Installing,
-		ModelSizeMB: mlxVoiceTotalSizeMB,
-		Available:   detectVoiceHardware().IsAppleSilicon,
+		Installed:   st.Installed,
+		Installing:  st.Downloading,
+		ModelSizeMB: st.SizeMB,
+		Available:   st.Available,
 		Error:       st.Error,
 	}
 }
 
 // handleWhatsAppVoiceToggle turns on-device WhatsApp voice-note transcription
-// on or off. Turning it on kicks off the MLX voice environment install if it
-// isn't already there (Parakeet — Apple Silicon only) and returns
-// immediately; the frontend polls for progress. Turning it off does NOT
-// delete anything — that's a deliberate, separate action via the "Remove"
-// button on the tier's own Settings card, not a side effect of this toggle.
+// on or off. Turning it on starts the shared model download if it isn't on
+// disk yet and returns immediately; the frontend polls for progress. Turning
+// it off does NOT delete anything — that's a deliberate, separate action via
+// the "Remove" button on the tier's own Settings card, not a side effect of
+// this toggle.
 func handleWhatsAppVoiceToggle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -65,8 +64,8 @@ func handleWhatsAppVoiceToggle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	if req.Enabled && !detectVoiceHardware().IsAppleSilicon {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Voice transcription needs a newer Mac (2020 or later)"})
+	if req.Enabled && !familyVoice.Status().Available {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Voice transcription isn't included in this build"})
 		return
 	}
 
@@ -82,7 +81,7 @@ func handleWhatsAppVoiceToggle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if enabled {
-		installMlxVoiceEnv()
+		familyVoice.Warm()
 	} else {
 		log.Printf("[voice] WhatsApp voice transcription disabled (engine left installed — remove it separately from Settings if you want it gone)")
 	}
@@ -91,13 +90,4 @@ func handleWhatsAppVoiceToggle(w http.ResponseWriter, r *http.Request) {
 	s = loadState()
 	stateMu.Unlock()
 	writeJSON(w, http.StatusOK, currentVoiceTranscriptionStatus(s))
-}
-
-// lastLines trims a subprocess's (often noisy) output down to a short tail
-// for a readable error message/log line.
-func lastLines(s string, maxChars int) string {
-	if len(s) > maxChars {
-		return s[len(s)-maxChars:]
-	}
-	return s
 }

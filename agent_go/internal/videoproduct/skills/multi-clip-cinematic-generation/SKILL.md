@@ -12,21 +12,31 @@ Read `video-stitching` after clips are approved to plan and verify the edit.
 
 ## Choose the sequence topology first
 
-Use the smallest number of H3 generation boundaries that preserves the
-intended action. Select and record one route for each seam:
+When the user has not set a per-clip duration, shot count, or beat boundary,
+use the smallest number of H3 generation boundaries that preserves the
+intended action. Those explicit user constraints win over cost and seam-count
+optimisation. Select and record one route for each seam:
 
-1. one uninterrupted H3 take, up to its live-supported duration;
-2. `minimax/h3/reference-to-video` from the accepted predecessor for every
+1. `minimax/h3-max/text-to-video` for a prompt-only standalone opening shot
+   with no reference or continuity obligation;
+2. `minimax/h3-max/image-to-video` when an approved start image must control
+   the opening composition;
+3. `minimax/h3-max/reference-to-video` from the accepted predecessor for every
    normal continuation, including a motivated camera-angle change;
-3. a motivated editorial cut with the stable approved reference pack;
-4. an intentional discontinuity such as a time jump, location change, or
-   montage beat;
-5. only after a direct-cut seam proof visibly fails, a separately approved
-   H3 Image-to-Video first/last-frame bridge.
+4. a motivated editorial cut with the stable approved reference pack;
+5. an intentional discontinuity such as a time jump, location change, or
+   montage beat.
 
 Never call separately generated clips a continuous take merely because a
-dissolve can join them. Do not select a different model or invent an API field
-when H3 lacks a control; redesign the seam or regenerate the affected H3 shot.
+dissolve can join them. Reference-to-Video conditions a new successor; it does
+not append the predecessor or guarantee a frame-, mouth-, or audio-exact seam.
+Keep uninterrupted on-camera dialogue and one continuous action in one H3 Max
+take whenever it fits 5–15 seconds. When a new request is unavoidable, the
+shot list must name an editorial boundary—a completed thought/pause, reaction,
+insert, or motivated angle change—not a mid-word continuation. Do not rewrite
+user-approved dialogue to fit that boundary without explicit approval. Do not
+create a third bridge clip when a direct review fails; regenerate or redesign
+the affected H3 successor through Reference-to-Video.
 
 ## Make an approved reference pack, then a reference manifest
 
@@ -41,8 +51,8 @@ Generate and present the images the sequence actually needs for review:
   at a seam;
 - a start reference for each continuity sequence and a planned exit/end-state
   reference for every sequence that has a successor;
-- an extra bridge frame held for an H3 Image-to-Video seam repair only after a
-  direct proof visibly fails; otherwise it remains a visual/editing target.
+- selected stable boundary frames for direct-cut review and successor prompt
+  handoff; they are not a request to make an intervening bridge clip.
 
 Call `show_reference` for each generated reference and obtain approval before
 footage consumes it. Keep the assets under `references/` and record exact
@@ -114,18 +124,20 @@ the matching first action explicitly. Preserve a subject crossing screen left
 to right unless the shot uses an intentional, readable reversal. Do not flip
 orientation, camera side, or gaze direction by accident.
 
-## Generate, prove the join, then advance
+## Generate, receipt-check, then advance
 
 Create exactly one clip per generation recipe. Reuse the manifest, approved
-references, and planned handoff in its request. Show and inspect the MP4
-before accepting it. On acceptance, update the continuity ledger with actual
-boundary frames and state; on rejection, record the reason and regenerate or
-redesign the seam before making a successor.
+references, and planned handoff in its request. The normal successor uses H3
+Max Reference-to-Video with the accepted predecessor as Video 1; H3 owns the
+continuity, including a deliberate change of angle. Show and inspect the MP4
+before accepting it. On acceptance, record the actual output and handoff state;
+on rejection, record the reason and regenerate or redesign that H3 successor.
 
-Individual acceptance is necessary but not sufficient. After every successor,
-render a short two-clip seam preview from the recorded trim points and show it
-to the user. The next clip may not be generated until its preceding join has
-a passing seam proof for identity, wardrobe, props, geography, screen
-direction, eyeline, action, lighting, motion, dialogue/voiceover, ambience,
-and music. Do not batch later clips or let an unproved join become continuity
-evidence.
+For each preview, perform only a clip receipt: `ffprobe` the downloaded asset
+and inspect its stable opening and ending frames. For a successor, compare its
+opening against the predecessor's ending closely enough to catch an obvious
+break. Do not render a per-shot FFmpeg seam preview, set default trims, or
+write a seam-proof document. If the boundary is visibly wrong, revise the H3
+prompt/reference set and regenerate the successor; never use a bridge clip,
+crossfade, blend, zoom, or reframe to conceal it. Full delivery QA happens once
+on the final direct-concatenated export.

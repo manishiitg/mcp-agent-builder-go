@@ -1,0 +1,179 @@
+package step_based_workflow
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestOrchestratorPromptIncludesSharedCodeExecutionSection(t *testing.T) {
+	agent := &WorkflowOrchestratorAgent{}
+
+	prompt := agent.orchestratorSystemPromptProcessor(map[string]string{
+		"CurrentTodos":          "",
+		"ProgressSummary":       "",
+		"VariableNames":         "",
+		"VariableValues":        "",
+		"LearningHistory":       "",
+		"StepExecutionPath":     "/app/workspace-docs/Workflow/confida-oi/runs/iteration-0/default/execution/step-qa-no-redlines",
+		"DownloadsPath":         "/app/workspace-docs/Workflow/confida-oi/runs/iteration-0/default/execution/Downloads",
+		"ExecutionFolderPath":   "/app/workspace-docs/Workflow/confida-oi/runs/iteration-0/default/execution",
+		"WorkspacePath":         "/app/workspace-docs/Workflow/confida-oi",
+		"WorkflowRoot":          "/app/workspace-docs/Workflow/confida-oi",
+		"KnowledgebasePath":     "/app/workspace-docs/Workflow/confida-oi/knowledgebase",
+		"FolderGuardReadPaths":  "",
+		"FolderGuardWritePaths": "",
+		"ShowToolsSection":      "false",
+		"UseKnowledgebase":      "true",
+		"IsCodeExecutionMode":   "true",
+		"PreviousStepsSummary":  "",
+		"StepTitle":             "QA Scenario: No Redlines",
+		"StepDescription":       "Run the no-redlines scenario.",
+		"StepSuccessCriteria":   "Scenario completes successfully.",
+		"HasBrowserAccess":      "true",
+		"PredefinedRoutes":      "- route-nr-setup",
+	})
+
+	requiredSnippets := []string{
+		"**Sub-agent tool rule**:",
+		"Prefer calling these sub-agent tools directly only when they are actually listed as provider-callable tools in this session.",
+		"In bridge-only CLI sessions where only the documented api-bridge tools are native, sub-agent tools are dynamic custom tools:",
+		"**CODE EXECUTION MODE — Access MCP Tools via HTTP API:**",
+		"{{TOOL_STRUCTURE}}",
+		"MCP_CUSTOM and MCP_AUTH",
+		"get_api_spec(tool_name=\"...\")",
+	}
+	for _, snippet := range requiredSnippets {
+		if !strings.Contains(prompt, snippet) {
+			t.Fatalf("expected prompt to contain %q\n\nPrompt:\n%s", snippet, prompt)
+		}
+	}
+}
+
+func TestOrchestratorPromptDocumentsMessageSequenceRoutes(t *testing.T) {
+	agent := &WorkflowOrchestratorAgent{}
+
+	prompt := agent.orchestratorSystemPromptProcessor(map[string]string{
+		"ShowToolsSection":    "true",
+		"IsCodeExecutionMode": "false",
+		"PredefinedRoutes":    "- route-sequence",
+	})
+
+	requiredSnippets := []string{
+		"[AUTO-NOTIFICATION] SUB-AGENT COMPLETION BATCH",
+		"**Message sequence routes**:",
+		"Step type: message_sequence",
+		"First call starts the route conversation",
+		"instructions are added as initial context",
+		"Later calls to the same route resume",
+		"instructions become the re-entry user message",
+		"message_sequence_restart=true",
+		"configured queue is replayed from the beginning",
+		"query_sub_agent(execution_id)",
+		"stop_sub_agent(execution_id)",
+		"never poll it to detect normal completion",
+	}
+	for _, snippet := range requiredSnippets {
+		if !strings.Contains(prompt, snippet) {
+			t.Fatalf("expected prompt to contain %q\n\nPrompt:\n%s", snippet, prompt)
+		}
+	}
+}
+
+func TestOrchestratorPromptRoutesConsequentialEvidenceToPulseReview(t *testing.T) {
+	agent := &WorkflowOrchestratorAgent{}
+	prompt := agent.orchestratorSystemPromptProcessor(map[string]string{})
+
+	for _, want := range []string{
+		"## Completion",
+		"Technical Review evaluates consequential non-fatal evidence directly",
+		"emit a separate concern protocol",
+		"STATUS: COMPLETED",
+		"STATUS: FAILED",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("todo-task prompt missing concern handoff %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "CONCERNS:") {
+		t.Fatalf("todo-task prompt must not revive the retired free-text concern protocol:\n%s", prompt)
+	}
+}
+
+func TestOrchestratorCLIPromptUsesProjectedWorkflowLearnings(t *testing.T) {
+	agent := &WorkflowOrchestratorAgent{}
+	prompt := agent.orchestratorSystemPromptProcessor(map[string]string{
+		"UseProjectedReferenceSkills": "true",
+		"LearningHistory":             "legacy recursive inventory that must not be rendered",
+		"CurrentTodos":                "- [ ] inspect the application\n- [ ] verify the result",
+		"ProgressSummary":             "No tasks completed yet.",
+		"VariableNames":               "ACCOUNT_ID",
+		"VariableValues":              "ACCOUNT_ID=<configured>",
+		"StepExecutionPath":           "/app/workspace-docs/Workflow/example/runs/iteration-0/default/execution/todo",
+		"DownloadsPath":               "/app/workspace-docs/Workflow/example/runs/iteration-0/default/execution/Downloads",
+		"ExecutionFolderPath":         "/app/workspace-docs/Workflow/example/runs/iteration-0/default/execution",
+		"WorkspacePath":               "/app/workspace-docs/Workflow/example",
+		"WorkflowRoot":                "/app/workspace-docs/Workflow/example",
+		"KnowledgebasePath":           "/app/workspace-docs/Workflow/example/knowledgebase",
+		"FolderGuardReadPaths":        "/app/workspace-docs/Workflow/example",
+		"FolderGuardWritePaths":       "/app/workspace-docs/Workflow/example/runs/iteration-0/default/execution/todo",
+		"ShowToolsSection":            "true",
+		"UseKnowledgebase":            "true",
+		"IsCodeExecutionMode":         "true",
+		"PreviousStepsSummary":        "Acquisition completed successfully.",
+		"StepTitle":                   "Investigate and verify",
+		"StepDescription":             "Inspect the evidence, perform the requested work, and verify it.",
+		"StepSuccessCriteria":         "The requested outcome is complete and evidence-backed.",
+		"HasBrowserAccess":            "true",
+		"PredefinedRoutes":            "- route-browser\n- route-review",
+	})
+	if strings.Contains(prompt, "legacy recursive inventory") || strings.Contains(prompt, "## Workflow Skill") {
+		t.Fatalf("todo-task CLI prompt still embeds workflow learnings instead of using the projected skill:\n%s", prompt)
+	}
+	const maxCLISystemPromptBytes = 30_000
+	if len(prompt) > maxCLISystemPromptBytes {
+		t.Fatalf("todo-task CLI system prompt is %d bytes; budget is %d", len(prompt), maxCLISystemPromptBytes)
+	}
+}
+
+func TestFormatMessageSequenceRoutePromptBlock(t *testing.T) {
+	block := formatMessageSequenceRoutePromptBlock(&MessageSequencePlanStep{})
+
+	requiredSnippets := []string{
+		"Step type: message_sequence",
+		"route-scoped session resumes",
+		"Initial instructions",
+		"Re-entry",
+		"message_sequence_restart=true",
+	}
+	for _, snippet := range requiredSnippets {
+		if !strings.Contains(block, snippet) {
+			t.Fatalf("expected block to contain %q\n\nBlock:\n%s", snippet, block)
+		}
+	}
+
+	if got := formatMessageSequenceRoutePromptBlock(&RegularPlanStep{}); got != "" {
+		t.Fatalf("expected non-message sequence routes to produce no block, got %q", got)
+	}
+}
+
+func TestOrchestratorUserPromptIncludesWorkshopHumanInput(t *testing.T) {
+	agent := &WorkflowOrchestratorAgent{}
+
+	prompt := agent.orchestratorUserMessageProcessor(map[string]string{
+		"StepTitle":           "Investigate RCA",
+		"StepDescription":     "Gather evidence and synthesize.",
+		"StepSuccessCriteria": "Answer is complete.",
+		"WorkshopHumanInput":  "focus on production incidents from the last hour",
+	}, nil)
+
+	requiredSnippets := []string{
+		"## Human Input (Highest Priority)",
+		"execute_step(..., human_input=...)",
+		"focus on production incidents from the last hour",
+	}
+	for _, snippet := range requiredSnippets {
+		if !strings.Contains(prompt, snippet) {
+			t.Fatalf("expected prompt to contain %q\n\nPrompt:\n%s", snippet, prompt)
+		}
+	}
+}

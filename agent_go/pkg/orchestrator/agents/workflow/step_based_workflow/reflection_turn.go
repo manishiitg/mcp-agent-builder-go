@@ -50,7 +50,7 @@ type StepReflectionTurnInput struct {
 	// SkillIndexLines reports the index's current size. It is a signal, not a
 	// budget: the judgment asked for is structural (is each entry still a link
 	// plus a one-line description?), and applies identically at 42 lines and at
-	// 510. Per-step file sizes are deliberately absent — the skill is organised
+	// 510. Per-step file sizes are deliberately absent — the skill is organized
 	// by topic, so no single file belongs to the step being reflected on.
 	SkillIndexLines int
 }
@@ -155,7 +155,7 @@ func buildReflectionLearningsSection(in StepReflectionTurnInput, skillPath, refe
 	// The index is already in this agent's prompt under '## Skill', so no
 	// discovery step is needed to find the owning topic.
 	b.WriteString("**This is one skill for the whole workflow, shared by every step and improved by all of them.** ")
-	b.WriteString("It is organised by **topic**, not by step. The index in `")
+	b.WriteString("It is organized by **topic**, not by step. The index in `")
 	b.WriteString(skillPath)
 	b.WriteString("` — already in your prompt above under `## Skill` — names the topic file that owns each area of this workflow's execution knowledge.\n\n")
 
@@ -178,7 +178,7 @@ func buildReflectionLearningsSection(in StepReflectionTurnInput, skillPath, refe
 	// real complexity; a small one can already be redundant. Judge the content
 	// on its own terms every turn, not against a number.
 	b.WriteString("**Keep every file you touch compact, precise, and informative — a reference, not a growing log.** Each time you touch one, actually read the whole thing and check for the patterns below, whether or not you have new content to add:\n")
-	b.WriteString("- **Restated facts.** Two or more entries establishing the same behaviour — merge them into one, keep whichever is most current, delete the rest. A date is metadata on an entry (`verified 2026-07-02`), never its identity; \"third confirmation\" and \"fourth confirmation\" of the same bug are one entry, not four.\n")
+	b.WriteString("- **Restated facts.** Two or more entries establishing the same behavior — merge them into one, keep whichever is most current, delete the rest. A date is metadata on an entry (`verified 2026-07-02`), never its identity; \"third confirmation\" and \"fourth confirmation\" of the same bug are one entry, not four.\n")
 	b.WriteString("- **Narrative instead of technique.** A trial-and-error account of what you tried, run IDs, attempt numbers — the outcome belongs here; the story of getting there does not.\n")
 	b.WriteString("- **Content that isn't yours to keep.** Anything covered by the routing table above (a fact, a result, a suspected platform bug) that ended up here anyway — move it to where it belongs, or raise it as a concern, right now rather than leaving it for later.\n")
 	b.WriteString("If you find these, fix them as part of this turn even when your own new observation is small. A file only gets this way because every turn treated cleanup as someone else's job.\n\n")
@@ -200,7 +200,7 @@ func buildReflectionLearningsSection(in StepReflectionTurnInput, skillPath, refe
 	b.WriteString("**Judge it structurally, not by size:** every entry should be one line — a link plus a short description of what that file covers. If you find a paragraph, a selector, a timing rule, or any other real detail sitting in the index instead of behind a link, that is the defect regardless of how long the index is overall — move it into the owning file and leave a link, as part of this turn.\n\n")
 
 	// ---- Compaction (F). ----
-	b.WriteString("**Update in place; do not stack confirmations.** Before adding a new section, read the topic file and check whether an existing entry already covers this behaviour. ")
+	b.WriteString("**Update in place; do not stack confirmations.** Before adding a new section, read the topic file and check whether an existing entry already covers this behavior. ")
 	b.WriteString("If it does, correct or strengthen that entry. Do not append a new dated block restating it — a date is metadata on an entry (`last verified 2026-07-02`), never the identity of one. ")
 	b.WriteString("Four entries saying the same thing on four dates is a defect, not a history.\n\n")
 

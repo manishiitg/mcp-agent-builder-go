@@ -117,7 +117,7 @@ func TestExecutionContextForStepPreservesExplicitSingleStepInput(t *testing.T) {
 func TestUnknownWorkflowStepInputIDsAcceptsPredefinedRouteIDs(t *testing.T) {
 	steps := []PlanStepInterface{
 		&MessageSequencePlanStep{CommonStepFields: CommonStepFields{ID: "top-level-step"}},
-		&TodoTaskPlanStep{
+		&OrchestratorPlanStep{
 			CommonStepFields: CommonStepFields{ID: "orchestrator-step"},
 			PredefinedRoutes: []PlanOrchestrationRoute{
 				{
@@ -130,7 +130,7 @@ func TestUnknownWorkflowStepInputIDsAcceptsPredefinedRouteIDs(t *testing.T) {
 					RouteID: "route-b",
 					// A route nested inside a route: the same recursion that
 					// already handles this for step-ID uniqueness must apply here.
-					SubAgentStep: &TodoTaskPlanStep{
+					SubAgentStep: &OrchestratorPlanStep{
 						CommonStepFields: CommonStepFields{ID: "nested-orchestrator"},
 						PredefinedRoutes: []PlanOrchestrationRoute{
 							{RouteID: "route-c", SubAgentStep: &MessageSequencePlanStep{

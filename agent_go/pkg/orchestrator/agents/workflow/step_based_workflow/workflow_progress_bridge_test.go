@@ -105,7 +105,7 @@ func TestWorkflowProgressBridgeNotifiesStepStartAndCompletion(t *testing.T) {
 	}
 }
 
-func TestWorkflowProgressBridgeWaitsForTodoTaskStepCompletion(t *testing.T) {
+func TestWorkflowProgressBridgeWaitsForOrchestratorStepCompletion(t *testing.T) {
 	notifier := &recordingExecutionNotifier{}
 	session := &WorkshopChatSession{
 		StepRegistry:      NewWorkshopStepRegistry(),
@@ -160,9 +160,9 @@ func TestWorkflowProgressBridgeWaitsForTodoTaskStepCompletion(t *testing.T) {
 	}
 
 	stepCompleted := &baseevents.AgentEvent{
-		Type:      orchestrator_events.TodoTaskStepCompleted,
+		Type:      orchestrator_events.OrchestratorStepCompleted,
 		Timestamp: time.Now(),
-		Data: &TodoTaskStepCompletedEvent{
+		Data: &OrchestratorStepCompletedEvent{
 			StepIndex:        6,
 			StepID:           "step-execution-pipeline",
 			StepTitle:        "[Route] Execution",

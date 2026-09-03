@@ -156,8 +156,8 @@ Apply the same reference-backed pattern to the other specialized step types:
   regular step is still agentic, treat that as a migration question: bounded
   deterministic work should become scripted, while conversational judgment
   should become `message_sequence`.
-- For `step_type: "todo_task"` (the orchestrator), load
-  `references/todo-task.md` and record **`todo_task_best_practices`**. Confirm
+- For `step_type: "orchestrator"` (the orchestrator), load
+  `references/orchestrator.md` and record **`orchestrator_best_practices`**. Confirm
   runtime orchestration is genuinely dynamic or adaptive rather than a fixed
   child list; route eligibility/conditions are distinct; inline versus shared
   orphan ownership is valid; sub-agent context, outputs, retries, and completion

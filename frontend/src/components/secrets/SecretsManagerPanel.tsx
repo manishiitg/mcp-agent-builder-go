@@ -4,6 +4,7 @@ import { useSecretsStore } from '../../stores';
 import { secretsApi } from '../../api/secrets';
 import { serverOnlySecretNames } from './secretsManagerUtils';
 import type { StoredSecret } from '../../stores';
+import { READ_ONLY_TITLE, useCanWriteWorkflow } from '../../hooks/useCanWriteWorkflow';
 
 interface SecretsManagerPanelProps {
   /**
@@ -19,6 +20,10 @@ const isValidName = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
 
 export default function SecretsManagerPanel({ compact = false }: SecretsManagerPanelProps) {
   const { secrets, addSecret, updateSecret, removeSecret, globalSecrets, fetchGlobalSecrets, storedUserSecrets, botEnabledNames, fetchBotSecrets, toggleBotAccess, lastError, clearLastError } = useSecretsStore();
+
+  // Create/edit/delete and the bot-access toggle all write immediately, so
+  // they disable for read-only users; viewing a value stays allowed.
+  const readOnly = !useCanWriteWorkflow();
 
   // Secrets the server holds that this browser has no local record of.
   const serverOnly = serverOnlySecretNames(storedUserSecrets, secrets);
@@ -193,12 +198,14 @@ export default function SecretsManagerPanel({ compact = false }: SecretsManagerP
               placeholder="SECRET_NAME"
               value={newName}
               onChange={(e) => setNewName(e.target.value.toUpperCase())}
+              disabled={readOnly}
               className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-amber-500"
             />
             <textarea
               placeholder="Secret value (supports multi-line)"
               value={newValue}
               onChange={(e) => setNewValue(e.target.value)}
+              disabled={readOnly}
               rows={compact ? 2 : 3}
               className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-amber-500 resize-y"
             />
@@ -207,7 +214,8 @@ export default function SecretsManagerPanel({ compact = false }: SecretsManagerP
             )}
             <button
               onClick={handleAdd}
-              disabled={isAdding}
+              disabled={readOnly || isAdding}
+              title={readOnly ? READ_ONLY_TITLE : undefined}
               className="w-full px-3 py-1.5 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded-md transition-colors flex items-center justify-center gap-2"
             >
               <Plus className="w-4 h-4" />
@@ -294,7 +302,8 @@ export default function SecretsManagerPanel({ compact = false }: SecretsManagerP
                       <div className="flex gap-2">
                         <button
                           onClick={handleSaveEdit}
-                          disabled={editLoading}
+                          disabled={readOnly || editLoading}
+                          title={readOnly ? READ_ONLY_TITLE : undefined}
                           className="px-3 py-1 text-xs font-medium text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 rounded transition-colors"
                         >
                           {editLoading ? 'Saving...' : 'Save'}
@@ -338,27 +347,30 @@ export default function SecretsManagerPanel({ compact = false }: SecretsManagerP
                         </button>
                         <button
                           onClick={() => toggleBotAccess(secret.id)}
-                          className={`p-1 transition-colors ${
+                          disabled={readOnly}
+                          className={`p-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                             botEnabledNames.has(secret.name)
                               ? 'text-amber-500 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-300'
                               : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
                           }`}
-                          title={botEnabledNames.has(secret.name) ? 'Available to bots' : 'Not available to bots'}
+                          title={readOnly ? READ_ONLY_TITLE : botEnabledNames.has(secret.name) ? 'Available to bots' : 'Not available to bots'}
                         >
                           <Bot className="w-3.5 h-3.5" />
                         </button>
                         <div className="w-px h-3.5 bg-gray-300 dark:bg-gray-600 mx-0.5" />
                         <button
                           onClick={() => handleStartEdit(secret)}
-                          className="p-1 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
-                          title="Edit secret"
+                          disabled={readOnly}
+                          className="p-1 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                          title={readOnly ? READ_ONLY_TITLE : 'Edit secret'}
                         >
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => handleDelete(secret.id)}
-                          className="p-1 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
-                          title="Delete secret"
+                          disabled={readOnly}
+                          className="p-1 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                          title={readOnly ? READ_ONLY_TITLE : 'Delete secret'}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>

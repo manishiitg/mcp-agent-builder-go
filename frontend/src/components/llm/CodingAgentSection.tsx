@@ -6,6 +6,7 @@ import { TierModelSelector } from '../ui/TierModelSelector'
 import { DynamicModelSelector } from '../ui/DynamicModelSelector'
 import { CodingAgentCapabilities } from './CodingAgentCapabilities'
 import { useLLMStore } from '../../stores'
+import { READ_ONLY_TITLE } from '../../hooks/useCanWriteWorkflow'
 import { llmConfigService, type ModelMetadata, type ProviderManifestEntry } from '../../services/llm-config-api'
 import { providerKeysApi, type StoredProviderKeys } from '../../api/scheduler'
 
@@ -18,6 +19,24 @@ interface CodingAgentSectionProps {
    * this instead of `provider` fields wherever they'd otherwise say
    * "Pi CLI" or default to the pi-cli-wide model. */
   groupFilter?: string
+  /** The current user can't change workflow state: test, key save, and
+   * publish disable. Model/effort pickers stay usable since they're local
+   * state until published. */
+  readOnly?: boolean
+  /** 'library' (default) is the full LLM-library editor: model + effort
+   * pickers and Save-to-Library. 'workflow' is the workflow panel's
+   * drill-in, where the only decisions are "does this provider work here"
+   * and "use it for this workflow": model/effort come from the provider's
+   * tier defaults, so those pickers and the publish card are hidden. */
+  variant?: 'library' | 'workflow'
+  /** Model to test against when the picker is hidden (workflow variant):
+   * the row's default model, which for a Pi group also selects which
+   * provider key the auth card asks for. */
+  initialModelId?: string
+  /** True when this provider is already the workflow's selection. */
+  inUse?: boolean
+  /** Renders the "Use in this workflow" action (workflow variant). */
+  onUseInWorkflow?: () => void | Promise<void>
 }
 
 type PiTopLevelProviderKey =
@@ -168,15 +187,17 @@ function piAuthValue(keys: StoredProviderKeys | undefined, spec: PiAuthSpec): st
   return ''
 }
 
-export function CodingAgentSection({ provider, onPublished, groupFilter }: CodingAgentSectionProps) {
-  const {
-    saveLLM,
-    savedLLMs,
-  } = useLLMStore()
+export function CodingAgentSection({ provider, onPublished, groupFilter, readOnly = false, variant = 'library', initialModelId, inUse = false, onUseInWorkflow }: CodingAgentSectionProps) {
+  const saveLLM = useLLMStore(state => state.saveLLM)
+  const savedLLMs = useLLMStore(state => state.savedLLMs)
+  const workflowMode = variant === 'workflow'
   // A group-scoped tab has no valid pi-cli-wide default to start from --
   // DynamicModelSelector picks the group's own default once its catalog
-  // loads (see its groupFilter-aware auto-select effect).
-  const [selectedModel, setSelectedModel] = useState(groupFilter ? '' : (provider.default_model_id || provider.id))
+  // loads (see its groupFilter-aware auto-select effect). In the workflow
+  // variant that picker is hidden, so the caller supplies the row's default
+  // model up front instead.
+  const [selectedModel, setSelectedModel] = useState(initialModelId ?? (groupFilter ? '' : (provider.default_model_id || provider.id)))
+  const [using, setUsing] = useState(false)
   const displayName = groupFilter || provider.display_name
   const [effortLevel, setEffortLevel] = useState('high')
   const [isPublishing, setIsPublishing] = useState(false)
@@ -349,7 +370,10 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
         <h3 className="text-lg font-semibold text-foreground">{displayName}</h3>
       </div>
 
-      {/* Info card */}
+      {/* Info card and capabilities: library only. The workflow drill-in is
+          two actions (test, use); the provider blurb and capability grid
+          belong to the library editor. */}
+      {!workflowMode && (
       <Card className="p-4">
         <div className="flex items-start gap-3">
           <Terminal className="w-5 h-5 text-primary mt-0.5 flex-shrink-0" />
@@ -362,10 +386,12 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
         </div>
       </Card>
 
-      {/* Capabilities */}
-      <CodingAgentCapabilities provider={provider.id} modelId={selectedModel} />
+      )}
+      {!workflowMode && <CodingAgentCapabilities provider={provider.id} modelId={selectedModel} />}
 
-      {/* Model selection */}
+      {/* Model selection (library only: the workflow variant runs on the
+          provider's tier defaults, pinned per role under Advanced if needed) */}
+      {!workflowMode && (
       <Card className="p-4">
         <h4 className="font-medium text-foreground mb-3">Model</h4>
         {provider.id === 'pi-cli' && (
@@ -407,6 +433,7 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
           <p className="text-sm text-muted-foreground">No models available for this provider.</p>
         )}
       </Card>
+      )}
 
       {piAuthSpec && (
         <Card className="p-4">
@@ -427,21 +454,23 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
                   }}
                   placeholder={piAuthLoading ? 'Loading saved key...' : `Enter ${piAuthSpec.envNames[0]}`}
                   className="flex-1 px-3 py-2 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary"
-                  disabled={piAuthLoading || piAuthStatus === 'saving'}
+                  disabled={readOnly || piAuthLoading || piAuthStatus === 'saving'}
                 />
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={handleSavePiAuth}
-                  disabled={piAuthLoading || piAuthStatus === 'saving'}
+                  disabled={readOnly || piAuthLoading || piAuthStatus === 'saving'}
                 >
                   {piAuthStatus === 'saving' ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save'}
                 </Button>
               </div>
             </div>
+            {!workflowMode && (
             <p className="text-xs leading-relaxed text-muted-foreground">
               {piAuthSpec.help} Testing or saving this configuration stores the key encrypted for runtime, then exports it to Pi as {piAuthSpec.envNames.join(' / ')}.
             </p>
+            )}
             {piAuthStatus === 'saved' && (
               <div className="flex items-start gap-2 text-sm text-green-600 dark:text-green-400">
                 <CheckCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
@@ -459,7 +488,7 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
       )}
 
       {/* Effort/reasoning level (when model supports it) */}
-      {showEffort && (
+      {showEffort && !workflowMode && (
         <Card className="p-4">
           <h4 className="font-medium text-foreground mb-3">Effort Level</h4>
           <select
@@ -482,15 +511,18 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
       {/* Test connection */}
       <Card className="p-4">
         <h4 className="font-medium text-foreground mb-3">Test Connection</h4>
+        {!workflowMode && (
         <p className="text-sm text-muted-foreground mb-3">
           Sends a test prompt to verify the CLI is installed and authenticated. For Pi, a typed key is saved encrypted after a successful test.
         </p>
+        )}
         <div className="space-y-3">
           <Button
             variant="outline"
             size="sm"
             onClick={handleTestConnection}
-            disabled={testStatus === 'testing'}
+            disabled={readOnly || testStatus === 'testing'}
+            title={readOnly ? READ_ONLY_TITLE : undefined}
           >
             {testStatus === 'testing' ? (
               <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Testing...</>
@@ -518,8 +550,40 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
         </div>
       </Card>
 
-      {/* Save reusable configuration */}
-      {canPublish && (
+      {/* Use in this workflow (workflow variant): the one decision this
+          drill-in exists for. Test first is recommended but not enforced --
+          a provider the status line already reports Ready needs no test. */}
+      {workflowMode && onUseInWorkflow && (
+      <Card className="p-4">
+        <h4 className="font-medium text-foreground mb-3">Use in this workflow</h4>
+        {inUse ? (
+          <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+            <CheckCircle className="w-4 h-4" />
+            This workflow already runs on {displayName}.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <Button
+              size="sm"
+              onClick={async () => {
+                setUsing(true)
+                try { await onUseInWorkflow() } finally { setUsing(false) }
+              }}
+              disabled={readOnly || using || (piAuthSpec !== null && !piAuthKey.trim() && piAuthStatus !== 'saved')}
+              title={readOnly ? READ_ONLY_TITLE : piAuthSpec && !piAuthKey.trim() && piAuthStatus !== 'saved' ? 'Save the provider key first' : undefined}
+            >
+              {using ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Saving…</> : 'Use in this workflow'}
+            </Button>
+            {piAuthSpec && !piAuthKey.trim() && piAuthStatus !== 'saved' && (
+              <p className="text-xs text-muted-foreground">Save a provider key above to enable this.</p>
+            )}
+          </div>
+        )}
+      </Card>
+      )}
+
+      {/* Save reusable configuration (library only) */}
+      {canPublish && !workflowMode && (
       <Card className="p-4">
         <h4 className="font-medium text-foreground mb-3">Save Configuration</h4>
 
@@ -552,6 +616,8 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
               setPublishError(null)
             }}
             size="sm"
+            disabled={readOnly}
+            title={readOnly ? READ_ONLY_TITLE : undefined}
           >
             Save to Library
           </Button>
@@ -571,7 +637,8 @@ export function CodingAgentSection({ provider, onPublished, groupFilter }: Codin
             <div className="flex gap-2">
               <Button
                 onClick={handlePublishToLibrary}
-                disabled={!publishName.trim() || isSubmitting}
+                disabled={readOnly || !publishName.trim() || isSubmitting}
+                title={readOnly ? READ_ONLY_TITLE : undefined}
                 size="sm"
               >
                 {isSubmitting ? (

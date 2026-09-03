@@ -7,7 +7,7 @@ func TestBuildPromptHealthReportCountsNestedStepsAndTriggersReview(t *testing.T)
 	shared += shared
 	steps := []PlanStepInterface{
 		&MessageSequencePlanStep{CommonStepFields: CommonStepFields{ID: "large", Title: "Large", Description: makeDescription(20_001)}},
-		&TodoTaskPlanStep{
+		&OrchestratorPlanStep{
 			CommonStepFields: CommonStepFields{ID: "parent", Description: "parent description"},
 			PredefinedRoutes: []PlanOrchestrationRoute{{RouteID: "child", SubAgentStep: &MessageSequencePlanStep{CommonStepFields: CommonStepFields{ID: "child", Description: shared}}}},
 		},

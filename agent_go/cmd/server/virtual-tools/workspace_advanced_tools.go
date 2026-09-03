@@ -11,6 +11,7 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/services"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/fsutil"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/llm"
@@ -816,7 +817,23 @@ func wrapReadImageWithLLM(
 			},
 		}
 
-		resp, err := llmModel.GenerateContent(ctx, messages)
+		// A coding-agent provider starts a fresh CLI/tmux runtime for this
+		// analysis. Give it the stable workspace-documents root explicitly rather
+		// than inheriting the server's release directory, which changes at every
+		// deploy and can trigger Claude Code's trust/onboarding prompt. The adapter
+		// pre-trusts this server-owned directory before launch; the prompt handler
+		// remains a fallback for future Claude UI changes.
+		callOptions := []llmtypes.CallOption{}
+		if workingDirOption := llmproviders.CodingAgentWorkingDirOption(llmproviders.Provider(provider), fsutil.WorkspaceDocsRoot()); workingDirOption != nil {
+			callOptions = append(callOptions, workingDirOption)
+		}
+		if strings.EqualFold(provider, string(llmproviders.ProviderClaudeCode)) {
+			// The analysis prompt is passed directly, so do not transiently project
+			// it as CLAUDE.md into the shared docs root.
+			callOptions = append(callOptions, llmproviders.WithClaudeCodeWriteProjectInstructionFile(false))
+		}
+
+		resp, err := llmModel.GenerateContent(ctx, messages, callOptions...)
 		if err != nil {
 			log.Printf("[READ_IMAGE_DEBUG] LLM GenerateContent failed: %v", err)
 			return "", fmt.Errorf("LLM image analysis failed: %w", err)
@@ -986,6 +1003,15 @@ func imageAnalysisAPIKeysWithEnv(apiKeys *llm.ProviderAPIKeys) *llm.ProviderAPIK
 		*merged = *apiKeys
 	}
 
+	// Claude Code's subscription credential is intentionally distinct from an
+	// Anthropic API key. The rootless deployment supplies it as a service-scoped
+	// environment variable; pass it explicitly to a child CLI runtime rather
+	// than relying on its ambient saved-login state.
+	if merged.ClaudeCodeOAuthToken == nil {
+		if value := firstNonEmptyEnv("CLAUDE_CODE_OAUTH_TOKEN"); value != "" {
+			merged.ClaudeCodeOAuthToken = &value
+		}
+	}
 	if merged.Vertex == nil {
 		if value := firstNonEmptyEnv("VERTEX_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"); value != "" {
 			merged.Vertex = &value
@@ -1007,6 +1033,9 @@ func imageAnalysisAPIKeysWithEnv(apiKeys *llm.ProviderAPIKeys) *llm.ProviderAPIK
 func hasWorkspaceDefaultImageAnalysisAuth(provider string, apiKeys *llm.ProviderAPIKeys) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case string(llm.ProviderClaudeCode):
+		if apiKeys == nil || apiKeys.ClaudeCodeOAuthToken == nil || strings.TrimSpace(*apiKeys.ClaudeCodeOAuthToken) == "" {
+			return false
+		}
 		_, err := exec.LookPath("claude")
 		return err == nil
 	case string(llm.ProviderCodexCLI):

@@ -1,0 +1,832 @@
+package server
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gorilla/mux"
+	"golang.org/x/crypto/argon2"
+)
+
+// The user directory: the one place AgentWorks knows who its users are.
+// See docs/design/user_accounts_and_workflow_sharing.md.
+//
+// Storage is config/users.json in the shared workspace (the same place and
+// pattern as workflow-user-permissions.json), written under a mutex with the
+// workspace API's atomic document write. It replaces the AUTH_USERS env var
+// as the user store: AUTH_USERS is still read, but only to IMPORT users into
+// this file on startup (password hashed at import), after which it can be
+// dropped from the environment.
+//
+// A record answers the two account-level questions no single workflow can:
+// may this person create things at all (CanCreate; false is the read-only
+// user), and may this person manage other accounts (Admin). Products lists
+// which product surfaces the account may open. Everything else — who owns
+// which workflow — lives on the workflow itself (phase 3 of the design).
+//
+// How it plugs into the existing permission machinery: workflowAccessForIdentity
+// consults the directory first and maps Admin → owner, CanCreate → write,
+// otherwise → read, so every existing enforcement point (PLAT-262's runtime
+// read-only gates, requireWorkflowWriteAccess, list filtering) keys off the
+// directory with no change of its own. Identities with NO record keep
+// today's behavior exactly (env tiers / permissive default), so a
+// deployment that never writes this file is unaffected.
+
+// UserRecord is one account.
+type UserRecord struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Email    string `json:"email,omitempty"`
+	// PasswordHash is argon2id in PHC string format; absent for SSO-only
+	// accounts.
+	PasswordHash string   `json:"password_hash,omitempty"`
+	SSO          *UserSSO `json:"sso,omitempty"`
+	Admin        bool     `json:"admin"`
+	CanCreate    bool     `json:"can_create"`
+	// Products the account may open. Meaning depends on the account: an
+	// admin ignores it (all products), a member with an empty list gets all
+	// products, a read-only user with an empty list gets none.
+	Products  []string `json:"products"`
+	Disabled  bool     `json:"disabled,omitempty"`
+	CreatedAt string   `json:"created_at,omitempty"`
+	UpdatedAt string   `json:"updated_at,omitempty"`
+}
+
+// UserSSO links an account to an external identity provider.
+type UserSSO struct {
+	Provider   string `json:"provider"`
+	ExternalID string `json:"external_id,omitempty"`
+}
+
+type userDirectoryFile struct {
+	Users []UserRecord `json:"users"`
+}
+
+// userDirectory is the in-memory view of users.json.
+type userDirectory struct {
+	Users []UserRecord
+}
+
+func userDirectoryFilePath() string { return "config/users.json" }
+
+// userIDForUsername is the SAME derivation AUTH_USERS used, so an account
+// imported from the env var keeps the id (and therefore the _users/<id>
+// tree, secrets and history) it already had.
+func userIDForUsername(username string) string {
+	hash := sha256.Sum256([]byte("user:" + strings.TrimSpace(username)))
+	return hex.EncodeToString(hash[:16])
+}
+
+// ---- password hashing -------------------------------------------------
+
+// argon2id parameters: 64MB, 3 passes, 2 lanes — the OWASP-recommended
+// interactive-login setting, ~50ms on a laptop.
+const (
+	argonMemory  = 64 * 1024
+	argonTime    = 3
+	argonThreads = 2
+	argonKeyLen  = 32
+)
+
+func hashPassword(password string) (string, error) {
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", err
+	}
+	key := argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", argonMemory, argonTime, argonThreads,
+		base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(key)), nil
+}
+
+func verifyPassword(encoded, password string) bool {
+	parts := strings.Split(encoded, "$")
+	if len(parts) != 6 || parts[1] != "argon2id" {
+		return false
+	}
+	var memory, iterations uint32
+	var threads uint8
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &iterations, &threads); err != nil {
+		return false
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
+	if err != nil {
+		return false
+	}
+	want, err := base64.RawStdEncoding.DecodeString(parts[5])
+	if err != nil {
+		return false
+	}
+	got := argon2.IDKey([]byte(password), salt, iterations, memory, threads, uint32(len(want))) //nolint:gosec // G115: key length is bounded.
+	return subtle.ConstantTimeCompare(got, want) == 1
+}
+
+// ---- load / save with a short cache ----------------------------------
+
+var (
+	userDirectoryMu        sync.Mutex
+	userDirectoryCache     *userDirectory
+	userDirectoryCacheTime time.Time
+	userDirectoryCacheTTL  = 3 * time.Second
+	// userDirectoryUnavailable is set when the workspace API answered but
+	// the file could not be parsed; the directory is then treated as empty
+	// rather than silently granting or denying.
+	userDirectoryLoadErr error
+)
+
+func loadUserDirectory() (*userDirectory, error) {
+	userDirectoryMu.Lock()
+	defer userDirectoryMu.Unlock()
+	if userDirectoryCache != nil && time.Since(userDirectoryCacheTime) < userDirectoryCacheTTL {
+		return userDirectoryCache, userDirectoryLoadErr
+	}
+	dir, err := readUserDirectoryFile()
+	userDirectoryCache, userDirectoryCacheTime, userDirectoryLoadErr = dir, time.Now(), err
+	return dir, err
+}
+
+// The two workspace calls are variables so tests can run the handlers
+// against an in-memory file instead of a live workspace API.
+var (
+	userDirectoryRead = func() (string, bool, error) {
+		return readFileFromWorkspace(context.Background(), userDirectoryFilePath())
+	}
+	userDirectoryWrite = func(content string) error {
+		return writeFileToWorkspace(context.Background(), userDirectoryFilePath(), content)
+	}
+)
+
+func readUserDirectoryFile() (*userDirectory, error) {
+	data, exists, err := userDirectoryRead()
+	if err != nil {
+		return &userDirectory{}, err
+	}
+	if !exists || strings.TrimSpace(data) == "" {
+		return &userDirectory{}, nil
+	}
+	var f userDirectoryFile
+	if err := json.Unmarshal([]byte(data), &f); err != nil {
+		return &userDirectory{}, fmt.Errorf("users.json: %w", err)
+	}
+	return &userDirectory{Users: f.Users}, nil
+}
+
+// saveUserDirectory writes the whole file and drops the cache. Callers hold
+// no lock; the write itself is serialized here.
+func saveUserDirectory(dir *userDirectory) error {
+	userDirectoryMu.Lock()
+	defer userDirectoryMu.Unlock()
+	sort.Slice(dir.Users, func(i, j int) bool { return dir.Users[i].Username < dir.Users[j].Username })
+	for i := range dir.Users {
+		if dir.Users[i].Products == nil {
+			dir.Users[i].Products = []string{}
+		}
+	}
+	data, err := json.MarshalIndent(userDirectoryFile{Users: dir.Users}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := userDirectoryWrite(string(data)); err != nil {
+		return err
+	}
+	userDirectoryCache, userDirectoryCacheTime, userDirectoryLoadErr = dir, time.Now(), nil
+	return nil
+}
+
+func invalidateUserDirectoryCache() {
+	userDirectoryMu.Lock()
+	userDirectoryCache = nil
+	userDirectoryMu.Unlock()
+}
+
+// ---- lookups ------------------------------------------------------------
+
+func (d *userDirectory) byID(id string) *UserRecord {
+	for i := range d.Users {
+		if d.Users[i].ID == id {
+			return &d.Users[i]
+		}
+	}
+	return nil
+}
+
+func (d *userDirectory) byUsername(username string) *UserRecord {
+	username = strings.ToLower(strings.TrimSpace(username))
+	if username == "" {
+		return nil
+	}
+	for i := range d.Users {
+		if strings.ToLower(d.Users[i].Username) == username {
+			return &d.Users[i]
+		}
+	}
+	return nil
+}
+
+func (d *userDirectory) byEmail(email string) *UserRecord {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return nil
+	}
+	for i := range d.Users {
+		if strings.ToLower(d.Users[i].Email) == email {
+			return &d.Users[i]
+		}
+	}
+	return nil
+}
+
+// find resolves an identity by id, then username, then email — the same
+// precedence the legacy permission files use.
+func (d *userDirectory) find(userID, username, email string) *UserRecord {
+	if r := d.byID(userID); r != nil {
+		return r
+	}
+	if r := d.byUsername(username); r != nil {
+		return r
+	}
+	return d.byEmail(email)
+}
+
+// directoryUserFor is the lookup every permission check goes through. A
+// nil result means "no record" and callers fall back to legacy behavior.
+func directoryUserFor(userID, username, email string) *UserRecord {
+	dir, err := loadUserDirectory()
+	if err != nil || dir == nil {
+		return nil
+	}
+	return dir.find(userID, username, email)
+}
+
+func directoryUserForClaims(claims *UserClaims) *UserRecord {
+	if claims == nil {
+		return nil
+	}
+	return directoryUserFor(claims.UserID, claims.Username, claims.Email)
+}
+
+// userDirectoryHasPasswordUsers reports whether password login has anyone
+// to authenticate — what makes the "simple" provider configured once
+// AUTH_USERS is gone from the environment.
+func userDirectoryHasPasswordUsers() bool {
+	dir, err := loadUserDirectory()
+	if err != nil || dir == nil {
+		return false
+	}
+	for _, u := range dir.Users {
+		if u.PasswordHash != "" && !u.Disabled {
+			return true
+		}
+	}
+	return false
+}
+
+// validateDirectoryCredentials checks a username/password against the
+// directory. Returns nil for unknown, disabled, SSO-only, or wrong password.
+func validateDirectoryCredentials(username, password string) *UserRecord {
+	dir, err := loadUserDirectory()
+	if err != nil || dir == nil {
+		return nil
+	}
+	rec := dir.byUsername(username)
+	if rec == nil || rec.Disabled || rec.PasswordHash == "" {
+		return nil
+	}
+	if !verifyPassword(rec.PasswordHash, password) {
+		return nil
+	}
+	copy := *rec
+	return &copy
+}
+
+// ---- effective access ---------------------------------------------------
+
+// UserAccess is what an identity may do at the account level.
+type UserAccess struct {
+	// Known is false when the identity has no directory record; every
+	// other field is then the legacy/compat answer, not a directory one.
+	Known     bool
+	Admin     bool
+	CanCreate bool
+	Disabled  bool
+	// Products the identity may open when ProductsRestricted; ignored
+	// otherwise (all products).
+	Products           []string
+	ProductsRestricted bool
+}
+
+func accessForRecord(rec *UserRecord) UserAccess {
+	acc := UserAccess{Known: true, Admin: rec.Admin, CanCreate: rec.Admin || rec.CanCreate, Disabled: rec.Disabled}
+	switch {
+	case rec.Admin:
+		acc.ProductsRestricted = false
+	case len(rec.Products) > 0:
+		acc.ProductsRestricted = true
+		acc.Products = append([]string(nil), rec.Products...)
+	case rec.CanCreate:
+		acc.ProductsRestricted = false
+	default:
+		// Read-only account with nothing enabled: no products at all.
+		acc.ProductsRestricted = true
+		acc.Products = []string{}
+	}
+	return acc
+}
+
+// userAccessForClaims resolves the account-level answer for a request.
+// Outside multi-user mode the single local user is the machine's owner and
+// is an admin of their own installation; a multi-user identity without a
+// record is Unknown and keeps today's env-driven behavior.
+func userAccessForClaims(claims *UserClaims) UserAccess {
+	if rec := directoryUserForClaims(claims); rec != nil {
+		return accessForRecord(rec)
+	}
+	if !IsMultiUserMode() {
+		return UserAccess{Known: false, Admin: true, CanCreate: true}
+	}
+	return UserAccess{Known: false, CanCreate: true}
+}
+
+// currentUserIsAdmin is the gate for account management. With no directory
+// record it defers to the legacy owner tier so an existing deployment's
+// WORKFLOW_OWNER_USERS keep working until they are imported.
+func currentUserIsAdmin(r *http.Request) bool {
+	claims := GetUserFromContext(r.Context())
+	acc := userAccessForClaims(claims)
+	if acc.Known {
+		return acc.Admin && !acc.Disabled
+	}
+	return acc.Admin || currentUserCanManageWorkflowAccess(r)
+}
+
+func requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "OPTIONS" || currentUserIsAdmin(r) {
+			next(w, r)
+			return
+		}
+		writeWorkflowPermissionDenied(w, "admin")
+	}
+}
+
+// directoryUserIsDisabled lets the auth middleware refuse tokens of an
+// account an admin has switched off, without waiting for the JWT to expire.
+func directoryUserIsDisabled(claims *UserClaims) bool {
+	rec := directoryUserForClaims(claims)
+	return rec != nil && rec.Disabled
+}
+
+// ---- bootstrap ------------------------------------------------------------
+
+// adminUsernamesFromEnv reads ADMIN_USERS: comma-separated usernames or
+// emails that are admins. Applied whenever a matching record is created or
+// loaded at bootstrap, so the first admin is always named in config, never
+// inferred from who signed up first.
+func adminUsernamesFromEnv() map[string]bool {
+	out := map[string]bool{}
+	for _, raw := range strings.Split(os.Getenv("ADMIN_USERS"), ",") {
+		key := strings.ToLower(strings.TrimSpace(raw))
+		if key != "" {
+			out[key] = true
+		}
+	}
+	return out
+}
+
+func isConfiguredAdmin(rec *UserRecord) bool {
+	admins := adminUsernamesFromEnv()
+	return admins[strings.ToLower(rec.Username)] || (rec.Email != "" && admins[strings.ToLower(rec.Email)])
+}
+
+// hardcodedUsersSource is GetHardcodedUsers, swappable in tests (the real
+// one is guarded by a sync.Once over the environment).
+var hardcodedUsersSource = GetHardcodedUsers
+
+// bootstrapUserDirectory imports AUTH_USERS into users.json (hashing the
+// passwords) and applies ADMIN_USERS. Idempotent: existing records are never
+// overwritten except to set Admin for a configured admin. Called once at
+// startup, after the workspace API is reachable; failures are logged, not
+// fatal, since the legacy env path still authenticates.
+func bootstrapUserDirectory(ctx context.Context) {
+	dir, err := readUserDirectoryFile()
+	if err != nil {
+		log.Printf("[USERS] bootstrap: cannot read %s: %v", userDirectoryFilePath(), err)
+		return
+	}
+	changed := false
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, hu := range hardcodedUsersSource() {
+		if dir.byUsername(hu.Username) != nil {
+			continue
+		}
+		hash, err := hashPassword(hu.Password)
+		if err != nil {
+			log.Printf("[USERS] bootstrap: cannot hash password for %s: %v", hu.Username, err)
+			continue
+		}
+		rec := UserRecord{ID: hu.UserID, Username: hu.Username, PasswordHash: hash, CanCreate: true, Products: []string{}, CreatedAt: now, UpdatedAt: now}
+		rec.Admin = isConfiguredAdmin(&rec)
+		dir.Users = append(dir.Users, rec)
+		changed = true
+		log.Printf("[USERS] bootstrap: imported %s from AUTH_USERS (admin=%v)", hu.Username, rec.Admin)
+	}
+	for i := range dir.Users {
+		if !dir.Users[i].Admin && isConfiguredAdmin(&dir.Users[i]) {
+			dir.Users[i].Admin = true
+			dir.Users[i].UpdatedAt = now
+			changed = true
+			log.Printf("[USERS] bootstrap: %s is an admin per ADMIN_USERS", dir.Users[i].Username)
+		}
+	}
+	if changed {
+		if err := saveUserDirectory(dir); err != nil {
+			log.Printf("[USERS] bootstrap: cannot write %s: %v", userDirectoryFilePath(), err)
+			return
+		}
+	}
+	if len(dir.Users) > 0 {
+		log.Printf("[USERS] directory ready: %d user(s) in %s", len(dir.Users), userDirectoryFilePath())
+	}
+	_ = ctx
+}
+
+// ensureDirectoryUserForExternal creates the record for an SSO identity on
+// its first login. New SSO users start with nothing enabled (no create, no
+// products) unless ADMIN_USERS names them — the safe default for an open
+// sign-in provider; an admin switches them on. Returns the record.
+func ensureDirectoryUserForExternal(userID string, ext *ExternalUser) *UserRecord {
+	dir, err := readUserDirectoryFile()
+	if err != nil {
+		return nil
+	}
+	if rec := dir.find(userID, ext.Username, ext.Email); rec != nil {
+		return rec
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	rec := UserRecord{
+		ID:        userID,
+		Username:  ext.Username,
+		Email:     ext.Email,
+		SSO:       &UserSSO{Provider: ext.Provider, ExternalID: ext.ExternalID},
+		Products:  []string{},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if isConfiguredAdmin(&rec) {
+		rec.Admin = true
+		rec.CanCreate = true
+	}
+	dir.Users = append(dir.Users, rec)
+	if err := saveUserDirectory(dir); err != nil {
+		log.Printf("[USERS] cannot record SSO user %s: %v", ext.Username, err)
+		return nil
+	}
+	log.Printf("[USERS] created SSO user %s via %s (admin=%v, can_create=%v)", ext.Username, ext.Provider, rec.Admin, rec.CanCreate)
+	return dir.byID(userID)
+}
+
+// ---- admin API --------------------------------------------------------------
+
+// userAdminView is what the admin page sees; never the hash.
+type userAdminView struct {
+	ID          string   `json:"id"`
+	Username    string   `json:"username"`
+	Email       string   `json:"email,omitempty"`
+	Provider    string   `json:"provider"`
+	HasPassword bool     `json:"has_password"`
+	Admin       bool     `json:"admin"`
+	CanCreate   bool     `json:"can_create"`
+	Products    []string `json:"products"`
+	Disabled    bool     `json:"disabled"`
+	CreatedAt   string   `json:"created_at,omitempty"`
+	UpdatedAt   string   `json:"updated_at,omitempty"`
+}
+
+func viewOf(rec UserRecord) userAdminView {
+	provider := "password"
+	if rec.SSO != nil && rec.SSO.Provider != "" {
+		provider = rec.SSO.Provider
+	}
+	products := rec.Products
+	if products == nil {
+		products = []string{}
+	}
+	return userAdminView{
+		ID: rec.ID, Username: rec.Username, Email: rec.Email, Provider: provider,
+		HasPassword: rec.PasswordHash != "", Admin: rec.Admin, CanCreate: rec.CanCreate,
+		Products: products, Disabled: rec.Disabled, CreatedAt: rec.CreatedAt, UpdatedAt: rec.UpdatedAt,
+	}
+}
+
+func writeUsersJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeUsersError(w http.ResponseWriter, status int, msg string) {
+	writeUsersJSON(w, status, map[string]string{"error": msg})
+}
+
+// GET /api/admin/users
+func (api *StreamingAPI) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
+	dir, err := readUserDirectoryFile()
+	if err != nil {
+		writeUsersError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]userAdminView, 0, len(dir.Users))
+	for _, u := range dir.Users {
+		out = append(out, viewOf(u))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
+	writeUsersJSON(w, http.StatusOK, map[string]any{"users": out, "products": knownProductIDs()})
+}
+
+// userWriteRequest is the body for create and update. Pointer fields are
+// "unchanged" when absent on update.
+type userWriteRequest struct {
+	Username  string    `json:"username"`
+	Email     *string   `json:"email"`
+	Password  *string   `json:"password"`
+	Admin     *bool     `json:"admin"`
+	CanCreate *bool     `json:"can_create"`
+	Products  *[]string `json:"products"`
+	Disabled  *bool     `json:"disabled"`
+}
+
+var errUsernameInvalid = errors.New("username must be 2-64 characters: letters, digits, dot, dash, underscore, or an email address")
+
+func validUsername(u string) bool {
+	if len(u) < 2 || len(u) > 64 {
+		return false
+	}
+	for _, c := range u {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '.', c == '-', c == '_', c == '@', c == '+':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeProducts(in []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, p := range in {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// POST /api/admin/users
+func (api *StreamingAPI) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
+	var req userWriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeUsersError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	username := strings.TrimSpace(req.Username)
+	if !validUsername(username) {
+		writeUsersError(w, http.StatusBadRequest, errUsernameInvalid.Error())
+		return
+	}
+	dir, err := readUserDirectoryFile()
+	if err != nil {
+		writeUsersError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if dir.byUsername(username) != nil {
+		writeUsersError(w, http.StatusConflict, "a user with that username already exists")
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	rec := UserRecord{ID: userIDForUsername(username), Username: username, Products: []string{}, CreatedAt: now, UpdatedAt: now}
+	if req.Email != nil {
+		rec.Email = strings.TrimSpace(*req.Email)
+	}
+	if req.Password != nil && *req.Password != "" {
+		if len(*req.Password) < 8 {
+			writeUsersError(w, http.StatusBadRequest, "password must be at least 8 characters")
+			return
+		}
+		hash, err := hashPassword(*req.Password)
+		if err != nil {
+			writeUsersError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		rec.PasswordHash = hash
+	}
+	if req.Admin != nil {
+		rec.Admin = *req.Admin
+	}
+	if req.CanCreate != nil {
+		rec.CanCreate = *req.CanCreate
+	}
+	if req.Products != nil {
+		rec.Products = normalizeProducts(*req.Products)
+	}
+	if req.Disabled != nil {
+		rec.Disabled = *req.Disabled
+	}
+	dir.Users = append(dir.Users, rec)
+	if err := saveUserDirectory(dir); err != nil {
+		writeUsersError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	log.Printf("[USERS] %s created user %s (admin=%v can_create=%v products=%v)", GetUserIDFromContext(r.Context()), rec.Username, rec.Admin, rec.CanCreate, rec.Products)
+	writeUsersJSON(w, http.StatusCreated, viewOf(rec))
+}
+
+// PUT /api/admin/users/{id}
+func (api *StreamingAPI) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	var req userWriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeUsersError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	dir, err := readUserDirectoryFile()
+	if err != nil {
+		writeUsersError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	rec := dir.byID(id)
+	if rec == nil {
+		writeUsersError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	callerID := GetUserIDFromContext(r.Context())
+	// An admin cannot lock themselves out: no removing their own admin
+	// flag or disabling their own account. Another admin can.
+	if rec.ID == callerID {
+		if (req.Admin != nil && !*req.Admin) || (req.Disabled != nil && *req.Disabled) {
+			writeUsersError(w, http.StatusBadRequest, "you cannot remove your own admin access or disable your own account")
+			return
+		}
+	}
+	if req.Email != nil {
+		rec.Email = strings.TrimSpace(*req.Email)
+	}
+	if req.Password != nil && *req.Password != "" {
+		if len(*req.Password) < 8 {
+			writeUsersError(w, http.StatusBadRequest, "password must be at least 8 characters")
+			return
+		}
+		hash, err := hashPassword(*req.Password)
+		if err != nil {
+			writeUsersError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		rec.PasswordHash = hash
+	}
+	if req.Admin != nil {
+		rec.Admin = *req.Admin
+	}
+	if req.CanCreate != nil {
+		rec.CanCreate = *req.CanCreate
+	}
+	if req.Products != nil {
+		rec.Products = normalizeProducts(*req.Products)
+	}
+	if req.Disabled != nil {
+		rec.Disabled = *req.Disabled
+	}
+	rec.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := saveUserDirectory(dir); err != nil {
+		writeUsersError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	log.Printf("[USERS] %s updated user %s (admin=%v can_create=%v products=%v disabled=%v)", callerID, rec.Username, rec.Admin, rec.CanCreate, rec.Products, rec.Disabled)
+	writeUsersJSON(w, http.StatusOK, viewOf(*rec))
+}
+
+// DELETE /api/admin/users/{id} — removes the record. The user's _users/<id>
+// tree is deliberately left in place (their workflows' history, projects);
+// disabling is the reversible alternative and the one the UI offers first.
+func (api *StreamingAPI) handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	if id == GetUserIDFromContext(r.Context()) {
+		writeUsersError(w, http.StatusBadRequest, "you cannot delete your own account")
+		return
+	}
+	dir, err := readUserDirectoryFile()
+	if err != nil {
+		writeUsersError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	kept := dir.Users[:0]
+	var removed *UserRecord
+	for i := range dir.Users {
+		if dir.Users[i].ID == id {
+			u := dir.Users[i]
+			removed = &u
+			continue
+		}
+		kept = append(kept, dir.Users[i])
+	}
+	if removed == nil {
+		writeUsersError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	dir.Users = kept
+	if err := saveUserDirectory(dir); err != nil {
+		writeUsersError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	log.Printf("[USERS] %s deleted user %s", GetUserIDFromContext(r.Context()), removed.Username)
+	writeUsersJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// POST /api/auth/password — a user changes their own password. Requires the
+// current one; an admin resets someone else's through the admin route.
+func (api *StreamingAPI) handleChangeOwnPassword(w http.ResponseWriter, r *http.Request) {
+	claims := GetUserFromContext(r.Context())
+	if claims == nil {
+		writeUsersError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	var req struct {
+		Current string `json:"current_password"`
+		New     string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeUsersError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if len(req.New) < 8 {
+		writeUsersError(w, http.StatusBadRequest, "password must be at least 8 characters")
+		return
+	}
+	dir, err := readUserDirectoryFile()
+	if err != nil {
+		writeUsersError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	rec := dir.find(claims.UserID, claims.Username, claims.Email)
+	if rec == nil || rec.PasswordHash == "" {
+		writeUsersError(w, http.StatusBadRequest, "this account does not use a password")
+		return
+	}
+	if !verifyPassword(rec.PasswordHash, req.Current) {
+		writeUsersError(w, http.StatusForbidden, "current password is incorrect")
+		return
+	}
+	hash, err := hashPassword(req.New)
+	if err != nil {
+		writeUsersError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	rec.PasswordHash = hash
+	rec.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := saveUserDirectory(dir); err != nil {
+		writeUsersError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeUsersJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// knownProductIDs lists the product surfaces an admin can enable per user:
+// AgentWorks itself plus every registered product profile.
+func knownProductIDs() []string {
+	ids := []string{"agentworks"}
+	for _, id := range registeredProductIDs() {
+		if id != "" && id != "agentworks" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// registeredProductIDs is the product surfaces this server can host,
+// filtered by AGENT_PRODUCTS so a dedicated deployment only offers its own.
+func registeredProductIDs() []string {
+	var out []string
+	for _, id := range []string{"video-studio", "finance", "dominion"} {
+		if productEnabled(id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}

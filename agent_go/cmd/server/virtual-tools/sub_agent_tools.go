@@ -62,7 +62,7 @@ type StopSubAgentFunc func(ctx context.Context, executionID string) (string, err
 // SubAgentResult represents the result of a sub-agent execution
 type SubAgentResult struct {
 	Success       bool      `json:"success"`
-	TodoID        string    `json:"todo_id"`
+	TodoID        string    `json:"task_id"`
 	RouteID       string    `json:"route_id,omitempty"`
 	AgentType     string    `json:"agent_type"` // "predefined" or "generic"
 	Result        string    `json:"result"`
@@ -114,9 +114,9 @@ func CreateSubAgentTools() []llmtypes.Tool {
 			"type":        "string",
 			"description": "Parent-side selector for the predefined route to execute (from the available routes in your context). The runtime resolves it; do not repeat it inside instructions.",
 		},
-		"todo_id": map[string]interface{}{
+		"task_id": map[string]interface{}{
 			"type":        "string",
-			"description": "Existing durable todo ID this execution advances. Used by the parent runtime for task tracking and artifact naming; it is not child task context and should not be repeated inside instructions.",
+			"description": "Stable label for this unit of delegated work (kebab-case, e.g. draft-intro-section). Used by the parent runtime for tracking and artifact naming; it is not child task context and should not be repeated inside instructions.",
 		},
 		"instructions": map[string]interface{}{
 			"type":        "string",
@@ -132,7 +132,7 @@ func CreateSubAgentTools() []llmtypes.Tool {
 			"description": "Optional. Only for message_sequence routes. If true, archive the existing route conversation and replay the configured item queue from the beginning. Default: false, which resumes the existing route conversation and sends instructions as the re-entry message.",
 		},
 	}
-	callSubAgentRequired := []string{"route_id", "todo_id", "instructions", "preferred_tier"}
+	callSubAgentRequired := []string{"route_id", "task_id", "instructions", "preferred_tier"}
 	callSubAgentTool := llmtypes.Tool{
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
@@ -149,9 +149,9 @@ func CreateSubAgentTools() []llmtypes.Tool {
 
 	// call_generic_agent tool - Execute a generic agent for ad-hoc tasks
 	callGenericAgentProperties := map[string]interface{}{
-		"todo_id": map[string]interface{}{
+		"task_id": map[string]interface{}{
 			"type":        "string",
-			"description": "Existing durable todo ID this execution advances. Used by the parent runtime for task tracking and artifact naming; it is not child task context and should not be repeated inside instructions.",
+			"description": "Stable label for this unit of delegated work (kebab-case, e.g. draft-intro-section). Used by the parent runtime for tracking and artifact naming; it is not child task context and should not be repeated inside instructions.",
 		},
 		"instructions": map[string]interface{}{
 			"type":        "string",
@@ -178,7 +178,7 @@ func CreateSubAgentTools() []llmtypes.Tool {
 		"description": "REQUIRED. LLM reasoning tier for this sub-agent. 1 = high reasoning (complex/novel tasks), 2 = medium reasoning (routine tasks), 3 = low reasoning (simple/validation tasks). You must pick a tier for every call based on the task's difficulty.",
 		"enum":        []int{1, 2, 3},
 	}
-	callGenericAgentRequired := []string{"todo_id", "instructions", "preferred_tier"}
+	callGenericAgentRequired := []string{"task_id", "instructions", "preferred_tier"}
 	callGenericAgentTool := llmtypes.Tool{
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
@@ -330,9 +330,9 @@ func handleCallSubAgent(ctx context.Context, args map[string]interface{}) (strin
 		return "", fmt.Errorf("route_id is required")
 	}
 
-	todoID, ok := args["todo_id"].(string)
+	todoID, ok := args["task_id"].(string)
 	if !ok || todoID == "" {
-		return "", fmt.Errorf("todo_id is required")
+		return "", fmt.Errorf("task_id is required")
 	}
 
 	instructions, ok := args["instructions"].(string)
@@ -403,9 +403,9 @@ func handleCallSubAgent(ctx context.Context, args map[string]interface{}) (strin
 // handleCallGenericAgent executes a generic agent
 func handleCallGenericAgent(ctx context.Context, args map[string]interface{}) (string, error) {
 	// Extract arguments
-	todoID, ok := args["todo_id"].(string)
+	todoID, ok := args["task_id"].(string)
 	if !ok || todoID == "" {
-		return "", fmt.Errorf("todo_id is required")
+		return "", fmt.Errorf("task_id is required")
 	}
 
 	instructions, ok := args["instructions"].(string)
@@ -569,8 +569,8 @@ func handleGetRouteDescription(ctx context.Context, args map[string]interface{})
 
 // handleGetSubAgentConversation retrieves the internal conversation of a previous sub-agent call
 func handleGetSubAgentConversation(ctx context.Context, args map[string]interface{}) (string, error) {
-	// Inspect one exact call. A todo can be retried or delegated more than once,
-	// so todo_id is not a unique conversation identity.
+	// Inspect one exact call. A task label can be retried or delegated more than once,
+	// so task_id is not a unique conversation identity.
 	executionID, ok := args["execution_id"].(string)
 	if !ok || strings.TrimSpace(executionID) == "" {
 		return "", fmt.Errorf("execution_id is required")

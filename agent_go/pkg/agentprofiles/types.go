@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/productschedule"
 )
 
 type CapabilityRequirement string
@@ -63,9 +65,60 @@ type RuntimePolicy struct {
 	// chats. The browser supplies only the key (when one is required); the
 	// server owns the durable conversation/session identity.
 	Conversation ConversationPolicy `json:"conversation,omitempty" yaml:"conversation,omitempty"`
+
+	// Sandbox declares how this profile's shell and file tools are confined.
+	// Empty keeps the platform default (the folder guard: the conversation's
+	// workspace is writable, a few platform folders are read-only, and the
+	// command runs in an allow-by-default kernel sandbox with network).
+	Sandbox SandboxPolicy `json:"sandbox,omitempty" yaml:"sandbox,omitempty"`
 }
 
 // WorkspacePolicy carries a product's declared artifact placement rules.
+// SandboxPolicy confines a profile's shell and file tools. It is enforced by
+// the workspace shell isolator (workspace/security), on top of the folder
+// guard that already limits paths to the conversation's workspace.
+type SandboxPolicy struct {
+	// Mode: "" or "folder" is the platform default (allow-by-default kernel
+	// sandbox, only the workspace paths are controlled). "strict" is a
+	// deny-by-default sandbox: only the workspace folder, the read-only
+	// folders below, system binaries and scratch space are visible, and the
+	// command's environment carries no secrets. Fully enforced on macOS
+	// (seatbelt); on Linux the path rules apply but network is not cut.
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+	// Network: "" or "allowed" keeps outbound network; "disabled" removes it
+	// (strict mode only).
+	Network string `json:"network,omitempty" yaml:"network,omitempty"`
+	// ReadOnly lists workspace-relative folders the profile may read but not
+	// write, replacing the platform default of skills/, subagents/ and
+	// Downloads/. Use an explicit empty list to grant nothing extra.
+	ReadOnly []string `json:"read_only,omitempty" yaml:"read_only,omitempty"`
+}
+
+const (
+	SandboxModeFolder     = "folder"
+	SandboxModeStrict     = "strict"
+	SandboxNetworkAllowed = "allowed"
+	SandboxNetworkOff     = "disabled"
+)
+
+// IsStrict reports whether the policy asks for the deny-by-default sandbox.
+func (p SandboxPolicy) IsStrict() bool {
+	return strings.EqualFold(strings.TrimSpace(p.Mode), SandboxModeStrict)
+}
+
+// NetworkDisabled reports whether outbound network must be cut.
+func (p SandboxPolicy) NetworkDisabled() bool {
+	return strings.EqualFold(strings.TrimSpace(p.Network), SandboxNetworkOff)
+}
+
+// PromptSource says where a profile's system prompt file lives inside the
+// product's embedded files, with simple {{NAME}} substitutions applied when
+// the manifest is loaded (see RenderPromptTemplate).
+type PromptSource struct {
+	File      string            `json:"-" yaml:"file"`
+	Variables map[string]string `json:"-" yaml:"variables,omitempty"`
+}
+
 type WorkspacePolicy struct {
 	// Mode is fixed for products with one workspace and project for products
 	// whose conversation key selects a project manifest below ProjectsRoot.
@@ -171,7 +224,7 @@ type ToolBinding struct {
 // PresentationBinding names the presentation kind a tool produces and the
 // compact activity row that accompanies its update in the transcript. Keeping
 // both facts beside the tool declaration means a future presentation cannot
-// accidentally fall through to an unrecognised raw event card in the UI.
+// accidentally fall through to an unrecognized raw event card in the UI.
 type PresentationBinding struct {
 	Kind     string                       `json:"kind" yaml:"kind"`
 	Activity *PresentationActivityBinding `json:"activity" yaml:"activity"`
@@ -232,18 +285,22 @@ type SecretBinding struct {
 }
 
 type Profile struct {
-	ID                   string           `json:"id" yaml:"id"`
-	Name                 string           `json:"name" yaml:"name"`
-	Version              int              `json:"version" yaml:"version"`
-	SystemPromptTemplate string           `json:"system_prompt" yaml:"system_prompt"`
-	Skills               []string         `json:"skills,omitempty" yaml:"skills,omitempty"`
-	Tools                []ToolBinding    `json:"tools,omitempty" yaml:"tools,omitempty"`
-	Commands             []CommandBinding `json:"commands,omitempty" yaml:"commands,omitempty"`
-	Secrets              []SecretBinding  `json:"secrets,omitempty" yaml:"secrets,omitempty"`
-	ToolPolicy           ToolPolicy       `json:"tool_policy,omitempty" yaml:"tool_policy,omitempty"`
-	Runtime              RuntimePolicy    `json:"runtime" yaml:"runtime"`
-	BuiltIn              bool             `json:"built_in" yaml:"built_in"`
-	OwnerID              string           `json:"owner_id,omitempty" yaml:"owner_id,omitempty"`
+	ID                   string `json:"id" yaml:"id"`
+	Name                 string `json:"name" yaml:"name"`
+	Version              int    `json:"version" yaml:"version"`
+	SystemPromptTemplate string `json:"system_prompt" yaml:"system_prompt"`
+	// Prompt is where the system prompt comes from in product.yaml. It is
+	// resolved into SystemPromptTemplate by LoadProductManifest and never
+	// travels over the wire.
+	Prompt     PromptSource     `json:"-" yaml:"prompt,omitempty"`
+	Skills     []string         `json:"skills,omitempty" yaml:"skills,omitempty"`
+	Tools      []ToolBinding    `json:"tools,omitempty" yaml:"tools,omitempty"`
+	Commands   []CommandBinding `json:"commands,omitempty" yaml:"commands,omitempty"`
+	Secrets    []SecretBinding  `json:"secrets,omitempty" yaml:"secrets,omitempty"`
+	ToolPolicy ToolPolicy       `json:"tool_policy,omitempty" yaml:"tool_policy,omitempty"`
+	Runtime    RuntimePolicy    `json:"runtime" yaml:"runtime"`
+	BuiltIn    bool             `json:"built_in" yaml:"built_in"`
+	OwnerID    string           `json:"owner_id,omitempty" yaml:"owner_id,omitempty"`
 	// Product names which product surface this builtin profile belongs to
 	// (e.g. "dominion", "video-studio", "finance") -- set by each product's
 	// registration call in server.go, never by the product package itself.
@@ -268,6 +325,12 @@ type Profile struct {
 	// GET /api/agent-profiles/{id}, the same response Commands and
 	// Runtime.ProviderOptions travel through.
 	UIPanels UIPanels `json:"ui_panels,omitempty" yaml:"ui_panels,omitempty"`
+	// Schedules are the product's recurring jobs: on a cron or cadence, run
+	// this profile for each user who has the product, sending the listed
+	// messages one at a time into the user's product conversation. The
+	// platform scheduler executes them; a product hosting itself runs the
+	// same definition through productschedule.Runner.
+	Schedules []productschedule.Schedule `json:"schedules,omitempty" yaml:"schedules,omitempty"`
 }
 
 // UIPanels are optional panels a product's surface can offer. Every field

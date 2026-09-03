@@ -461,7 +461,7 @@ func ResolveDependencyPathCandidates(
 
 	if cut := strings.LastIndex(currentStepPath, "-sub-"); cut != -1 {
 		if stepIndex >= 0 && stepIndex < len(allSteps) {
-			if todoStep, ok := allSteps[stepIndex].(*TodoTaskPlanStep); ok {
+			if todoStep, ok := allSteps[stepIndex].(*OrchestratorPlanStep); ok {
 				parentRoutePrefix := fmt.Sprintf("step-%d-sub-", stepIndex+1)
 				currentTodoIDPart := ""
 				parentStepPath := fmt.Sprintf("step-%d", stepIndex+1)

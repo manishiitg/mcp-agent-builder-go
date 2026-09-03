@@ -54,6 +54,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractPulseLifecycleReconciliationVersion,
 		workflowContractPulseBacklogTriageVersion,
 		workflowContractPulseActionableBacklogVersion,
+		workflowContractOrchestratorStepTypeVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -289,6 +290,10 @@ Do only this platform data migration. Call record_pulse_migration_reconciliation
 
 Read the returned counts. Then call get_pulse_state(workspace_path={{WORKSPACE_PATH}}, view="backlog", detail="compact") and confirm the canonical issue register is readable. Pulse's workflow-owned repair target is only the returned actionable_workflow_issues count: do not treat platform issues, human decisions, evidence waits, or retired observations as repair debt. Do not run a workflow or a Pulse review. If either tool fails, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.34") and stop.`
 
+const upgradeOrchestratorStepType = `WORKFLOW CONTRACT UPGRADE: ORCHESTRATOR STEP TYPE.
+
+Do only this migration. The plan step type formerly called todo_task is now named orchestrator; the runtime reads both names, so nothing changes in behavior. Call migrate_orchestrator_step_type once. It rewrites every legacy "type": "todo_task" discriminator in planning/plan.json to "orchestrator", validates the plan, and records the change; a plan already on the new name is a no-op. Do not edit plan.json by hand and do not run the workflow. If the tool reports an error, do not stamp. Otherwise call set_workflow_contract_version(version="1.0.35") and stop.`
+
 const workflowUpgradeWorkspacePathPlaceholder = "{{WORKSPACE_PATH}}"
 
 func bindWorkflowUpgradeWorkspacePath(query, workspacePath string) string {
@@ -360,6 +365,10 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	}
 	if rank < 33 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractPulseActionableBacklogVersion, label: "upgrade-pulse-actionable-backlog", query: upgradePulseActionableBacklog})
+	}
+	// workflowContractOrchestratorStepTypeVersion ("1.0.35") sits at rank 34.
+	if rank < 34 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractOrchestratorStepTypeVersion, label: "upgrade-orchestrator-step-type", query: upgradeOrchestratorStepType})
 	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse

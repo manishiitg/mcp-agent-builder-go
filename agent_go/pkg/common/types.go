@@ -180,8 +180,14 @@ type SessionShellConfig struct {
 	WritePaths        []string // Folder guard write paths for Isolator
 	BlockedPaths      []string // Deny reads and writes
 	BlockedWritePaths []string // Deny writes; reads allowed (flows to FolderGuardConfig.BlockedWritePaths)
-	BrowserMode       string   // Resolved browser mode: "headless", "cdp", ""
-	BrowserSessionID  string   // Shared browser identity for browser tools when "default" session is used
+	// StrictAllowlist switches the shell isolator to deny-by-default: only the
+	// guard's paths, system binaries and scratch space are visible. DenyNetwork
+	// additionally removes outbound network (strict mode only). Both come from
+	// an agent profile's runtime.sandbox policy.
+	StrictAllowlist  bool
+	DenyNetwork      bool
+	BrowserMode      string // Resolved browser mode: "headless", "cdp", ""
+	BrowserSessionID string // Shared browser identity for browser tools when "default" session is used
 	// Env is extra environment variables exported into this session's shell
 	// (bridge execute_shell_command). Lets per-step values like DB_PATH and
 	// STEP_OUTPUT_DIR reach the server-side bridge shell, which — unlike the
@@ -416,6 +422,17 @@ func SetSessionFolderGuardBlockedPaths(sessionID string, blockedPaths []string) 
 // even when the path is under a WritePath prefix. Used by the chat-agent
 // #workflow setup to grant `Workflow/<name>/` as a broad write prefix while
 // denying writes to `Workflow/<name>/planning/`.
+// SetSessionSandbox applies an agent profile's sandbox policy to the
+// session's shell: deny-by-default confinement and, optionally, no network.
+func SetSessionSandbox(sessionID string, strictAllowlist, denyNetwork bool) {
+	updateSessionShellConfig(sessionID, func(cfg *SessionShellConfig) {
+		cfg.FolderGuardSet = true
+		cfg.StrictAllowlist = strictAllowlist
+		cfg.DenyNetwork = denyNetwork
+	})
+	log.Printf("[SHELL] Set sandbox for session %s: strict=%v deny_network=%v", sessionID, strictAllowlist, denyNetwork)
+}
+
 func SetSessionFolderGuardBlockedWritePaths(sessionID string, blockedWritePaths []string) {
 	updateSessionShellConfig(sessionID, func(cfg *SessionShellConfig) {
 		cfg.FolderGuardSet = true

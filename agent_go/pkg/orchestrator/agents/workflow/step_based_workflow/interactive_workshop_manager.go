@@ -369,7 +369,7 @@ func collectInnerSteps(step PlanStepInterface) []WorkshopStepInfo {
 	parentType := step.StepType()
 
 	switch s := step.(type) {
-	case *TodoTaskPlanStep:
+	case *OrchestratorPlanStep:
 		for _, route := range s.PredefinedRoutes {
 			if route.SubAgentStep != nil {
 				result = append(result, WorkshopStepInfo{
@@ -423,23 +423,6 @@ func isScriptedExecutionModeConfig(cfg *AgentConfigs) bool {
 		return false
 	}
 	return canonicalDeclaredExecutionMode(cfg.DeclaredExecutionMode) == StepModeScripted
-}
-
-// isOrchestratorScriptedEligible gates the todo_task fast path: the builder-authored
-// main.py is only run when the step declares scripted and has at least one
-// predefined route for the script to call. If either check fails the step runs as a
-// normal LLM orchestrator — the script is never attempted.
-// The orchestrator scripted path is read-only at runtime: the builder writes
-// main.py at design time, the runtime only runs it. There is no repair loop and no
-// save-back; any script failure falls back to the LLM orchestrator with a fresh start.
-func isOrchestratorScriptedEligible(step *TodoTaskPlanStep, cfg *AgentConfigs) bool {
-	if step == nil || !isScriptedExecutionModeConfig(cfg) {
-		return false
-	}
-	if len(step.PredefinedRoutes) == 0 {
-		return false
-	}
-	return true
 }
 
 func syncDeclaredExecutionModeConfig(cfg *AgentConfigs) {
@@ -501,7 +484,7 @@ func (iwm *InteractiveWorkshopManager) enrichQueryForComplexStep(
 	stepType := stepInfo.Step.StepType()
 	var logFileName, stepTypeName string
 	switch stepType {
-	case StepTypeTodoTask:
+	case StepTypeOrchestrator:
 		logFileName = "todo-task-execution.json"
 		stepTypeName = "Todo Task"
 	case StepTypeRouting, StepTypeBranch:
@@ -558,7 +541,7 @@ func (iwm *InteractiveWorkshopManager) enrichQueryForComplexStep(
 
 		// Extract sub-agent path from the response
 		var response map[string]interface{}
-		if stepType == StepTypeTodoTask {
+		if stepType == StepTypeOrchestrator {
 			response, _ = entry["todo_task_response"].(map[string]interface{})
 		} else {
 			response, _ = entry["orchestration_response"].(map[string]interface{})
@@ -574,7 +557,7 @@ func (iwm *InteractiveWorkshopManager) enrichQueryForComplexStep(
 		}
 
 		// Extract tier usage data for todo_task steps
-		if stepType == StepTypeTodoTask {
+		if stepType == StepTypeOrchestrator {
 			nextAction, _ := response["next_action"].(string)
 			if nextAction == "delegate" {
 				tierNum := 0
@@ -609,7 +592,7 @@ func (iwm *InteractiveWorkshopManager) enrichQueryForComplexStep(
 	summary.WriteString(fmt.Sprintf("\n\n[%s step — %d iterations", stepTypeName, iterations))
 
 	// Show todo progress from the last entry (already parsed in main loop)
-	if stepType == StepTypeTodoTask && lastEntry != nil {
+	if stepType == StepTypeOrchestrator && lastEntry != nil {
 		if todoSummary, ok := lastEntry["todo_summary"].(map[string]interface{}); ok {
 			total, _ := todoSummary["total"].(float64)
 			completed, _ := todoSummary["completed"].(float64)
@@ -1327,7 +1310,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 		// not in the central workspace registry; use the active shell/diff/text/search tools.
 		"execute_shell_command", "diff_patch_workspace_file",
 		"generate_text_llm", "search_web_llm",
-		"query_workflow_db", "mutate_workflow_db", "apply_workflow_db_migration",
+		"query_workflow_db", "mutate_workflow_db", "apply_workflow_db_migration", "create_workflow_database_snapshot",
 		// PLAT-184. This workflow's own per-workspace cost ledger.
 		"query_workflow_costs",
 		// Secret management tools. Global secrets are read-only; workflow/user
@@ -1381,9 +1364,10 @@ func GetToolsForWorkshopMode(mode string) []string {
 	planMod := []string{
 		"create_plan",
 		"validate_plan_change",
-		"migrate_message_sequence_code_items",
+		"migrate_message_sequence_code_items", "migrate_orchestrator_step_type",
 		"add_scripted_step", "add_message_sequence_step", "add_routing_step", "add_branch_step",
 		"add_human_input_step", "add_todo_task_step", "add_todo_task_route",
+		"add_orchestrator_step", "add_orchestrator_route", "update_orchestrator_step", "update_orchestrator_route", "delete_orchestrator_route",
 		"update_scripted_step", "update_message_sequence_step", "update_routing_step", "update_branch_step",
 		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
 		"delete_todo_task_route", "delete_plan_steps", "cleanup_orphan_step_configs",
@@ -2267,6 +2251,28 @@ func resolveWorkshopStepConfigTarget(ctx context.Context, controller *StepBasedW
 	return "", "", false, fmt.Errorf("step %q not found in planning/plan.json or evaluation/evaluation_plan.json", inputID)
 }
 
+// workshopPlanStepType returns the plan step type for a workflow (non-evaluation)
+// step ID, or "" when the plan cannot be loaded or the step is not in it. It
+// mirrors resolveWorkshopStepConfigTarget's save/restore of controller state so a
+// lookup never leaves the controller pointed at a different plan.
+func workshopPlanStepType(ctx context.Context, controller *StepBasedWorkflowOrchestrator, stepID string) StepType {
+	originalEvalMode := controller.isEvaluationMode
+	originalPlan := controller.approvedPlan
+	defer func() {
+		controller.isEvaluationMode = originalEvalMode
+		controller.approvedPlan = originalPlan
+	}()
+	controller.isEvaluationMode = false
+	if err := controller.LoadPlanForWorkshop(ctx); err != nil || controller.approvedPlan == nil {
+		return ""
+	}
+	info := findWorkshopStepByID(controller.approvedPlan.Steps, stepID)
+	if info == nil || info.Step == nil {
+		return ""
+	}
+	return info.Step.StepType()
+}
+
 // registerInteractiveWorkshopTools registers the custom workshop tools on the agent.
 func registerGetCostSummaryTool(iwm *InteractiveWorkshopManager, mcpAgent DefinitionToolRegistrar, logger loggerv2.Logger) {
 	if err := mcpAgent.RegisterCustomTool(
@@ -2994,7 +3000,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				}
 
 				if agentType == "orchestrator" {
-					result, execErr = iwm.runBackgroundTodoTaskAgent(execCtx, name, instruction, inheritedSkills)
+					result, execErr = iwm.runBackgroundOrchestratorAgent(execCtx, name, instruction, inheritedSkills)
 				} else {
 					result, execErr = iwm.runBackgroundTaskAgentSequence(execCtx, name, instruction, messageSequence, inheritedSkills)
 				}
@@ -3923,6 +3929,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				if s, ok := val.(string); ok && s != "" {
 					if err := validateDeclaredExecutionModeChange(s, targetConfig.AgentConfigs.DeclaredExecutionModeReason); err != nil {
 						return "", err
+					}
+					if canonicalDeclaredExecutionMode(s) == StepModeScripted && !isEvalStep &&
+						workshopPlanStepType(ctx, iwm.controller, stepID) == StepTypeOrchestrator {
+						return "", fmt.Errorf("declared_execution_mode=\"scripted\" is not supported on orchestrator (todo_task) step %q: an orchestrator exists to make runtime delegation decisions, and delegation that is deterministic enough to script belongs in a regular scripted step whose main.py calls the routes", stepID)
 					}
 					targetConfig.AgentConfigs.DeclaredExecutionMode = s
 				}
@@ -9718,17 +9728,17 @@ func validateWorkshopScheduleTimezone(timezone string) error {
 	return nil
 }
 
-// runBackgroundTodoTaskAgent runs a todo task orchestrator as a background agent.
+// runBackgroundOrchestratorAgent runs a todo task orchestrator as a background agent.
 // Unlike runBackgroundTaskAgent (single-pass), this supports multi-step task management
 // and sub-agent delegation. Sub-agent completions auto-notify
 // the main workshop agent via the subAgentNotifier already set on the controller.
-func (iwm *InteractiveWorkshopManager) runBackgroundTodoTaskAgent(ctx context.Context, name, instruction string, inheritedSkills []*llmtypes.Skill) (string, error) {
+func (iwm *InteractiveWorkshopManager) runBackgroundOrchestratorAgent(ctx context.Context, name, instruction string, inheritedSkills []*llmtypes.Skill) (string, error) {
 	stepID := fmt.Sprintf("bg-todo-%s-%d", strings.ToLower(strings.ReplaceAll(name, " ", "-")), time.Now().UnixNano()%100000)
 	ctx = withBackgroundAgentSkills(ctx, inheritedSkills)
 
-	// Build a minimal TodoTaskPlanStep from the instruction
-	todoStep := &TodoTaskPlanStep{
-		Type: StepTypeTodoTask,
+	// Build a minimal OrchestratorPlanStep from the instruction
+	todoStep := &OrchestratorPlanStep{
+		Type: StepTypeOrchestrator,
 		CommonStepFields: CommonStepFields{
 			ID:          stepID,
 			Title:       name,
@@ -9745,7 +9755,7 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTodoTaskAgent(ctx context.Co
 		IsEvaluationMode:  false,
 	}
 
-	_, _, err := iwm.controller.executeTodoTaskStep(
+	_, _, err := iwm.controller.executeOrchestratorStep(
 		ctx,
 		todoStep,
 		0,

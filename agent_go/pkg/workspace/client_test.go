@@ -252,3 +252,24 @@ func TestSessionGuardNarrowsFrozenSnapshotForMessageSequenceItem(t *testing.T) {
 		}())
 	}
 }
+
+func TestResolveEffectiveFolderGuardCarriesSandboxPolicy(t *testing.T) {
+	sessionID := "strict-sandbox-session"
+	SetSessionFolderGuard(sessionID, []string{"_users/u1/Chats/family/activity-1"}, []string{"_users/u1/Chats/family/activity-1"})
+	SetSessionSandbox(sessionID, true, true)
+	defer ClearSessionShellConfig(sessionID)
+
+	ctx := context.WithValue(context.Background(), common.ChatSessionIDKey, sessionID)
+	guard := NewClient("http://unused").resolveEffectiveFolderGuard(ctx)
+	if guard == nil || !guard.StrictAllowlist || !guard.DenyNetwork {
+		t.Fatalf("sandbox policy did not reach the folder guard: %#v", guard)
+	}
+	// A session without a sandbox policy keeps the permissive defaults.
+	other := "plain-session"
+	SetSessionFolderGuard(other, []string{"Workflow/demo"}, []string{"Workflow/demo"})
+	defer ClearSessionShellConfig(other)
+	plain := NewClient("http://unused").resolveEffectiveFolderGuard(context.WithValue(context.Background(), common.ChatSessionIDKey, other))
+	if plain == nil || plain.StrictAllowlist || plain.DenyNetwork {
+		t.Fatalf("plain session should not be strict: %#v", plain)
+	}
+}

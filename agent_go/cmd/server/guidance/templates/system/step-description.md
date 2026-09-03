@@ -12,7 +12,7 @@ Before finalizing a description, cut anything that:
 
 ### Let `validation_schema` name the shape — don't restate it in prose
 
-`validation_schema` is shown to the executing agent on its opening turn for every step type (`regular`, `message_sequence`, `todo_task`) — not only reactively after a failed attempt. So once a step has a schema, the description does not need to also spell out the object's keys; doing so is exactly the duplication the earlier sections warn against, and the two copies drift the moment one is edited. Define the schema, then let the description state the outcome and any context the schema itself can't carry (why the field matters, where the source data comes from) — not the field list.
+`validation_schema` is shown to the executing agent on its opening turn for every step type (`regular`, `message_sequence`, `orchestrator`) — not only reactively after a failed attempt. So once a step has a schema, the description does not need to also spell out the object's keys; doing so is exactly the duplication the earlier sections warn against, and the two copies drift the moment one is edited. Define the schema, then let the description state the outcome and any context the schema itself can't carry (why the field matters, where the source data comes from) — not the field list.
 
 A step with no schema at all is the one case the description still has to name the shape itself, since nothing else will: "Return the semantic balance as an object" tells the model an object exists, not what belongs in it. Prefer adding the schema over writing the shape in prose — it's checked automatically, shown proactively, and never goes stale independently of the description.
 

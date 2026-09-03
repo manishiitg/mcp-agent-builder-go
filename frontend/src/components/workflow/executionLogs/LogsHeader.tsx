@@ -1,0 +1,81 @@
+import { Filter, RefreshCw, Terminal } from 'lucide-react'
+import { formatStartedAt } from '../../../utils/duration'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select'
+
+export interface LogsHeaderProps {
+  /** Embedded density: the pane header is one compact row, the modal's is two. */
+  embedded: boolean
+  startedAt?: string | null
+  runFolderOptions: string[]
+  selectedRunFolder: string
+  setSelectedRunFolder: (folder: string) => void
+  loading: boolean
+  loadLogs: () => void
+  onRefreshRunFolders?: () => void | Promise<void>
+}
+
+// Header content only; InspectorShell owns the row wrapper and the close X.
+export function LogsHeader({
+  embedded,
+  startedAt,
+  runFolderOptions,
+  selectedRunFolder,
+  setSelectedRunFolder,
+  loading,
+  loadLogs,
+  onRefreshRunFolders,
+}: LogsHeaderProps) {
+  return (
+          <div className={`flex min-w-0 flex-1 ${embedded ? 'items-center gap-3' : 'items-start gap-3'}`}>
+            <h2 className={`${embedded ? 'text-sm' : 'text-lg'} flex shrink-0 items-center gap-2 font-semibold text-foreground`}>
+              <Terminal className={`${embedded ? 'h-4 w-4' : 'h-5 w-5'} text-primary`} />
+              Execution Logs
+              {startedAt && (
+                <span className="text-xs font-normal text-muted-foreground">{formatStartedAt(startedAt)}</span>
+              )}
+            </h2>
+            <div className={`flex min-w-0 flex-1 items-center gap-2 ${embedded ? 'justify-end' : 'flex-wrap'}`}>
+              {/* Run Folder Selector */}
+              {runFolderOptions.length > 0 && (
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <Filter className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <Select
+                    value={selectedRunFolder}
+                    onValueChange={setSelectedRunFolder}
+                  >
+                    <SelectTrigger className="h-7 w-52 max-w-[42vw] bg-card px-2 text-xs font-medium shadow-none" aria-label="Execution run">
+                      <SelectValue placeholder="Select iteration/group" />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-72">
+                      {runFolderOptions.map(folder => (
+                        <SelectItem key={folder} value={folder} className="text-xs">
+                          {folder}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {/* Refresh Button — also refreshes the run-folder list itself
+                  (onRefreshRunFolders), not just the currently selected
+                  folder's logs (loadLogs). Without this, a run folder that
+                  appeared after this list was last loaded (e.g. a standalone
+                  execute_step run) stays invisible in the dropdown no matter
+                  how many times this button is clicked. */}
+              <button
+                onClick={() => {
+                  loadLogs()
+                  onRefreshRunFolders?.()
+                }}
+                disabled={loading || !selectedRunFolder}
+                className="p-1.5 rounded-lg border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-muted transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ml-auto"
+                title="Refresh logs and run-folder list"
+                aria-label="Refresh logs and run-folder list"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+          </div>
+  )
+}

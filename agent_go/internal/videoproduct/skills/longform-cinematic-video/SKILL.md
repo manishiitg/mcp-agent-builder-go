@@ -35,8 +35,7 @@ Create `longform-sequence-plan.json` before paid video generation. Include:
 
 - chapter, sequence, scene, and shot identifiers;
 - measured narration or dialogue duration covered by each sequence;
-- H3 route: Reference-to-Video for anchors and normal continuations, or the
-  separately approved Image-to-Video seam bridge after a failed direct proof;
+- H3 route: Reference-to-Video for anchors and every normal continuation;
 - references and their exact semantic roles;
 - incoming and outgoing character, prop, geography, motion, camera, lighting,
   and audio state;
@@ -50,9 +49,9 @@ pack: location/background boards, recurring wardrobe and hero-prop references,
 and start/exit references for every continuity sequence. References must be
 real files, not just prompt language; show each one to the user and record its
 role in the manifest. Carry an accepted predecessor through H3
-Reference-to-Video for every normal continuation. Reserve first/last boundary
-frames for the H3 Image-to-Video seam bridge after a direct proof visibly
-fails; never invent an endpoint field.
+Reference-to-Video for every normal continuation. Use first/last stable
+boundary frames for direct-cut review and a corrected successor prompt when a
+review fails; never invent an endpoint field or create a bridge clip.
 
 Minimize generations and seams. Prefer one H3 take up to the live-supported
 limit when the action is continuous. When a new call is necessary, use H3
@@ -86,37 +85,21 @@ Create `longform-edit-decision-list.json` with source version, in/out time,
 timeline time, cut type, audio lead/trail, transition, grade, speed change,
 and linked narration beat for every segment.
 
-Use motivated cuts:
+Use motivated cuts in the H3 prompt: state whether the next clip begins on an
+action, eyeline, reaction, insert, or a deliberate scene reset. Reference-to-
+Video must carry the prior accepted clip as Video 1 so H3, rather than the
+editor, makes the handoff. The final assembly is a direct concat: do not add
+J/L bridges, dissolves, fades, cutaway repairs, grading, or audio repairs to
+make separate generations appear continuous.
 
-- cut on action when movement continues across the boundary;
-- use eyeline and match cuts when composition carries the idea forward;
-- use J- and L-cuts to bridge dialogue, ambience, or reactions;
-- use hard cuts between independent generations by default;
-- reserve dissolves and fades for real temporal, spatial, or tonal changes;
-- use cutaways to conceal unavoidable discontinuity, not arbitrary effects.
+After each successor, confirm the downloaded clip with `ffprobe` and inspect
+its stable first/last frames. Compare the join enough to catch an obvious
+failure. If it fails, correct the H3 prompt or reference set and regenerate the
+successor. Do not create a per-seam render, trim plan, or separate seam report.
 
-Maintain one sound world across the edit. Bridge seams with room tone,
-ambience, score, and J/L cuts; do not restart music or ambience with every
-generated clip. Grade black level, white balance, contrast, saturation, and
-grain consistently without pretending a grade can fix identity or geometry.
+## Inspect the delivered film once
 
-Build and review a short assembled sequence **after every newly generated
-join**, before making another follow-up clip, and before rendering the full
-film. The seam preview must use the selected boundary frames, trim points,
-transition, and audio bridge—not a generic concatenation. This checkpoint
-tests the continuity strategy and editorial grammar, which individual clip
-approval cannot prove.
-
-## Prove every seam
-
-Create `longform-seam-report.json` for the final candidate. Check every edit
-boundary, not a sample. Record preceding and following clip/version, last and
-first boundary-frame evidence, cut type, visual continuity, action match,
-screen direction, identity, lighting/color, audio continuity, and verdict.
-
-Fail the candidate if an unmotivated seam exposes a character reset, wardrobe
-or prop drift, geography reversal, frozen or duplicated motion, lighting jump,
-audio restart, double face, or generation artifact. Fix the source clip or edit
-decision, rebuild only the affected sequence, and recheck its adjacent seams.
-Approve the full film only when individual clips, every seam, narrative timing,
-sound continuity, and final technical QA all pass.
+After direct concat, run the single final `video-quality` report with the
+`generated-video-quality` extension. It inspects the actual delivery MP4,
+including its joins, narrative timing, picture, and sound. A visible continuity
+failure returns to H3 successor regeneration; it is never hidden by an edit.

@@ -388,12 +388,16 @@ func (api *StreamingAPI) handleListStoredWorkflowSecrets(w http.ResponseWriter, 
 		return
 	}
 
+	// The encrypted value is returned so the workflow pane can reveal a
+	// secret on demand through /api/secrets/decrypt; same contract as the
+	// user-secret list above. The ciphertext is opaque without the server key.
 	type entry struct {
-		Name string `json:"name"`
+		Name           string `json:"name"`
+		EncryptedValue string `json:"encrypted_value,omitempty"`
 	}
 	result := make([]entry, len(secrets))
 	for i, s := range secrets {
-		result[i] = entry{Name: s.Name}
+		result[i] = entry{Name: s.Name, EncryptedValue: s.EncryptedValue}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

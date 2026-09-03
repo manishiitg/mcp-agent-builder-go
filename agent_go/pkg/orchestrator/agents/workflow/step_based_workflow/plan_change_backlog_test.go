@@ -206,10 +206,10 @@ func TestWrongStepTypeRefusalNamesTheRightTool(t *testing.T) {
 	}
 
 	for stepType, want := range map[StepType]string{
-		StepTypeTodoTask:   "update_todo_task_step",
-		StepTypeRouting:    "update_routing_step",
-		StepTypeHumanInput: "update_human_input_step",
-		StepTypeRegular:    "update_scripted_step",
+		StepTypeOrchestrator: "update_orchestrator_step",
+		StepTypeRouting:      "update_routing_step",
+		StepTypeHumanInput:   "update_human_input_step",
+		StepTypeRegular:      "update_scripted_step",
 	} {
 		if got := updateToolForStepType(stepType); got != want {
 			t.Fatalf("step type %q maps to %q, want %q", stepType, got, want)

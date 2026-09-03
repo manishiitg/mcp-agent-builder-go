@@ -214,7 +214,7 @@ func TestGenericAgentStartNotificationIncludesExecutionControlID(t *testing.T) {
 		Kind: "generic_agent",
 		Metadata: map[string]string{
 			"execution_type": "generic-agent",
-			"todo_id":        "cost-review",
+			"task_id":        "cost-review",
 		},
 	})
 	for _, want := range []string{

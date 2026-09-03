@@ -1819,7 +1819,7 @@ export function usePlanToFlow(
   // Get preset LLM configs
   const presetLLMConfig = activePreset?.llmConfig || undefined
   // Get available LLMs for model name formatting
-  const { availableLLMs } = useLLMStore()
+  const availableLLMs = useLLMStore(state => state.availableLLMs)
 
   // Convert serialized stepStatusMap to Map if needed, and create stable reference for dependency comparison
   const stepStatusMapSerialized = useMemo(() => {

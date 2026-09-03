@@ -135,3 +135,20 @@ row's model chip shows the new model immediately (no manual attempt-order
 reasoning required), and confirm a standalone `execute_step` run's folder
 shows up in the panel's dropdown after clicking the panel's own refresh
 button, without needing the outer canvas refresh.
+
+## Follow-up — Pulse background review logs
+
+Execution Logs now includes a separate **Pulse reviews** section for the
+selected retained run. Each manual or scheduled Pulse pass remains a distinct,
+timestamped entry and exposes its background review agents, status, duration,
+provider/model, parent orchestrator execution ID, original instruction,
+assistant messages, tool calls, result, and errors from the durable structured
+transcript. Ordinary workflow step sub-agents are excluded: scheduled sessions
+use the full-run completion boundary, while manual Pulse sessions use their
+explicit `manual-pulse` schedule identity. Transcript read/parse failures are
+shown instead of being mistaken for an empty review.
+
+Verification added in `workflow_pulse_execution_logs_test.go` covers scheduled
+post-run selection, group-aware retained-folder matching, transcript loading,
+and manual Pulse runs without a full-run lifecycle marker. `go test
+./cmd/server` and frontend TypeScript compilation pass.

@@ -548,7 +548,7 @@ KB worker drains jobs FIFO — serialized against any live post-step KB updates
     ↓
 graph.json + index.json written/merged
     ↓
-Frontend: KBPopup refreshes
+Frontend: KnowledgebaseView refreshes
 ```
 
 **Why share the queue:** the full-run phase could otherwise race with a still-running workflow's post-step KB updates, producing lost merges. Enqueuing onto `kbUpdateQueue` means the worker processes manual-phase jobs and live-step jobs in the order they arrive, with no concurrent writers to `graph.json`. The manual phase does not wait for an empty queue before returning to the user — it enqueues and reports a job count; progress is visible via the usual event stream.
@@ -581,7 +581,7 @@ The workflow interactive builder is a chat-based phase (`workflow-builder`) that
 
 ### New: KB Management Popup
 
-A new popup component (`KBPopup.tsx`) parallel to `LearningsPopup.tsx` and `FinalOutputPopup.tsx`:
+A new popup component (`KnowledgebaseView.tsx`) parallel to `LearningsView.tsx` and `FinalOutputPopup.tsx`:
 
 - **View**: renders `knowledgebase/index.json` summary (entity count, types, relationship types, last updated)
 - **Explore**: expandable entity list from `graph.json`
@@ -594,7 +594,7 @@ A new popup component (`KBPopup.tsx`) parallel to `LearningsPopup.tsx` and `Fina
 In `WorkflowToolbar.tsx` alongside the existing "Final Report" button:
 
 ```
-"Update KB" → opens KBPopup → user selects run folder → clicks "Run KB Update"
+"Update KB" → opens KnowledgebaseView → user selects run folder → clicks "Run KB Update"
     ↓
 handleRunKBUpdate() → onStartPhase('kb-update', { selected_run_folder })
 ```
@@ -636,7 +636,7 @@ This is part of the same builder flow that produces `report_plan.md`, since the 
 
 | File | Change |
 |------|--------|
-| New: `frontend/src/components/workflow/KBPopup.tsx` | KB management popup |
+| New: `frontend/src/components/workflow/KnowledgebaseView.tsx` | KB management popup |
 | `WorkflowToolbar.tsx` | Add "Update KB" button + `handleRunKBUpdate()` |
 | Step config panel component | Replace `disable_knowledgebase` toggle with `knowledgebase_access` dropdown |
 | `frontend/src/services/api.ts` | Add `updateKnowledgebase()`, `getKnowledgebaseIndex()`, `clearKnowledgebase()` API calls |
@@ -745,7 +745,7 @@ Written against the shipping code after the bulk of this design landed. Captures
 | **1** | `db/` folder + folder guards + `DBWrite` eval flag; KB access control (`knowledgebase_access` + `knowledgebase_contribution`); `soul/soul.md` | Shipped |
 | **2** | KB graph scaffolding (empty seed only); `learningQueue` + `kbUpdateQueue` single-writer queues; learning retrofit; KB update agent + post-step trigger; `reorganize_knowledgebase` builder tool | Shipped |
 | **3** | Dynamic report system — `ReportViewer.tsx` + parser + toolbar wiring; removal of the old `final_output.go` report agent and everything that fed it | Shipped |
-| **4** | `KBPopup.tsx` (KB viewer + clear + export) | Shipped (partial — see §Deferred) |
+| **4** | `KnowledgebaseView.tsx` (KB viewer + clear + export) | Shipped (partial — see §Deferred) |
 | **Deferred** | Full-run `kb-update` phase (§6), step-config UI panel for `knowledgebase_access` / `knowledgebase_contribution`, Phase 4 `run_full_kb_update` button | Not shipped |
 
 ### Major change: Go does NOT parse `graph.json` or `index.json`
@@ -843,7 +843,7 @@ Workers lazy-start via `sync.Once` on first enqueue — no explicit boot wiring.
 |---|---|---|---|
 | Persistent stores | `kb_graph.go`, `kb_update_agent.go`, `controller_kb_update.go`, `queues.go`, `workshop_helpers.go` | `controller_execution.go`, `controller_run_manager.go`, `controller_agent_factory.go`, `controller_todo_task.go`, `controller_learning.go`, `controller_batch_execution.go`, `controller_learn_code.go`, `evaluation_types.go`, `execution_only_agent.go`, `todo_task_orchestrator_agent.go`, `planning_agent.go`, `pre_validation.go` | — |
 | Report system | `ReportViewer.tsx`, `reportPlanParser.ts` | `interactive_workshop_manager.go` (prompts + tool schema), `api-types.ts`, `api.ts` | `final_output.go`, `FinalOutputPopup.tsx` |
-| KB UI | `KBPopup.tsx` | `WorkflowToolbar.tsx` (Database icon, popup wiring) | — |
+| KB UI | `KnowledgebaseView.tsx` | `WorkflowToolbar.tsx` (Database icon, popup wiring) | — |
 | Workflow-level | — | `workflow.go`, `server.go`, `scheduler.go`, `workflow_orchestrator.go`, `types.go` (workflowtypes) | — |
 | Markdown renderer | — | `MarkdownRenderer.tsx` (deleted ChartBlock + chart language branch) | — |
 
@@ -851,7 +851,7 @@ Rough LOC impact: **+~2,800 net added, ~5,200 removed** (dominated by the old re
 
 ### Not yet shipped (§Deferred, per original phase 4)
 
-- **Full-run `kb-update` phase (§6)** — manual "rebuild KB from a completed run" trigger with its own HTTP endpoint and orchestrator routing. `KBPopup` reserves space for a button but doesn't call it.
+- **Full-run `kb-update` phase (§6)** — manual "rebuild KB from a completed run" trigger with its own HTTP endpoint and orchestrator routing. `KnowledgebaseView` reserves space for a button but doesn't call it.
 - **Step-config UI panel** — `knowledgebase_access` dropdown and `knowledgebase_contribution` textarea. Right now the builder must set these via `update_step_config` in chat or via hand-edited `step_config.json`.
 - **Scheduler "Run KB Update" integration** — the scheduler could offer a post-run KB rebuild option; out of scope until §6 ships.
 

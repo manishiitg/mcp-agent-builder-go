@@ -17,8 +17,8 @@ func TestExecutionEvidencePathsMatchPulseContract(t *testing.T) {
 	}
 }
 
-func TestTodoTaskExecutionLogFilenamePreservesRetryIdentity(t *testing.T) {
-	if got, want := todoTaskExecutionLogFilename(3, 0), "execution-attempt-3-iteration-0.json"; got != want {
+func TestOrchestratorExecutionLogFilenamePreservesRetryIdentity(t *testing.T) {
+	if got, want := orchestratorExecutionLogFilename(3, 0), "execution-attempt-3-iteration-0.json"; got != want {
 		t.Fatalf("filename = %q, want %q", got, want)
 	}
 }

@@ -33,6 +33,9 @@ func RegisterSessionNotificationDestination(sessionID string, dest *services.Not
 	if incoming.WorkflowName != "" {
 		current.WorkflowName = incoming.WorkflowName
 	}
+	if incoming.WorkspacePath != "" {
+		current.WorkspacePath = incoming.WorkspacePath
+	}
 	if len(incoming.RouteSelections) > 0 {
 		current.RouteSelections = incoming.RouteSelections
 	}

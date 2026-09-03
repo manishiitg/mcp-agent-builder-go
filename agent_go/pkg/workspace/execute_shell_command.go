@@ -43,6 +43,11 @@ func SetSessionFolderGuardBlockedPaths(sessionID string, blockedPaths []string) 
 // read-only bind-mount on Linux). Reads are intentionally still permitted so
 // the agent can inspect files (e.g. read plan.json) without the ability to
 // modify them — distinct from BlockedPaths which denies reads as well.
+// SetSessionSandbox delegates to common.SetSessionSandbox.
+func SetSessionSandbox(sessionID string, strictAllowlist, denyNetwork bool) {
+	common.SetSessionSandbox(sessionID, strictAllowlist, denyNetwork)
+}
+
 func SetSessionFolderGuardBlockedWritePaths(sessionID string, blockedWritePaths []string) {
 	common.SetSessionFolderGuardBlockedWritePaths(sessionID, blockedWritePaths)
 }
@@ -386,6 +391,8 @@ func (c *Client) ExecuteShellCommand(ctx context.Context, params ExecuteShellCom
 			ReadPaths:         readPaths,
 			BlockedPaths:      sessionCfg.BlockedPaths,
 			BlockedWritePaths: sessionCfg.BlockedWritePaths,
+			StrictAllowlist:   sessionCfg.StrictAllowlist,
+			DenyNetwork:       sessionCfg.DenyNetwork,
 		}
 		log.Printf("[FOLDER_GUARD_RESOLVE] SessionConfig: session=%s WritePaths=%v ReadPaths=%v BlockedWritePaths=%v cmd=%s", sessionID, sessionCfg.WritePaths, readPaths, sessionCfg.BlockedWritePaths, redactedCommandForLog)
 	} else if allowedWrites, ok := ctx.Value(common.FolderGuardAllowedWriteFolderKey).([]string); ok {
