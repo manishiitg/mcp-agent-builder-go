@@ -153,3 +153,13 @@ Claude Code logs `pasted`/`handoff`/`confirmed`/`retries`. Normalizing that is
 the same problem [PLAT-105](plat-105.md) addresses one layer up at the delivery
 acknowledgement, so the two should be sequenced together — PLAT-105 now owns
 pinning the shared contract that this ticket's "Current state" left open.
+
+## 2026-09-03 addendum
+
+A live RTS `hi` on the locked Cursor provider measured 52 s to first token, of
+which 38.4 s was platform time before the coding agent was launched — two
+passes of nested MCP connect retries against an unauthenticated connector, a
+cost this ticket's traces never showed because their connectors were signed
+in. Filed and fixed as [PLAT-275](plat-275.md); after it the pre-launch cost is
+0.4 s and the remaining ~14 s is cursor-agent's own startup, which is the
+"cold coding-agent startup" wait this ticket already names.

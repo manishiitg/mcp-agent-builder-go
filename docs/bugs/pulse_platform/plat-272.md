@@ -94,3 +94,14 @@ the manifest's owners/readers.
   pane lists names with disabled controls, run a step that reads
   `$SECRET_*`, and confirm the agent log shows the one-shot
   `[SECRETS] migrated N workflow secret(s)` line — pending.
+
+## 2026-09-03 live note (RTS)
+
+Partial reverify. On RTS (release `18c0da5a9-20260903141144`) the Builder chat's
+`set_workflow_secret` wrote to the shared store (`_users/_shared/workflow_secrets/`
+holds one record) and re-attached the secret to the `rtslatency` manifest, and
+the workflow's step shells resolve `$SECRET_*` from the Workshop's live map. Not
+yet evidenced: the one-shot `[SECRETS] migrated N workflow secret(s)` log line
+(no pre-existing per-user records may have needed migrating on this box) and the
+read-only login's Secrets pane. The same-turn chat-shell gap found while checking
+this is a separate defect, [PLAT-276](plat-276.md).
