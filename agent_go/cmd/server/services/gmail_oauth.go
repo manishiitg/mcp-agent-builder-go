@@ -48,6 +48,12 @@ func gmailOAuthTokenDir() string {
 	if v := strings.TrimSpace(os.Getenv("GMAIL_OAUTH_TOKEN_DIR")); v != "" {
 		return v
 	}
+	// Same rule as the MCP connector tokens and the DCR client cache: a host
+	// whose ~/.config is not writable by the service user (RTS: root-owned)
+	// points XDG_CONFIG_HOME at a writable tree, and this must follow it.
+	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
+		return filepath.Join(xdg, "agentworks", "gmail-oauth")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return filepath.Join(os.TempDir(), "agentworks-gmail-oauth")

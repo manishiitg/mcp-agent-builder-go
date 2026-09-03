@@ -156,9 +156,3 @@ func writeGmailOAuthPage(w http.ResponseWriter, success bool, title, detail stri
   <script>setTimeout(function(){ try { window.close() } catch (e) {} }, 2500)</script>
 </body></html>`, html.EscapeString(title), accent, html.EscapeString(title), detail)
 }
-
-// gmailOAuthCallbackIsPublic documents the coupling between the route path and
-// the auth middleware's exemption list. If the path changes, this fails first.
-func gmailOAuthCallbackIsPublic() bool {
-	return shouldSkipAuth(gmailOAuthCallbackPath)
-}
