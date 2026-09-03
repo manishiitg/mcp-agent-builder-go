@@ -3310,7 +3310,7 @@ export default function LearningApp() {
                         expects. A file opened from the general list (where
                         viewerActivityDir is already null) still falls through to
                         that list, unchanged. */}
-                    <button className="fl-viewer-back" type="button" onClick={() => setViewerPath(null)}><ArrowLeft size={15} /> Files</button>
+                    <button className="fl-viewer-back" type="button" onClick={() => setViewerPath(null)}><ArrowLeft size={15} /> Activities</button>
                     <span className="fl-viewer-name">{viewerPath.split('/').pop()}</span>
                     {/\.html?$/i.test(viewerPath) && (
                       <button className="fl-viewer-back" type="button" title={pins.some((p) => p.path === viewerPath) ? 'Remove from the tabs at the top' : 'Keep this page as a tab at the top'} onClick={() => togglePin(viewerPath)}>
@@ -3400,7 +3400,7 @@ export default function LearningApp() {
                 return (
                   <div className="fl-viewer">
                     <div className="fl-viewer-bar">
-                      <button className="fl-viewer-back" type="button" onClick={() => setViewerActivityDir(null)}><ArrowLeft size={15} /> Files</button>
+                      <button className="fl-viewer-back" type="button" onClick={() => setViewerActivityDir(null)}><ArrowLeft size={15} /> Activities</button>
                       <span className="fl-viewer-name">{act.title}</span>
                     </div>
                     <div key={viewerActivityDir} className="fl-viewer-body fl-package-detail">
