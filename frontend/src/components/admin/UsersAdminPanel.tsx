@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { X, Loader2, Trash2, Plus, AlertCircle, Users, KeyRound, Ban, CheckCircle2 } from 'lucide-react'
+import { X, Loader2, Trash2, AlertCircle, Users, KeyRound, Ban, CheckCircle2 } from 'lucide-react'
 import { authApi, type AdminUser, type AdminUserWrite } from '../../services/api'
 import { useAuthStore } from '../../stores/useAuthStore'
 import ModalPortal from '../ui/ModalPortal'
@@ -46,13 +46,6 @@ const UsersAdminPanel: React.FC<UsersAdminPanelProps> = ({ isOpen, onClose, embe
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
 
-  const [newUsername, setNewUsername] = useState('')
-  const [newEmail, setNewEmail] = useState('')
-  const [newPassword, setNewPassword] = useState('')
-  const [newRole, setNewRole] = useState<Role>('member')
-  const [newProducts, setNewProducts] = useState<string[]>([])
-  const [submitting, setSubmitting] = useState(false)
-
   const [resetFor, setResetFor] = useState<AdminUser | null>(null)
   const [resetPassword, setResetPassword] = useState('')
 
@@ -87,32 +80,6 @@ const UsersAdminPanel: React.FC<UsersAdminPanelProps> = ({ isOpen, onClose, embe
     }
   }, [refresh])
 
-  const handleAdd = useCallback(async () => {
-    const username = newUsername.trim()
-    if (!username) return
-    setSubmitting(true)
-    setError(null)
-    try {
-      await authApi.createAdminUser({
-        username,
-        email: newEmail.trim() || undefined,
-        password: newPassword || undefined,
-        ...roleFields(newRole),
-        products: newProducts,
-      })
-      setNewUsername('')
-      setNewEmail('')
-      setNewPassword('')
-      setNewRole('member')
-      setNewProducts([])
-      await refresh()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setSubmitting(false)
-    }
-  }, [newUsername, newEmail, newPassword, newRole, newProducts, refresh])
-
   const toggleProduct = (list: string[], id: string) => (list.includes(id) ? list.filter((p) => p !== id) : [...list, id])
 
   const sorted = useMemo(() => [...users].sort((a, b) => a.username.localeCompare(b.username)), [users])
@@ -127,68 +94,9 @@ const UsersAdminPanel: React.FC<UsersAdminPanelProps> = ({ isOpen, onClose, embe
             (a member with none ticked may open all; a read-only account with none ticked may open none).
           </div>
 
-          {/* Add account */}
-          <div className="px-4 pt-2 pb-3 border-b border-border">
-            <div className="grid grid-cols-1 gap-2 md:grid-cols-[1.2fr_1.4fr_1.2fr_1fr_auto] md:items-end">
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Username</label>
-                <input
-                  type="text"
-                  value={newUsername}
-                  onChange={(e) => setNewUsername(e.target.value)}
-                  placeholder="username"
-                  className="w-full mt-1 px-2 py-1.5 text-sm bg-muted/40 border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Email (optional)</label>
-                <input
-                  type="email"
-                  value={newEmail}
-                  onChange={(e) => setNewEmail(e.target.value)}
-                  placeholder="name@example.com"
-                  className="w-full mt-1 px-2 py-1.5 text-sm bg-muted/40 border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Password</label>
-                <input
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="min 8 chars (blank = SSO only)"
-                  className="w-full mt-1 px-2 py-1.5 text-sm bg-muted/40 border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Role</label>
-                <select
-                  value={newRole}
-                  onChange={(e) => setNewRole(e.target.value as Role)}
-                  className="w-full mt-1 px-2 py-1.5 text-sm bg-muted/40 border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-                </select>
-              </div>
-              <button
-                onClick={() => { void handleAdd() }}
-                disabled={!newUsername.trim() || submitting}
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {submitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                Add
-              </button>
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
-              <span className="text-muted-foreground">{ROLES.find((r) => r.value === newRole)?.hint}</span>
-              {newRole !== 'admin' && products.map((p) => (
-                <label key={p} className="inline-flex items-center gap-1">
-                  <input type="checkbox" checked={newProducts.includes(p)} onChange={() => setNewProducts((l) => toggleProduct(l, p))} />
-                  {productLabel(p)}
-                </label>
-              ))}
-            </div>
-          </div>
+          {/* No add-account form for now (removed 2026-09-03 at the user's
+              request): accounts are created by AUTH_USERS at startup or via
+              POST /api/admin/users; this panel manages what exists. */}
 
           {/* List */}
           <div className="flex-1 overflow-auto px-4 py-3">
@@ -204,7 +112,7 @@ const UsersAdminPanel: React.FC<UsersAdminPanelProps> = ({ isOpen, onClose, embe
               </div>
             ) : sorted.length === 0 ? (
               <div className="py-8 text-center text-sm text-muted-foreground">
-                No accounts yet. Add one above, or set <code>AUTH_USERS</code> and <code>ADMIN_USERS</code> and restart to import.
+                No accounts yet. Set <code>AUTH_USERS</code> and <code>ADMIN_USERS</code> and restart to import.
               </div>
             ) : (
               <table className="w-full text-sm">
