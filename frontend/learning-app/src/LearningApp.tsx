@@ -2979,7 +2979,9 @@ export default function LearningApp() {
                 }
                 const { msg: m, index: i } = g
                 if (m.role === 'tool') {
-                  if (m.tool === 'debug_summary') {
+                  // 'tool_summary' is what turns persist today; 'debug_summary'
+                  // is the older name still present in saved conversations.
+                  if (m.tool === 'debug_summary' || m.tool === 'tool_summary') {
                     return <ToolCallSummary key={i} calls={m.toolCalls ?? []} />
                   }
                   if (m.tool === 'video' && m.path) {
@@ -4139,7 +4141,7 @@ export default function LearningApp() {
                     </div>
                   ) : (() => {
                     const { msg: m, index: i } = g
-                    return m.role === 'tool' && m.tool === 'debug_summary' ? (
+                    return m.role === 'tool' && (m.tool === 'debug_summary' || m.tool === 'tool_summary') ? (
                     <ToolCallSummary key={i} calls={m.toolCalls ?? []} />
                   ) : m.role === 'tool' && m.tool === 'video' && m.path ? (
                     <div key={i} className="fl-tmsg is-tutor">

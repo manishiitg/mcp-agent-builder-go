@@ -1301,24 +1301,9 @@ export interface ChatHistorySummary {
   last_activity?: string;
 }
 
-export interface ChatHistoryMessagePart {
-  Text?: string;
-  text?: string;
-  Type?: string;
-  type?: string;
-  Content?: string;
-  content?: string;
-}
-
-export interface ChatHistoryMessage {
-  Role?: string;
-  role?: string;
-  Parts?: ChatHistoryMessagePart[];
-  parts?: ChatHistoryMessagePart[];
-  /** Stable original position supplied only by the bounded formatted-resume projection. */
-  resume_order?: number;
-  resume_source_message_count?: number;
-}
+// Persisted-message shapes live in the shared session client.
+export type { ChatHistoryMessagePart, ChatHistoryMessage } from '../../shared/session/types'
+import type { ChatHistoryMessage } from '../../shared/session/types'
 
 export interface ChatHistoryConversation {
   session_id: string;

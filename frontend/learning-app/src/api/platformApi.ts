@@ -10,8 +10,8 @@ import type {
   StoredConversation, TurnMessage, TurnResult, TurnStreamEvent,
   WhatsAppStatus, WhatsAppVoiceTranscription,
 } from './familyApi'
-import { type EventBatch, TurnCollector, isMainEvent, payloadOf } from './platform/events'
-import { fetchSessionEvents, followSession } from '../../../shared/session'
+import { TurnCollector, type EventBatch, messagesFromEvents, type PlatformEvent } from './platform/events'
+import { fetchSessionEvents, followSession, conversationToRestoredEvents, type RestorableConversation } from '../../../shared/session'
 import { FamilyWorkspace, documentsURL } from './platform/workspace'
 
 export const PARENT_PROFILE = 'sparkquill'
@@ -207,25 +207,21 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
   }
 
   /** Rebuilds a transcript from the session's event history. */
+  // The persisted chat history is the durable record (the live event store is
+  // in memory and empty after a server restart); it is rebuilt into events by
+  // the platform's own restore converter and then read like a live turn.
   async function history(profile: string, key: string): Promise<StoredConversation | null> {
     const conv = await conversation(profile, key)
-    const batch = await fetchSessionEvents(sessionClient, conv.sessionID, 0)
-    const messages: NonNullable<StoredConversation['messages']> = []
-    for (const e of batch.events ?? []) {
-      const type = e.type ?? e.data?.type
-      const p = payloadOf(e)
-      if (type === 'user_message' && typeof p.content === 'string') { messages.push({ role: 'user', text: p.content }); continue }
-      if (type === 'product_interaction') {
-        const payload = (p.payload ?? {}) as Record<string, unknown>
-        if (p.kind === 'celebrate') messages.push({ role: 'tool', tool: 'celebrate', stars: Number(payload.stars ?? 1), reason: String(payload.reason ?? '') })
-        if (p.kind === 'scene' && typeof payload.html === 'string') messages.push({ role: 'tool', tool: 'scene', html: payload.html })
-        continue
-      }
-      if (type === 'unified_completion' && isMainEvent(e, conv.sessionID) && typeof p.final_result === 'string' && p.final_result.trim()) {
-        messages.push({ role: 'assistant', text: p.final_result })
-      }
+    let stored: RestorableConversation | null = null
+    try {
+      stored = await request<RestorableConversation>('GET', `/api/chat-history/sessions/${encodeURIComponent(conv.sessionID)}`)
+    } catch (err) {
+      if (!/HTTP 404/.test(String(err))) throw err
     }
-    return { messages }
+    const events: PlatformEvent[] = stored?.conversation_history?.length
+      ? (conversationToRestoredEvents({ ...stored, session_id: conv.sessionID }) as PlatformEvent[])
+      : (await fetchSessionEvents(sessionClient, conv.sessionID, 0)).events ?? []
+    return { messages: messagesFromEvents(events, conv.sessionID) }
   }
 
   // ---- workspace -----------------------------------------------------------

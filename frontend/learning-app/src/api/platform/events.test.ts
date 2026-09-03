@@ -3,7 +3,7 @@
 // the preview events and TurnResult the SparkQuill UI consumes.
 import { describe, expect, it } from 'vitest'
 import type { TurnStreamEvent } from '../familyApi'
-import { TurnCollector, bareToolName, familyRelativePath, isMainEvent, type PlatformEvent } from './events'
+import { TurnCollector, bareToolName, familyRelativePath, isMainEvent, messagesFromEvents, type PlatformEvent } from './events'
 
 const SID = 'product-379ea1f1'
 const main = (type: string, data: Record<string, unknown>, extra: Partial<PlatformEvent> = {}): PlatformEvent => ({
@@ -28,7 +28,7 @@ describe('TurnCollector', () => {
     // A delegated sub-agent's completion must not end the turn.
     c.feed(main('unified_completion', { final_result: 'sub-agent done', status: 'completed' }, { execution_kind: 'delegation', execution_id: 'delegation-1' }))
     expect(c.done).toBe(false)
-    c.feed(main('llm_generation_end', { content: 'Got it, mom — Maya is all set.' }))
+    c.feed(main('llm_generation_end', { content: 'Got it, mom — Maya is all set.', metadata: { assistant_turn_text: 'Saving that now.\n\nGot it, mom — Maya is all set.' } }))
     c.feed(main('unified_completion', { final_result: 'Got it, mom — Maya is all set.', status: 'completed' }))
     expect(c.done).toBe(true)
 
@@ -38,7 +38,7 @@ describe('TurnCollector', () => {
     expect(calls).toEqual(['execute_shell_command:running', 'execute_shell_command:completed', 'set_child_profile:running', 'set_child_profile:completed'])
 
     const r = c.result()
-    expect(r.reply).toBe('Got it, mom — Maya is all set.')
+    expect(r.reply).toBe('Saving that now.\n\nGot it, mom — Maya is all set.')
     expect(r.error).toBeUndefined()
     expect(r.suggestions).toEqual([{ label: 'How is she doing?', message: 'progress' }])
     expect(r.tool_events).toEqual([
@@ -99,5 +99,46 @@ describe('TurnCollector streaming preview', () => {
     // A fresh generation (chunk 0) restarts the preview instead of appending.
     c.feed(main('streaming_chunk', { content: 'Second turn', chunk_index: 0, is_delta: true, source: 'content' }))
     expect(seen.at(-1)).toEqual({ type: 'replace', text: 'Second turn' })
+  })
+})
+
+describe('messagesFromEvents', () => {
+  // Shaped like /api/chat-history/sessions/{id} for a claude-code turn: the
+  // narration, the tool call and the closing line are separate "ai" messages.
+  it('rebuilds a restored claude-code conversation with the whole turn text', async () => {
+    const { conversationToRestoredEvents } = await import('../../../../shared/session')
+    const conversation = {
+      session_id: SID,
+      conversation_history: [
+        { Role: 'system', Parts: [{ Type: 'text', Text: 'You are Quill.' }] },
+        { Role: 'human', Parts: [{ Type: 'text', Text: 'hi, what can you help me with today?' }] },
+        { Role: 'ai', Parts: [{ Type: 'text', Text: "Hi! I'm here to help you support Maya's grade 6 CBSE learning." }, { Type: 'function' }] },
+        { Role: 'tool', Parts: [{ Type: 'text', Text: '{"ok":true}' }] },
+        { Role: 'ai', Parts: [{ Type: 'text', Text: 'Three options are ready below to get started! 🌟' }] },
+        { Role: 'human', Parts: [{ Type: 'text', Text: 'thanks' }] },
+        { Role: 'ai', Parts: [{ Type: 'text', Text: 'Anytime!' }] },
+      ],
+    }
+    const msgs = messagesFromEvents(conversationToRestoredEvents(conversation) as PlatformEvent[], SID)
+    expect(msgs).toEqual([
+      { role: 'user', text: 'hi, what can you help me with today?' },
+      { role: 'assistant', text: "Hi! I'm here to help you support Maya's grade 6 CBSE learning.\n\nThree options are ready below to get started! 🌟" },
+      { role: 'user', text: 'thanks' },
+      { role: 'assistant', text: 'Anytime!' },
+    ])
+  })
+
+  it('prefers the recorded turn text on live events and keeps product cards', () => {
+    const events = [
+      main('user_message', { content: 'celebrate her' }),
+      main('llm_generation_end', { content: 'Done!', metadata: { assistant_turn_text: 'Cheering now.\n\nDone!' } }),
+      main('product_interaction', { product: 'sparkquill', kind: 'celebrate', payload: { stars: 3, reason: 'fractions' } }),
+      main('unified_completion', { final_result: 'Done!', status: 'completed' }),
+    ]
+    expect(messagesFromEvents(events, SID)).toEqual([
+      { role: 'user', text: 'celebrate her' },
+      { role: 'tool', tool: 'celebrate', stars: 3, reason: 'fractions' },
+      { role: 'assistant', text: 'Cheering now.\n\nDone!' },
+    ])
   })
 })

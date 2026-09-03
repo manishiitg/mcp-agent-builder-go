@@ -1077,3 +1077,23 @@ slice, not after.
 - Putting product-specific rules into `mcpagent`.
 - Sharing code merely because two functions currently look similar.
 - Copying a dedicated server and allowing the copies to drift.
+
+### 2026-09-03: chat parity fixes found by driving the SparkQuill demo
+
+- **Whole-turn text.** Coding-agent providers commit only the last assistant
+  message as `final_result` (workflow semantics). The claude-code adapters now
+  also emit `assistant_turn_text` (every assistant text block of the turn, in
+  order) in the generation metadata; the agent server persists it on
+  `llm_generation_end`. Chat surfaces show that; `final_result` is unchanged.
+- **Restore from the persisted chat history.** The live event store is in
+  memory, so a product app must rebuild history from
+  `GET /api/chat-history/sessions/{id}`. The converter that AgentWorks used
+  for this (`conversationToRestoredEvents`) moved to
+  `frontend/shared/session/restore.ts`; SparkQuill's history goes through it
+  and then through the same event→message mapping as a live turn.
+- **Streaming chunks.** The chunk rules (`source: terminal` never prose, tool
+  markers → status, chunk 0/1 restart, delta vs block join) live in
+  `frontend/shared/session/streamingStatus.ts` for every surface.
+- Open: suggestion pills and product cards emitted as `product_interaction`
+  are not in the persisted history, so they do not survive a reload; product
+  schedule turns restore as plain user bubbles (no `source: pulse` marker).

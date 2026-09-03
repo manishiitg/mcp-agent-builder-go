@@ -191,3 +191,33 @@ export interface SSEStatusMessage {
   can_steer?: boolean
   runtime_state?: RuntimeSnapshot
 }
+
+// ---- persisted chat history (what /api/chat-history/sessions/{id} returns) ----
+
+export interface ChatHistoryMessagePart {
+  Text?: string
+  text?: string
+  Type?: string
+  type?: string
+  Content?: string
+  content?: string
+}
+
+export interface ChatHistoryMessage {
+  Role?: string
+  role?: string
+  Parts?: ChatHistoryMessagePart[]
+  parts?: ChatHistoryMessagePart[]
+  /** Stable original position supplied only by the bounded formatted-resume projection. */
+  resume_order?: number
+  resume_source_message_count?: number
+}
+
+/** The part of a persisted conversation the restore converter needs; AgentWorks' fuller ChatHistoryConversation satisfies it. */
+export interface RestorableConversation {
+  session_id: string
+  conversation_history: ChatHistoryMessage[]
+  ui_events?: PollingEventSchema[]
+  history_pagination?: { has_more: boolean; next_offset: number; start_turn: number; total_turns: number }
+  history_source_message_count?: number
+}
