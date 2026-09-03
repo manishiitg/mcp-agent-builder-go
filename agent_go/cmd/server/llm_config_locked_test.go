@@ -72,7 +72,7 @@ func TestResolveLockedLLMHonoursProfileBindingsAndFallsBackOtherwise(t *testing.
 // A workflow's saved llm_config is what the Builder chat, scheduled runs and
 // step tiers actually use, so the lock must rewrite it. Locking to a
 // coding-agent provider (Cursor) means locking to that provider's role
-// profile -- Builder/High grok-4.6, Medium composer-2.5, Low auto -- not
+// profile -- Builder/High/Pulse grok-4.6, Medium and Low auto -- not
 // flattening every role onto one model; the saved config is never mutated
 // and passes through untouched off-lock.
 func TestLockedPresetLLMConfigLocksToThePublishedProvidersProfile(t *testing.T) {
@@ -100,19 +100,19 @@ func TestLockedPresetLLMConfigLocksToThePublishedProvidersProfile(t *testing.T) 
 	if builder.Provider != "cursor-cli" || builder.ModelID != "grok-4.6" {
 		t.Fatalf("builder = %+v, want cursor-cli/grok-4.6", builder)
 	}
-	if tiers.Tier2.ModelID != "composer-2.5" || tiers.Tier3.ModelID != "auto" {
-		t.Fatalf("tiers = %+v/%+v, want composer-2.5 / auto", tiers.Tier2, tiers.Tier3)
+	if tiers.Tier1.ModelID != "grok-4.6" || tiers.Tier2.ModelID != "auto" || tiers.Tier3.ModelID != "auto" {
+		t.Fatalf("tiers = %+v/%+v/%+v, want grok-4.6 / auto / auto", tiers.Tier1, tiers.Tier2, tiers.Tier3)
 	}
 	if saved.BuilderLLM.Provider != "claude-code" {
 		t.Fatal("the saved config must not be mutated")
 	}
 	// The profile's own models are published by implication.
-	for _, m := range []string{"grok-4.6", "composer-2.5", "auto", "cursor-cli"} {
+	for _, m := range []string{"grok-4.6", "auto", "cursor-cli"} {
 		if !isAllowedDefaultLLM("cursor-cli", m) {
 			t.Fatalf("cursor-cli/%s must be allowed under the lock", m)
 		}
 	}
-	if isAllowedDefaultLLM("cursor-cli", "gpt-5") || isAllowedDefaultLLM("openai", "gpt-5.2") {
+	if isAllowedDefaultLLM("cursor-cli", "gpt-5") || isAllowedDefaultLLM("cursor-cli", "composer-2.5") || isAllowedDefaultLLM("openai", "gpt-5.2") {
 		t.Fatal("models outside the published provider's profile must stay refused")
 	}
 	if lockedPresetLLMConfig(nil) == nil {
