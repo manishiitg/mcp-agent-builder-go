@@ -555,8 +555,27 @@ function isToolBatchEvent(event: PollingEvent): boolean {
 // A batch is only worth collapsing if it contains real tool calls — a stray
 // token_usage between two messages should stay inline, not become a control
 // that hides nothing.
+// Counting only starts left an end whose start was not retained (a session
+// restored from a trimmed trace, a bridge call whose start landed before the
+// turn boundary) outside any batch, so it rendered as a full standalone
+// "Command Completed" card instead of folding into the "N tool calls" chip.
+// pairToolCalls already builds a card from an end alone; count what it builds.
 function countRealToolCalls(events: PollingEvent[]): number {
-  return events.reduce((n, event) => (event.type === 'tool_call_start' ? n + 1 : n), 0)
+  const startIDs = new Set<string>()
+  let starts = 0
+  for (const event of events) {
+    if (event.type !== 'tool_call_start') continue
+    starts += 1
+    const id = textField(toolCallField(event, 'tool_call_id'))
+    if (id) startIDs.add(id)
+  }
+  let orphans = 0
+  for (const event of events) {
+    if (event.type !== 'tool_call_end' && event.type !== 'tool_call_error') continue
+    const id = textField(toolCallField(event, 'tool_call_id'))
+    if (id && !startIDs.has(id)) orphans += 1
+  }
+  return starts + orphans
 }
 
 export function toolBatchLabel(events: PollingEvent[]): string {
