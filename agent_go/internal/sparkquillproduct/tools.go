@@ -282,7 +282,7 @@ func createLearningActivityFactory(workspaceAPIURL string) agentprofiles.ToolFac
 				"title":   map[string]interface{}{"type": "string", "description": "short human title, e.g. \"Fractions — Quick Check\""},
 				"subject": map[string]interface{}{"type": "string", "description": "the school subject, e.g. Math"},
 				"topic":   map[string]interface{}{"type": "string", "description": "the topic within the subject, e.g. Fractions"},
-				"items":   map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "bare filenames inside the folder, in order (exclude any *-KEY.md answer key). Empty = instruction-only activity; then goal is required."},
+				"items":   map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "bare filenames inside the folder, in order. Never an answer key: keys live in " + KeysFolder + "/ and any *-KEY.md still in the folder is moved there. Empty = instruction-only activity; then goal is required."},
 				"goal":    map[string]interface{}{"type": "string", "description": "WHAT the activity is for and what finishing looks like, plus anything the parent genuinely cares about"},
 				"persona": map[string]interface{}{"type": "string", "description": "the tutor's tone/personality for this activity, e.g. \"playful coach\""},
 			}, "required": []string{"dir", "title"}},
