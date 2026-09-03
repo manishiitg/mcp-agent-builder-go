@@ -77,6 +77,18 @@ exec /usr/bin/node /usr/lib/node_modules/surge/bin/surge "$@"
 SURGE
 chmod 0755 /usr/local/bin/surge
 
+# Google Workspace CLI (gws, npm @googleworkspace/cli) for the Gmail
+# connector. The SERVER execs it (gmail_service.go) with a per-connection
+# GOOGLE_WORKSPACE_CLI_TOKEN it minted itself, so no launcher env mapping is
+# needed -- the OAuth client lives at $XDG_CONFIG_HOME/gws/client_secret.json
+# for the service user (gmail_oauth.go), never in the sandbox. Not the
+# Homebrew "gws" (a git-workspaces tool); the npm package is the real one.
+if ! test -e /usr/lib/node_modules/@googleworkspace/cli/run.js; then
+  npm install -g --silent @googleworkspace/cli >/dev/null
+fi
+ln -sfn /usr/lib/node_modules/@googleworkspace/cli/run.js /usr/local/bin/gws
+chmod 0755 /usr/lib/node_modules/@googleworkspace/cli/run.js
+
 # AWS profile "RTS" for workflow shells. The rtslatency workflow was written
 # against a named profile on the operator's laptop; on the box the credentials
 # are the instance role, so both `default` and `RTS` resolve to it through

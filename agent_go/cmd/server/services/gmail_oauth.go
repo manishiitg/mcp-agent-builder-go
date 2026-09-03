@@ -97,11 +97,19 @@ func gmailOAuthConfig(redirectURL string) (*oauth2.Config, error) {
 func readGmailClientSecretFile() (string, string, error) {
 	path := strings.TrimSpace(os.Getenv("GMAIL_CLIENT_SECRET_FILE"))
 	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", "", fmt.Errorf("locate home directory: %w", err)
+		// Same rule as the MCP connector tokens, the DCR client cache, and the
+		// Gmail refresh-token directory: a host whose ~/.config is not
+		// writable by the service user (RTS: root-owned) points
+		// XDG_CONFIG_HOME at a writable tree instead.
+		if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
+			path = filepath.Join(xdg, "gws", "client_secret.json")
+		} else {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", "", fmt.Errorf("locate home directory: %w", err)
+			}
+			path = filepath.Join(home, ".config", "gws", "client_secret.json")
 		}
-		path = filepath.Join(home, ".config", "gws", "client_secret.json")
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
