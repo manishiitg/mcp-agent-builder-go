@@ -84,9 +84,13 @@ type secretEncryptResponse struct {
 	Encrypted string `json:"encrypted"`
 }
 
-// secretDecryptRequest is the request body for decrypting a secret value
+// secretDecryptRequest is the request body for decrypting a secret value.
+// WorkspacePath marks the blob as a shared workflow secret (bound to the
+// workflow, not the caller) and makes the request a reveal that only the
+// workflow's owners may perform.
 type secretDecryptRequest struct {
-	Encrypted string `json:"encrypted"`
+	Encrypted     string `json:"encrypted"`
+	WorkspacePath string `json:"workspace_path,omitempty"`
 }
 
 // secretDecryptResponse is the response body with the decrypted value
@@ -163,6 +167,27 @@ func (api *StreamingAPI) handleDecryptSecret(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	if strings.TrimSpace(req.WorkspacePath) != "" {
+		// Reveal of a shared workflow secret: owners only. Readers can run the
+		// workflow with the value but never see it.
+		if !requireWorkflowOwner(w, r, req.WorkspacePath) {
+			return
+		}
+		aad, err := sharedWorkflowSecretAAD(req.WorkspacePath)
+		if err != nil {
+			http.Error(w, "Invalid workspace_path", http.StatusBadRequest)
+			return
+		}
+		plaintext, err := decryptSecretValueWithAAD(req.Encrypted, aad)
+		if err != nil {
+			http.Error(w, "Decryption failed — invalid key or data", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(secretDecryptResponse{Value: plaintext})
+		return
+	}
+
 	userID := GetUserIDFromContext(r.Context())
 
 	data, err := base64.StdEncoding.DecodeString(req.Encrypted)
@@ -209,35 +234,7 @@ func (api *StreamingAPI) handleDecryptSecret(w http.ResponseWriter, r *http.Requ
 // decryptSecretValue decrypts an AES-256-GCM encrypted base64 value using userID as AAD.
 // Extracted from handleDecryptSecret for reuse by the bot secrets loader.
 func decryptSecretValue(encryptedBase64 string, userID string) (string, error) {
-	data, err := base64.StdEncoding.DecodeString(encryptedBase64)
-	if err != nil {
-		return "", fmt.Errorf("invalid base64: %w", err)
-	}
-
-	key := deriveSecretsKey()
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", fmt.Errorf("cipher error: %w", err)
-	}
-
-	aesGCM, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("GCM error: %w", err)
-	}
-
-	nonceSize := aesGCM.NonceSize()
-	if len(data) < nonceSize {
-		return "", fmt.Errorf("encrypted data too short")
-	}
-
-	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
-	aad := []byte(userID)
-	plaintext, err := aesGCM.Open(nil, nonce, ciphertext, aad)
-	if err != nil {
-		return "", fmt.Errorf("decryption failed: %w", err)
-	}
-
-	return string(plaintext), nil
+	return decryptSecretValueWithAAD(encryptedBase64, []byte(userID))
 }
 
 // storeSecretRequest is the request body for storing a user secret server-side
@@ -326,8 +323,13 @@ func (api *StreamingAPI) handleListStoredSecrets(w http.ResponseWriter, r *http.
 	json.NewEncoder(w).Encode(result)
 }
 
-// handleStoreWorkflowSecret upserts a workflow-scoped user secret in the server-side store.
+// handleStoreWorkflowSecret upserts a workflow secret in the shared,
+// workflow-scoped store (see workflow_shared_secrets.go). Owners only.
 // PUT /api/secrets/workflow/store
+//
+// The client keeps sending encrypted_value from /api/secrets/encrypt (bound to
+// the caller); it is re-bound to the workflow here so every user with access
+// resolves it.
 func (api *StreamingAPI) handleStoreWorkflowSecret(w http.ResponseWriter, r *http.Request) {
 	var req storeSecretRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -338,9 +340,17 @@ func (api *StreamingAPI) handleStoreWorkflowSecret(w http.ResponseWriter, r *htt
 		http.Error(w, "workspace_path, name, and encrypted_value are required", http.StatusBadRequest)
 		return
 	}
+	if !requireWorkflowOwner(w, r, req.WorkspacePath) {
+		return
+	}
 
 	userID := GetUserIDFromContext(r.Context())
-	if err := api.chatStore.UpsertWorkflowSecret(r.Context(), userID, req.WorkspacePath, req.Name, req.EncryptedValue); err != nil {
+	plaintext, err := decryptSecretValue(req.EncryptedValue, userID)
+	if err != nil {
+		http.Error(w, "encrypted_value must be produced by /api/secrets/encrypt in this session", http.StatusBadRequest)
+		return
+	}
+	if err := api.upsertSharedWorkflowSecret(r.Context(), req.WorkspacePath, req.Name, plaintext); err != nil {
 		log.Printf("[SECRETS] Failed to store workflow secret: %v", err)
 		http.Error(w, "Failed to store workflow secret", http.StatusInternalServerError)
 		return
@@ -350,7 +360,7 @@ func (api *StreamingAPI) handleStoreWorkflowSecret(w http.ResponseWriter, r *htt
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-// handleDeleteWorkflowSecret deletes a workflow-scoped user secret.
+// handleDeleteWorkflowSecret deletes a shared workflow secret. Owners only.
 // DELETE /api/secrets/workflow/store/{name}?workspace_path=Workflow/foo
 func (api *StreamingAPI) handleDeleteWorkflowSecret(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
@@ -359,9 +369,12 @@ func (api *StreamingAPI) handleDeleteWorkflowSecret(w http.ResponseWriter, r *ht
 		http.Error(w, "Secret name and workspace_path are required", http.StatusBadRequest)
 		return
 	}
+	if !requireWorkflowOwner(w, r, workspacePath) {
+		return
+	}
 
 	userID := GetUserIDFromContext(r.Context())
-	if err := api.chatStore.DeleteWorkflowSecret(r.Context(), userID, workspacePath, name); err != nil {
+	if err := api.deleteSharedWorkflowSecret(r.Context(), workspacePath, name, userID); err != nil {
 		log.Printf("[SECRETS] Failed to delete workflow secret: %v", err)
 		http.Error(w, "Failed to delete workflow secret", http.StatusInternalServerError)
 		return
@@ -371,7 +384,10 @@ func (api *StreamingAPI) handleDeleteWorkflowSecret(w http.ResponseWriter, r *ht
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
-// handleListStoredWorkflowSecrets returns workflow-scoped secret names (no values).
+// handleListStoredWorkflowSecrets returns the workflow's shared secret names
+// for anyone who can see the workflow. Owners additionally receive the
+// ciphertext so the pane can reveal a value through /api/secrets/decrypt
+// (which re-checks ownership); readers get names only.
 // GET /api/secrets/workflow/stored?workspace_path=Workflow/foo
 func (api *StreamingAPI) handleListStoredWorkflowSecrets(w http.ResponseWriter, r *http.Request) {
 	workspacePath := r.URL.Query().Get("workspace_path")
@@ -379,25 +395,31 @@ func (api *StreamingAPI) handleListStoredWorkflowSecrets(w http.ResponseWriter, 
 		http.Error(w, "workspace_path is required", http.StatusBadRequest)
 		return
 	}
+	level := currentUserWorkflowAccess(r, workspacePath)
+	if level == WorkflowAccessNone {
+		writeWorkflowPermissionDenied(w, "read")
+		return
+	}
+	canReveal := level == WorkflowAccessOwner || level == WorkflowAccessWrite
 
 	userID := GetUserIDFromContext(r.Context())
-	secrets, err := api.chatStore.ListWorkflowSecrets(r.Context(), userID, workspacePath)
+	secrets, err := api.ensureSharedWorkflowSecrets(r.Context(), workspacePath, userID)
 	if err != nil {
 		log.Printf("[SECRETS] Failed to list workflow secrets: %v", err)
 		http.Error(w, "Failed to list workflow secrets", http.StatusInternalServerError)
 		return
 	}
 
-	// The encrypted value is returned so the workflow pane can reveal a
-	// secret on demand through /api/secrets/decrypt; same contract as the
-	// user-secret list above. The ciphertext is opaque without the server key.
 	type entry struct {
 		Name           string `json:"name"`
 		EncryptedValue string `json:"encrypted_value,omitempty"`
 	}
 	result := make([]entry, len(secrets))
 	for i, s := range secrets {
-		result[i] = entry{Name: s.Name, EncryptedValue: s.EncryptedValue}
+		result[i] = entry{Name: s.Name}
+		if canReveal {
+			result[i].EncryptedValue = s.EncryptedValue
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

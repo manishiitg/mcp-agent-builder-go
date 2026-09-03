@@ -37,6 +37,10 @@ bin/*
 !agent_go/cmd/server/secrets_routes.go
 !agent_go/pkg/orchestrator/**/secrets_*.go
 !agent_go/cmd/server/guidance/templates/system/secret-management.md
+# PLAT-272 shared workflow-secret store: source and its test, no secret values.
+!agent_go/cmd/server/workflow_shared_secrets.go
+!agent_go/cmd/server/workflow_shared_secrets_test.go
+!agent_go/pkg/chathistory/shared_secrets.go
 # The *credential* rule above is meant for credential FILES, but it also
 # swallows source that merely has "Credential" in its name. These two are
 # ordinary UI source (a form field and a masking helper) holding no secret

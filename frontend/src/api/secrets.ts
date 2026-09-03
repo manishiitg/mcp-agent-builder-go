@@ -42,8 +42,14 @@ export const secretsApi = {
     return response.data;
   },
 
-  decrypt: async (encrypted: string): Promise<{ value: string }> => {
-    const response = await api.post('/api/secrets/decrypt', { encrypted });
+  // workspacePath marks a shared workflow secret (bound to the workflow rather
+  // than the caller); the server treats that as a reveal and allows it for the
+  // workflow's owners only.
+  decrypt: async (encrypted: string, workspacePath?: string): Promise<{ value: string }> => {
+    const response = await api.post(
+      '/api/secrets/decrypt',
+      workspacePath ? { encrypted, workspace_path: workspacePath } : { encrypted },
+    );
     return response.data;
   },
 

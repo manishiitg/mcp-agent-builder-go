@@ -2885,17 +2885,21 @@ func (api *StreamingAPI) loadSelectedSecrets(ctx context.Context, userID, workfl
 	}
 
 	if strings.TrimSpace(workflowPath) != "" {
-		workflowSecrets, err := api.chatStore.ListWorkflowSecrets(ctx, userID, workflowPath)
+		// Workflow secrets are shared by everyone with access to the workflow
+		// (PLAT-272): they are read from the workflow's own document and bound
+		// to the workflow path, so the value is the same whether this run was
+		// started by the owner, a read-only user, or the scheduler.
+		workflowSecrets, err := api.ensureSharedWorkflowSecrets(ctx, workflowPath, userID)
 		if err != nil {
-			log.Printf("[SECRETS] Failed to list workflow secrets for %s (%s): %v", userID, workflowPath, err)
+			log.Printf("[SECRETS] Failed to list workflow secrets for %s: %v", workflowPath, err)
 		} else {
 			for _, s := range workflowSecrets {
 				if !selectedSet[s.Name] {
 					continue
 				}
-				plaintext, err := decryptSecretValue(s.EncryptedValue, userID)
+				plaintext, err := decryptSharedWorkflowSecret(workflowPath, s)
 				if err != nil {
-					log.Printf("[SECRETS] Failed to decrypt workflow secret %q for user %s workflow %s: %v", s.Name, userID, workflowPath, err)
+					log.Printf("[SECRETS] Failed to decrypt workflow secret %q for workflow %s: %v", s.Name, workflowPath, err)
 					continue
 				}
 				addResult(s.Name, plaintext)
