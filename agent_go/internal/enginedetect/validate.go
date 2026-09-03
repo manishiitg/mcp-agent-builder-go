@@ -332,7 +332,7 @@ func validatePiCLI(apiKey, modelID string, options map[string]interface{}) llm.A
 	log.Printf("[PI-CLI VALIDATION] runtime available: %s", runtimePath)
 
 	if strings.TrimSpace(modelID) == "" || strings.EqualFold(strings.TrimSpace(modelID), "pi-cli") {
-		modelID = "google/gemini-3.5-flash"
+		modelID = "google/gemini-3.8-flash"
 	}
 
 	workspaceDir, err := os.MkdirTemp("", "pi-cli-validation-*")

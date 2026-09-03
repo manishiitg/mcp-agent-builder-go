@@ -694,7 +694,7 @@ func fetchPiCLIModels(full bool) *dynamicModelsResponse {
 		Models:             models,
 		Groups:             dynamicModelGroups(models),
 		SupportsCustom:     true,
-		CustomModelHint:    "Enter any Pi model as provider/model, e.g. google/gemini-3.5-flash, zai/glm-5.3, or openrouter/minimax/minimax-m3-20260531",
+		CustomModelHint:    "Enter any Pi model as provider/model, e.g. google/gemini-3.8-flash, zai/glm-5.3, or openrouter/minimax/minimax-m3-20260531",
 		Source:             source,
 		CacheTTLSeconds:    300,
 		CachedAt:           time.Now().UTC().Format(time.RFC3339),
