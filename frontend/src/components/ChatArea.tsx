@@ -3594,7 +3594,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
                 in explicitly enabled runtime diagnostics. */}
             {visibleWorkflowSurface === 'active' && activeTab?.sessionId && (
               showMainTerminal
-                ? <MainAgentTerminal sessionId={activeTab.sessionId} />
+                ? <MainAgentTerminal sessionId={activeTab.sessionId} onUnavailable={() => useChatStore.getState().setTabViewMode(activeTab.tabId, 'formatted')} />
                 : <TerminalEventTranscript
                     events={transcriptEvents}
                     terminal={null}
@@ -3648,7 +3648,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
                 is available only through the explicit developer flag. */}
             {multiAgentSurface === 'active' && activeTab?.sessionId && (
               showMainTerminal
-                ? <MainAgentTerminal sessionId={activeTab.sessionId} />
+                ? <MainAgentTerminal sessionId={activeTab.sessionId} onUnavailable={() => useChatStore.getState().setTabViewMode(activeTab.tabId, 'formatted')} />
                 : <TerminalEventTranscript
                     events={transcriptEvents}
                     terminal={null}
