@@ -25,7 +25,6 @@ import {
   X,
 } from 'lucide-react'
 import ChatArea, { type ChatContentRendererProps } from '../../components/ChatArea'
-import { CleanConversationSurface } from '../../components/CleanConversationSurface'
 import { FileWorkspacePane } from '../../components/FileWorkspacePane'
 import { TerminalEventTranscript } from '../../components/TerminalEventTranscript'
 import { ConversationMarkdownRenderer } from '../../components/ui/MarkdownRenderer'
@@ -821,6 +820,26 @@ function ProjectWorkspace({ project, onBack }: { project: VideoProject; onBack: 
         tab.metadata?.agentProfileId === VIDEO_PROFILE_ID &&
         tab.metadata?.agentProfileProjectId === project.id
       )
+
+      // Switching products unmounts this surface but deliberately leaves the
+      // shared chat store alive. Reusing an already-hydrated project tab keeps
+      // the conversation where it was, rather than replaying its entire
+      // durable transcript every time the user moves between AgentWorks and
+      // Video Studio. A hard reload has the persisted tab but no volatile
+      // events, so it still follows the restore path below.
+      const existingSessionId = existing?.sessionId
+      const hasCachedConversation = Boolean(existingSessionId && (
+        (chatStore.tabEvents[existingSessionId]?.length ?? 0) > 0 ||
+        chatStore.streamingText[existingSessionId]?.trim() ||
+        chatStore.streamingStatus[existingSessionId]?.trim() ||
+        chatStore.completedStreamingText[existingSessionId]?.trim()
+      ))
+      if (existing && hasCachedConversation) {
+        chatStore.switchTab(existing.tabId)
+        setTabId(existing.tabId)
+        return
+      }
+
       const conversation = await agentApi.resolveAgentProfileConversation(
         VIDEO_PROFILE_ID,
         { conversation_key: project.id },
