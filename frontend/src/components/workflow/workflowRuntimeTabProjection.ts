@@ -52,44 +52,9 @@ export function shouldCatchUpRunningWorkflowTranscript(
 }
 
 
-/**
- * reusableScheduleTabId finds a finished Schedule lane that a newly-discovered
- * run should take over, instead of opening yet another tab.
- *
- * The scheduler holds a durable per-workflow lease — `runningScheduleInSetLocked`
- * refuses to start a second schedule while one owns the workflow — so at most one
- * scheduled run per workflow exists at a time. The UI keyed its dedupe purely on
- * backend session id, and every run mints a new session, so each run opened a
- * fresh tab and none was ever reclaimed: a workflow scheduled three times a day
- * accumulated a row of identical "Schedule" tabs for runs that had long finished.
- *
- * Only a lane that is genuinely free is reused:
- *  - it belongs to this workflow (same preset), so runs never cross workflows;
- *  - it is still a view-only scheduled run. A tab the user promoted to an
- *    interactive Builder chat is user-owned state and must never be recycled
- *    underneath them (the same precedence reconcileWorkflowRuntimeTab honours);
- *  - its own run is over. A streaming lane is a live run, and the lease means a
- *    new run should not be displacing it.
- */
-export function reusableScheduleTabId(
-  // Derived from ChatTab rather than restated: a hand-written shape drifted
-  // from the real one (ChatTab.sessionId is string | null, not string).
-  tabs: Record<string, Pick<ChatTab, 'tabId' | 'sessionId' | 'isStreaming' | 'metadata'>>,
-  presetQueryId: string,
-  incomingSessionId: string,
-): string | null {
-  for (const tab of Object.values(tabs)) {
-    if (!tab || tab.sessionId === incomingSessionId) continue
-    const meta = tab.metadata
-    if (!meta || meta.mode !== 'workflow') continue
-    if (!meta.isScheduledRun || !meta.isViewOnly) continue
-    if (meta.userInteractiveContinuation) continue
-    if (meta.presetQueryId !== presetQueryId) continue
-    if (tab.isStreaming) continue
-    return tab.tabId
-  }
-  return null
-}
+// Which tab a session lands in -- existing, a reclaimed lane of the same
+// schedule, or new -- is decided in utils/workflowTabResolution.ts
+// (resolveWorkflowTabForSession), shared by every caller that opens tabs.
 
 /**
  * Apply a live-runtime projection without undoing an explicit user promotion.
@@ -145,10 +110,11 @@ export function reconcileWorkflowRuntimeTab(
  * selectDurableChatState's persistence filter, which no longer excludes
  * finished Schedule tabs either.
  *
- * The accumulation that decision accepted is now bounded by time rather than
- * by run state: see staleWorkflowTabIds, which actually closes a tab left
- * untouched for six hours. Finishing a run still never hides or closes
- * anything.
+ * What now bounds the accumulation is tab *reuse*, not closing: a new run of
+ * a schedule takes over that schedule's finished tab (see
+ * utils/workflowTabResolution.ts), so a schedule keeps one tab however often
+ * it fires. staleWorkflowTabIds below is a time-based close that is not
+ * currently wired up -- see the note in WorkflowChatTabs for why.
  */
 export function shouldDisplayWorkflowTab(_tab: ChatTab, _activeTabId: string | null): boolean {
   return true

@@ -21,10 +21,10 @@ import { activeWorkflowTabIdForPreset } from '../../utils/workflowTabOwnership'
 import { activateTab } from '../../utils/activateTab'
 import {
   reconcileWorkflowRuntimeTab,
-  reusableScheduleTabId,
   shouldCatchUpRunningWorkflowTranscript,
   workflowRuntimeTabProjection,
 } from './workflowRuntimeTabProjection'
+import { resolveWorkflowTabForSession } from '../../utils/workflowTabResolution'
 import {
   PreviousChatHistoryPanel,
   chatHistoryConversationPath,
@@ -1025,22 +1025,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     workflowManifests,
     activeWorkflowPreset,
   )
-  const showResumeHint = useChatStore(state => {
-    const tabId = state.activeTabId
-    const tab = tabId ? state.chatTabs[tabId] : null
-    if (
-      !tab ||
-      tab.metadata?.mode !== 'workflow' ||
-      tab.metadata?.phaseId !== 'workflow-builder' ||
-      tab.metadata?.isViewOnly ||
-      tab.isStreaming ||
-      tab.config?.restoredConversationPath
-    ) {
-      return false
-    }
-    const tabEvents = tab.sessionId ? state.tabEvents[tab.sessionId] : undefined
-    return !hasWorkflowChatContent(tabEvents)
-  })
   // Keep the last concrete workspace path for the active preset during manifest
   // refreshes. A transient null here unmounts the report pane and makes toolbar
   // popups think the user switched workflows.
@@ -1068,14 +1052,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     }
     return null
   }, [activePresetId, activeWorkflowWorkspacePath])
-
-  // Show the previous-automation-chats list as the primary landing surface on a
-  // fresh builder chat (mirrors the multi-agent landing panel). The panel owns
-  // both loaded history and the "no previous chats yet" empty state; the terminal
-  // waiting surface is reserved for active/pending turns after submit.
-  const showWorkflowPreviousChatsAsPrimary =
-    showResumeHint &&
-    !!workspacePath
 
   const [reportPreviewPreference, setReportPreviewPreference] = useState<ReportPreviewDevice>(
     () => readReportPreviewPreference(workspacePath),
@@ -1766,17 +1742,28 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           // it as a read-only observer of an external trigger.
           const isScheduled = session.isScheduledRun || session.triggeredBy === 'cron'
           const isBot = Boolean(session.botPlatform)
-          const tabId = await createChatTab(phaseName, {
-            mode: 'workflow',
-            phaseId: phaseId || undefined,
-            phaseName,
+          // Same resolution as the running-workflow reconciler: a scheduled
+          // run rediscovered on boot takes over its own schedule's finished
+          // tab instead of opening a second one beside it.
+          const { tabId } = await resolveWorkflowTabForSession({
+            getTabs: () => useChatStore.getState().chatTabs,
             presetQueryId: activePresetId,
-            isViewOnly: isScheduled || isBot ? true : undefined,
-            isScheduledRun: isScheduled || undefined,
-            scheduledJobName: isScheduled ? (session.title || phaseName) : undefined,
-            isBotRun: isBot || undefined,
-            botPlatform: isBot ? session.botPlatform : undefined,
-          }, session.sessionId)
+            sessionId: session.sessionId,
+            name: phaseName,
+            metadata: {
+              mode: 'workflow',
+              phaseId: phaseId || undefined,
+              phaseName,
+              presetQueryId: activePresetId,
+              isViewOnly: isScheduled || isBot ? true : undefined,
+              isScheduledRun: isScheduled || undefined,
+              scheduledJobName: isScheduled ? (session.title || phaseName) : undefined,
+              isBotRun: isBot || undefined,
+              botPlatform: isBot ? session.botPlatform : undefined,
+            },
+            createChatTab,
+            updateTabSessionId: useChatStore.getState().updateTabSessionId,
+          })
 
           // Workflow switches default to terminal/report surfaces. Event history
           // is only hydrated for the tree/debug view.
@@ -1914,32 +1901,19 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         for (const { running, projection } of projectedRunningWorkflows) {
           if (!running.session_id) continue
 
-          // The run panel and this poll can discover the same schedule in the
-          // same moment. Re-read the store and dedupe on backend session ID.
+          // Existing tab, a finished lane of the same schedule, or a new
+          // tab -- one decision shared with the reconnect path and the
+          // activity monitor (utils/workflowTabResolution.ts).
           const latestChatStore = useChatStore.getState()
-          const existingTab = Object.values(latestChatStore.chatTabs).find(tab =>
-            tab.metadata?.mode === 'workflow' && tab.sessionId === running.session_id
-          )
-
-          let tabId = existingTab?.tabId
-          if (!tabId) {
-            // The scheduler holds a per-workflow lease, so only one scheduled
-            // run exists at a time. Take over a finished Schedule lane rather
-            // than opening another tab per run — keying the dedupe purely on
-            // session id meant every run minted a new tab and none was ever
-            // reclaimed.
-            const reusableTabId = reusableScheduleTabId(
-              latestChatStore.chatTabs,
-              activePresetId,
-              running.session_id,
-            )
-            if (reusableTabId) {
-              tabId = reusableTabId
-              latestChatStore.updateTabSessionId(reusableTabId, running.session_id)
-            } else {
-              tabId = await latestChatStore.createChatTab(projection.name, projection.metadata, running.session_id)
-            }
-          }
+          const { tabId } = await resolveWorkflowTabForSession({
+            getTabs: () => useChatStore.getState().chatTabs,
+            presetQueryId: activePresetId,
+            sessionId: running.session_id,
+            name: projection.name,
+            metadata: projection.metadata,
+            createChatTab: latestChatStore.createChatTab,
+            updateTabSessionId: latestChatStore.updateTabSessionId,
+          })
           if (projection.autoActivate) selectedRunningTabId ||= tabId
 
           // Runtime discovery may refresh status for an observed run, but an
