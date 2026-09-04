@@ -322,6 +322,18 @@ func (c *Client) ExecuteShellCommand(ctx context.Context, params ExecuteShellCom
 	sessionID := c.sessionIDFromContext(ctx)
 	sessionCfg := GetSessionShellConfig(sessionID)
 	sessionEnv := common.GetSessionShellEnv(sessionID)
+	// PLAT-280 diagnostic: a scripted-mode step (declared_execution_mode=
+	// "scripted") that was granted DB access should always have DB_PATH in its
+	// session env by the time its shell command runs. Its absence here, for a
+	// session the workflow believes it granted DB access to, is exactly the
+	// "database path access must be granted" failure reported against the
+	// upwork workflow's search-save-jobs/outreach-record/improve-read-history/
+	// bid-record steps (all codex-cli, code-execution mode) starting 2026-09-01.
+	// This never changes behavior — it only surfaces the anomaly if it recurs.
+	if strings.TrimSpace(sessionEnv["WORKFLOW_DB_ACCESS"]) != "" && strings.TrimSpace(sessionEnv["DB_PATH"]) == "" {
+		log.Printf("[PLAT-280] execute_shell_command: session %q has WORKFLOW_DB_ACCESS=%q but no DB_PATH in its registered shell env (client MCP_SESSION_ID=%q)",
+			sessionID, sessionEnv["WORKFLOW_DB_ACCESS"], clientEnv["MCP_SESSION_ID"])
+	}
 
 	// Block agent-browser browser-driving CLI calls via shell — catches direct calls,
 	// bash -c wrapping, piping, etc. The agent_browser tool handles CDP URL
