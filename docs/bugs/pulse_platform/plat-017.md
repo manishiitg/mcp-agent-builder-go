@@ -156,3 +156,27 @@ proved completion with `interrupted`.
 Extend acceptance with a fixture that completes the provider/workflow turn,
 fails the final workspace projection, restarts the server, and proves every
 projection converges on the original terminal result and completion time.
+
+## Interrupted review recovery — 2026-09-04 (RTS Latency)
+
+RTS Latency exposed a related but distinct receipt-loss path. Its Strategic
+Review checkpoint recorded turn 1 of 4, but the child never persisted a final
+module result. A later Gate therefore saw no strategic backlog and repeatedly
+selected Technical Review instead.
+
+The scheduler now owns this lifecycle boundary:
+
+- it creates a `running` review-recovery attempt before dispatching a due
+  Technical or Strategic child;
+- a missing terminal result, timeout, or server restart changes that attempt
+  to durable `incomplete` state with its exact checkpoint path and reason;
+- the next eligible Gate forces that module due and exposes the checkpoint to
+  the executor; a terminal `record_pulse_result` atomically clears recovery.
+
+Plan Drift is intentionally exclusive: when deterministic drift is due it is
+the only review mode for that pass. Interrupted Technical/Strategic recovery
+is retained and resumes on the next non-drift pass, rather than competing with
+Plan Drift or disappearing behind a cooldown.
+
+Regression coverage: `pulse_review_recovery_test.go` proves forced recovery,
+terminal clearing, restart reconciliation, and Plan Drift deferral.

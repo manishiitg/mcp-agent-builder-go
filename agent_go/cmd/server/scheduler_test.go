@@ -1930,21 +1930,15 @@ func TestValidatePulseDueModuleResultsForScopesToGivenModules(t *testing.T) {
 	pulseRunID := "pulse-scoped-results"
 	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
 		pulseModulePlanDriftReview: {Module: pulseModulePlanDriftReview, Due: true, Reason: "A step's drift_review is null."},
-		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Operational evidence."},
 	})); err != nil {
 		t.Fatalf("record worklist: %v", err)
 	}
 
-	// Neither module has a terminal result yet. Scoped to plan_drift_review
-	// only, this must fail on plan_drift_review and must NOT mention
-	// technical_review (which simply has not had its turn yet in this
-	// lifecycle ordering).
+	// The selected plan-drift module has no terminal result yet, so scoped
+	// validation must name it.
 	err := validatePulseDueModuleResultsFor(ctx, workspacePath, pulseRunID, pulseModulePlanDriftReview)
 	if err == nil || !strings.Contains(err.Error(), pulseModulePlanDriftReview) {
 		t.Fatalf("expected an error naming plan_drift_review, got: %v", err)
-	}
-	if strings.Contains(err.Error(), pulseModuleTechnicalReview) {
-		t.Fatalf("scoped validation must not flag technical_review, which has not run yet: %v", err)
 	}
 
 	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModulePlanDriftReview, pulseRunID, "done", "Ground truth established for all pending steps.", nil); err != nil {
@@ -1963,18 +1957,14 @@ func TestValidatePulseDueModuleResultsRequiresTerminalModuleResults(t *testing.T
 	pulseRunID := "pulse-run-results"
 	if _, err := recordPulseWorklist(ctx, workspacePath, pulseRunID, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
 		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Operational evidence."},
-		pulseModuleStrategicReview: {Module: pulseModuleStrategicReview, Due: true, Reason: "Strategic evidence."},
 	})); err != nil {
 		t.Fatalf("record worklist: %v", err)
 	}
-	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "technical_review, strategic_review") {
+	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err == nil || !strings.Contains(err.Error(), "technical_review") {
 		t.Fatalf("missing-result validation error = %v", err)
 	}
 	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleTechnicalReview, pulseRunID, "done", "Clean review.", []string{"pulse_review_log:run:technical_review"}); err != nil {
 		t.Fatalf("mark bug review: %v", err)
-	}
-	if _, err := markPulseModuleResultFromAgent(ctx, workspacePath, pulseModuleStrategicReview, pulseRunID, "done", "Strategic review complete.", []string{"pulse_review_log:run:strategic_review"}); err != nil {
-		t.Fatalf("mark goal advisor: %v", err)
 	}
 	if err := validatePulseDueModuleResults(ctx, workspacePath, pulseRunID); err != nil {
 		t.Fatalf("terminal validation: %v", err)
@@ -1985,9 +1975,6 @@ func TestValidatePulseDueModuleResultsRequiresTerminalModuleResults(t *testing.T
 	}
 	if got := worklist[pulseModuleTechnicalReview].LastResult; got != "done" {
 		t.Fatalf("existing completed module was overwritten: %q", got)
-	}
-	if got := worklist[pulseModuleStrategicReview].LastResult; got != "done" {
-		t.Fatalf("strategic review result = %q, want done", got)
 	}
 }
 

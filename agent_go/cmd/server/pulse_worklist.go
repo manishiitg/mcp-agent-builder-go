@@ -122,6 +122,33 @@ const pulseModuleAuditSchema = `CREATE TABLE IF NOT EXISTS pulse_module_audit (
 	PRIMARY KEY (workspace_path, module, pulse_run_id)
 )`
 
+// pulse_review_recovery is the scheduler-owned handoff between an interrupted
+// reviewer and the next Gate. A checkpoint alone is only working memory: if a
+// child exits before it writes record_pulse_result, later Gates previously had
+// no durable fact requiring them to resume it.
+const pulseReviewRecoverySchema = `CREATE TABLE IF NOT EXISTS pulse_review_recovery (
+	workspace_path TEXT NOT NULL,
+	module TEXT NOT NULL,
+	source_pulse_run_id TEXT NOT NULL,
+	checkpoint_path TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'incomplete',
+	reason TEXT NOT NULL,
+	detected_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (workspace_path, module)
+)`
+
+type PulseReviewRecovery struct {
+	WorkspacePath    string `json:"workspace_path"`
+	Module           string `json:"module"`
+	SourcePulseRunID string `json:"source_pulse_run_id"`
+	CheckpointPath   string `json:"checkpoint_path"`
+	Status           string `json:"status"`
+	Reason           string `json:"reason"`
+	DetectedAt       string `json:"detected_at"`
+	UpdatedAt        string `json:"updated_at"`
+}
+
 // pulseRunModeSchema stores the Gate's agent-selected shape for one Pulse pass.
 // It is deliberately separate from per-module cadence: mode explains *how* the
 // selected work should run, while module rows explain *which* perspectives are due.
@@ -302,6 +329,7 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 	stmts := []string{
 		pulseModuleStateSchema,
 		pulseModuleAuditSchema,
+		pulseReviewRecoverySchema,
 		pulseRunModeSchema,
 		pulseReviewFocusStateSchema,
 		pulseReviewFocusHistorySchema,
@@ -316,6 +344,9 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	if err := ensurePulseModuleStateColumns(ctx, db); err != nil {
+		return err
+	}
+	if err := ensurePulseReviewRecoveryColumns(ctx, db); err != nil {
 		return err
 	}
 	if err := ensurePulseReviewFocusColumns(ctx, db); err != nil {
@@ -346,6 +377,32 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func ensurePulseReviewRecoveryColumns(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(pulse_review_recovery)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	hasStatus := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue interface{}
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		hasStatus = hasStatus || name == "status"
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !hasStatus {
+		_, err := db.ExecContext(ctx, `ALTER TABLE pulse_review_recovery ADD COLUMN status TEXT NOT NULL DEFAULT 'incomplete'`)
+		return err
 	}
 	return nil
 }
@@ -953,6 +1010,13 @@ func recordPulseWorklistWithMode(ctx context.Context, workspacePath, pulseRunID,
 	if err != nil {
 		return nil, err
 	}
+	// Recovery is a backend fact, not another input for Gate to remember. Apply
+	// it before validating the worklist so an otherwise valid Gate skip cannot
+	// suppress an interrupted review behind a cooldown.
+	decisions, err = forcePendingPulseReviewRecoveries(ctx, workspacePath, decisions)
+	if err != nil {
+		return nil, err
+	}
 	if err := validatePulseWorklistDecisions(decisions); err != nil {
 		return nil, err
 	}
@@ -1044,6 +1108,134 @@ func recordPulseWorklistWithMode(ctx context.Context, workspacePath, pulseRunID,
 		return nil, err
 	}
 	return states, nil
+}
+
+func pendingPulseReviewRecoveries(ctx context.Context, workspacePath string) ([]PulseReviewRecovery, error) {
+	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		return []PulseReviewRecovery{}, err
+	}
+	defer db.Close()
+	if err := ensurePulseModuleStateSchema(ctx, db); err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT workspace_path, module, source_pulse_run_id, checkpoint_path, status, reason, detected_at, updated_at
+		FROM pulse_review_recovery WHERE workspace_path=? AND status='incomplete' ORDER BY detected_at`, normalized)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var recoveries []PulseReviewRecovery
+	for rows.Next() {
+		var recovery PulseReviewRecovery
+		if err := rows.Scan(&recovery.WorkspacePath, &recovery.Module, &recovery.SourcePulseRunID, &recovery.CheckpointPath, &recovery.Status, &recovery.Reason, &recovery.DetectedAt, &recovery.UpdatedAt); err != nil {
+			return nil, err
+		}
+		recovery.Module = normalizePulseModule(recovery.Module)
+		recoveries = append(recoveries, recovery)
+	}
+	return recoveries, rows.Err()
+}
+
+func forcePendingPulseReviewRecoveries(ctx context.Context, workspacePath string, decisions []PulseWorklistDecision) ([]PulseWorklistDecision, error) {
+	recoveries, err := pendingPulseReviewRecoveries(ctx, workspacePath)
+	if err != nil || len(recoveries) == 0 {
+		return decisions, err
+	}
+	// Plan Drift is the single selected review when deterministic drift is due.
+	// Keep recovery durable and schedule it in the next eligible pass rather
+	// than running two independent review modes together.
+	for _, decision := range decisions {
+		if normalizePulseModule(decision.Module) == pulseModulePlanDriftReview && decision.Due {
+			return decisions, nil
+		}
+	}
+	forced := append([]PulseWorklistDecision(nil), decisions...)
+	for _, recovery := range recoveries {
+		for index := range forced {
+			if normalizePulseModule(forced[index].Module) != recovery.Module {
+				continue
+			}
+			forced[index].Due = true
+			forced[index].CooldownRuns = 0
+			forced[index].NextCheckAt = ""
+			forced[index].NextCheckAfterRunID = ""
+			forced[index].Reason = fmt.Sprintf("Mandatory recovery: %s", recovery.Reason)
+			forced[index].Evidence = append(normalizePulseEvidence(forced[index].Evidence), "pulse_review_recovery:"+recovery.SourcePulseRunID)
+			break
+		}
+	}
+	return forced, nil
+}
+
+func markPulseReviewRecovery(ctx context.Context, workspacePath, module, sourcePulseRunID, checkpointPath, reason string) error {
+	module = normalizePulseModule(module)
+	if !validPulseModules[module] {
+		return fmt.Errorf("module %q is not valid for review recovery", module)
+	}
+	if strings.TrimSpace(sourcePulseRunID) == "" || strings.TrimSpace(checkpointPath) == "" || strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("source_pulse_run_id, checkpoint_path, and reason are required for review recovery")
+	}
+	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := ensurePulseModuleStateSchema(ctx, db); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err = db.ExecContext(ctx, `INSERT INTO pulse_review_recovery (
+		workspace_path, module, source_pulse_run_id, checkpoint_path, status, reason, detected_at, updated_at
+	) VALUES (?, ?, ?, ?, 'incomplete', ?, ?, ?)
+	ON CONFLICT(workspace_path, module) DO UPDATE SET
+		source_pulse_run_id=excluded.source_pulse_run_id, checkpoint_path=excluded.checkpoint_path,
+		status='incomplete', reason=excluded.reason, updated_at=excluded.updated_at`,
+		normalized, module, strings.TrimSpace(sourcePulseRunID), strings.TrimSpace(checkpointPath), strings.TrimSpace(reason), now, now)
+	return err
+}
+
+// beginPulseReviewRecovery records ownership before a child is dispatched. A
+// server restart can then turn this running attempt into an incomplete
+// recovery obligation even if the scheduler never receives the child result.
+func beginPulseReviewRecovery(ctx context.Context, workspacePath, module, pulseRunID, checkpointPath string) error {
+	module = normalizePulseModule(module)
+	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, true)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := ensurePulseModuleStateSchema(ctx, db); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err = db.ExecContext(ctx, `INSERT INTO pulse_review_recovery (
+		workspace_path, module, source_pulse_run_id, checkpoint_path, status, reason, detected_at, updated_at
+	) VALUES (?, ?, ?, ?, 'running', 'review executor dispatched; awaiting terminal module result', ?, ?)
+	ON CONFLICT(workspace_path, module) DO NOTHING`, normalized, module, strings.TrimSpace(pulseRunID), strings.TrimSpace(checkpointPath), now, now)
+	return err
+}
+
+func finalizeRunningPulseReviewRecoveries(ctx context.Context, workspacePath, reason string) (int64, error) {
+	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
+	if err != nil || db == nil {
+		return 0, err
+	}
+	defer db.Close()
+	if err := ensurePulseModuleStateSchema(ctx, db); err != nil {
+		return 0, err
+	}
+	result, err := db.ExecContext(ctx, `UPDATE pulse_review_recovery SET status='incomplete', reason=?, updated_at=?
+		WHERE workspace_path=? AND status='running'`, strings.TrimSpace(reason), time.Now().UTC().Format(time.RFC3339Nano), normalized)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func clearPulseReviewRecoveryTx(ctx context.Context, tx *sql.Tx, workspacePath, module string) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM pulse_review_recovery WHERE workspace_path=? AND module=?`, workspacePath, module)
+	return err
 }
 
 // forcePulseModuleDueForLateRepairDebt amends exactly one module's persisted
@@ -1166,6 +1358,14 @@ func recordPulseModuleDueForManualReview(ctx context.Context, workspacePath, pul
 // authorizes a repair: it only prevents Gate from suppressing Technical Review
 // when retained structured evidence already proves that review is needed.
 func validateDeterministicIntakeRouting(ctx context.Context, workspacePath string, decisions []PulseWorklistDecision) error {
+	// Pulse deliberately runs one review mode per pass. When deterministic plan
+	// drift is already selected, retain runtime evidence for the next Gate
+	// rather than forcing a concurrent Technical Review.
+	for _, decision := range decisions {
+		if normalizePulseModule(decision.Module) == pulseModulePlanDriftReview && decision.Due {
+			return nil
+		}
+	}
 	reasons := []string{}
 	runtimeResult := pulseintake.CheckRuntime(workspacePath, time.Now().UTC())
 	lastTechnicalCheck := lastPulseModuleCheck(ctx, workspacePath, pulseModuleTechnicalReview)
@@ -1273,6 +1473,14 @@ func recordPulseWorklistOnceAfter(ctx context.Context, workspacePath, pulseRunID
 	if _, _, err := normalizePulseRunMode(mode, modeReason); err != nil {
 		return nil, err
 	}
+	// Apply recovery before this early structural validation too. Otherwise an
+	// interrupted module that Gate skipped without a future boundary would be
+	// rejected before the backend got its chance to make it mandatory due.
+	var err error
+	decisions, err = forcePendingPulseReviewRecoveries(ctx, workspacePath, decisions)
+	if err != nil {
+		return nil, err
+	}
 	if err := validatePulseWorklistDecisions(decisions); err != nil {
 		return nil, err
 	}
@@ -1371,6 +1579,23 @@ func validatePulseWorklistDecisions(decisions []PulseWorklistDecision) error {
 		return fmt.Errorf("decisions is missing required module(s) %s; every Pulse module needs its own entry and the complete set is: %s",
 			strings.Join(missing, ", "), pulseModuleList())
 	}
+	var planDriftDue, technicalDue, strategicDue bool
+	for _, decision := range decisions {
+		switch normalizePulseModule(decision.Module) {
+		case pulseModulePlanDriftReview:
+			planDriftDue = decision.Due
+		case pulseModuleTechnicalReview:
+			technicalDue = decision.Due
+		case pulseModuleStrategicReview:
+			strategicDue = decision.Due
+		}
+	}
+	if planDriftDue && (technicalDue || strategicDue) {
+		return fmt.Errorf("plan_drift_review is due, so technical_review and strategic_review must both be skipped this pass; Pulse selects one review mode at a time")
+	}
+	if technicalDue && strategicDue {
+		return fmt.Errorf("technical_review and strategic_review cannot both be due in one pass; choose the single perspective with the strongest current evidence")
+	}
 	return nil
 }
 
@@ -1454,6 +1679,9 @@ func markPulseModuleResult(ctx context.Context, workspacePath, module, pulseRunI
 		return nil, err
 	}
 	if err := recordPulseModuleAudit(ctx, tx, normalized, module, pulseRunID, result, reason, evidence, PulseModuleAuditInput{}, now); err != nil {
+		return nil, err
+	}
+	if err := clearPulseReviewRecoveryTx(ctx, tx, normalized, module); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1568,6 +1796,9 @@ func markPulseModuleResultFromAgentWithAuditAndFindings(
 	if err := step_based_workflow.RecordPulseFindingDispositionsTx(
 		ctx, tx, module, pulseRunID, dispositions, now,
 	); err != nil {
+		return nil, err
+	}
+	if err := clearPulseReviewRecoveryTx(ctx, tx, normalized, module); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -2606,6 +2837,11 @@ func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID str
 		log.Printf("[PULSE] get_pulse_state(view=module): focus selections unavailable for %s: %v", workspacePath, selectionErr)
 		focusSelections = []PulseReviewFocus{}
 	}
+	pendingRecoveries, recoveryErr := pendingPulseReviewRecoveries(ctx, workspacePath)
+	if recoveryErr != nil {
+		log.Printf("[PULSE] get_pulse_state(view=module): review recovery state unavailable for %s: %v", workspacePath, recoveryErr)
+		pendingRecoveries = []PulseReviewRecovery{}
+	}
 	var runMode *PulseRunMode
 	if strings.TrimSpace(pulseRunID) != "" {
 		var modeErr error
@@ -2630,29 +2866,31 @@ func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID str
 			"closed_issues":         "Previously handled roots. Matching new evidence reopens the same root rather than creating a duplicate.",
 			"workflow_observations": "Historical audit evidence only. It is not an active reviewer queue; Technical Review reads retained run artifacts and deterministic receipts directly.",
 		},
-		"suppressed_concerns":          pulseConcernAgentProjection(suppressedConcerns),
-		"suppressed_concern_count":     len(suppressedConcerns),
-		"suppressed_concerns_note":     "Diagnosed real findings owned outside this workflow. Do not report an unchanged fingerprint as a new finding or spend active review effort on it. A materially changed target/evidence creates or reopens an active finding; the recorded reopen condition explains the boundary.",
-		"plan_change_backlog":          planBacklog,
-		"loop_closure":                 loopClosure,
-		"loop_closure_note":            "Read-only deterministic evidence. Gate may weigh verified findings alongside other facts, but they do not mandate a module or authorize mutation. coverage_status must be verified before an empty findings list means clean.",
-		"deterministic_intake":         map[string]interface{}{"runtime": runtimeIntake, "plan_change_dependencies": planDependencyIntake},
-		"plan_drift_candidates":        planDriftCandidates,
-		"plan_drift_candidates_error":  planDriftErrorText,
-		"plan_drift_candidates_note":   "Steps with no drift_review record, one flagged needs_review==true, or one below the contract version required for its step_type (evidence from any prior review is preserved on the step's own record in step_config.json, not duplicated here), each with Go-precomputed Check 1/2/4/9 results (report query compatibility, validation_schema db[] rules from step_config.json only, scripted-code queries, db/README.md contract). Checks 5 (validation_schema file rules) and 13 (orphaned tables) are not precomputed here; the plan_drift_review reviewer checks those directly. Each supported step type requires one reference-backed agentic check: scripted_best_practices, message_sequence_best_practices, orchestrator_best_practices (legacy orchestrator_best_practices accepted), routing_best_practices, or branch_best_practices; record_plan_drift_review rejects a step without its matching check. A failed precomputed check is still evidence, not a filed finding — the reviewer turn records the merged result via record_plan_drift_review and files a Pulse finding for anything unresolved. A candidate with step_id==\"" + step_based_workflow.WorkflowDriftReviewStepID + "\" is not a real plan step: it means one or more steps were deleted since the last workflow-level audit, and dependent-artifact fallout from that deletion needs tracing — see plan-drift-review.md's workflow-level deletion audit section; clear it the same way, via record_plan_drift_review(step_id=\"" + step_based_workflow.WorkflowDriftReviewStepID + "\", ...). A non-empty plan_drift_candidates_error means this scan itself failed (unreadable/malformed plan.json or step_config.json) — the candidate list above is empty because it is unknown, not because nothing is due; validatePlanDriftRouting requires plan_drift_review or technical_review due in that case.",
-		"deterministic_intake_note":    "Read-only typed evidence from retained runtime receipts and current-contract plan-change dependency receipts. A failed signal requires agentic Technical Review, but is not an automatic Pulse issue or Fixer authorization. coverage_status must be verified before an empty findings list means clean.",
-		"module_review_history":        reviewHistory,
-		"review_history_note":          "What each reviewer concluded the last few times it ran, most recently run first. A module absent from this list has not run in the retained window at all. Use it to justify each skip: a module that keeps returning real findings is a poor candidate for another cooldown, and one that has come back clean repeatedly is a good one. A verdict here is the reviewer's conclusion, which is not the same as whether anything was then fixed.",
-		"review_focus_history":         focusHistory,
-		"review_focus_history_note":    "Compact durable deep-review coverage. Never-reviewed and overdue focus keys are candidates after urgent regressions, matured verification, and answered unapplied decisions. Route-specific counts prevent one sub-workflow from standing in for another. The agent chooses semantically; this is not blind round-robin.",
-		"review_focus_selections":      focusSelections,
-		"review_focus_selections_note": "Recent focus selections, one row per investigated focus and route scope. Multiple rows for one Pulse run are valid when the reviewer found distinct evidence and decision value; their count is agent-chosen, not a platform quota.",
-		"impact_ledger":                impactLedger,
-		"impact_ledger_note":           "Durable intervention, per-run success-criterion observation, and append-only before/after assessment history. Reliability or measurement work is not direct goal progress; inconclusive is correct until a comparable evidence window matures.",
-		"context_records":              loadPulseContextRecordsForState(ctx, workspacePath),
-		"context_records_note":         "User-confirmed workflow rules captured through capture_context. The context file is the runtime source; these immutable records show who captured what and when.",
-		"gate_mode":                    runMode,
-		"gate_mode_note":               "The Gate-selected pass shape for the supplied pulse_run_id. Go records it but does not choose it; the following message sequence must follow it.",
+		"suppressed_concerns":            pulseConcernAgentProjection(suppressedConcerns),
+		"suppressed_concern_count":       len(suppressedConcerns),
+		"suppressed_concerns_note":       "Diagnosed real findings owned outside this workflow. Do not report an unchanged fingerprint as a new finding or spend active review effort on it. A materially changed target/evidence creates or reopens an active finding; the recorded reopen condition explains the boundary.",
+		"plan_change_backlog":            planBacklog,
+		"loop_closure":                   loopClosure,
+		"loop_closure_note":              "Read-only deterministic evidence. Gate may weigh verified findings alongside other facts, but they do not mandate a module or authorize mutation. coverage_status must be verified before an empty findings list means clean.",
+		"deterministic_intake":           map[string]interface{}{"runtime": runtimeIntake, "plan_change_dependencies": planDependencyIntake},
+		"plan_drift_candidates":          planDriftCandidates,
+		"plan_drift_candidates_error":    planDriftErrorText,
+		"plan_drift_candidates_note":     "Steps with no drift_review record, one flagged needs_review==true, or one below the contract version required for its step_type (evidence from any prior review is preserved on the step's own record in step_config.json, not duplicated here), each with Go-precomputed Check 1/2/4/9 results (report query compatibility, validation_schema db[] rules from step_config.json only, scripted-code queries, db/README.md contract). Checks 5 (validation_schema file rules) and 13 (orphaned tables) are not precomputed here; the plan_drift_review reviewer checks those directly. Each supported step type requires one reference-backed agentic check: scripted_best_practices, message_sequence_best_practices, orchestrator_best_practices (legacy orchestrator_best_practices accepted), routing_best_practices, or branch_best_practices; record_plan_drift_review rejects a step without its matching check. A failed precomputed check is still evidence, not a filed finding — the reviewer turn records the merged result via record_plan_drift_review and files a Pulse finding for anything unresolved. A candidate with step_id==\"" + step_based_workflow.WorkflowDriftReviewStepID + "\" is not a real plan step: it means one or more steps were deleted since the last workflow-level audit, and dependent-artifact fallout from that deletion needs tracing — see plan-drift-review.md's workflow-level deletion audit section; clear it the same way, via record_plan_drift_review(step_id=\"" + step_based_workflow.WorkflowDriftReviewStepID + "\", ...). A non-empty plan_drift_candidates_error means this scan itself failed (unreadable/malformed plan.json or step_config.json) — the candidate list above is empty because it is unknown, not because nothing is due; validatePlanDriftRouting requires plan_drift_review or technical_review due in that case.",
+		"deterministic_intake_note":      "Read-only typed evidence from retained runtime receipts and current-contract plan-change dependency receipts. A failed signal requires agentic Technical Review, but is not an automatic Pulse issue or Fixer authorization. coverage_status must be verified before an empty findings list means clean.",
+		"module_review_history":          reviewHistory,
+		"review_history_note":            "What each reviewer concluded the last few times it ran, most recently run first. A module absent from this list has not run in the retained window at all. Use it to justify each skip: a module that keeps returning real findings is a poor candidate for another cooldown, and one that has come back clean repeatedly is a good one. A verdict here is the reviewer's conclusion, which is not the same as whether anything was then fixed.",
+		"review_focus_history":           focusHistory,
+		"review_focus_history_note":      "Compact durable deep-review coverage. Never-reviewed and overdue focus keys are candidates after urgent regressions, matured verification, and answered unapplied decisions. Route-specific counts prevent one sub-workflow from standing in for another. The agent chooses semantically; this is not blind round-robin.",
+		"review_focus_selections":        focusSelections,
+		"review_focus_selections_note":   "Recent focus selections, one row per investigated focus and route scope. Multiple rows for one Pulse run are valid when the reviewer found distinct evidence and decision value; their count is agent-chosen, not a platform quota.",
+		"pending_review_recoveries":      pendingRecoveries,
+		"pending_review_recoveries_note": "Backend-owned interrupted-review recovery. A listed module is mandatory due regardless of cooldown. Its executor must continue from checkpoint_path and persist one terminal module result; do not restart from scratch or infer missing findings.",
+		"impact_ledger":                  impactLedger,
+		"impact_ledger_note":             "Durable intervention, per-run success-criterion observation, and append-only before/after assessment history. Reliability or measurement work is not direct goal progress; inconclusive is correct until a comparable evidence window matures.",
+		"context_records":                loadPulseContextRecordsForState(ctx, workspacePath),
+		"context_records_note":           "User-confirmed workflow rules captured through capture_context. The context file is the runtime source; these immutable records show who captured what and when.",
+		"gate_mode":                      runMode,
+		"gate_mode_note":                 "The Gate-selected pass shape for the supplied pulse_run_id. Go records it but does not choose it; the following message sequence must follow it.",
 	})
 	return string(payload), nil
 }

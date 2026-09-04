@@ -207,11 +207,14 @@ An old backlog must not hide a new production failure. Conversely, unchanged
 backlog must not force another expensive discovery pass. A cooldown or focus
 rotation cannot suppress a measured miss or a new critical regression.
 
-Select **at most two** due modules, chosen agentically from `technical_review`
-and `strategic_review`. `plan_drift_review` is never part of that judgment
-call: its due state is the plain fact reported in `plan_drift_candidates` (see
-Deterministic-intake boundary above), so record it as due exactly when that
-list is non-empty, whether or not you also select two other modules. Call
+Select **at most one** due module per Pulse pass. `plan_drift_review` has
+priority: when `plan_drift_candidates` is non-empty, record only
+`plan_drift_review` as due and skip both Technical and Strategic Review for
+this pass. Its due state is a plain fact, not a judgment call. When Plan Drift
+is not due, choose the single stronger perspective between `technical_review`
+and `strategic_review`; it is valid to skip both when no evidence warrants a
+review. An interrupted-review recovery remains durable while Plan Drift runs
+and is resumed on the next eligible non-drift pass. Call
 `record_pulse_worklist` exactly once with the mode, mode reason, and one
 decision for every canonical module: `technical_review`, `strategic_review`,
 and `plan_drift_review`. On recovery, if this Pulse run already has a complete
