@@ -1106,6 +1106,11 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     setFocusedPane('preview')
   }, [setFocusedPane, setShowChatArea])
 
+  // A workflow opens in whatever device and split width the user last chose
+  // for it (the two sync effects below re-read both on every switch). Nothing
+  // on the open path writes a layout preference -- see the invariant in
+  // utils/reportPreviewPreference.ts.
+
   const createFreshWorkflowBuilderTab = useCallback(async (presetId: string, options?: { composerFirst?: boolean; isExplicitNewChat?: boolean }) => {
     const chatStore = useChatStore.getState()
 

@@ -9,7 +9,6 @@ import { useWorkflowStore } from '../stores/useWorkflowStore'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
 import { isInternalChildSession } from './workflowSessionKinds'
 import { isVisibleActivitySession } from './activitySessions'
-import { openWorkflowInDefaultPreview } from './reportPreviewPreference'
 import { normalizeWorkspacePath } from './workspacePathUtils'
 import { activateWorkflowTab, beginWorkflowNavigation, isCurrentWorkflowNavigation, selectWorkflowPreset } from './workflowNavigation'
 import { scheduleTabLabel } from './scheduleTabLabel'
@@ -257,9 +256,9 @@ function requestChatScrollToBottom(): void {
   setTimeout(() => window.dispatchEvent(new CustomEvent('chat-scroll-to-bottom')), 400)
 }
 
-function revealWorkflowChat(tabId: string, workspacePath?: string | null): void {
-  openWorkflowInDefaultPreview(workspacePath)
-
+// Bring the chat pane forward. Deliberately does not touch the workflow's
+// saved preview device / split width -- see utils/reportPreviewPreference.ts.
+function revealWorkflowChat(): void {
   const workflowStore = useWorkflowStore.getState()
   workflowStore.setShowChatArea(true)
   workflowStore.setShowWorkspacePane(true)
@@ -272,7 +271,6 @@ async function restoreWorkflowSessionChat(
 ): Promise<string> {
   const resolvedPreset = options.preset || findWorkflowPresetForSession(session, options.runningWorkflow)
   const presetId = resolvedPreset?.id || session.preset_query_id || options.runningWorkflow?.preset_query_id
-  const workspacePath = resolvedPreset?.selectedFolder?.filepath || options.runningWorkflow?.workspace_path || session.workspace_path || null
   const isActive = isActiveWorkflowSession(session)
 
   useRunningWorkflowsStore.getState().setIsRestoringWorkflow(true)
@@ -338,7 +336,7 @@ async function restoreWorkflowSessionChat(
       activateWorkflowTab(tabId, {
         expectedGeneration: options.navigationGeneration,
       })
-      revealWorkflowChat(tabId, workspacePath)
+      revealWorkflowChat()
       if (options.scrollToBottom !== false) requestChatScrollToBottom()
       return tabId
     }
@@ -351,7 +349,7 @@ async function restoreWorkflowSessionChat(
     activateWorkflowTab(tabId, {
       expectedGeneration: options.navigationGeneration,
     })
-    revealWorkflowChat(tabId, workspacePath)
+    revealWorkflowChat()
     if (options.scrollToBottom !== false) requestChatScrollToBottom()
 
     return tabId
@@ -508,7 +506,7 @@ async function restoreReadOnlyWorkflowRunChat(
     activateWorkflowTab(interactiveTab.tabId, {
       expectedGeneration: options.navigationGeneration,
     })
-    revealWorkflowChat(interactiveTab.tabId, workspacePath)
+    revealWorkflowChat()
     if (options.scrollToBottom !== false) requestChatScrollToBottom()
     return interactiveTab.tabId
   }
@@ -559,7 +557,7 @@ async function restoreReadOnlyWorkflowRunChat(
   activateWorkflowTab(tabId, {
     expectedGeneration: options.navigationGeneration,
   })
-  revealWorkflowChat(tabId, workspacePath)
+  revealWorkflowChat()
   window.dispatchEvent(new CustomEvent('workflow-readonly-run-restored', {
     detail: { presetId, tabId, workspacePath }
   }))
