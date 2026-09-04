@@ -1,6 +1,6 @@
 ---
 name: minimax-h3-video
-description: "Plan Video Studio's MiniMax H3 Max generation through fal.ai, including H3 Max Turbo for an initial image-controlled anchor and H3 Max Reference-to-Video for continuity. Read with video-provider-capabilities and fal-ai before any paid H3 call."
+description: "Plan Video Studio's MiniMax H3 Max generation through fal.ai, including H3 Max Turbo for an initial image-controlled anchor, Reference-to-Video for queued continuity, and Director for explicitly approved real-time direction. Read with video-provider-capabilities and fal-ai before any paid H3 call."
 ---
 
 # Use MiniMax H3 Max deliberately
@@ -13,6 +13,7 @@ live machine-readable guide for the selected route before every paid call:
 - `https://fal.ai/models/minimax/h3-max/image-to-video/llms.txt`;
 - `https://fal.ai/models/minimax/h3-max/reference-to-video/llms.txt`.
 - `https://fal.ai/models/minimax/h3-max-turbo/image-to-video/llms.txt` for an initial Turbo anchor.
+- `https://fal.ai/models/minimax/h3-max/director/llms.txt` for an explicitly requested real-time Director session.
 
 ## Use the guarded H3 runner
 
@@ -22,6 +23,12 @@ the approved H3 Max endpoints plus the narrowly allowed Turbo anchor endpoint,
 validates route-specific inputs before a
 paid submit, saves the request ID and resolved non-secret input immediately,
 and emits JSON-lines console progress plus a sibling `*.log.jsonl` file.
+
+**Director is deliberately excluded from this runner.** It is a WebRTC live
+session, not a queued request that produces a completed MP4. Do not pass its
+model ID to the runner, substitute it into a normal shot job, or claim it is
+available until Video Studio has a dedicated authenticated realtime-browser
+implementation.
 
 Write a non-secret job JSON with `endpoint`, `prompt`, and the selected route's
 controls. Then validate, submit once, and wait/rejoin the *same* state file:
@@ -48,9 +55,9 @@ to the retained local file. After its `completed` event, run the normal file rec
 
 For a direct continuation, do not send the full predecessor as Video 1. After
 the predecessor is accepted, create a deterministic **2- or 3-second tail**
-from its end, then pass the uploaded tail URL as Video 1 together with the
-approved character and location references. Default to 3 seconds; use 2 only
-when it fully contains the outgoing action.
+from its end, then pass the uploaded tail URL as Video 1 with only the still
+references that have a distinct job in the successor. Default to 3 seconds;
+use 2 only when it fully contains the outgoing action.
 
 ```bash
 node .claude/skills/minimax-h3-video/scripts/h3-max-runner.mjs tail-reference \
@@ -61,7 +68,10 @@ The runner verifies source/output duration and writes only the final tail.
 Upload that output through the normal workspace upload flow before adding its
 returned URL to `reference_video_urls`. This prepares a model input, not a
 visual seam repair: do not trim accepted delivery clips, blend picture/audio,
-or use the tail as a substitute for still references.
+or use the tail as a substitute for required character-identity references.
+It can, however, carry the visible location, lighting, composition, and set
+dressing from the predecessor. Do not automatically repeat a location still
+when that same setting is already clearly visible in the tail.
 
 Use H3 Max only. Do not substitute standard H3, another H3 Max route, or
 another provider.
@@ -121,6 +131,37 @@ successor with a clearer handoff. Never silently shorten/rewrite approved
 dialogue merely to make a seam less visible. When reporting model behavior,
 separate a result observed in this production from a guarantee or limitation
 verified in official H3 Max route documentation.
+
+## H3 Max Director: an explicit real-time mode
+
+`minimax/h3-max/director` is for a user who wants to direct one continuous
+live stream while it plays: send an initial `configure` message, then later
+`prompt` messages to evolve the action. It is **not** a replacement for the
+normal queued shot-review workflow, Reference-to-Video inputs, or the final
+MP4 assembly pipeline.
+
+Before proposing or starting Director, read its current `llms.txt` and obtain
+explicit approval for the session minimum, current per-second price, selected
+resolution, and the fact that a dedicated realtime session will be opened.
+The published contract uses `fal.realtime.open` with WebRTC and an
+application-authenticated Fal proxy; never use `fal.run`, `fal.subscribe`, or
+the Queue API for this endpoint, and never expose `FAL_KEY` in the browser.
+
+Configure a single original scene with a prompt, optional exact-first-frame
+`image_url`, resolution (`480p` or `768p`), aspect ratio (`16:9`, `9:16`, or
+`1:1`), seed when appropriate, and a deliberate `memory` window for prior
+prompts. Director's schema does not make it a substitute for the normal
+Reference-to-Video character, audio, or predecessor-tail request. Do not
+invent those fields; if the live schema does not expose a needed control, keep
+the production on the queued H3 route.
+
+Treat the stream as live playback, not proof of a durable deliverable. Track
+`prompt_pending` / `prompt_applied` with their `prompt_version`, preserve
+chunk metrics for diagnosis, and surface `deadline_missed` honestly: its
+documented behavior is a video freeze and silent audio until the next chunk is
+ready. Do not describe the mode as guaranteed gapless. Confirm how a durable
+recording/export is retained before treating any Director result as an
+assembly input or a final delivery.
 
 ## Prompt from an H3 Max shot contract
 
@@ -211,6 +252,12 @@ Reference-to-Video accepts at most 9 images, 3 videos, and 3 audio clips, with
 with an image or video. Do not use Image-to-Video's prompt-only fallback when
 Text-to-Video states the intent more accurately, and do not use an edit route
 as a fallback for a broken source shot.
+4. **Live, continuously directed scene:** consider
+   `minimax/h3-max/director` only when the user explicitly prefers real-time
+   direction over queued per-shot review, accepts its session-minimum cost,
+   and Video Studio's authenticated WebRTC Director integration is available.
+   It receives live prompts during a single stream; it is not a queued H3
+   continuation or a direct MP4 stitching operation.
 
 ## Assign every reference one job
 
@@ -219,6 +266,17 @@ input, record its order, accepted media constraints, and purpose: subject
 identity, start composition, end state, motion, camera language, environment,
 voice, music, ambience, or style. Use the exact positional tokens and ordering
 shown by the live endpoint schema.
+
+For a direct successor, the predecessor tail is the default continuity context
+for everything visibly present in its final seconds. Include an approved
+character still when that character must remain recognizably locked. Include a
+location/background still only when it has a distinct job the tail cannot do:
+the successor opens on a new or wider angle, must reveal set detail outside the
+tail's framing, has a deliberate composition change, or prior attempts show
+location drift. For the same visible setting and framing, describe the next
+action in the prompt and omit the duplicate background still. Do not send every
+available image merely because it exists; record why each supplied reference is
+needed.
 
 Current H3 documentation describes a unified multimodal context with images,
 video clips, and audio tracks, but its published counts and combined-duration
@@ -255,7 +313,8 @@ For a planned successor shot, use Reference-to-Video from a 2- or 3-second tail
 of the accepted immediate predecessor as Video 1. Carry forward the accepted
 output, endpoint route, reference order, subject state, screen direction,
 lighting, audio bed, and the precise next camera/action handoff. Keep approved
-character/location still references in the same request. Prefer this generation-time
+character still references when identity requires them; include the location
+still only under the reference-role rule above. Prefer this generation-time
 continuity over manual stitching or a bridge workaround. H3 Max produces a new
 bounded file; it does not append footage to its predecessor or reproduce an
 exact vocal/mouth state at the boundary.

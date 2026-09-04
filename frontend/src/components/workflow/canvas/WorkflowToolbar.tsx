@@ -9,6 +9,8 @@ import {
   Activity,
   BellRing,
   CalendarClock,
+  ChevronDown,
+  ChevronRight,
   Gauge,
 } from 'lucide-react'
 import { useWorkflowStore, type RunFolder } from '../../../stores/useWorkflowStore'
@@ -71,9 +73,10 @@ function ToolbarGroup({ label, open, onToggle, title, children, ...rest }: {
         onClick={onToggle}
         aria-expanded={open}
         title={title}
-        className={`inline-flex h-6 items-center rounded px-2 text-[11px] font-medium outline-none transition-colors hover:bg-background/70 ${open ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+        className={`inline-flex h-6 items-center gap-1 rounded px-2 text-[11px] font-medium outline-none transition-colors hover:bg-background/70 ${open ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
       >
         <span>{label}</span>
+        {open ? <ChevronDown className="h-3 w-3" aria-hidden="true" /> : <ChevronRight className="h-3 w-3" aria-hidden="true" />}
       </button>
       {open && children}
     </div>
@@ -176,7 +179,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   // Button clusters come from the view registry, in registry order. The
   // Plan button is the one view that hides itself until a plan exists.
   const workspaceViewDefinitions = useMemo(
-    () => WORKSPACE_VIEWS.filter(view => view.toolbarGroup === 'views' && (view.id !== 'flow' || hasPlan)),
+    () => WORKSPACE_VIEWS.filter(view => view.toolbarGroup === 'views' && view.id !== 'evaluation' && view.id !== 'schedules' && (view.id !== 'flow' || hasPlan)),
     [hasPlan],
   )
   const capabilityViewDefinitions = useMemo(
@@ -523,7 +526,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
               label="Views"
               open={openGroups.views}
               onToggle={() => toggleGroup('views')}
-              title={openGroups.views ? 'Hide views' : 'Show views: report, plan, costs, logs, learnings, knowledgebase, database, files'}
+              title={openGroups.views ? 'Hide views' : 'Show views: report, plan, costs, logs, learnings, knowledgebase, database, evaluation, schedules, files'}
             >
               <div className="inline-flex items-center gap-0.5">
                 {workspaceViewDefinitions.map(({ id: view, icon: Icon, label }) => {
@@ -557,18 +560,47 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   </Tooltip>
                   )
                 })}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => openWorkspaceView('evaluation')}
+                      className={`flex h-6 w-7 items-center justify-center rounded transition-colors ${activeWorkspaceView === 'evaluation' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
+                      aria-label="Evaluation"
+                      aria-pressed={activeWorkspaceView === 'evaluation'}
+                    >
+                      <Gauge className="h-3.5 w-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom"><p>Evaluation results</p></TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => openWorkspaceView('schedules')}
+                      className={`relative flex h-6 w-7 items-center justify-center rounded transition-colors ${activeWorkspaceView === 'schedules' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/70 hover:text-foreground'}`}
+                      aria-label="Schedules"
+                      aria-pressed={activeWorkspaceView === 'schedules'}
+                    >
+                      <CalendarClock className="h-3.5 w-3.5" />
+                      <span className={`absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full border border-background ${scheduleStatusDotClass}`} />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom"><p>{scheduleTooltip}</p></TooltipContent>
+                </Tooltip>
               </div>
             </ToolbarGroup>
           )}
 
-          {/* Pulse is the operational hub for monitoring, schedules, backup,
+          {/* Pulse is the operational hub for review, repair, backup,
               publishing, and notifications. */}
           {workspacePath && (
             <ToolbarGroup
               label="Pulse"
               open={openGroups.pulse}
               onToggle={() => toggleGroup('pulse')}
-              title={openGroups.pulse ? 'Hide Pulse tools' : 'Show Pulse tools: status, evaluation, schedules, run now, backup, publish, notify'}
+              title={openGroups.pulse ? 'Hide Pulse tools' : 'Show Pulse tools: status, run now, backup, publish, notify'}
             >
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -582,33 +614,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom"><p>Pulse status and module cadence</p></TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => openWorkspaceView('evaluation')}
-                    className="flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
-                    aria-label="Evaluation"
-                  >
-                    <Gauge className="h-3.5 w-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom"><p>Evaluation results</p></TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => openWorkspaceView('schedules')}
-                    className="relative flex h-6 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
-                    aria-label="Schedules"
-                  >
-                    <CalendarClock className="h-3.5 w-3.5" />
-                    <span className={`absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full border border-background ${scheduleStatusDotClass}`} />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom"><p>{scheduleTooltip}</p></TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>

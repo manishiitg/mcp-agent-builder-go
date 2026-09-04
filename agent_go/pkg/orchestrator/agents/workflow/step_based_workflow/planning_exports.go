@@ -268,6 +268,7 @@ type SchedulerCallbacks struct {
 // enforced by the runtime rather than inferred from a natural-language
 // message or a conveniently spaced cron expression.
 type ScheduleRuntimePolicy struct {
+	PulseMode            string
 	ExecutionMode        string
 	CollisionPolicy      string
 	MaxStartDelayMinutes int
@@ -279,6 +280,7 @@ type ScheduleRuntimePolicy struct {
 	// from an explicit empty/zero value, so changing one policy does not erase
 	// the other three.
 	SetExecutionMode        bool
+	SetPulseMode            bool
 	SetCollisionPolicy      bool
 	SetMaxStartDelayMinutes bool
 	SetAfterScheduleID      bool

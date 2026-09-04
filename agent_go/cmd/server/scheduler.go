@@ -615,7 +615,17 @@ func shouldRunPulseLifecycle(sctx *ScheduleContext, manifest *WorkflowManifest) 
 	if manifest == nil {
 		return false
 	}
-	return manifest.PulseEnabled() || (sctx != nil && sctx.ForcePulseReview)
+	return effectiveSchedulePulseMode(sctx, manifest) != schedulePulseModeOff
+}
+
+func effectiveSchedulePulseMode(sctx *ScheduleContext, manifest *WorkflowManifest) string {
+	if sctx != nil && sctx.ForcePulseReview {
+		return schedulePulseModeFull
+	}
+	if sctx == nil {
+		return schedulePulseModeOff
+	}
+	return manifest.EffectivePulseMode(sctx.Schedule)
 }
 
 // pulseScheduleTimingSummary supplies facts to the ordinary-run finalizer; it
@@ -2141,13 +2151,11 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] Failed to update run entry for %s: %v", schedID, err)
 	}
 
-	// Pulse runs after an enabled normal schedule completes. Gate reads
-	// run evidence and records a module worklist in db/db.sqlite, then executes
-	// only the selected agents (consolidated Workflow Review, independent
-	// Strategy Auditor, and independent Goal Advisor), then one Fixer, backs
-	// up the final state, publishes, and sends
-	// a review summary notification. Recurring Pulse is configured by
-	// workflow.json pulse.enabled and has no independent cron.
+	// Pulse runs after a normal schedule only when its effective pulse mode is
+	// basic or full. Basic performs backup, report publishing, and run-summary
+	// notification only. Full additionally gates, reviews, repairs, and sends
+	// the Pulse summary. workflow.json pulse.enabled supplies the default;
+	// schedule pulse_mode can explicitly override it. There is no independent cron.
 	// Manual one-off Pulse explicitly forces the same lifecycle.
 	// Never affects the run's recorded result.
 	// A blocked contract-upgrade preflight is the one failure where Pulse has
@@ -2162,6 +2170,7 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 	}
 	if !upgradeBlocked && !userInterrupted && runFolder != "" {
 		if manifest, found, mErr := ReadWorkflowManifest(ctx, sctx.WorkspacePath); mErr == nil && found && shouldRunPulseLifecycle(sctx, manifest) {
+			pulseMode := effectiveSchedulePulseMode(sctx, manifest)
 			pulseEvidenceStatus := status
 			if sctx.PulseOnly && strings.TrimSpace(sctx.PulseEvidenceRunStatus) != "" {
 				pulseEvidenceStatus = sctx.PulseEvidenceRunStatus
@@ -2174,7 +2183,7 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 				})
 			}
 			// Pass the run's sessionID so the next message resumes the SAME chat.
-			pulseResult = s.runPulseLifecycle(ctx, sctx, pulseEvidenceStatus, runFolder, sessionID, runID, errMsg)
+			pulseResult = s.runPulseLifecycle(ctx, sctx, pulseMode, pulseEvidenceStatus, runFolder, sessionID, runID, errMsg)
 		}
 	}
 
@@ -2249,7 +2258,7 @@ const (
 	pulseLifecycleStopped   pulseLifecycleResult = "stopped"
 )
 
-func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *ScheduleContext, runStatus, runFolder, runSessionID, scheduleRunID, runFailureReason string) (pulseResult pulseLifecycleResult) {
+func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *ScheduleContext, pulseMode, runStatus, runFolder, runSessionID, scheduleRunID, runFailureReason string) (pulseResult pulseLifecycleResult) {
 	pulseResult = pulseLifecyclePartial
 	var reviewFixStartedAt, reviewFixCompletedAt time.Time
 
@@ -2278,6 +2287,9 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 	// the single durable completion boundary; Go preserves ordering while agents
 	// own the semantic choices and per-finding lifecycle.
 	pulseContext := "A scheduled run of this workflow just finished"
+	if pulseMode == schedulePulseModeBasic {
+		pulseContext = "A scheduled run of this workflow just finished; its schedule requests basic post-run finalization only"
+	}
 	if sctx.PulseOnly {
 		pulseContext = "This is a manual Pulse-only review of the latest retained workflow evidence. The workflow was not executed by this action"
 	}
@@ -2365,7 +2377,7 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 	// run folder does not. Manual PulseOnly is the intentional exception because
 	// it explicitly reviews retained evidence without executing the workflow.
 	reviewEvidenceAvailable := sctx.ProducedRunEvidence || sctx.PulseOnly
-	if !reviewEvidenceAvailable {
+	if pulseMode == schedulePulseModeFull && !reviewEvidenceAvailable {
 		s.sessionLogf(sctx, sessionID, "[PULSE] workflow did not start in this invocation; skipping Gate, reviewers, Fixer, dashboard and publish")
 	}
 
@@ -2375,7 +2387,10 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 	// plan_drift_review finding must not get technical_review dispatched
 	// twice in the same pass).
 	reviewFixScheduled := false
-	if !reviewEvidenceAvailable {
+	if pulseMode == schedulePulseModeBasic {
+		steps = scheduledRunFinalizeStep(scheduleRunID, notificationInstructionsFromCapabilities(sctx.Capabilities))
+		s.sessionLogf(sctx, sessionID, "[PULSE] basic post-run finalization selected for %s; Gate, drift review, reviewers, and Fixer are disabled by this schedule", sctx.Schedule.ID)
+	} else if !reviewEvidenceAvailable {
 		steps = pulseLifecycleNoRunSteps(pulseRunID, runFailureReason, notificationInstructionsFromCapabilities(sctx.Capabilities))
 	} else {
 		gateStep := pulseLifecycleGateStep(pulseRunID, runFolder, runStatus)
@@ -2992,13 +3007,9 @@ func pulseLifecycleFinalSteps(pulseRunID string, instructions ...workflowNotific
 	return []pulseLifecycleStep{{"finalize", fmt.Sprintf("PULSE FINALIZER. pulse_run_id=%q. Load read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/pulse-finalizer.md\"}]) and follow it exactly. First confirm every due module has a terminal current-run result; never treat missing as success. The Pulse popup is the only presentation: do not write a Pulse HTML document or dashboard card. Complete backup, publish, and notify in that order in this one turn, recording running and terminal status for each with record_pulse_result(command=...). Continue after individual failures, keep every status truthful, then stop.%s", pulseRunID, notificationContext)}}
 }
 
-// scheduledRunFinalizeStep finalizes an ordinary workflow run. Gate,
-// Review+Fix, and Pulse publication are never part of this session; the
-// dedicated pulse_review_only schedule owns them. Keeping the normal session
-// short prevents the lifecycle coupling behind PLAT-113/114/115.
-//
-// Execution-report publishing remains valid here; only the Pulse target is
-// skipped because no review ran in the ordinary schedule session.
+// scheduledRunFinalizeStep is the basic post-run Pulse mode. Gate, drift
+// review, Review+Fix, and Pulse publication are excluded; backup, execution
+// report publishing, and the run-summary notification remain independent.
 func scheduledRunFinalizeStep(runID string, instructions ...workflowNotificationContentInstructions) []pulseLifecycleStep {
 	return scheduledRunFinalizeStepWithPulseTiming(runID, "", instructions...)
 }
@@ -3025,8 +3036,7 @@ func scheduledRunFinalizeStepWithPulseTiming(runID, pulseTiming string, instruct
 	}
 	return []pulseLifecycleStep{{"finalize", fmt.Sprintf(
 		"WORKFLOW RUN FINALIZER — BACKUP, REPORT PUBLISH, AND NOTIFY ONLY. run_id=%q. "+
-			"Gate, reviewers, and Fixer never run after an ordinary workflow run; the enabled pulse_review_only schedule owns "+
-			"those reviews on its own cadence over accumulated evidence. This is normal, not a missing Pulse pass. Do not run Gate, reviewers, "+
+			"This schedule selected basic Pulse, so Gate, drift review, reviewers, and Fixer are intentionally excluded. This is normal, not a missing Pulse pass. Do not run Gate, reviewers, "+
 			"or Fixer, do not read old Pulse findings and present them as new, and do not write builder/improve.html.\n\n"+
 			"Do these in order and record each with record_pulse_result(command=..., result=..., reason=...): "+
 			"(1) run the configured source-hash-gated backup and record its truthful terminal result; "+

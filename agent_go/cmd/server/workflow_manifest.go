@@ -181,6 +181,31 @@ func (m *WorkflowManifest) PulseEnabled() bool {
 	return m.HasEnabledPulseReviewSchedule()
 }
 
+const (
+	schedulePulseModeOff   = "off"
+	schedulePulseModeBasic = "basic"
+	schedulePulseModeFull  = "full"
+)
+
+// EffectivePulseMode returns this schedule's post-run stewardship policy.
+// An omitted pulse_mode intentionally preserves the workflow-wide setting so
+// existing manifests retain their behavior: enabled means full Pulse, disabled
+// means no post-run Pulse work. Explicit schedule values override that default.
+func (m *WorkflowManifest) EffectivePulseMode(schedule WorkflowSchedule) string {
+	switch strings.ToLower(strings.TrimSpace(schedule.PulseMode)) {
+	case schedulePulseModeOff:
+		return schedulePulseModeOff
+	case schedulePulseModeBasic:
+		return schedulePulseModeBasic
+	case schedulePulseModeFull:
+		return schedulePulseModeFull
+	}
+	if m.PulseEnabled() {
+		return schedulePulseModeFull
+	}
+	return schedulePulseModeOff
+}
+
 // MigrateLegacyPulseSchedule folds the retired dedicated Pulse schedule into
 // pulse.enabled and removes it from the normal schedule list.
 func (m *WorkflowManifest) MigrateLegacyPulseSchedule() bool {
@@ -408,15 +433,15 @@ type WorkflowSchedule struct {
 	WorkshopMode         string `json:"workshop_mode,omitempty"`   // Vestigial. Schedules always run in workshop mode; nothing branches on this value any more. Retained so existing workflow.json files still parse.
 	Query                string `json:"query,omitempty"`           // Message to execute (multi-agent mode)
 	ResumePrevious       *bool  `json:"resume_previous,omitempty"` // Coding-agent CLI only: resume the latest prior thread (same provider) instead of a fresh session each run. nil = default (fresh session); explicit true opts in.
-	// PulseReviewOnly marks this schedule as a workflow's own Pulse review
-	// pass, not a workflow-execution schedule: when it
-	// fires, the workflow does not run — Gate/Review+Fix/Finalize run over
-	// whatever runs/iteration-N/ backlog has accumulated since Gate's own
-	// last_checked_at, the same way the manual "Run Pulse now" trigger
-	// (ScheduleContext.PulseOnly) already reviews retained evidence without
-	// executing the workflow. Its enabled presence is the complete recurring
-	// Pulse configuration; there is no second workflow-level enable/mode flag.
+	// PulseReviewOnly is a legacy compatibility field. On read, an enabled
+	// legacy entry enables workflow-level pulse.enabled; migration removes the
+	// obsolete schedule. The scheduler never registers it as an independent cron.
 	PulseReviewOnly bool `json:"pulse_review_only,omitempty"`
+	// PulseMode optionally overrides this schedule's post-run stewardship.
+	// "off" runs no Pulse actions; "basic" runs only backup, report publish,
+	// and the run-summary notification; "full" additionally runs Gate, drift
+	// review, review+fix, and Pulse finalization. Empty inherits pulse.enabled.
+	PulseMode string `json:"pulse_mode,omitempty"`
 	// ExecutionMode is a typed, runtime-enforced operating mode for a scheduled
 	// invocation. It is deliberately separate from Messages: safety must not
 	// depend on an agent interpreting prose or on the wall clock happening to be
@@ -681,6 +706,9 @@ func ValidateManifest(m *WorkflowManifest) error {
 		}
 		if err := validateScheduleRuntimePolicy(sched); err != nil {
 			return fmt.Errorf("schedules[%d]: %w", i, err)
+		}
+		if mode := strings.ToLower(strings.TrimSpace(sched.PulseMode)); mode != "" && mode != schedulePulseModeOff && mode != schedulePulseModeBasic && mode != schedulePulseModeFull {
+			return fmt.Errorf("schedules[%d].pulse_mode must be off, basic, or full", i)
 		}
 		if dependencyID := strings.TrimSpace(sched.AfterScheduleID); dependencyID != "" {
 			if _, ok := scheduleIDs[dependencyID]; !ok {

@@ -63,6 +63,7 @@ type ScheduledJobResponse struct {
 	LatestMissedRunAt    *time.Time             `json:"latest_missed_run_at,omitempty"`
 	MissedRunReason      string                 `json:"missed_run_reason,omitempty"`
 	PulseReviewOnly      bool                   `json:"pulse_review_only,omitempty"`
+	PulseMode            string                 `json:"pulse_mode,omitempty"`
 	CreatedAt            string                 `json:"created_at,omitempty"`
 	UpdatedAt            string                 `json:"updated_at,omitempty"`
 }
@@ -93,6 +94,7 @@ type CreateScheduleRequest struct {
 	AfterDelayMinutes    int                    `json:"after_delay_minutes,omitempty"`
 	DependencyDeadline   string                 `json:"dependency_deadline,omitempty"`
 	PulseReviewOnly      bool                   `json:"pulse_review_only,omitempty"`
+	PulseMode            string                 `json:"pulse_mode,omitempty"`
 }
 
 // UpdateScheduleRequest is the request body for updating a schedule.
@@ -119,6 +121,7 @@ type UpdateScheduleRequest struct {
 	AfterTerminalStatus  *string                `json:"after_terminal_status,omitempty"`
 	AfterDelayMinutes    *int                   `json:"after_delay_minutes,omitempty"`
 	DependencyDeadline   *string                `json:"dependency_deadline,omitempty"`
+	PulseMode            *string                `json:"pulse_mode,omitempty"`
 }
 
 type TriggerPulseRequest struct {
@@ -171,6 +174,7 @@ func buildJobResponse(workspacePath string, manifest *WorkflowManifest, sched Wo
 		LatestMissedRunAt:    missed.LatestMissedRunAt,
 		MissedRunReason:      missed.MissedRunReason,
 		PulseReviewOnly:      sched.PulseReviewOnly,
+		PulseMode:            sched.PulseMode,
 		CreatedAt:            manifest.CreatedAt,
 		UpdatedAt:            manifest.UpdatedAt,
 	}
@@ -546,6 +550,7 @@ func createScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 			AfterDelayMinutes:    req.AfterDelayMinutes,
 			DependencyDeadline:   strings.TrimSpace(req.DependencyDeadline),
 			PulseReviewOnly:      req.PulseReviewOnly,
+			PulseMode:            strings.ToLower(strings.TrimSpace(req.PulseMode)),
 		}
 
 		manifest.Schedules = append(manifest.Schedules, newSched)
@@ -716,6 +721,9 @@ func updateScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 		if req.ResumePrevious != nil {
 			sched.ResumePrevious = req.ResumePrevious
+		}
+		if req.PulseMode != nil {
+			sched.PulseMode = strings.ToLower(strings.TrimSpace(*req.PulseMode))
 		}
 		if req.ExecutionMode != nil {
 			sched.ExecutionMode = strings.TrimSpace(*req.ExecutionMode)

@@ -12,6 +12,13 @@ catalog, because model IDs, capabilities, and pricing change on their own
 schedule and going stale here would silently break every production that
 trusted it.
 
+Some endpoints are explicitly **realtime**, not queued jobs. When the selected
+official schema requires WebRTC/WMA (for example H3 Max Director), do not use
+the submit/poll/subscribe patterns below. Use the endpoint's realtime client
+contract through an application-authenticated server proxy, keep the Fal key
+server-side, and treat the result as live media until a documented export has
+been retained. Read the route-specific skill before offering that mode.
+
 This skill owns the client call once a model is already chosen and the shot's
 direction is already decided. Read `video-model-selection` first to choose
 between this provider and `google-ai`, and `video-cinematography` to turn the

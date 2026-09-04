@@ -2146,7 +2146,7 @@ This is the one-line-per-category map. For full signatures, parameters, when-to-
 - **Read-only info**: `+"`get_step_prompts`"+`, `+"`get_workflow_config`"+`, `+"`get_llm_config`"+`{{if eq .WorkshopMode "workshop"}}, `+"`get_workflow_command_guidance(kind=\"review-artifact-drift\")`"+`{{else}}. Artifact drift reviews belong in Workshop — switch modes and run `+"`/review-artifact-drift`"+` if needed{{end}}.
 {{if eq .WorkshopMode "workshop"}}
 - **Plan modification**: `+"`create_plan`"+`, `+"`add_<type>_step`"+`, `+"`update_<type>_step`"+`, `+"`delete_plan_steps`"+`, `+"`cleanup_orphan_step_configs`"+`, todo-task route tools, `+"`update_validation_schema`"+`.
-- **Variables & config**: `+"`update_variable`"+`, `+"`add_group`"+`/`+"`update_group`"+`/`+"`delete_group`"+`, `+"`update_workflow_config`"+`. Use `+"`update_workflow_config`"+` for workflow MCP servers, workflow-level MCP tool allowlists, selected skills, selected secrets, the one-way Slack webhook secret reference, browser_mode, run retention, and activation of an owner-approved advisor specialization decision. Recurring Pulse is configured only through an enabled `+"`pulse_review_only`"+` schedule. Do NOT edit `+"`workflow.json`"+` manually.
+- **Variables & config**: `+"`update_variable`"+`, `+"`add_group`"+`/`+"`update_group`"+`/`+"`delete_group`"+`, `+"`update_workflow_config`"+`. Use `+"`update_workflow_config`"+` for workflow MCP servers, workflow-level MCP tool allowlists, selected skills, selected secrets, the one-way Slack webhook secret reference, browser_mode, run retention, and activation of an owner-approved advisor specialization decision. Recurring Pulse defaults from `+"`workflow.json.pulse.enabled`"+`, but each normal schedule can override it with `+"`pulse_mode`"+`: `+"`off`"+` (no Pulse actions), `+"`basic`"+` (backup, report publish, run notification only), or `+"`full`"+` (Gate, drift review, review+fix, and finalization). Start with the default: choose `+"`full`"+` for durable-state/external-action/plan-changing or sole meaningful outcome runs; choose `+"`basic`"+` for routine outcomes already covered by another full schedule; choose `+"`off`"+` only for an explicit user request or intentional disposable/test/maintenance run. Never choose `+"`off`"+` only to save cost, and state the selected mode and reason. Do not create `+"`pulse_review_only`"+` schedules; they are legacy compatibility only. Do NOT edit `+"`workflow.json`"+` manually.
 - **Schedule management**: `+"`list_schedules`"+`, `+"`create_schedule`"+`, `+"`create_calendar_schedule`"+`, `+"`update_schedule`"+`, `+"`delete_schedule`"+`, `+"`trigger_schedule`"+`, `+"`get_schedule_runs`"+`. Cron / message-authoring rules, normal Run schedules plus Pulse, the `+"`/pulse-setup`"+` setup path, and unattended-message discipline — all live in the `+"`workflow-tools`"+` ref doc. Workflow schedules always use the workshop path; do not create direct `+"`mode=\"workflow\"`"+` schedules. **Whenever you create a recurring schedule, also pair it with a backup** so unattended runs persist their state off-box — see `+"`builder-reference/references/backup-strategy.md`"+`.
 {{end}}
 - **Shell & discovery**: `+"`execute_shell_command`"+`, `+"`diff_patch_workspace_file`"+`, `+"`read_image`"+`, `+"`generate_text_llm`"+`, `+"`search_web_llm`"+`.
@@ -7300,7 +7300,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 		// PLAT-262: skip create_schedule registration for read-only access
 	} else if err := mcpAgent.RegisterCustomTool(
 		"create_schedule",
-		"Create a new cron schedule for this workflow. Workflow schedules use mode='workshop' with workshop_mode='run'. Messages are optional; when omitted, the scheduler asks Run mode to execute the full workflow. Continuous improvement, including Goal Advisor, is selected dynamically by Pulse after normal scheduled runs; do not create a separate optimizer schedule. For the full contract (collision/dependency policy design, when direct messages vs. route_selections is correct, resume_previous tradeoffs): read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/schedules.md\"}]).",
+		"Create a new cron schedule for this workflow. Workflow schedules use mode='workshop' with workshop_mode='run'. Messages are optional; when omitted, the scheduler asks Run mode to execute the full workflow. Choose pulse_mode deliberately when this schedule differs from the workflow default: off has no Pulse actions, basic finalizes backup/report/notification only, and full includes Gate, drift review, review+fix, and finalization. For the full contract (collision/dependency policy design, when direct messages vs. route_selections is correct, resume_previous tradeoffs): read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/schedules.md\"}]).",
 		map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -7351,7 +7351,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"pulse_review_only": map[string]interface{}{
 					"type":        "boolean",
-					"description": "Creates this workflow's own Pulse review schedule instead of a workflow-execution schedule. Its enabled presence is the single source of truth for recurring Pulse. On its own cadence it reviews the accumulated runs/iteration-N backlog and runs Gate/Review+Fix/Finalize; it never runs the workflow itself, so group_names/route_selections/messages do not apply. Omit or false for an ordinary workflow-execution schedule.",
+					"description": "Legacy compatibility field only. Do not set true for new workflows: recurring Pulse is workflow-wide workflow.json.pulse.enabled and runs after each normal scheduled run. An enabled legacy value is migrated to that setting and is not registered as an independent cron. Omit or false for ordinary schedules.",
+				},
+				"pulse_mode": map[string]interface{}{
+					"type": "string", "enum": []string{"off", "basic", "full"},
+					"description": "Optional per-schedule Pulse override. off: no Pulse actions. basic: backup, report publish, and run-summary notification only. full: Gate, drift review, technical/strategic review+fix, then finalization. Omit to inherit workflow.json.pulse.enabled (existing behavior).",
 				},
 				"execution_mode": map[string]interface{}{
 					"type": "string", "enum": []string{"close_only"},
@@ -7448,6 +7452,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				return "pulse_review_only does not run the workflow — it must not set group_names, route_selections, or messages.", nil
 			}
 			policy := ScheduleRuntimePolicy{}
+			policy.PulseMode, _ = args["pulse_mode"].(string)
 			policy.ExecutionMode, _ = args["execution_mode"].(string)
 			policy.CollisionPolicy, _ = args["collision_policy"].(string)
 			policy.AfterScheduleID, _ = args["after_schedule_id"].(string)
@@ -7618,7 +7623,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				},
 				"pulse_review_only": map[string]interface{}{
 					"type":        "boolean",
-					"description": "Converts this schedule between a workflow-execution schedule and this workflow's periodic Pulse review schedule (PLAT-115). true: this schedule stops running the workflow and instead runs Gate/Review+Fix/Finalize over the accumulated backlog on its own cadence. false: converts it back to an ordinary workflow-execution schedule. Omit to leave the current setting unchanged.",
+					"description": "Legacy compatibility field only. Do not use it to configure Pulse: recurring Pulse is workflow-wide workflow.json.pulse.enabled and runs after each normal scheduled run. Omit to leave any legacy value unchanged.",
+				},
+				"pulse_mode": map[string]interface{}{
+					"type": "string", "enum": []string{"off", "basic", "full"},
+					"description": "Set this schedule's Pulse behavior: off skips all Pulse actions; basic runs backup, report publish, and run-summary notification only; full runs Gate, drift review, review+fix, and finalization. Omit to preserve its current value.",
 				},
 				"execution_mode": map[string]interface{}{
 					"type": "string", "description": "Set close_only, or an empty string to clear the backend-enforced execution mode.",
@@ -7756,7 +7765,12 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			if _, ok7 := args["dependency_deadline"]; ok7 && policy == nil {
 				policy = &ScheduleRuntimePolicy{}
 			}
+			if _, ok := args["pulse_mode"]; ok && policy == nil {
+				policy = &ScheduleRuntimePolicy{}
+			}
 			if policy != nil {
+				_, policy.SetPulseMode = args["pulse_mode"]
+				policy.PulseMode, _ = args["pulse_mode"].(string)
 				_, policy.SetExecutionMode = args["execution_mode"]
 				_, policy.SetCollisionPolicy = args["collision_policy"]
 				_, policy.SetMaxStartDelayMinutes = args["max_start_delay_minutes"]

@@ -12,14 +12,14 @@ The right-hand pane of the workflow page shows one view at a time; the toolbar a
 | `learnings` | `learnings/_global/SKILL.md` and per-step learnings: the HOW the workflow has accumulated | You updated learnings, or the user asks what the workflow has learned |
 | `knowledgebase` | `knowledgebase/context/` (user-provided rules) and `knowledgebase/notes/` (what the workflow found) | You captured context or wrote notes, or the user asks what the workflow knows |
 | `database` | The tables in `db/db.sqlite` with their rows, and `db/README.md` contracts | You wrote or changed rows, or the user asks about stored data |
+| `evaluation` | Evaluation results for the selected run against `evaluation/evaluation_plan.json` | You ran or edited the evaluation, or the user asks how a run scored |
+| `schedules` | Scheduled runs: cadence, next run, last run, run history | You created or changed a schedule |
 | `files` | The workspace file browser | The user wants to open a specific file, or you wrote a file they should see |
 
 ### Pulse cluster
 | View id | Shows | Open it when |
 |---------|-------|--------------|
 | `pulse` | Pulse status: work areas, open findings, who owns the next move, gate decisions | The user asks how the workflow is doing or what Pulse found |
-| `evaluation` | Evaluation results for the selected run against `evaluation/evaluation_plan.json` | You ran or edited the evaluation, or the user asks how a run scored |
-| `schedules` | Scheduled runs: cadence, next run, last run, run history | You created or changed a schedule |
 | `backup` | Backup status and history | You set up or ran a backup |
 | `publish` | The published page and its status | You published or refreshed the public report |
 | `notify` | Notification settings and recent deliveries | You changed how the workflow notifies people |

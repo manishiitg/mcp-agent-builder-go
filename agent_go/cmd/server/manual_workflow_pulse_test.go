@@ -70,6 +70,26 @@ func TestManualPulseScheduleContract(t *testing.T) {
 	}
 }
 
+func TestSchedulePulseModeControlsWhetherLifecycleStarts(t *testing.T) {
+	manifest := &WorkflowManifest{Pulse: &WorkflowPulseConfig{Enabled: true}}
+	if shouldRunPulseLifecycle(&ScheduleContext{Schedule: WorkflowSchedule{PulseMode: schedulePulseModeOff}}, manifest) {
+		t.Fatal("pulse_mode=off must suppress every post-run Pulse action even when the workflow default is enabled")
+	}
+	if !shouldRunPulseLifecycle(&ScheduleContext{Schedule: WorkflowSchedule{PulseMode: schedulePulseModeBasic}}, manifest) {
+		t.Fatal("pulse_mode=basic must start the lightweight finalization lifecycle")
+	}
+	if !shouldRunPulseLifecycle(&ScheduleContext{Schedule: WorkflowSchedule{PulseMode: schedulePulseModeFull}}, manifest) {
+		t.Fatal("pulse_mode=full must start the full review lifecycle")
+	}
+	manifest.Pulse.Enabled = false
+	if shouldRunPulseLifecycle(&ScheduleContext{Schedule: WorkflowSchedule{}}, manifest) {
+		t.Fatal("an inherited schedule must suppress Pulse when the workflow default is disabled")
+	}
+	if !shouldRunPulseLifecycle(&ScheduleContext{Schedule: WorkflowSchedule{PulseMode: schedulePulseModeFull}}, manifest) {
+		t.Fatal("pulse_mode=full must override a disabled workflow default")
+	}
+}
+
 // TestPulseReviewOnlyScheduleContractMirrorsManualPulseTrigger retains the
 // legacy schedule parser until startup migration removes old entries.
 func TestPulseReviewOnlyScheduleContractMirrorsManualPulseTrigger(t *testing.T) {

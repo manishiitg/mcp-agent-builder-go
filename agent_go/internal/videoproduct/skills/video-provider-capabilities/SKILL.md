@@ -41,6 +41,7 @@ capability record begins with:
   "schema_version": 2,
   "provider": "fal-ai or google-ai",
   "model_id": "exact resolved model id",
+  "execution_mode": "queue or realtime",
   "checked_at": "RFC3339 timestamp",
   "official_docs": ["official API URL"],
   "input_contract": {
@@ -69,6 +70,14 @@ automatic coercion as a changed request: record it and stop before accepting
 the result when it alters duration, ratio, resolution, references, audio, or
 continuity. Preserve the exact request and media-role manifest in both the
 generation ledger and `production.json` next to the output path.
+
+For a realtime model, the capability record must additionally name the session
+transport, browser receive/send tracks, authenticated proxy boundary, live
+prompt/update protocol, current session-minimum billing rule, and how a durable
+recording is exported. Realtime media is not a queue result: do not apply
+request-ID polling, pretend it has a downloadable output URL, or commit a
+live stream to assembly until the documented export has been retained and
+reviewed.
 
 ## Choose a continuity plan before calling the model
 

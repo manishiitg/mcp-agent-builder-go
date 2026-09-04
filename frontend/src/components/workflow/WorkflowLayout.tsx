@@ -1,6 +1,6 @@
 import React, { useMemo, useCallback, useRef, useEffect, forwardRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { GripVertical, Laptop, PanelRightClose, PanelRightOpen, Smartphone, Tablet } from 'lucide-react'
+import { GripVertical, Laptop, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Smartphone, Tablet } from 'lucide-react'
 import { WorkflowCanvas, type WorkflowCanvasRef } from './canvas'
 import { useGlobalPresetStore } from '../../stores/useGlobalPresetStore'
 import { useModeStore } from '../../stores/useModeStore'
@@ -36,9 +36,7 @@ import {
 } from '../PreviousChatHistoryPanel'
 import { chatHistoryOpenDisposition } from '../../utils/chatHistoryOpenDisposition'
 import {
-  DEFAULT_REPORT_PREVIEW_DEVICE,
   REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
-  openWorkflowInDefaultPreview,
   readReportPreviewPreference,
   readWorkflowSplitPreference,
   type ReportPreviewDevice,
@@ -894,12 +892,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       chatStore.setTabViewMode(tabId, 'formatted')
       activateTab(tabId)
     }
-    try {
-      const activeWorkspacePath = useGlobalPresetStore.getState().getActivePreset('workflow')?.selectedFolder?.filepath ?? null
-      openWorkflowInDefaultPreview(activeWorkspacePath)
-    } catch {
-      // UI preference only.
-    }
     setShowChatArea(true)
     setShowWorkspacePane(true)
     setFocusedPane('chat')
@@ -1109,18 +1101,10 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     setWorkspaceMinimized(true)
   }, [setShowWorkspacePane, setWorkspaceMinimized])
 
-  const openDefaultPreview = useCallback(() => {
-    setReportPreviewPreference(DEFAULT_REPORT_PREVIEW_DEVICE)
-    openWorkflowInDefaultPreview(workspacePath)
-  }, [workspacePath])
-
-  // Every workflow opens in the balanced Tablet layout. Device changes made
-  // after opening still work normally; switching away and back starts from the
-  // same predictable report/chat split instead of inheriting an old Mobile
-  // value written by terminal restoration.
-  useEffect(() => {
-    openDefaultPreview()
-  }, [openDefaultPreview])
+  const collapseChatFromRail = useCallback(() => {
+    setShowChatArea(false)
+    setFocusedPane('preview')
+  }, [setFocusedPane, setShowChatArea])
 
   const createFreshWorkflowBuilderTab = useCallback(async (presetId: string, options?: { composerFirst?: boolean; isExplicitNewChat?: boolean }) => {
     const chatStore = useChatStore.getState()
@@ -1151,7 +1135,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         skipWorkflowAutoRestore: options?.isExplicitNewChat === true
       })
     if (options?.composerFirst) {
-      openDefaultPreview()
       // No explicit view: the pane falls back to the last canvas view.
       setWorkflowWorkspaceView(null)
       setShowWorkspacePane(true)
@@ -1159,10 +1142,11 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     }
     activateTab(tabId)
     setShowChatArea(true)
-  }, [openDefaultPreview, setFocusedPane, setShowChatArea, setShowWorkspacePane, setWorkflowWorkspaceView])
+  }, [setFocusedPane, setShowChatArea, setShowWorkspacePane, setWorkflowWorkspaceView])
 
   useEffect(() => {
-    // Re-read this workflow's scoped preference (default Tablet) on mount, on
+    // Re-read this workflow's scoped preference (default Tablet only when it
+    // has never been chosen) on mount, on
     // workflow switch, and whenever the device changes (event/storage).
     const syncReportPreviewPreference = () => {
       setReportPreviewPreference(readReportPreviewPreference(workspacePath))
@@ -2224,7 +2208,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
 
   const handleWorkflowNewChat = useCallback(async () => {
     if (activePresetId) {
-      openDefaultPreview()
       setWorkflowWorkspaceView(null)
       setShowWorkspacePane(true)
       setFocusedPane('chat')
@@ -2269,12 +2252,11 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     // activePresetId are independent state, set from ~18 different call
     // sites, and nothing here guarantees they stay in lockstep. Left in place
     // as a harmless fallback rather than deleted without full certainty.
-    openDefaultPreview()
     setWorkflowWorkspaceView(null)
     setShowWorkspacePane(true)
     setFocusedPane('chat')
     chatAreaRef.current?.handleNewChat()
-  }, [activePresetId, activeSessionId, createFreshWorkflowBuilderTab, openDefaultPreview, setFocusedPane, setShowChatArea, setShowWorkspacePane, setWorkflowWorkspaceView, workspacePath])
+  }, [activePresetId, activeSessionId, createFreshWorkflowBuilderTab, setFocusedPane, setShowChatArea, setShowWorkspacePane, setWorkflowWorkspaceView, workspacePath])
 
   const handleKillAndStart = useCallback(async () => {
     if (!activePresetId) {
@@ -2372,6 +2354,18 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         >
           <PanelRightOpen className="h-4 w-4" />
           <span className="[writing-mode:vertical-rl] text-[10px] font-semibold uppercase tracking-wider">Panel</span>
+        </button>
+      )}
+      {!showChatArea && (
+        <button
+          type="button"
+          onClick={handleToggleChatArea}
+          title="Show chat panel"
+          aria-label="Show chat panel"
+          className="absolute left-0 top-1/2 z-30 hidden -translate-y-1/2 flex-col items-center gap-1.5 rounded-r-lg border border-l-0 border-border bg-background/95 py-3 pl-1 pr-1.5 text-muted-foreground shadow-md backdrop-blur-sm transition-colors hover:bg-muted hover:text-foreground md:flex"
+        >
+          <PanelLeftOpen className="h-4 w-4" />
+          <span className="[writing-mode:vertical-rl] text-[10px] font-semibold uppercase tracking-wider">Chat</span>
         </button>
       )}
       {/* Main Content */}
@@ -2475,6 +2469,16 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
                 </button>
               ))}
               <span className="h-px w-3 bg-border" />
+              <button
+                type="button"
+                onPointerDown={event => event.stopPropagation()}
+                onClick={collapseChatFromRail}
+                className="pointer-events-auto flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                aria-label="Collapse chat panel"
+                title="Collapse chat panel"
+              >
+                <PanelLeftClose className="h-3 w-3" />
+              </button>
               <button
                 type="button"
                 onPointerDown={event => event.stopPropagation()}

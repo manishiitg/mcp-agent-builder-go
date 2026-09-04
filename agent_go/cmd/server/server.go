@@ -9501,6 +9501,7 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				if workshopMode == "" {
 					workshopMode = "run"
 				}
+				pulseMode := manifest.EffectivePulseMode(sched)
 				sb.WriteString(fmt.Sprintf("### %s\n", sched.Name))
 				sb.WriteString(fmt.Sprintf("- **ID**: `%s`\n", sched.ID))
 				sb.WriteString(fmt.Sprintf("- **Type**: %s\n", scheduleType))
@@ -9513,6 +9514,12 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				}
 				sb.WriteString(fmt.Sprintf("- **Timezone**: %s\n", sched.Timezone))
 				sb.WriteString(fmt.Sprintf("- **Status**: %s\n", status))
+				sb.WriteString(fmt.Sprintf("- **Pulse**: %s", pulseMode))
+				if strings.TrimSpace(sched.PulseMode) == "" {
+					sb.WriteString(" (workflow default)\n")
+				} else {
+					sb.WriteString(" (schedule override)\n")
+				}
 				if api.scheduler != nil {
 					state := api.scheduler.GetRuntimeStateForWorkflow(workspacePath, sched.ID)
 					if state.LastStatus != "" {
@@ -9580,6 +9587,7 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				WorkshopMode:         workshopMode,
 				ResumePrevious:       resumePrevious,
 				PulseReviewOnly:      pulseReviewOnly,
+				PulseMode:            strings.ToLower(strings.TrimSpace(policy.PulseMode)),
 				ExecutionMode:        strings.TrimSpace(policy.ExecutionMode),
 				CollisionPolicy:      strings.TrimSpace(policy.CollisionPolicy),
 				MaxStartDelayMinutes: policy.MaxStartDelayMinutes,
@@ -9755,6 +9763,9 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				sched.PulseReviewOnly = *pulseReviewOnly
 			}
 			if policy != nil {
+				if policy.SetPulseMode {
+					sched.PulseMode = strings.ToLower(strings.TrimSpace(policy.PulseMode))
+				}
 				if policy.SetExecutionMode {
 					sched.ExecutionMode = strings.TrimSpace(policy.ExecutionMode)
 				}
