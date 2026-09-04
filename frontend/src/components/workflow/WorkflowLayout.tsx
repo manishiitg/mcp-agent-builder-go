@@ -1121,7 +1121,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     // content (see submitQueryImmediately's rename-on-first-message), it's no
     // longer a match here and a later call legitimately opens a fresh one.
     const tabId = blankWorkflowBuilderTabId(chatStore.chatTabs, presetId, chatStore.tabEvents)
-      ?? await chatStore.createChatTab('New chat', {
+      ?? await chatStore.createChatTab('Automation Builder', {
         mode: 'workflow',
         phaseId: 'workflow-builder',
         phaseName: 'Automation Builder',

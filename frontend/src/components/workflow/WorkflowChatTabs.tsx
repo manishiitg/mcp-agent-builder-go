@@ -11,6 +11,7 @@ import {
   isMisclassifiedRestoredWorkflowChat,
 } from './workflowChatTabConversion'
 import { shouldDisplayWorkflowTab, workflowTabDisplayName } from './workflowRuntimeTabProjection'
+import { isBlankWorkflowBuilderTab } from '../../utils/workflowTabResolution'
 import { useAuthStore } from '../../stores/useAuthStore'
 import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
 
@@ -188,12 +189,14 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
   const {
     chatTabs,
     activeTabId,
+    tabEvents,
     closeTab,
     setTabStreaming,
     setTabHasRunningBgAgents,
   } = useChatStore(useShallow(state => ({
     chatTabs: state.chatTabs,
     activeTabId: state.activeTabId,
+    tabEvents: state.tabEvents,
     closeTab: state.closeTab,
     setTabStreaming: state.setTabStreaming,
     setTabHasRunningBgAgents: state.setTabHasRunningBgAgents,
@@ -249,6 +252,16 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
         )
     return visible.sort((a, b) => a.createdAt - b.createdAt)
   }, [chatTabs, activePresetId, activeTabId])
+
+  // "+ New chat" would just hand back the tab already in front of you --
+  // createFreshWorkflowBuilderTab reuses a blank builder tab rather than
+  // stacking a second one -- so the button is a no-op while that's the
+  // active tab. Hiding it keeps it from reading as a second, competing
+  // "new chat" beside a tab that already reads as one.
+  const activeTabIsBlankBuilder = useMemo(() => {
+    const activeTab = activeTabId ? chatTabs[activeTabId] : undefined
+    return Boolean(activeTab && isBlankWorkflowBuilderTab(activeTab, activePresetId || '', tabEvents))
+  }, [activeTabId, activePresetId, chatTabs, tabEvents])
 
   // Skip auto-close on initial mount
   const hasRenderedRef = useRef(false)
@@ -362,7 +375,7 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
         {/* This starts a fresh conversation. The active tab is the
             conversation workspace; it is deliberately not another "Chat"
             label competing with the recent-conversation selector below. */}
-        {onNewChat && (
+        {onNewChat && !activeTabIsBlankBuilder && (
           <button
             type="button"
             onClick={(e) => {
