@@ -795,7 +795,15 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   // Virtuoso's internal scroller even though accessibility scroll actions work.
   // Forward the gesture explicitly. Nested scroll regions (expanded tool output)
   // keep first refusal while they can still move in the requested direction.
-  const handleWheelCapture = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+  // A native listener, not React's onWheelCapture: React registers wheel
+  // handlers as passive, so the preventDefault below was a no-op that logged
+  // "Unable to preventDefault inside passive event listener" on every
+  // trackpad tick in the desktop app while the scroll still went nowhere.
+  const wheelHostRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const host = wheelHostRef.current
+    if (!host) return
+    const handleWheelCapture = (event: WheelEvent) => {
     const scroller = scrollerRef.current
     if (!(scroller instanceof HTMLElement) || event.deltaY === 0) return
     if (event.deltaY < 0) {
@@ -820,6 +828,9 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     if (event.deltaY > 0 && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32) {
       followCurrentTurnRef.current = true
     }
+    }
+    host.addEventListener('wheel', handleWheelCapture, { capture: true, passive: false })
+    return () => host.removeEventListener('wheel', handleWheelCapture, { capture: true })
   }, [])
 
   if (items.length === 0 && !streamingText && !streamingStatus) {
@@ -878,7 +889,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     <div
       data-testid="terminal-clear-view"
       className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${surfaceClassName ?? 'bg-[#0d100f]'}`}
-      onWheelCapture={handleWheelCapture}
+      ref={wheelHostRef}
     >
       {showEarlierMessagesControl && (
         <div className={`flex shrink-0 items-center border-b px-3 py-1.5 text-[11px] ${
