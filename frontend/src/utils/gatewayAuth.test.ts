@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { gatewayLoginTarget } from './gatewayAuth'
+import { gatewayLoginTarget, isGatewayLoginPath } from './gatewayAuth'
 
 describe('gatewayLoginTarget', () => {
   it('accepts the explicit same-origin gateway login signal', () => {
@@ -14,5 +14,11 @@ describe('gatewayLoginTarget', () => {
   it('rejects external and protocol-relative redirects', () => {
     expect(gatewayLoginTarget(401, 'https://example.com/login')).toBeNull()
     expect(gatewayLoginTarget(401, '//example.com/login')).toBeNull()
+  })
+
+  it('does not redirect when the login page receives a late 401', () => {
+    expect(isGatewayLoginPath('/login')).toBe(true)
+    expect(isGatewayLoginPath('/login/')).toBe(true)
+    expect(isGatewayLoginPath('/projects/123')).toBe(false)
   })
 })

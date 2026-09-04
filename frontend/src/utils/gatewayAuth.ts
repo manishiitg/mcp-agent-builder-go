@@ -10,8 +10,15 @@ export function gatewayLoginTarget(status: number | undefined, headerValue: unkn
 
 let redirectInProgress = false
 
+export function isGatewayLoginPath(pathname: string): boolean {
+  return pathname === '/login' || pathname.startsWith('/login/')
+}
+
 export function redirectToGatewayLogin(target: string | null): boolean {
-  if (!target || typeof window === 'undefined' || redirectInProgress) return false
+  // API calls already in flight during logout can return after the login
+  // screen has mounted. Do not redirect the login screen to itself; doing so
+  // creates an ever-growing /login?next=/login?... URL.
+  if (!target || typeof window === 'undefined' || redirectInProgress || isGatewayLoginPath(window.location.pathname)) return false
   redirectInProgress = true
   window.location.assign(target)
   return true
