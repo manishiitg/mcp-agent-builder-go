@@ -88,6 +88,41 @@ func TestValidateHTMLReportRunsLiteralQueriesAgainstTheDatabase(t *testing.T) {
 	}
 }
 
+// The sales-outreach report (and most agent-authored ones) never call
+// window.report.query with a literal: they wrap it once and pass SQL to the
+// wrapper. Those statements must still be checked.
+func TestValidateHTMLReportChecksSQLPassedThroughALocalWrapper(t *testing.T) {
+	t.Parallel()
+	html := "<!doctype html><html><head><title>Leads</title></head><body><script>" +
+		"async function query(sql){ return normalize(await window.report.query(sql)); }" +
+		"async function load(){" +
+		"  const leads = await query(`SELECT id, company FROM leads WHERE status = 'new' ORDER BY id DESC`);" +
+		"  const gone = await query('select count(*) as n from missing_table');" +
+		"  const label = 'Select a market';" + // prose, not SQL
+		"  const strategy = \"<!DOCTYPE html><p>select nothing here</p>\";" + // markup, not SQL
+		"}</script></body></html>"
+	seen := []string{}
+	hooks := ReportHTMLValidationHooks{
+		ExplainSQL: func(_ context.Context, sql string) error {
+			seen = append(seen, sql)
+			if strings.Contains(sql, "missing_table") {
+				return errors.New("no such table: missing_table")
+			}
+			return nil
+		},
+	}
+	result := validateReport(t, html, hooks)
+	if len(seen) != 2 {
+		t.Fatalf("expected the two wrapper-passed statements to be explained, got %d: %v", len(seen), seen)
+	}
+	if !strings.Contains(result, `"valid": false`) || !strings.Contains(result, "no such table: missing_table") {
+		t.Fatalf("expected the failing wrapped query to be reported: %s", result)
+	}
+	if !strings.Contains(result, `"sql_literals": 2`) {
+		t.Fatalf("expected two checked statements: %s", result)
+	}
+}
+
 func TestValidateHTMLReportChecksReferencedFilesAndExternalAssets(t *testing.T) {
 	t.Parallel()
 	html := `<!doctype html><html><head><title>Assets</title>

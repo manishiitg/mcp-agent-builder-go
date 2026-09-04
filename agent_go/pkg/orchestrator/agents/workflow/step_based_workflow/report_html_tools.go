@@ -20,6 +20,13 @@ var (
 	// checked; a query built from variables or a template with ${} is reported
 	// as unchecked rather than guessed at.
 	reportHTMLQueryCallPattern = regexp.MustCompile("(?s)window\\.report\\.query\\(\\s*(?:'((?:[^'\\\\]|\\\\.)*)'|\"((?:[^\"\\\\]|\\\\.)*)\"|`([^`]*)`)")
+	// Any JS string literal that reads as a SQL statement. Reports commonly
+	// wrap window.report.query in a local helper (`async function query(sql)`)
+	// and pass literals to THAT, which the direct-call pattern never sees --
+	// measured on a real report: 13 statements, 0 direct calls.
+	reportHTMLSQLLiteralPattern = regexp.MustCompile("(?s)(?:'((?:[^'\\\\]|\\\\.)*)'|\"((?:[^\"\\\\]|\\\\.)*)\"|`([^`]*)`)")
+	reportHTMLSQLStartPattern   = regexp.MustCompile(`(?i)^\s*(?:select|with|pragma)\b`)
+	reportHTMLSQLBodyPattern    = regexp.MustCompile(`(?i)\b(?:from|pragma)\b|^\s*with\b.*\bselect\b`)
 	// window.report.get/getText/getHtml/fileUrl/openFile('db/...') plus plain
 	// src="db/..." / href="db/..." attributes -- every workspace path a report
 	// resolves at runtime.
@@ -49,33 +56,63 @@ func missingImmediateReportDOMTargets(content string) []string {
 	return missing
 }
 
-// reportHTMLLiteralQueries returns the SQL literals passed to
-// window.report.query, and how many calls used a non-literal (dynamic) query.
-func reportHTMLLiteralQueries(content string) (literals []string, dynamic int) {
-	for _, match := range reportHTMLQueryCallPattern.FindAllStringSubmatch(content, -1) {
-		sqlText := ""
-		switch {
-		case match[1] != "":
-			sqlText = strings.ReplaceAll(match[1], `\'`, `'`)
-		case match[2] != "":
-			sqlText = strings.ReplaceAll(match[2], `\"`, `"`)
-		case match[3] != "":
-			if strings.Contains(match[3], "${") {
-				dynamic++
-				continue
-			}
-			sqlText = match[3]
+func reportHTMLDecodeLiteral(match []string) (sqlText string, dynamic bool) {
+	switch {
+	case match[1] != "":
+		sqlText = strings.ReplaceAll(match[1], `\'`, `'`)
+	case match[2] != "":
+		sqlText = strings.ReplaceAll(match[2], `\"`, `"`)
+	case match[3] != "":
+		if strings.Contains(match[3], "${") {
+			return "", true
 		}
-		sqlText = strings.TrimSpace(sqlText)
-		if sqlText != "" {
-			literals = append(literals, sqlText)
-		}
+		sqlText = match[3]
 	}
-	// A call whose argument isn't a string literal at all doesn't match the
-	// pattern; count those too so the result says how much was NOT checked.
+	return strings.TrimSpace(sqlText), false
+}
+
+// reportHTMLLiteralQueries returns every SQL statement the report holds as a
+// string literal -- passed straight to window.report.query or to a local
+// wrapper around it -- deduplicated, plus how many direct calls used a
+// non-literal (dynamic) query and so cannot be checked.
+func reportHTMLLiteralQueries(content string) (literals []string, dynamic int) {
+	seen := make(map[string]struct{})
+	add := func(sqlText string) {
+		if sqlText == "" {
+			return
+		}
+		if _, ok := seen[sqlText]; ok {
+			return
+		}
+		seen[sqlText] = struct{}{}
+		literals = append(literals, sqlText)
+	}
+	direct := 0
+	for _, match := range reportHTMLQueryCallPattern.FindAllStringSubmatch(content, -1) {
+		sqlText, isDynamic := reportHTMLDecodeLiteral(match)
+		if isDynamic {
+			dynamic++
+			continue
+		}
+		direct++
+		add(sqlText)
+	}
+	for _, match := range reportHTMLSQLLiteralPattern.FindAllStringSubmatch(content, -1) {
+		sqlText, isDynamic := reportHTMLDecodeLiteral(match)
+		// "Select a market" is prose; a statement has a FROM (or is a PRAGMA /
+		// a WITH that reaches a SELECT). Prose sent to EXPLAIN would fail and
+		// wrongly mark the report invalid.
+		if isDynamic || !reportHTMLSQLStartPattern.MatchString(sqlText) || !reportHTMLSQLBodyPattern.MatchString(sqlText) {
+			continue
+		}
+		add(sqlText)
+	}
+	// A direct call whose argument isn't a string literal at all matches
+	// neither pattern; count those so the result says how much was NOT checked.
+	// (A wrapper call with a literal IS covered by the literal scan above.)
 	total := strings.Count(content, "window.report.query(")
-	if total > len(literals)+dynamic {
-		dynamic += total - len(literals) - dynamic
+	if total > direct+dynamic {
+		dynamic += total - direct - dynamic
 	}
 	return literals, dynamic
 }
