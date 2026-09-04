@@ -4,7 +4,6 @@ import type { ChatTab } from '../../stores/useChatStore'
 import { convertObservedWorkflowTabToInteractive } from './workflowChatTabConversion'
 import {
   reconcileWorkflowRuntimeTab,
-  reusableScheduleTabId,
   shouldCatchUpRunningWorkflowTranscript,
   shouldDisplayWorkflowTab,
   staleWorkflowTabIds,
@@ -285,40 +284,5 @@ describe('staleWorkflowTabIds', () => {
   })
 })
 
-describe('reusableScheduleTabId', () => {
-  const finishedScheduleTab = {
-    tabId: 'schedule-tab',
-    sessionId: 'schedule-cron--old_1',
-    isStreaming: false,
-    metadata: { mode: 'workflow' as const, isScheduledRun: true, isViewOnly: true, presetQueryId: 'workflow-social' },
-  }
-
-  it('reuses a finished Schedule lane instead of opening another tab per run', () => {
-    expect(reusableScheduleTabId({ a: finishedScheduleTab }, 'workflow-social', 'schedule-cron--new_2'))
-      .toBe('schedule-tab')
-  })
-
-  it('never displaces a live run — the scheduler lease means it still owns the lane', () => {
-    expect(reusableScheduleTabId(
-      { a: { ...finishedScheduleTab, isStreaming: true } }, 'workflow-social', 'schedule-cron--new_2',
-    )).toBeNull()
-  })
-
-  it('never recycles a tab the user promoted to an interactive chat', () => {
-    expect(reusableScheduleTabId(
-      { a: { ...finishedScheduleTab, metadata: { ...finishedScheduleTab.metadata, userInteractiveContinuation: true } } },
-      'workflow-social', 'schedule-cron--new_2',
-    )).toBeNull()
-  })
-
-  it('never crosses workflows', () => {
-    expect(reusableScheduleTabId({ a: finishedScheduleTab }, 'workflow-upwork', 'schedule-cron--new_2')).toBeNull()
-  })
-
-  it('leaves an ordinary Chat tab alone', () => {
-    expect(reusableScheduleTabId(
-      { a: { ...finishedScheduleTab, metadata: { mode: 'workflow' as const } } },
-      'workflow-social', 'schedule-cron--new_2',
-    )).toBeNull()
-  })
-})
+// reusableScheduleTabId moved to utils/workflowTabResolution.ts; its tests
+// live in utils/workflowTabResolution.test.ts.

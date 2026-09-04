@@ -10,7 +10,7 @@ import {
   convertObservedWorkflowTabToInteractive,
   isMisclassifiedRestoredWorkflowChat,
 } from './workflowChatTabConversion'
-import { shouldDisplayWorkflowTab, staleWorkflowTabIds, workflowTabDisplayName } from './workflowRuntimeTabProjection'
+import { shouldDisplayWorkflowTab, workflowTabDisplayName } from './workflowRuntimeTabProjection'
 import { useAuthStore } from '../../stores/useAuthStore'
 import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
 
@@ -27,10 +27,6 @@ interface WorkflowTabItemProps {
   onMakeInteractive: (tabId: string) => void
   onStop: (tabId: string) => void
 }
-
-// How often the idle-tab sweep runs. The threshold it enforces is six hours,
-// so checking every few minutes is enough to keep the strip tidy.
-const STALE_TAB_SWEEP_INTERVAL_MS = 5 * 60 * 1000
 
 // Per-tab live status — mirrors the backend's consolidated busy/idle/stopped
 // (sessionDisplayStatus). The dot lives in the tab pill instead of the toolbar.
@@ -310,21 +306,19 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
     }
   }, [setTabStreaming, setTabHasRunningBgAgents])
 
-  // Tabs otherwise only ever leave the strip when the user closes one, so a
-  // workflow that fires several schedules a day accumulates a tab per run
-  // (they persist across reloads too). Sweep the ones left untouched for
-  // six hours; the tab in front of the user and anything still running are
-  // never swept, so this can't take a conversation out from under them.
-  useEffect(() => {
-    const sweepStaleTabs = () => {
-      const state = useChatStore.getState()
-      const staleIds = staleWorkflowTabIds(Object.values(state.chatTabs), state.activeTabId)
-      staleIds.forEach(tabId => { void state.closeTab(tabId, false) })
-    }
-    const interval = window.setInterval(sweepStaleTabs, STALE_TAB_SWEEP_INTERVAL_MS)
-    sweepStaleTabs()
-    return () => window.clearInterval(interval)
-  }, [])
+  // DISABLED 2026-09-04 (shipped and reverted same day): staleWorkflowTabIds
+  // treats a tab as "safe to sweep" using isStreaming/hasRunningBgAgents,
+  // but reconcileRunningWorkflowTab (WorkflowLayout.tsx) treats a session as
+  // still "running" on a broader definition that also covers idle/waiting --
+  // which is the normal resting state of an Automation Builder chat between
+  // messages. So the sweep was closing perfectly ordinary idle tabs, and the
+  // reconciler's next ~10s poll recreated them from the still-tracked
+  // backend session -- unprompted close/reopen flicker, live in production.
+  // Re-enable only once staleWorkflowTabIds (or its caller) checks the same
+  // "is this session still running" signal reconcileRunningWorkflowTab does,
+  // not the narrower streaming/bg-agent flags. staleWorkflowTabIds and its
+  // tests are left in place -- the function itself is correct, it just
+  // needs a correct "is this session done" input.
 
   // Close chat area when all workflow tabs are closed (but not on first render)
   useEffect(() => {

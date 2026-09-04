@@ -7,12 +7,13 @@ import { useGlobalPresetStore } from '../stores/useGlobalPresetStore'
 import { useRunningWorkflowsStore } from '../stores/useRunningWorkflowsStore'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import type { CustomPreset, PredefinedPreset } from '../types/preset'
-import { isInternalChildSession, isScheduledSession } from './workflowSessionKinds'
+import { isInternalChildSession } from './workflowSessionKinds'
 import { isVisibleActivitySession } from './activitySessions'
 import { openWorkflowInDefaultPreview } from './reportPreviewPreference'
 import { normalizeWorkspacePath } from './workspacePathUtils'
 import { activateWorkflowTab, beginWorkflowNavigation, isCurrentWorkflowNavigation, selectWorkflowPreset } from './workflowNavigation'
 import { scheduleTabLabel } from './scheduleTabLabel'
+import { resolveWorkflowTabForSession } from './workflowTabResolution'
 
 type RestoreWorkflowSessionOptions = {
   preset?: CustomPreset | PredefinedPreset
@@ -193,19 +194,6 @@ function isEmptyWorkflowBuilderTab(tab: ChatTab, presetId: string): boolean {
     !chatStore.getTabStreamingStatus(tab.tabId) &&
     !tab.config?.restoredConversationPath &&
     (!tab.sessionId || chatStore.getTabEvents(tab.sessionId).length === 0)
-}
-
-function findReadOnlyRunTabForSession(
-  tabs: Record<string, ChatTab>,
-  sessionId: string,
-  metadata: NonNullable<ChatTab['metadata']>,
-): ChatTab | undefined {
-  return Object.values(tabs).find(tab => {
-    if (tab.sessionId !== sessionId || tab.metadata?.mode !== 'workflow' || !tab.metadata?.isViewOnly) return false
-    if (metadata.isScheduledRun) return tab.metadata.isScheduledRun === true
-    if (metadata.isBotRun) return tab.metadata.isBotRun === true
-    return false
-  })
 }
 
 export function isScheduledWorkflowSession(session: ActiveSessionInfo, runningWorkflow?: RunningWorkflowInfo): boolean {
@@ -539,12 +527,21 @@ async function restoreReadOnlyWorkflowRunChat(
     }
   }
 
-  const existingTab = findReadOnlyRunTabForSession(chatStore.chatTabs, session.session_id, metadata)
-
-  const tabId = existingTab?.tabId ?? await chatStore.createChatTab(desiredName, metadata, session.session_id)
+  // Opened from the Global Activity Monitor / activity list. Same resolution
+  // as WorkflowLayout's reconciler: a new run of a schedule lands in that
+  // schedule's existing tab rather than opening one beside it.
+  const { tabId, via } = await resolveWorkflowTabForSession({
+    getTabs: () => useChatStore.getState().chatTabs,
+    presetQueryId: metadata.presetQueryId ?? presetId ?? '',
+    sessionId: session.session_id,
+    name: desiredName,
+    metadata,
+    createChatTab: chatStore.createChatTab,
+    updateTabSessionId: chatStore.updateTabSessionId,
+  })
   if (!isPresetStillActive(presetId)) return tabId
   chatStore.setTabMetadata(tabId, metadata)
-  if (existingTab && existingTab.name !== desiredName) {
+  if (via !== 'created' && useChatStore.getState().chatTabs[tabId]?.name !== desiredName) {
     useChatStore.setState((state) => {
       const tab = state.chatTabs[tabId]
       if (!tab) return state
