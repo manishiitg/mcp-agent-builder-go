@@ -1,11 +1,11 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-280 — `upwork`'s scripted-mode DB steps lose `$DB_PATH` on every codex-cli run since 2026-09-01; root mechanism not confirmed, diagnostic logging added
+# PLAT-280 — `upwork`'s scripted-mode DB steps lose `$DB_PATH` because their plan type never matched their declared execution mode
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `open` — reproduced from durable data across 4 days, code-traced at length, no confirmed defect found in the injection path itself; diagnostic-only logging shipped to catch the next recurrence live |
+| Ticket state | `fixed` — root cause confirmed (not the session-id hypothesis below), a real conversion tool + write-time guard + workflow contract migration shipped, and upwork's 4 affected steps converted live |
 | Last synchronized | `2026-09-04` |
 
 - **Priority:** P1 — user-reported live. `search-save-jobs` is upwork's core
@@ -140,7 +140,10 @@ flow changed.
   branch to unit-test, matching this repo's convention for this class of
   fix (see PLAT-196).
 
-## Next step when this recurs
+## Next step when this recurs (superseded — see resolution below)
+
+The paragraph below was the plan before the actual root cause was found; kept
+for the record.
 
 `search-save-jobs` runs on a schedule that fires roughly every 1-2 days
 (most recently today); the next failure should carry the `[PLAT-280]` log
@@ -153,3 +156,76 @@ the session-id-resolution hypothesis and points directly at
 `setMessageSequenceShellEnv`'s *first* call, before agent creation, ever
 runs *after* the one inside `createExecutionOnlyAgent` in some ordering this
 trace did not consider).
+
+## Resolution: the session-id hypothesis was unnecessary — the actual defect was simpler
+
+The user pushed back on the framing itself: *"does declared execution mode
+even make sense... or should just step type be scripted, because regular
+step is scripted right"*. That question found the real defect faster than
+the diagnostic-logging plan above would have.
+
+`RegularPlanStep` (plan `type: "regular"`) is already what the authoring
+surface calls "scripted" — the tool that creates one is literally named
+`add_scripted_step`. `declared_execution_mode` on a `regular` step exists
+only to disambiguate it from a pre-message_sequence-era legacy `regular`
+step that is really conversational (auto-upgraded to `message_sequence` by
+`update_message_sequence_step` the moment it's edited — that compatibility
+path already existed). It was never a valid, independent signal on a
+`message_sequence`-typed step: a `message_sequence` step is dispatched
+entirely through `controller_message_sequence.go`'s conversational executor
+regardless of what its `declared_execution_mode` claims. The real scripted
+executor (`controller_execution.go`'s `isScriptedMode` branch, backed by
+`controller_scripted.go`) — the one that reliably sets `$DB_PATH` — is only
+ever reached for a step whose **plan type** is `regular`. Setting
+`declared_execution_mode: "scripted"` on a `message_sequence` step, as a
+2026-08-31 technical-maintenance pass did for these four upwork steps
+(because no tool existed to convert the plan type), created a step that
+*claimed* to be scripted but never actually ran through the engine that
+makes that claim true. No session-id mismatch, no race, no exotic bridge
+behavior — the step simply never used the code path this whole
+investigation was tracing.
+
+**What shipped:**
+
+1. **A real in-place conversion**, symmetric with the existing (and
+   previously one-directional) `message_sequence` ← `regular` legacy-upgrade
+   path. `update_scripted_step` now accepts a `message_sequence` step whose
+   `step_config` already declares `scripted` and atomically converts it to
+   `regular` while applying the edit — same id, `step_config.json`/drift
+   history preserved, items dropped (a scripted step's real work is the
+   checked-in `main.py`, not plan-authored items). New:
+   `normalizeMessageSequenceStepToRegular`
+   (`controller_message_sequence.go`), `prepareScriptedStepUpdateTarget`
+   (replaces the old validate-only `validateScriptedStepUpdateTarget`,
+   `planning_agent.go`).
+2. **A write-time guard.** `update_step_config` already refused
+   `declared_execution_mode="scripted"` on an `orchestrator` (`todo_task`)
+   step; it now refuses the same combination on a `message_sequence` step
+   too, pointing the caller at `update_scripted_step` instead of letting the
+   drift get created again (`interactive_workshop_manager.go`).
+3. **Workflow contract 1.0.37.** `workflowContractScriptedTypeStaysRegularVersion`
+   walks every workflow through this same conversion the next time its
+   scheduler-driven contract preflight runs, for any other workflow carrying
+   the same drift (`workflow_manifest.go`, `workflow_version_upgrades.go`).
+4. **upwork's four affected steps fixed live.** Ran the real
+   `update_scripted_step` executor (not a hand-edit) against
+   `workspace-docs/Workflow/upwork/planning/{plan,step_config}.json` for
+   `search-save-jobs`, `bid-record`, `outreach-record`, and
+   `improve-read-history`. All four are now `regular`-typed; verified by
+   re-reading the plan afterward. `step_config.json`'s
+   `description_reviewed` was cleared and `drift_review.needs_review` set —
+   the tool's normal "this step's contract may be stale, re-review it"
+   side effect, not a bug. upwork's `workflow.json` version was deliberately
+   left at `1.0.35` (not hand-stamped to `1.0.37`) so its next scheduled
+   contract preflight still runs the intervening `1.0.36` migration in
+   order; the `1.0.37` step it eventually reaches will find nothing left to
+   do.
+
+**The `[PLAT-280]` diagnostic log line was left in place** — harmless, and
+still useful as a tripwire if some other code path ever produces the same
+symptom for a different reason.
+
+**Not yet done:** confirming with a live scheduled run that
+`search-save-jobs` actually saves jobs now (its cron fires roughly daily;
+next occurrence should show `status='completed'` in
+`background_agent_log`).

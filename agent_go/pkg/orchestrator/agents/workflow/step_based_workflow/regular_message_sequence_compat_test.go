@@ -64,7 +64,7 @@ func TestScriptedStepNextStepIDRoundTripAndUpdate(t *testing.T) {
 	}
 }
 
-func TestValidateScriptedStepUpdateTarget(t *testing.T) {
+func TestPrepareScriptedStepUpdateTarget(t *testing.T) {
 	plan := &PlanningResponse{Steps: []PlanStepInterface{
 		&RegularPlanStep{CommonStepFields: CommonStepFields{ID: "scripted"}},
 		&RegularPlanStep{CommonStepFields: CommonStepFields{ID: "legacy-agentic"}},
@@ -75,16 +75,18 @@ func TestValidateScriptedStepUpdateTarget(t *testing.T) {
 		AgentConfigs: &AgentConfigs{DeclaredExecutionMode: StepModeScripted},
 	}}
 
-	if err := validateScriptedStepUpdateTarget(plan, configs, "scripted"); err != nil {
+	if downgraded, err := prepareScriptedStepUpdateTarget(plan, configs, "scripted"); err != nil {
 		t.Fatalf("declared scripted step was rejected: %v", err)
+	} else if downgraded {
+		t.Fatal("an already-regular step must not be reported as downgraded")
 	}
-	if err := validateScriptedStepUpdateTarget(plan, configs, "legacy-agentic"); err == nil {
+	if _, err := prepareScriptedStepUpdateTarget(plan, configs, "legacy-agentic"); err == nil {
 		t.Fatal("legacy agentic regular step must not be editable through update_scripted_step")
 	} else if !strings.Contains(err.Error(), "update_message_sequence_step") {
 		t.Fatalf("legacy rejection must identify the working compatibility path: %v", err)
 	}
-	if err := validateScriptedStepUpdateTarget(plan, configs, "sequence"); err == nil {
-		t.Fatal("message_sequence must use its type-specific update tool")
+	if _, err := prepareScriptedStepUpdateTarget(plan, configs, "sequence"); err == nil {
+		t.Fatal("a genuine (non-scripted) message_sequence step must use its type-specific update tool")
 	}
 }
 
@@ -120,6 +122,60 @@ func TestPrepareMessageSequenceUpdateTargetUpgradesLegacyAgenticRegular(t *testi
 	}
 	if len(sequence.Items) != 1 || sequence.Items[0].ID != normalizedRegularSequenceItemID {
 		t.Fatalf("compatibility upgrade did not preserve effective runtime queue: %#v", sequence.Items)
+	}
+}
+
+func TestPrepareScriptedStepUpdateTargetDowngradesDeclaredScriptedSequence(t *testing.T) {
+	sequence := &MessageSequencePlanStep{
+		Type: StepTypeMessageSeq,
+		CommonStepFields: CommonStepFields{
+			ID:          "search-save-jobs",
+			Title:       "Record shortlisted jobs to db",
+			Description: "Execute the checked-in deterministic implementation in learnings/search-save-jobs/main.py for this run.",
+		},
+		NextStepID: "end",
+		Items: []MessageSequenceItem{{
+			ID:      "verify-scripted-result",
+			Type:    "user_message",
+			Message: "Run the checked-in script and verify its output.",
+		}},
+	}
+	plan := &PlanningResponse{Steps: []PlanStepInterface{sequence}}
+	configs := []StepConfig{{
+		ID:           sequence.ID,
+		AgentConfigs: &AgentConfigs{DeclaredExecutionMode: StepModeScripted},
+	}}
+
+	downgraded, err := prepareScriptedStepUpdateTarget(plan, configs, sequence.ID)
+	if err != nil {
+		t.Fatalf("declared-scripted message_sequence downgrade failed: %v", err)
+	}
+	if !downgraded {
+		t.Fatal("expected declared-scripted message_sequence step to be downgraded")
+	}
+	regular, ok := plan.Steps[0].(*RegularPlanStep)
+	if !ok {
+		t.Fatalf("downgraded step type = %T, want *RegularPlanStep", plan.Steps[0])
+	}
+	if regular.ID != sequence.ID || regular.Description != sequence.Description || regular.NextStepID != "end" {
+		t.Fatalf("downgrade lost existing fields: %#v", regular)
+	}
+}
+
+func TestPrepareScriptedStepUpdateTargetRejectsNonScriptedSequence(t *testing.T) {
+	plan := &PlanningResponse{Steps: []PlanStepInterface{
+		&MessageSequencePlanStep{CommonStepFields: CommonStepFields{ID: "sequence"}},
+	}}
+
+	downgraded, err := prepareScriptedStepUpdateTarget(plan, nil, "sequence")
+	if err == nil || !strings.Contains(err.Error(), "update_message_sequence_step") {
+		t.Fatalf("non-scripted sequence rejection = %v, want update_message_sequence_step guidance", err)
+	}
+	if downgraded {
+		t.Fatal("a genuine message_sequence step must never be converted")
+	}
+	if _, ok := plan.Steps[0].(*MessageSequencePlanStep); !ok {
+		t.Fatalf("rejected message_sequence step was mutated to %T", plan.Steps[0])
 	}
 }
 

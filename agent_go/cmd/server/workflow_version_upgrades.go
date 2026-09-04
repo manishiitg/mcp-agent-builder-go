@@ -56,6 +56,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractPulseActionableBacklogVersion,
 		workflowContractOrchestratorStepTypeVersion,
 		workflowContractActivityTabFromRunSummaryVersion,
+		workflowContractScriptedTypeStaysRegularVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -311,6 +312,14 @@ Otherwise read the report and find what feeds its activity tab:
 
 Do not delete a step or table without the parent agreeing in this conversation. Do not run the workflow. Call validate_report_html after any edit and repair every error. Then call set_workflow_contract_version(version="1.0.36") and stop — stamp it whichever way the parent chose, including "keep what we have".`
 
+const upgradeScriptedTypeStaysRegular = `WORKFLOW CONTRACT UPGRADE: A DECLARED-SCRIPTED STEP'S PLAN TYPE MUST BE REGULAR, NEVER MESSAGE_SEQUENCE.
+
+Do only this migration. Read planning/step_config.json and planning/plan.json. Find every step whose step_config declares declared_execution_mode="scripted" but whose plan.json type is "message_sequence" instead of "regular" -- that combination is invalid (PLAT-280): the real scripted executor only runs true regular-type steps and reliably injects $DB_PATH/STEP_OUTPUT_DIR there, which the message_sequence runtime does not guarantee even when its config claims to be scripted. This caused a live production step to silently lose database access.
+
+For each matching step, call update_scripted_step(existing_step_id=<its id>, reason="PLAT-280 migration: message_sequence type with declared scripted mode is not a valid combination"). It atomically converts the step's plan type to regular in place -- same id, step_config.json history preserved -- and drops its message_sequence items, since a scripted step's real work is the checked-in learnings/{step-id}/main.py, not plan-authored items. Do not hand-edit plan.json or step_config.json. Do not run the workflow.
+
+If no step matches, this is a no-op. If update_scripted_step reports an error for any matching step, do not stamp -- leave the mismatch as-is and report what blocked it. Otherwise call set_workflow_contract_version(version="1.0.37") and stop.`
+
 const workflowUpgradeWorkspacePathPlaceholder = "{{WORKSPACE_PATH}}"
 
 func bindWorkflowUpgradeWorkspacePath(query, workspacePath string) string {
@@ -390,6 +399,10 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	// workflowContractActivityTabFromRunSummaryVersion ("1.0.36") sits at rank 35.
 	if rank < 35 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractActivityTabFromRunSummaryVersion, label: "upgrade-activity-tab-from-run-summary", query: upgradeActivityTabFromRunSummary})
+	}
+	// workflowContractScriptedTypeStaysRegularVersion ("1.0.37") sits at rank 36.
+	if rank < 36 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractScriptedTypeStaysRegularVersion, label: "upgrade-scripted-type-stays-regular", query: upgradeScriptedTypeStaysRegular})
 	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse

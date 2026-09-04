@@ -4158,13 +4158,22 @@ func createUpdateRegularStepExecutor(workspacePath string, logger loggerv2.Logge
 		if err != nil {
 			return "", fmt.Errorf("failed to read step config: %w", err)
 		}
-		if err := validateScriptedStepUpdateTarget(plan, stepConfigs, partialUpdate.ExistingStepID); err != nil {
+		downgradedLegacySequence, err := prepareScriptedStepUpdateTarget(plan, stepConfigs, partialUpdate.ExistingStepID)
+		if err != nil {
 			return "", err
 		}
 
 		// Track per-field changes — passed to the plan changelog after a
 		// successful write.
 		fieldChanges := make([]PlanFieldChange, 0)
+		if downgradedLegacySequence {
+			fieldChanges = append(fieldChanges, PlanFieldChange{
+				StepID:   partialUpdate.ExistingStepID,
+				Field:    "type",
+				OldValue: string(StepTypeMessageSeq),
+				NewValue: string(StepTypeRegular),
+			})
+		}
 
 		_, _, err = updateSingleStep(plan, partialUpdate, &fieldChanges)
 		if err != nil {
@@ -4196,29 +4205,56 @@ func createUpdateRegularStepExecutor(workspacePath string, logger loggerv2.Logge
 
 		dependentReviewNotice := handlePlanStepDependentArtifactReview(ctx, workspacePath, partialUpdate.ExistingStepID, fieldChanges, readFile, writeFile, logger)
 
-		logger.Info(fmt.Sprintf("✅ Updated scripted step '%s' in plan", partialUpdate.ExistingStepID))
-		return fmt.Sprintf("Successfully updated scripted step '%s' in the plan%s", partialUpdate.ExistingStepID, dependentReviewNotice), nil
+		downgradeNotice := ""
+		if downgradedLegacySequence {
+			downgradeNotice = " and downgraded its saved legacy message_sequence type to regular, so the real scripted executor (with its $DB_PATH/STEP_OUTPUT_DIR injection) now runs it"
+		}
+		logger.Info(fmt.Sprintf("✅ Updated scripted step '%s' in plan%s", partialUpdate.ExistingStepID, downgradeNotice))
+		return fmt.Sprintf("Successfully updated scripted step '%s' in the plan%s%s", partialUpdate.ExistingStepID, downgradeNotice, dependentReviewNotice), nil
 	}
 }
 
-func validateScriptedStepUpdateTarget(plan *PlanningResponse, stepConfigs []StepConfig, stepID string) error {
+// prepareScriptedStepUpdateTarget is prepareMessageSequenceUpdateTarget's
+// mirror (PLAT-280). A message_sequence step whose step_config already
+// declares scripted mode has no in-place way to become a true `regular` plan
+// step, so update_message_sequence_step was its only editable path even
+// though its checked-in learnings/{step-id}/main.py needs the real scripted
+// executor. This atomically downgrades it to `regular` (dropping items, which
+// carry no information a scripted step uses) while applying the edit.
+func prepareScriptedStepUpdateTarget(plan *PlanningResponse, stepConfigs []StepConfig, stepID string) (bool, error) {
 	if plan == nil {
-		return fmt.Errorf("cannot update scripted step %q: plan is unavailable", stepID)
+		return false, fmt.Errorf("cannot update scripted step %q: plan is unavailable", stepID)
 	}
 	existingStep, _, _ := findStepByID(plan.Steps, stepID)
 	if existingStep == nil {
 		existingStep, _, _ = findStepByID(plan.OrphanSteps, stepID)
 	}
 	if existingStep == nil {
-		return nil // updateSingleStep returns the existing detailed not-found error.
+		return false, nil // updateSingleStep returns the existing detailed not-found error.
 	}
-	if existingStep.StepType() != StepTypeRegular {
-		return wrongStepTypeToolError(stepID, existingStep.StepType(), "update_scripted_step")
+
+	switch step := existingStep.(type) {
+	case *RegularPlanStep:
+		if !isScriptedExecutionModeConfig(MatchStepConfigByID(stepID, stepConfigs)) {
+			return false, fmt.Errorf("step %q is a legacy agentic regular step, not a declared scripted step; use update_message_sequence_step, which will atomically upgrade its saved type and apply the edit", stepID)
+		}
+		return false, nil
+	case *MessageSequencePlanStep:
+		if !isScriptedExecutionModeConfig(MatchStepConfigByID(stepID, stepConfigs)) {
+			return false, fmt.Errorf("step %q is a message_sequence step, not a declared scripted step; use update_message_sequence_step", stepID)
+		}
+		replacement := normalizeMessageSequenceStepToRegular(step)
+		replaced, _ := replaceStepRecursively(plan.Steps, stepID, replacement)
+		if !replaced {
+			replaced, _ = replaceStepRecursively(plan.OrphanSteps, stepID, replacement)
+		}
+		if !replaced {
+			return false, fmt.Errorf("failed to downgrade declared-scripted message_sequence step %q to regular", stepID)
+		}
+		return true, nil
+	default:
+		return false, wrongStepTypeToolError(stepID, existingStep.StepType(), "update_scripted_step")
 	}
-	if !isScriptedExecutionModeConfig(MatchStepConfigByID(stepID, stepConfigs)) {
-		return fmt.Errorf("step %q is a legacy agentic regular step, not a declared scripted step; use update_message_sequence_step, which will atomically upgrade its saved type and apply the edit", stepID)
-	}
-	return nil
 }
 
 // prepareMessageSequenceUpdateTarget makes the mutation API agree with the
@@ -5816,7 +5852,7 @@ func registerPlanModificationTools(
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"update_scripted_step",
-		"Update an existing deterministic scripted step. The internal plan type remains regular, but this tool only edits a checked-in script boundary implemented by learnings/<step-id>/main.py. Provide existing_step_id and only the contract fields to change. Use next_step_id to chain scripted steps inside a selected route and make the final script converge on a shared downstream step. Do not use it for conversational or judgment-heavy work; those steps must be message_sequence. The plan is updated immediately. After a substantive change, update and test main.py and review whether validation, learnings, and downstream consumers still match the contract; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
+		"Update an existing deterministic scripted step. The internal plan type remains regular, but this tool only edits a checked-in script boundary implemented by learnings/<step-id>/main.py. Provide existing_step_id and only the contract fields to change. Use next_step_id to chain scripted steps inside a selected route and make the final script converge on a shared downstream step. Do not use it for conversational or judgment-heavy work; those steps must be message_sequence. Also accepts a message_sequence step whose declared_execution_mode is already scripted -- its saved type is atomically downgraded to regular while the edit is applied, so the real scripted executor (reliable $DB_PATH/STEP_OUTPUT_DIR injection) runs it instead of the message_sequence runtime, which does not guarantee that. A genuine (non-scripted) message_sequence step is rejected; use update_message_sequence_step for that. The plan is updated immediately. After a substantive change, update and test main.py and review whether validation, learnings, and downstream consumers still match the contract; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		regularUpdateParams,
 		createUpdateRegularStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",

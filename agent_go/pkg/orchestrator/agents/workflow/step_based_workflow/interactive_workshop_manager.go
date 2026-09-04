@@ -3923,6 +3923,19 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						workshopPlanStepType(ctx, iwm.controller, stepID) == StepTypeOrchestrator {
 						return "", fmt.Errorf("declared_execution_mode=\"scripted\" is not supported on orchestrator (todo_task) step %q: an orchestrator exists to make runtime delegation decisions, and delegation that is deterministic enough to script belongs in a regular scripted step whose main.py calls the routes", stepID)
 					}
+					// PLAT-280: declared_execution_mode="scripted" on a message_sequence
+					// step is not a supported combination either. The real scripted
+					// executor only runs true `regular`-type steps and reliably injects
+					// $DB_PATH/STEP_OUTPUT_DIR there; a message_sequence step never gets
+					// that guarantee even when its config claims to be scripted, which is
+					// exactly how upwork's search-save-jobs silently lost DB access.
+					// update_scripted_step now performs the real fix atomically: it
+					// converts the step's plan type to regular while applying an edit, so
+					// this field and the plan type can never disagree afterward.
+					if canonicalDeclaredExecutionMode(s) == StepModeScripted && !isEvalStep &&
+						workshopPlanStepType(ctx, iwm.controller, stepID) == StepTypeMessageSeq {
+						return "", fmt.Errorf("declared_execution_mode=\"scripted\" cannot be set on message_sequence step %q here: the plan type and the declared mode would disagree, and the real scripted executor never actually runs it. Call update_scripted_step(existing_step_id=%q, reason=...) instead -- it converts the step to a true regular/scripted step in place, then this field is redundant (regular steps default to scripted)", stepID, stepID)
+					}
 					targetConfig.AgentConfigs.DeclaredExecutionMode = s
 				}
 			}

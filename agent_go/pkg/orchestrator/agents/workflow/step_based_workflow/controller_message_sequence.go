@@ -181,6 +181,26 @@ func shouldNormalizeRegularStepToMessageSequence(step PlanStepInterface) bool {
 	return ok && !isScriptedExecutionModeConfig(regular.AgentConfigs)
 }
 
+// normalizeMessageSequenceStepToRegular is normalizeRegularStepToMessageSequence's
+// mirror: a message_sequence step whose step_config already declares scripted
+// mode (PLAT-280 — a checked-in learnings/{step-id}/main.py that needs the real
+// scripted executor's $DB_PATH/STEP_OUTPUT_DIR injection, which the
+// message_sequence runtime does not reliably provide) has no in-place way to
+// become a true `regular` plan step. Items carry no information a scripted step
+// can use — its work lives entirely in the checked-in script — so they are
+// dropped, not migrated.
+func normalizeMessageSequenceStepToRegular(step *MessageSequencePlanStep) *RegularPlanStep {
+	if step == nil {
+		return nil
+	}
+	return &RegularPlanStep{
+		Type:             StepTypeRegular,
+		CommonStepFields: step.CommonStepFields,
+		NextStepID:       step.NextStepID,
+		AgentConfigs:     step.AgentConfigs,
+	}
+}
+
 // effectiveRuntimeStepType reports the execution model users actually see.
 // Persisted non-scripted regular steps run through message_sequence for
 // compatibility, so exposing them as "regular" in terminal metadata is
