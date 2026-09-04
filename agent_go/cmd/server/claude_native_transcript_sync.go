@@ -93,8 +93,9 @@ func (api *StreamingAPI) scheduleWorkflowBuilderNativeTranscriptSync(sessionID s
 
 // syncWorkflowBuilderConversationFromNativeTranscript reconciles one existing
 // workflow builder record, then updates its metadata index in the same pass.
-// The returned supported value is false for every provider except Claude Code,
-// avoiding needless retries for transcript formats this reader cannot parse.
+// The returned supported value is false for providers without a transcript
+// reader (see nativeTranscriptSyncSupportedProvider), avoiding needless
+// retries for formats this package cannot parse.
 func (api *StreamingAPI) syncWorkflowBuilderConversationFromNativeTranscript(ctx context.Context, sessionID, workspacePath string) (changed, supported bool) {
 	raw, err := ReadChatHistoryConversation("default", sessionID, workspacePath)
 	if err != nil || len(raw) == 0 || !claudeNativeTranscriptSyncSupported(raw) {
@@ -181,12 +182,54 @@ func claudeNativeTranscriptSyncSupported(raw []byte) bool {
 	if provider == "" && record.Runtime.AgentSessionHandle != nil && record.Runtime.AgentSessionHandle.Provider != nil {
 		provider = strings.ToLower(strings.TrimSpace(record.Runtime.AgentSessionHandle.Provider.Provider))
 	}
-	return provider == "claude-code"
+	return nativeTranscriptSyncSupportedProvider(provider)
+}
+
+// nativeTranscriptSyncSupportedProvider: the coding CLIs whose on-disk
+// transcript this package can read back (claude_native_transcript_sync.go,
+// codex_native_transcript_sync.go). Cursor and Pi have no reader yet, so a
+// retained live-input turn on those still leaves the durable record behind.
+func nativeTranscriptSyncSupportedProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "claude-code", "codex-cli":
+		return true
+	}
+	return false
+}
+
+// nativeTranscriptMessagesForRuntime reads the CLI's own transcript for a
+// builder session. ok is false when the provider has no reader or no
+// transcript could be found; callers then leave the persisted record as-is.
+func nativeTranscriptMessagesForRuntime(provider, nativeSessionID, workingDir string) (messages []builderConversationMessage, maxTimestamp time.Time, transcriptPath string, ok bool, err error) {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "claude-code":
+		if nativeSessionID == "" || workingDir == "" {
+			return nil, time.Time{}, "", false, nil
+		}
+		transcriptPath, err = resolveClaudeNativeTranscriptPath(workingDir, nativeSessionID)
+		if err != nil || transcriptPath == "" {
+			return nil, time.Time{}, "", false, err
+		}
+		messages, maxTimestamp, err = readNewClaudeTranscriptMessages(transcriptPath, time.Time{})
+		return messages, maxTimestamp, transcriptPath, err == nil, err
+	case "codex-cli":
+		if nativeSessionID == "" {
+			return nil, time.Time{}, "", false, nil
+		}
+		transcriptPath, err = resolveCodexNativeTranscriptPath(nativeSessionID)
+		if err != nil || transcriptPath == "" {
+			return nil, time.Time{}, "", false, err
+		}
+		messages, maxTimestamp, err = readCodexTranscriptMessages(transcriptPath)
+		return messages, maxTimestamp, transcriptPath, err == nil, err
+	}
+	return nil, time.Time{}, "", false, nil
 }
 
 // refreshLatestBuilderConversationFromNativeTranscript catches a persisted
-// builder conversation snapshot up with the Claude Code CLI's own on-disk
-// transcript (PLAT-178).
+// builder conversation snapshot up with the coding CLI's own on-disk
+// transcript (PLAT-178) -- Claude Code's project JSONL or Codex's rollout,
+// per nativeTranscriptMessagesForRuntime.
 //
 // Best-effort throughout: any resolution failure (no runtime info, no
 // matching transcript file, nothing new) returns log unchanged. A
@@ -222,27 +265,18 @@ func (api *StreamingAPI) refreshLatestBuilderConversationFromNativeTranscript(ct
 		}
 		workingDir = strings.TrimSpace(runtime.AgentSessionHandle.Provider.WorkingDir)
 	}
-	if provider != "claude-code" || nativeSessionID == "" || workingDir == "" {
-		return conv
-	}
-
-	transcriptPath, err := resolveClaudeNativeTranscriptPath(workingDir, nativeSessionID)
-	if err != nil || transcriptPath == "" {
-		return conv
-	}
-
 	// Do not use conv.UpdatedAt as a transcript cursor. The live-input path
 	// advances updated_at when it persists each human message, but it cannot
 	// persist the corresponding assistant reply. A later human message can
 	// therefore advance updated_at past an earlier missing reply. Reading the
 	// full native transcript and sequence-merging it is what recovers those
 	// interleaved replies without duplicating the already-persisted humans.
-	nativeMessages, maxTimestamp, err := readNewClaudeTranscriptMessages(transcriptPath, time.Time{})
+	nativeMessages, maxTimestamp, transcriptPath, ok, err := nativeTranscriptMessagesForRuntime(provider, nativeSessionID, workingDir)
 	if err != nil {
-		log.Printf("[CHAT_HISTORY] Native transcript catch-up: failed to read %s: %v", transcriptPath, err)
+		log.Printf("[CHAT_HISTORY] Native transcript catch-up: failed to read %s transcript for %s: %v", provider, nativeSessionID, err)
 		return conv
 	}
-	if len(nativeMessages) == 0 {
+	if !ok || len(nativeMessages) == 0 {
 		return conv
 	}
 

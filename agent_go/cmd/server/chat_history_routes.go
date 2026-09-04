@@ -468,6 +468,16 @@ func getChatHistoryConversationHandler(api *StreamingAPI) http.HandlerFunc {
 		sessionID := mux.Vars(r)["session_id"]
 		workspacePath := r.URL.Query().Get("workspace_path")
 
+		// A resume reads the durable record, but a builder chat continued
+		// through retained live input has turns that exist only in the
+		// coding CLI's own transcript (PLAT-178). Catch the record up first so
+		// Recent/Resume shows where the conversation actually ended, not the
+		// last full-turn snapshot. Best-effort: unsupported providers and
+		// missing transcripts leave the record untouched.
+		if parsePositiveQueryInt(r, "resume_turns") > 0 && strings.TrimSpace(workspacePath) != "" {
+			api.syncWorkflowBuilderConversationFromNativeTranscript(r.Context(), sessionID, workspacePath)
+		}
+
 		data, err := ReadChatHistoryConversation(userID, sessionID, workspacePath)
 		if err != nil {
 			http.Error(w, "Session not found", http.StatusNotFound)
