@@ -8,6 +8,7 @@ import { useWorkflowStore } from '../../../stores/useWorkflowStore'
 import { activateTab } from '../../../utils/activateTab'
 import { selectWorkflowPreset } from '../../../utils/workflowNavigation'
 import { scheduleTabLabel } from '../../../utils/scheduleTabLabel'
+import { resolveWorkflowTabForSession } from '../../../utils/workflowTabResolution'
 import type { ScheduledJob, ScheduledJobRun, SchedulerConfig } from '../../../services/api-types'
 import { useCanWriteWorkflow } from '../../../hooks/useCanWriteWorkflow'
 import {
@@ -593,53 +594,41 @@ export function useScheduleRunsData({ onClose, onJobsLoaded, workflowScope }: Us
       scheduledJobName: job.name,
     }
 
-    if (existingTab) {
-      chatStore.setTabMetadata(existingTab.tabId, metadata)
-      if (existingTab.name !== desiredName) {
+    // Same resolution as every other opener: the tab already on this run,
+    // else this schedule's finished lane rebound to it, else a new tab.
+    const { tabId, via } = await resolveWorkflowTabForSession({
+      getTabs: () => useChatStore.getState().chatTabs,
+      presetQueryId: effectivePresetQueryId ?? '',
+      sessionId,
+      name: desiredName,
+      metadata,
+      createChatTab: chatStore.createChatTab,
+      updateTabSessionId: chatStore.updateTabSessionId,
+    })
+    if (via !== 'created') {
+      chatStore.setTabMetadata(tabId, metadata)
+      if (useChatStore.getState().chatTabs[tabId]?.name !== desiredName) {
         useChatStore.setState((state) => {
-          const t = state.chatTabs[existingTab.tabId]
+          const t = state.chatTabs[tabId]
           if (!t) return state
-          return { chatTabs: { ...state.chatTabs, [existingTab.tabId]: { ...t, name: desiredName } } }
+          return { chatTabs: { ...state.chatTabs, [tabId]: { ...t, name: desiredName } } }
         })
       }
-      try {
-        const existingEvents = chatStore.getTabEvents(sessionId)
-        const response = existingEvents.length === 0
-          ? await agentApi.getRecentSessionEvents(sessionId)
-          : await agentApi.getSessionEvents(sessionId, chatStore.getTabLastEventIndex(sessionId))
-        if (response.events.length > 0) {
-          if (existingEvents.length === 0) {
-            chatStore.setTabEvents(sessionId, response.events)
-          } else {
-            chatStore.addTabEvents(sessionId, response.events)
-          }
-        }
-        if (response.last_processed_index !== undefined) {
-          chatStore.setTabLastEventIndex(sessionId, response.last_processed_index)
-        }
-        if (response.has_more !== undefined) {
-          chatStore.setTabHasMoreOlderEvents(sessionId, response.has_more)
-        }
-        const isDone = response.session_status === 'completed' || response.session_status === 'stopped'
-        const isError = response.session_status === 'error'
-        chatStore.setTabCompleted(existingTab.tabId, isDone)
-        chatStore.setTabStreaming(existingTab.tabId, !isDone && !isError && response.session_status === 'running')
-        chatStore.setTabHasRunningBgAgents(existingTab.tabId, !!response.has_running_background_agents)
-        chatStore.setTabSyntheticTurn(existingTab.tabId, !!response.is_synthetic_turn)
-        chatStore.setTabCanSteer(existingTab.tabId, !!response.can_steer)
-      } catch {
-        // Leave the tab attached even if the ephemeral session buffer is gone.
-      }
-      activateTab(existingTab.tabId)
-      onClose()
-      return
     }
 
-    const tabId = await chatStore.createChatTab(desiredName, metadata, sessionId)
+    // A tab with events in memory catches up incrementally; a fresh or
+    // rebound one loads the recent window.
     try {
-      const response = await agentApi.getRecentSessionEvents(sessionId)
+      const existingEvents = chatStore.getTabEvents(sessionId)
+      const response = existingEvents.length === 0
+        ? await agentApi.getRecentSessionEvents(sessionId)
+        : await agentApi.getSessionEvents(sessionId, chatStore.getTabLastEventIndex(sessionId))
       if (response.events.length > 0) {
-        chatStore.setTabEvents(sessionId, response.events)
+        if (existingEvents.length === 0) {
+          chatStore.setTabEvents(sessionId, response.events)
+        } else {
+          chatStore.addTabEvents(sessionId, response.events)
+        }
       }
       if (response.last_processed_index !== undefined) {
         chatStore.setTabLastEventIndex(sessionId, response.last_processed_index)
@@ -655,7 +644,8 @@ export function useScheduleRunsData({ onClose, onJobsLoaded, workflowScope }: Us
       chatStore.setTabSyntheticTurn(tabId, !!response.is_synthetic_turn)
       chatStore.setTabCanSteer(tabId, !!response.can_steer)
     } catch {
-      // Scheduled run sessions are in-memory only; after restart there may be nothing to hydrate.
+      // Scheduled run sessions are in-memory only; after a restart there may
+      // be nothing to hydrate. Leave the tab attached either way.
     }
     activateTab(tabId)
     onClose()

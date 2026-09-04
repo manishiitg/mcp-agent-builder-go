@@ -1,4 +1,6 @@
 import type { ChatTab } from '../stores/useChatStore'
+import type { PollingEvent } from '../services/api-types'
+import { hasWorkflowChatContent } from '../components/workflow/workflowChatTabConversion'
 
 /**
  * The one place that decides which workflow tab a backend session lands in.
@@ -73,6 +75,78 @@ export function reusableScheduleTabId(
   return null
 }
 
+type TabEvents = Record<string, PollingEvent[]>
+
+/**
+ * The one definition of "a blank interactive Chat tab for this workflow" --
+ * a tab that can take a conversation without losing anything. Four
+ * near-copies of this used to disagree (one keyed on a different event set,
+ * one skipped the preset check, one skipped the restored-conversation
+ * check), which is how a restore could land beside an identical-looking
+ * empty tab instead of in it.
+ *
+ * createChatTab always mints a session id, so "has a sessionId" is not
+ * "has content" -- content is whether that session has any real chat
+ * events (hasWorkflowChatContent, the same test the composer uses to decide
+ * when to rename a tab on its first message).
+ */
+export function isBlankWorkflowBuilderTab(
+  tab: Pick<ChatTab, 'sessionId' | 'isStreaming' | 'metadata' | 'config'>,
+  presetQueryId: string,
+  tabEvents: TabEvents,
+): boolean {
+  const meta = tab.metadata
+  if (!meta || meta.mode !== 'workflow') return false
+  if (meta.phaseId !== 'workflow-builder') return false
+  if (meta.isViewOnly === true) return false
+  if (meta.presetQueryId !== presetQueryId) return false
+  if (tab.isStreaming) return false
+  if (tab.config?.restoredConversationPath) return false
+  if (!tab.sessionId) return true
+  return !hasWorkflowChatContent(tabEvents[tab.sessionId])
+}
+
+/** The most recently used blank Chat tab for this workflow, if any. */
+export function blankWorkflowBuilderTabId(
+  tabs: Record<string, ChatTab>,
+  presetQueryId: string,
+  tabEvents: TabEvents,
+): string | null {
+  return Object.values(tabs)
+    .filter(tab => isBlankWorkflowBuilderTab(tab, presetQueryId, tabEvents))
+    .sort((a, b) => (b.lastAccessedAt ?? b.createdAt ?? 0) - (a.lastAccessedAt ?? a.createdAt ?? 0))[0]?.tabId ?? null
+}
+
+/**
+ * The workflow's interactive Chat tab that an opened conversation should
+ * land in: a blank one first, else the most recently used idle one. A
+ * streaming tab is a live conversation and is never taken over. This is the
+ * "one Chat tab per workflow" rule -- opening a different past conversation
+ * rebinds the tab rather than opening a second "Chat" beside it.
+ */
+function idleWorkflowBuilderTabId(
+  tabs: Record<string, ChatTab>,
+  presetQueryId: string,
+  tabEvents: TabEvents,
+): string | null {
+  const blank = blankWorkflowBuilderTabId(tabs, presetQueryId, tabEvents)
+  if (blank) return blank
+  return Object.values(tabs)
+    .filter(tab => {
+      const meta = tab.metadata
+      return meta?.mode === 'workflow' &&
+        meta.phaseId === 'workflow-builder' &&
+        meta.isViewOnly !== true &&
+        meta.presetQueryId === presetQueryId &&
+        !tab.isStreaming
+    })
+    .sort((a, b) => (b.lastAccessedAt ?? b.createdAt ?? 0) - (a.lastAccessedAt ?? a.createdAt ?? 0))[0]?.tabId ?? null
+}
+
+function isBuilderSession(metadata: TabMetadata): boolean {
+  return !metadata.isScheduledRun && !metadata.isBotRun && metadata.phaseId === 'workflow-builder'
+}
+
 /** Whether an existing tab is the same *kind* of lane the session is. A
  * scheduled run and the Builder child execution it spawns can share a
  * session id; the schedule tab must not be mistaken for the chat, or vice
@@ -87,8 +161,10 @@ function sameLaneKind(tab: Pick<ChatTab, 'metadata'>, metadata: TabMetadata): bo
 
 export type WorkflowTabResolution = {
   tabId: string
-  /** existing: a tab already bound to this session. lane: took over a
-   * finished tab of the same schedule. created: opened a new tab. */
+  /** existing: a tab already bound to this session. lane: took over an idle
+   * tab -- the same schedule's finished tab for a scheduled run, or this
+   * workflow's blank/idle Chat tab for a builder conversation. created:
+   * opened a new tab. */
   via: 'existing' | 'lane' | 'created'
 }
 
@@ -97,6 +173,9 @@ export interface ResolveWorkflowTabArgs {
    * previous await created, or two discoverers of one session both open
    * a tab for it. */
   getTabs: () => Record<string, ChatTab>
+  /** Needed to tell a blank Chat tab from one with a conversation in it.
+   * Without it a builder session never takes over an existing tab. */
+  getTabEvents?: () => TabEvents
   presetQueryId: string
   sessionId: string
   name: string
@@ -123,6 +202,12 @@ export async function resolveWorkflowTabForSession(args: ResolveWorkflowTabArgs)
     if (laneTabId) {
       args.updateTabSessionId(laneTabId, args.sessionId)
       return { tabId: laneTabId, via: 'lane' }
+    }
+  } else if (isBuilderSession(args.metadata) && args.getTabEvents) {
+    const chatTabId = idleWorkflowBuilderTabId(tabs, args.presetQueryId, args.getTabEvents())
+    if (chatTabId) {
+      args.updateTabSessionId(chatTabId, args.sessionId)
+      return { tabId: chatTabId, via: 'lane' }
     }
   }
 

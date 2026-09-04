@@ -24,7 +24,7 @@ import {
   shouldCatchUpRunningWorkflowTranscript,
   workflowRuntimeTabProjection,
 } from './workflowRuntimeTabProjection'
-import { resolveWorkflowTabForSession } from '../../utils/workflowTabResolution'
+import { blankWorkflowBuilderTabId, resolveWorkflowTabForSession } from '../../utils/workflowTabResolution'
 import {
   PreviousChatHistoryPanel,
   chatHistoryConversationPath,
@@ -99,7 +99,7 @@ import {
 } from '../../services/api-types'
 import { findOrCreateWorkflowTab, isChatCompatiblePhase } from '../../utils/chatSubmitHelpers'
 import { useWorkflowViewPresentations } from './useWorkflowViewPresentations'
-import { reusableBlankWorkflowChatTabId, hasWorkflowChatContent, workflowTabAlreadyHasContent } from './workflowChatTabConversion'
+import { hasWorkflowChatContent, workflowTabAlreadyHasContent } from './workflowChatTabConversion'
 import { hydrateTabEvents } from '../../utils/sessionRestore'
 import { isPreviewView, isWorkspacePaneView } from './workspaceViews'
 // Inactive workflow tabs hydrate lazily and fall back to workflow-scoped chat history.
@@ -294,11 +294,7 @@ const WorkflowPreviousChatsPanel: React.FC<{
       // leaves the untouched Chat placeholder beside a fake "Workflow
       // Builder" runtime tab.
       const latestStore = useChatStore.getState()
-      const reusableTabId = reusableBlankWorkflowChatTabId(
-        latestStore.chatTabs,
-        latestStore.tabEvents,
-        activePresetId,
-      )
+      const reusableTabId = blankWorkflowBuilderTabId(latestStore.chatTabs, activePresetId || '', latestStore.tabEvents)
       if (reusableTabId) {
         targetTabId = reusableTabId
       } else {
@@ -373,11 +369,6 @@ const WorkflowPreviousChatsPanel: React.FC<{
     const disposition = chatHistoryOpenDisposition(session)
     if (disposition === 'read-only-schedule') {
       const chatStore = useChatStore.getState()
-      const existingTab = Object.values(chatStore.chatTabs).find(tab =>
-        tab.metadata?.mode === 'workflow' &&
-        tab.metadata?.isScheduledRun === true &&
-        tab.sessionId === session.session_id
-      )
       const scheduleMetadata: NonNullable<ChatTab['metadata']> = {
         mode: 'workflow',
         presetQueryId: activePresetId || undefined,
@@ -387,10 +378,20 @@ const WorkflowPreviousChatsPanel: React.FC<{
         readOnlyRestoredAt: Date.now(),
         userInteractiveContinuation: false,
       }
-      const targetTabId = existingTab?.tabId || await chatStore.createChatTab('Schedule', scheduleMetadata)
-
-      if (existingTab) chatStore.setTabMetadata(targetTabId, scheduleMetadata)
-      chatStore.updateTabSessionId(targetTabId, session.session_id)
+      // Same resolution as every other opener: the tab already on this
+      // session, else this schedule's finished lane, else a new tab bound
+      // to the session at creation (it used to be minted with a random id
+      // and re-pointed afterwards).
+      const { tabId: targetTabId, via } = await resolveWorkflowTabForSession({
+        getTabs: () => useChatStore.getState().chatTabs,
+        presetQueryId: activePresetId || '',
+        sessionId: session.session_id,
+        name: 'Schedule',
+        metadata: scheduleMetadata,
+        createChatTab: chatStore.createChatTab,
+        updateTabSessionId: chatStore.updateTabSessionId,
+      })
+      if (via !== 'created') chatStore.setTabMetadata(targetTabId, scheduleMetadata)
       chatStore.setTabViewMode(targetTabId, 'formatted')
       chatStore.setTabStreaming(targetTabId, false)
       chatStore.setTabCompleted(targetTabId, true)
@@ -1119,16 +1120,8 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     // second, identical-looking blank tab next to it. Once it has real
     // content (see submitQueryImmediately's rename-on-first-message), it's no
     // longer a match here and a later call legitimately opens a fresh one.
-    const existingBlankTab = Object.values(chatStore.chatTabs).find(tab =>
-      tab.metadata?.mode === 'workflow' &&
-      tab.metadata?.phaseId === 'workflow-builder' &&
-      tab.metadata?.presetQueryId === presetId &&
-      !workflowTabAlreadyHasContent(tab, chatStore.tabEvents)
-    )
-
-    const tabId = existingBlankTab
-      ? existingBlankTab.tabId
-      : await chatStore.createChatTab('New chat', {
+    const tabId = blankWorkflowBuilderTabId(chatStore.chatTabs, presetId, chatStore.tabEvents)
+      ?? await chatStore.createChatTab('New chat', {
         mode: 'workflow',
         phaseId: 'workflow-builder',
         phaseName: 'Automation Builder',

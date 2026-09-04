@@ -12,7 +12,7 @@ import { isVisibleActivitySession } from './activitySessions'
 import { normalizeWorkspacePath } from './workspacePathUtils'
 import { activateWorkflowTab, beginWorkflowNavigation, isCurrentWorkflowNavigation, selectWorkflowPreset } from './workflowNavigation'
 import { scheduleTabLabel } from './scheduleTabLabel'
-import { resolveWorkflowTabForSession } from './workflowTabResolution'
+import { blankWorkflowBuilderTabId, isBlankWorkflowBuilderTab, resolveWorkflowTabForSession } from './workflowTabResolution'
 
 type RestoreWorkflowSessionOptions = {
   preset?: CustomPreset | PredefinedPreset
@@ -179,22 +179,6 @@ async function findRunningWorkflowForPreset(
   }
 }
 
-function tabSortTimestamp(tab: ChatTab): number {
-  return tab.lastAccessedAt ?? tab.createdAt ?? 0
-}
-
-function isEmptyWorkflowBuilderTab(tab: ChatTab, presetId: string): boolean {
-  const chatStore = useChatStore.getState()
-  return tab.metadata?.mode === 'workflow' &&
-    tab.metadata?.phaseId === 'workflow-builder' &&
-    tab.metadata?.isViewOnly !== true &&
-    tab.metadata?.presetQueryId === presetId &&
-    !tab.isStreaming &&
-    !chatStore.getTabStreamingStatus(tab.tabId) &&
-    !tab.config?.restoredConversationPath &&
-    (!tab.sessionId || chatStore.getTabEvents(tab.sessionId).length === 0)
-}
-
 export function isScheduledWorkflowSession(session: ActiveSessionInfo, runningWorkflow?: RunningWorkflowInfo): boolean {
   const triggeredBy = (session.triggered_by || runningWorkflow?.triggered_by || '').toLowerCase()
   const sessionId = (session.session_id || '').toLowerCase()
@@ -281,56 +265,39 @@ async function restoreWorkflowSessionChat(
       selectWorkflowPreset(presetId)
     }
 
-    const chatStore = useChatStore.getState()
-    const existingTab = findTabForSession(chatStore.chatTabs, session.session_id)
-    if (
-      existingTab?.metadata?.mode === 'workflow' &&
-      existingTab.metadata?.phaseId === 'workflow-builder' &&
-      existingTab.name !== 'Automation Builder'
-    ) {
-      await chatStore.closeTab(existingTab.tabId, false)
-    }
-
+    // One Chat tab per workflow: a tab already on this session, else the
+    // workflow's blank/idle Chat tab rebound to it, else a new one. A tab
+    // the composer renamed on first message is still this session's tab --
+    // it used to be closed and re-created here, which is one way a second
+    // "Chat" appeared.
     const latestChatStore = useChatStore.getState()
-    const exactSessionTab = findTabForSession(latestChatStore.chatTabs, session.session_id)
-    const exactBuilderTab = exactSessionTab?.metadata?.mode === 'workflow' &&
-      exactSessionTab.metadata?.phaseId === 'workflow-builder'
-      ? exactSessionTab
-      : undefined
-    const presetBuilderTab = Object.values(latestChatStore.chatTabs).find(tab =>
-      tab.metadata?.mode === 'workflow' &&
-      tab.metadata?.phaseId === 'workflow-builder' &&
-      presetId &&
-      tab.metadata?.presetQueryId === presetId
-    )
-    const builderTab = exactBuilderTab || (
-      presetBuilderTab &&
-      (presetBuilderTab.sessionId === session.session_id || !latestChatStore.getTabStreamingStatus(presetBuilderTab.tabId))
-        ? presetBuilderTab
-        : undefined
-    )
-
-    const tabId = builderTab?.tabId ?? await latestChatStore.createChatTab('Automation Builder', {
-      mode: 'workflow',
-      phaseId: 'workflow-builder',
-      phaseName: 'Automation Builder',
-      presetQueryId: presetId,
-    }, session.session_id)
+    const { tabId, via } = await resolveWorkflowTabForSession({
+      getTabs: () => useChatStore.getState().chatTabs,
+      getTabEvents: () => useChatStore.getState().tabEvents,
+      presetQueryId: presetId ?? '',
+      sessionId: session.session_id,
+      name: 'Automation Builder',
+      metadata: {
+        mode: 'workflow',
+        phaseId: 'workflow-builder',
+        phaseName: 'Automation Builder',
+        presetQueryId: presetId,
+      },
+      createChatTab: latestChatStore.createChatTab,
+      updateTabSessionId: latestChatStore.updateTabSessionId,
+    })
 
     // Tab creation can yield while the user selects another workflow. Keep the
     // cached tab, but never let the stale restore activate it over the newer
     // report/workspace selection.
     if (!isPresetStillActive(presetId)) return tabId
 
-    if (builderTab?.sessionId !== session.session_id) {
-      latestChatStore.updateTabSessionId(tabId, session.session_id)
-    }
     const hasExistingEvents = latestChatStore.getTabEvents(session.session_id).length > 0
     // Fast path for switching back to an already-open running workflow:
     // keep the in-memory event buffer and SSE connection intact. Re-fetching
     // recent events here replaces the tab event array and makes Ctrl+K feel
     // like a reload even though the workflow chat is already live.
-    if (builderTab?.sessionId === session.session_id && hasExistingEvents) {
+    if (via === 'existing' && hasExistingEvents) {
       latestChatStore.setTabStreaming(tabId, isActive)
       latestChatStore.setTabCompleted(tabId, !isActive)
       activateWorkflowTab(tabId, {
@@ -446,10 +413,8 @@ export async function openWorkflowPresetPage(
   }
 
   const latestStore = useChatStore.getState()
-  const builderTab = Object.values(latestStore.chatTabs)
-    .filter(tab => isEmptyWorkflowBuilderTab(tab, preset.id))
-    .sort((a, b) => tabSortTimestamp(b) - tabSortTimestamp(a))[0]
-  const tabId = builderTab?.tabId ?? await latestStore.createChatTab('Automation Builder', {
+  const blankTabId = blankWorkflowBuilderTabId(latestStore.chatTabs, preset.id, latestStore.tabEvents)
+  const tabId = blankTabId ?? await latestStore.createChatTab('Automation Builder', {
     mode: 'workflow',
     phaseId: 'workflow-builder',
     phaseName: 'Automation Builder',
@@ -512,13 +477,8 @@ async function restoreReadOnlyWorkflowRunChat(
   }
 
   if (presetId) {
-    const emptyBuilderTabs = Object.values(chatStore.chatTabs).filter(tab =>
-      tab.metadata?.mode === 'workflow' &&
-      tab.metadata?.phaseId === 'workflow-builder' &&
-      tab.metadata?.presetQueryId === presetId &&
-      !chatStore.getTabStreamingStatus(tab.tabId) &&
-      (!tab.sessionId || chatStore.getTabEvents(tab.sessionId).length === 0)
-    )
+    const emptyBuilderTabs = Object.values(chatStore.chatTabs)
+      .filter(tab => isBlankWorkflowBuilderTab(tab, presetId, chatStore.tabEvents))
 
     for (const tab of emptyBuilderTabs) {
       await chatStore.closeTab(tab.tabId, false)
@@ -631,7 +591,10 @@ export async function openCanonicalActivitySession(
   if (isWorkflow) {
     const preset = findWorkflowPresetForSession(session)
     if (preset) {
-      await openWorkflowPresetPage(preset, options)
+      // The user picked THIS session (Ctrl+K, an activity pill). Carry it
+      // through; without it openWorkflowPresetPage re-derives "the" session
+      // for the workflow and can land on a blank Chat first.
+      await openWorkflowPresetPage(preset, { ...options, activeSession: session })
       return
     }
   }

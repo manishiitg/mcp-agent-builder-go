@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ChatTab } from '../stores/useChatStore'
-import { resolveWorkflowTabForSession, reusableScheduleTabId, scheduleLaneKey } from './workflowTabResolution'
+import { blankWorkflowBuilderTabId, isBlankWorkflowBuilderTab, resolveWorkflowTabForSession, reusableScheduleTabId, scheduleLaneKey } from './workflowTabResolution'
 
 describe('scheduleLaneKey', () => {
   it('is the schedule segment of a scheduler-minted session id', () => {
@@ -131,7 +131,7 @@ describe('resolveWorkflowTabForSession', () => {
     expect(createChatTab).toHaveBeenCalledTimes(1)
   })
 
-  it('never rebinds a lane for a Builder chat -- those are user conversations', async () => {
+  it("a Builder chat never takes a schedule's tab", async () => {
     const { result, updateTabSessionId } = run([tab({})], 'fae1da55', builder)
     expect(await result).toEqual({ tabId: 'new-tab', via: 'created' })
     expect(updateTabSessionId).not.toHaveBeenCalled()
@@ -161,5 +161,104 @@ describe('resolveWorkflowTabForSession', () => {
     expect(first.via).toBe('created')
     expect(second).toEqual({ tabId: 'new-tab', via: 'existing' })
     expect(createChatTab).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('isBlankWorkflowBuilderTab', () => {
+  const chat = (overrides: Partial<ChatTab>): ChatTab => ({
+    tabId: 'chat', name: 'Automation Builder', sessionId: 's1',
+    isStreaming: false, isCompleted: false, hasRunningBgAgents: false, isSyntheticTurn: false,
+    canSteer: false, hideToolCalls: true, viewMode: 'terminal', config: {} as ChatTab['config'],
+    createdAt: 1, lastAccessedAt: 1, lastViewedEventCount: 0, lastViewedEventCounts: { micro: 0 },
+    metadata: { mode: 'workflow', presetQueryId: 'workflow-upwork', phaseId: 'workflow-builder' },
+    ...overrides,
+  })
+  const noEvents = {}
+  const withChat = { s1: [{ type: 'user_message' } as never] }
+  const onlyLifecycle = { s1: [{ type: 'tool_call_start' } as never] }
+
+  it('is blank with no session, or a session that has no real chat in it', () => {
+    expect(isBlankWorkflowBuilderTab(chat({ sessionId: null }), 'workflow-upwork', noEvents)).toBe(true)
+    expect(isBlankWorkflowBuilderTab(chat({}), 'workflow-upwork', noEvents)).toBe(true)
+    expect(isBlankWorkflowBuilderTab(chat({}), 'workflow-upwork', onlyLifecycle)).toBe(true)
+  })
+
+  it('is not blank once a message has been sent', () => {
+    expect(isBlankWorkflowBuilderTab(chat({}), 'workflow-upwork', withChat)).toBe(false)
+  })
+
+  it('never counts a live, restored, view-only, other-workflow or phase tab', () => {
+    expect(isBlankWorkflowBuilderTab(chat({ isStreaming: true }), 'workflow-upwork', noEvents)).toBe(false)
+    expect(isBlankWorkflowBuilderTab(chat({ config: { restoredConversationPath: 'p' } as ChatTab['config'] }), 'workflow-upwork', noEvents)).toBe(false)
+    expect(isBlankWorkflowBuilderTab(chat({ metadata: { mode: 'workflow', presetQueryId: 'workflow-upwork', phaseId: 'workflow-builder', isViewOnly: true } }), 'workflow-upwork', noEvents)).toBe(false)
+    expect(isBlankWorkflowBuilderTab(chat({}), 'workflow-social', noEvents)).toBe(false)
+    expect(isBlankWorkflowBuilderTab(chat({ metadata: { mode: 'workflow', presetQueryId: 'workflow-upwork', phaseId: 'planning' } }), 'workflow-upwork', noEvents)).toBe(false)
+  })
+
+  it('blankWorkflowBuilderTabId picks the most recently used blank one', () => {
+    const older = chat({ tabId: 'older', sessionId: 'a', lastAccessedAt: 10 })
+    const newer = chat({ tabId: 'newer', sessionId: 'b', lastAccessedAt: 20 })
+    expect(blankWorkflowBuilderTabId({ older, newer }, 'workflow-upwork', {})).toBe('newer')
+    expect(blankWorkflowBuilderTabId({}, 'workflow-upwork', {})).toBeNull()
+  })
+})
+
+describe("resolveWorkflowTabForSession -- one Chat tab per workflow", () => {
+  const chat = (overrides: Partial<ChatTab>): ChatTab => ({
+    tabId: 'chat', name: 'Automation Builder', sessionId: 'old-session',
+    isStreaming: false, isCompleted: false, hasRunningBgAgents: false, isSyntheticTurn: false,
+    canSteer: false, hideToolCalls: true, viewMode: 'terminal', config: {} as ChatTab['config'],
+    createdAt: 1, lastAccessedAt: 1, lastViewedEventCount: 0, lastViewedEventCounts: { micro: 0 },
+    metadata: { mode: 'workflow', presetQueryId: 'workflow-upwork', phaseId: 'workflow-builder' },
+    ...overrides,
+  })
+  const builder = { mode: 'workflow' as const, presetQueryId: 'workflow-upwork', phaseId: 'workflow-builder' }
+
+  const open = (tabs: ChatTab[], tabEvents: Record<string, never[]>) => {
+    const createChatTab = vi.fn(async () => 'new-tab')
+    const updateTabSessionId = vi.fn()
+    const byId = Object.fromEntries(tabs.map(t => [t.tabId, t]))
+    const result = resolveWorkflowTabForSession({
+      getTabs: () => byId, getTabEvents: () => tabEvents, presetQueryId: 'workflow-upwork',
+      sessionId: 'new-session', name: 'Automation Builder', metadata: builder,
+      createChatTab, updateTabSessionId,
+    })
+    return { result, createChatTab, updateTabSessionId }
+  }
+
+  it("opens a conversation into the workflow's blank Chat tab, not beside it", async () => {
+    const { result, createChatTab, updateTabSessionId } = open([chat({})], {})
+    expect(await result).toEqual({ tabId: 'chat', via: 'lane' })
+    expect(updateTabSessionId).toHaveBeenCalledWith('chat', 'new-session')
+    expect(createChatTab).not.toHaveBeenCalled()
+  })
+
+  it('rebinds an idle Chat tab that already has a conversation -- a different past chat replaces it', async () => {
+    const { result, createChatTab } = open([chat({})], { 'old-session': [{ type: 'user_message' } as never] })
+    expect(await result).toEqual({ tabId: 'chat', via: 'lane' })
+    expect(createChatTab).not.toHaveBeenCalled()
+  })
+
+  it('never takes over a Chat tab that is mid-conversation', async () => {
+    const { result, createChatTab } = open([chat({ isStreaming: true })], {})
+    expect(await result).toEqual({ tabId: 'new-tab', via: 'created' })
+    expect(createChatTab).toHaveBeenCalledTimes(1)
+  })
+
+  it('prefers a blank tab over an idle one with content', async () => {
+    const used = chat({ tabId: 'used', sessionId: 'u', lastAccessedAt: 50 })
+    const blank = chat({ tabId: 'blank', sessionId: 'b', lastAccessedAt: 5 })
+    const { result } = open([used, blank], { u: [{ type: 'user_message' } as never] })
+    expect((await result).tabId).toBe('blank')
+  })
+
+  it('without tab events it cannot judge blankness and opens a new tab (old behaviour)', async () => {
+    const createChatTab = vi.fn(async () => 'new-tab')
+    const result = await resolveWorkflowTabForSession({
+      getTabs: () => ({ chat: chat({}) }), presetQueryId: 'workflow-upwork',
+      sessionId: 'new-session', name: 'Automation Builder', metadata: builder,
+      createChatTab, updateTabSessionId: vi.fn(),
+    })
+    expect(result.via).toBe('created')
   })
 })
