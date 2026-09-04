@@ -262,3 +262,83 @@ describe("resolveWorkflowTabForSession -- one Chat tab per workflow", () => {
     expect(result.via).toBe('created')
   })
 })
+
+describe('resolveWorkflowTabForSession -- no sessionId (ensure a blank builder tab)', () => {
+  const chat = (overrides: Partial<ChatTab>): ChatTab => ({
+    tabId: 'chat', name: 'Automation Builder', sessionId: 'existing-session',
+    isStreaming: false, isCompleted: false, hasRunningBgAgents: false, isSyntheticTurn: false,
+    canSteer: false, hideToolCalls: true, viewMode: 'terminal', config: {} as ChatTab['config'],
+    createdAt: 1, lastAccessedAt: 1, lastViewedEventCount: 0, lastViewedEventCounts: { micro: 0 },
+    metadata: { mode: 'workflow', presetQueryId: 'workflow-upwork', phaseId: 'workflow-builder' },
+    ...overrides,
+  })
+  const builder = { mode: 'workflow' as const, presetQueryId: 'workflow-upwork', phaseId: 'workflow-builder', phaseName: 'Automation Builder' }
+
+  const ensure = (tabs: ChatTab[], tabEvents: Record<string, never[]> = {}, presetQueryId = 'workflow-upwork') => {
+    const createChatTab = vi.fn(async () => 'new-tab')
+    const byId = Object.fromEntries(tabs.map(t => [t.tabId, t]))
+    const result = resolveWorkflowTabForSession({
+      getTabs: () => byId, getTabEvents: () => tabEvents, presetQueryId,
+      name: 'Automation Builder', metadata: builder,
+      createChatTab, updateTabSessionId: vi.fn(),
+    })
+    return { result, createChatTab }
+  }
+
+  it('reuses the workflow\'s blank builder tab instead of creating a new one', async () => {
+    const { result, createChatTab } = ensure([chat({})])
+    expect(await result).toEqual({ tabId: 'chat', via: 'existing' })
+    expect(createChatTab).not.toHaveBeenCalled()
+  })
+
+  it('creates one when no blank tab exists, minting a fresh session id (no third createChatTab arg)', async () => {
+    const { result, createChatTab } = ensure([chat({ metadata: { ...builder } })], { 'existing-session': [{ type: 'user_message' } as never] })
+    expect(await result).toEqual({ tabId: 'new-tab', via: 'created' })
+    expect(createChatTab).toHaveBeenCalledWith('Automation Builder', builder)
+    expect(createChatTab).toHaveBeenCalledTimes(1)
+  })
+
+  it('never mistakes a different workflow\'s blank tab for this one\'s', async () => {
+    const { result, createChatTab } = ensure([chat({ metadata: { ...builder, presetQueryId: 'workflow-social' } })])
+    expect((await result).via).toBe('created')
+    expect(createChatTab).toHaveBeenCalledTimes(1)
+  })
+
+  it('concurrent callers for the same workflow share one creation instead of each creating a tab -- the two "Chat" tabs, 4 seconds apart, bug', async () => {
+    let resolveCreate!: (id: string) => void
+    const createChatTab = vi.fn(() => new Promise<string>(resolve => { resolveCreate = resolve }))
+    const byId: Record<string, ChatTab> = {}
+    const args = {
+      getTabs: () => byId, getTabEvents: () => ({}), presetQueryId: 'workflow-upwork',
+      name: 'Automation Builder', metadata: builder, createChatTab, updateTabSessionId: vi.fn(),
+    }
+
+    // Two independent discoverers (the boot reconnect and the preset-restore
+    // retry) both find no blank tab and both start resolving before either
+    // has created one -- exactly the race caught live via console.trace.
+    const first = resolveWorkflowTabForSession(args)
+    const second = resolveWorkflowTabForSession(args)
+
+    resolveCreate('new-tab')
+    const [firstResult, secondResult] = await Promise.all([first, second])
+
+    expect(createChatTab).toHaveBeenCalledTimes(1)
+    expect(firstResult.tabId).toBe('new-tab')
+    expect(secondResult.tabId).toBe('new-tab')
+  })
+
+  it('a later caller after the race has settled creates its own tab, not a stale shared one', async () => {
+    const byId: Record<string, ChatTab> = {}
+    const createChatTab = vi.fn(async () => 'new-tab')
+    const args = {
+      getTabs: () => byId, getTabEvents: () => ({}), presetQueryId: 'workflow-upwork',
+      name: 'Automation Builder', metadata: builder, createChatTab, updateTabSessionId: vi.fn(),
+    }
+    await resolveWorkflowTabForSession(args)
+    byId['new-tab'] = chat({ tabId: 'new-tab', sessionId: 'new-tab-session' })
+
+    const second = await resolveWorkflowTabForSession(args)
+    expect(second).toEqual({ tabId: 'new-tab', via: 'existing' })
+    expect(createChatTab).toHaveBeenCalledTimes(1)
+  })
+})

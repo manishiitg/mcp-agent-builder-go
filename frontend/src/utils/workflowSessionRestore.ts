@@ -12,7 +12,7 @@ import { isVisibleActivitySession } from './activitySessions'
 import { normalizeWorkspacePath } from './workspacePathUtils'
 import { activateWorkflowTab, beginWorkflowNavigation, isCurrentWorkflowNavigation, selectWorkflowPreset } from './workflowNavigation'
 import { scheduleTabLabel } from './scheduleTabLabel'
-import { blankWorkflowBuilderTabId, isBlankWorkflowBuilderTab, resolveWorkflowTabForSession } from './workflowTabResolution'
+import { isBlankWorkflowBuilderTab, resolveWorkflowTabForSession } from './workflowTabResolution'
 
 type RestoreWorkflowSessionOptions = {
   preset?: CustomPreset | PredefinedPreset
@@ -413,13 +413,15 @@ export async function openWorkflowPresetPage(
   }
 
   const latestStore = useChatStore.getState()
-  const blankTabId = blankWorkflowBuilderTabId(latestStore.chatTabs, preset.id, latestStore.tabEvents)
-  const tabId = blankTabId ?? await latestStore.createChatTab('Automation Builder', {
-    mode: 'workflow',
-    phaseId: 'workflow-builder',
-    phaseName: 'Automation Builder',
+  const tabId = (await resolveWorkflowTabForSession({
+    getTabs: () => useChatStore.getState().chatTabs,
+    getTabEvents: () => useChatStore.getState().tabEvents,
     presetQueryId: preset.id,
-  })
+    name: 'Automation Builder',
+    metadata: { mode: 'workflow', phaseId: 'workflow-builder', phaseName: 'Automation Builder', presetQueryId: preset.id },
+    createChatTab: latestStore.createChatTab,
+    updateTabSessionId: latestStore.updateTabSessionId,
+  })).tabId
 
   if (!isCurrentWorkflowNavigation(navigationGeneration, preset.id)) return
 

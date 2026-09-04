@@ -143,6 +143,18 @@ function idleWorkflowBuilderTabId(
     .sort((a, b) => (b.lastAccessedAt ?? b.createdAt ?? 0) - (a.lastAccessedAt ?? a.createdAt ?? 0))[0]?.tabId ?? null
 }
 
+// Keyed by presetQueryId, only for the no-sessionId case below (ensuring a
+// blank builder tab exists). Two independent callers discovering "this
+// workflow has no interactive tab yet" in the same window (a cold-boot race
+// between the preset-restore retry and the reconnect fallback, seen live:
+// two blank builder tabs, 4 seconds apart) would otherwise each pass the
+// blank-tab check before either has created one. There is no `await`
+// between that check and this map registration in the branch below, so the
+// first caller to run always finishes registering before a second caller's
+// synchronous prefix can start -- JS's run-to-completion model, not a lock
+// primitive, is what makes this race-proof.
+const pendingBuilderTabCreation = new Map<string, Promise<string>>()
+
 function isBuilderSession(metadata: TabMetadata): boolean {
   return !metadata.isScheduledRun && !metadata.isBotRun && metadata.phaseId === 'workflow-builder'
 }
@@ -174,43 +186,66 @@ export interface ResolveWorkflowTabArgs {
    * a tab for it. */
   getTabs: () => Record<string, ChatTab>
   /** Needed to tell a blank Chat tab from one with a conversation in it.
-   * Without it a builder session never takes over an existing tab. */
+   * Without it a builder session never takes over an existing tab, and the
+   * no-sessionId case (below) can't tell blank from in-use at all. */
   getTabEvents?: () => TabEvents
   presetQueryId: string
-  sessionId: string
+  /** Omit when there is no specific session yet -- "+New chat", the
+   * cold-boot/preset-switch fallback, any caller that just needs *a* blank
+   * builder tab rather than a particular conversation. The store mints a
+   * fresh session id; concurrent no-sessionId callers for the same workflow
+   * are race-proofed (see pendingBuilderTabCreation) instead of each
+   * creating their own tab. */
+  sessionId?: string
   name: string
   metadata: TabMetadata
-  createChatTab: (name: string, metadata: TabMetadata, sessionId: string) => Promise<string>
+  createChatTab: (name: string, metadata: TabMetadata, sessionId?: string) => Promise<string>
   updateTabSessionId: (tabId: string, sessionId: string) => void
 }
 
 /**
- * Resolve the tab for a workflow session: an existing tab bound to it, else
- * (for scheduled runs) a finished tab of the same schedule to take over,
- * else a new tab.
+ * Resolve the tab a workflow conversation belongs in -- the one place this
+ * is decided, for both a known session (an existing tab bound to it, else a
+ * reusable idle lane, else a new tab) and no session at all (ensure a blank
+ * builder tab exists, race-proofed against concurrent callers).
  */
 export async function resolveWorkflowTabForSession(args: ResolveWorkflowTabArgs): Promise<WorkflowTabResolution> {
   const tabs = args.getTabs()
+
+  if (args.sessionId === undefined) {
+    const existing = blankWorkflowBuilderTabId(tabs, args.presetQueryId, args.getTabEvents?.() ?? {})
+    if (existing) return { tabId: existing, via: 'existing' }
+
+    const pending = pendingBuilderTabCreation.get(args.presetQueryId)
+    if (pending) return { tabId: await pending, via: 'lane' }
+
+    const creation = (async () => args.createChatTab(args.name, args.metadata))()
+      .finally(() => pendingBuilderTabCreation.delete(args.presetQueryId))
+    pendingBuilderTabCreation.set(args.presetQueryId, creation)
+    return { tabId: await creation, via: 'created' }
+  }
+
+  const sessionId = args.sessionId
   const boundToSession = Object.values(tabs).filter(tab =>
-    tab.metadata?.mode === 'workflow' && tab.sessionId === args.sessionId,
+    tab.metadata?.mode === 'workflow' && tab.sessionId === sessionId,
   )
   const existing = boundToSession.find(tab => sameLaneKind(tab, args.metadata)) ?? boundToSession[0]
   if (existing) return { tabId: existing.tabId, via: 'existing' }
 
   if (args.metadata.isScheduledRun) {
-    const laneTabId = reusableScheduleTabId(tabs, args.presetQueryId, args.sessionId)
+    const laneTabId = reusableScheduleTabId(tabs, args.presetQueryId, sessionId)
     if (laneTabId) {
-      args.updateTabSessionId(laneTabId, args.sessionId)
+      args.updateTabSessionId(laneTabId, sessionId)
       return { tabId: laneTabId, via: 'lane' }
     }
   } else if (isBuilderSession(args.metadata) && args.getTabEvents) {
     const chatTabId = idleWorkflowBuilderTabId(tabs, args.presetQueryId, args.getTabEvents())
     if (chatTabId) {
-      args.updateTabSessionId(chatTabId, args.sessionId)
+      args.updateTabSessionId(chatTabId, sessionId)
       return { tabId: chatTabId, via: 'lane' }
     }
   }
 
-  const tabId = await args.createChatTab(args.name, args.metadata, args.sessionId)
+  const tabId = await args.createChatTab(args.name, args.metadata, sessionId)
   return { tabId, via: 'created' }
 }

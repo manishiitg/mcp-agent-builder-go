@@ -24,7 +24,7 @@ import {
   shouldCatchUpRunningWorkflowTranscript,
   workflowRuntimeTabProjection,
 } from './workflowRuntimeTabProjection'
-import { blankWorkflowBuilderTabId, resolveWorkflowTabForSession } from '../../utils/workflowTabResolution'
+import { resolveWorkflowTabForSession } from '../../utils/workflowTabResolution'
 import {
   PreviousChatHistoryPanel,
   chatHistoryConversationPath,
@@ -294,17 +294,15 @@ const WorkflowPreviousChatsPanel: React.FC<{
       // leaves the untouched Chat placeholder beside a fake "Workflow
       // Builder" runtime tab.
       const latestStore = useChatStore.getState()
-      const reusableTabId = blankWorkflowBuilderTabId(latestStore.chatTabs, activePresetId || '', latestStore.tabEvents)
-      if (reusableTabId) {
-        targetTabId = reusableTabId
-      } else {
-        targetTabId = await latestStore.createChatTab('Automation Builder', {
-          mode: 'workflow',
-          phaseId: 'workflow-builder',
-          phaseName: 'Automation Builder',
-          presetQueryId: activePresetId || undefined,
-        })
-      }
+      targetTabId = (await resolveWorkflowTabForSession({
+        getTabs: () => useChatStore.getState().chatTabs,
+        getTabEvents: () => useChatStore.getState().tabEvents,
+        presetQueryId: activePresetId || '',
+        name: 'Automation Builder',
+        metadata: { mode: 'workflow', phaseId: 'workflow-builder', phaseName: 'Automation Builder', presetQueryId: activePresetId || undefined },
+        createChatTab: latestStore.createChatTab,
+        updateTabSessionId: latestStore.updateTabSessionId,
+      })).tabId
       targetTab = useChatStore.getState().chatTabs[targetTabId]
     }
 
@@ -1120,8 +1118,12 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     // second, identical-looking blank tab next to it. Once it has real
     // content (see submitQueryImmediately's rename-on-first-message), it's no
     // longer a match here and a later call legitimately opens a fresh one.
-    const tabId = blankWorkflowBuilderTabId(chatStore.chatTabs, presetId, chatStore.tabEvents)
-      ?? await chatStore.createChatTab('Automation Builder', {
+    const tabId = (await resolveWorkflowTabForSession({
+      getTabs: () => useChatStore.getState().chatTabs,
+      getTabEvents: () => useChatStore.getState().tabEvents,
+      presetQueryId: presetId,
+      name: 'Automation Builder',
+      metadata: {
         mode: 'workflow',
         phaseId: 'workflow-builder',
         phaseName: 'Automation Builder',
@@ -1130,8 +1132,11 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         // preset-switch fallback (landing on a workflow with no open tabs) must
         // keep auto-restoring the previous conversation -- that's the feature
         // working as intended, not the bug this flag guards against.
-        skipWorkflowAutoRestore: options?.isExplicitNewChat === true
-      })
+        skipWorkflowAutoRestore: options?.isExplicitNewChat === true,
+      },
+      createChatTab: chatStore.createChatTab,
+      updateTabSessionId: chatStore.updateTabSessionId,
+    })).tabId
     if (options?.composerFirst) {
       // No explicit view: the pane falls back to the last canvas view.
       setWorkflowWorkspaceView(null)
@@ -1808,12 +1813,15 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         if (!lastTabId) {
           const store = useChatStore.getState()
           if (interactiveExistingWorkflowTabs.length === 0) {
-            const defaultTabId = await createChatTab('Automation Builder', {
-              mode: 'workflow',
-              phaseId: 'workflow-builder',
-              phaseName: 'Automation Builder',
-              presetQueryId: activePresetId
-            })
+            const defaultTabId = (await resolveWorkflowTabForSession({
+              getTabs: () => useChatStore.getState().chatTabs,
+              getTabEvents: () => useChatStore.getState().tabEvents,
+              presetQueryId: activePresetId,
+              name: 'Automation Builder',
+              metadata: { mode: 'workflow', phaseId: 'workflow-builder', phaseName: 'Automation Builder', presetQueryId: activePresetId },
+              createChatTab,
+              updateTabSessionId: useChatStore.getState().updateTabSessionId,
+            })).tabId
             activateTab(defaultTabId)
             setShowChatArea(true)
           } else {
