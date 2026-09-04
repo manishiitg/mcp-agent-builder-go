@@ -95,31 +95,9 @@ func UpdateEvaluationPlanStep(
 		}
 	}
 
-	path := strings.Trim(strings.TrimSpace(workspacePath), "/") + "/" + evaluationPlanRelPath
-	raw, err := readFile(ctx, path)
+	path, document, stepsKey, rawSteps, err := loadEvaluationPlanDocument(ctx, workspacePath, readFile)
 	if err != nil {
-		return "", fmt.Errorf("read %s: %w", evaluationPlanRelPath, err)
-	}
-	if strings.TrimSpace(raw) == "" {
-		return "", fmt.Errorf("%s is empty or missing", evaluationPlanRelPath)
-	}
-
-	// Decode into generic containers so unrecognized keys survive the write.
-	var document map[string]interface{}
-	if err := json.Unmarshal([]byte(raw), &document); err != nil {
-		return "", fmt.Errorf("parse %s: %w", evaluationPlanRelPath, err)
-	}
-	stepsKey := "steps"
-	rawSteps, ok := document[stepsKey].([]interface{})
-	if !ok {
-		// The plan also loads from an "eval_steps" key; honor whichever this
-		// file actually uses rather than rewriting it into the other shape.
-		if alt, altOK := document["eval_steps"].([]interface{}); altOK {
-			stepsKey, rawSteps, ok = "eval_steps", alt, true
-		}
-	}
-	if !ok {
-		return "", fmt.Errorf("%s has no steps array", evaluationPlanRelPath)
+		return "", err
 	}
 
 	changes := make([]PlanFieldChange, 0, len(updates))
@@ -195,6 +173,156 @@ func UpdateEvaluationPlanStep(
 		changed = append(changed, change.Field)
 	}
 	return fmt.Sprintf("Updated evaluation step %q (%s) and recorded it in planning/changelog.", stepID, strings.Join(changed, ", ")), nil
+}
+
+// loadEvaluationPlanDocument reads and decodes evaluation/evaluation_plan.json
+// into a generic container (unrecognized keys survive a later write) and
+// resolves whether this file uses "steps" or the legacy "eval_steps" key,
+// honoring whichever it actually has rather than rewriting it into the other
+// shape. Shared by every mutating tool in this file.
+func loadEvaluationPlanDocument(
+	ctx context.Context,
+	workspacePath string,
+	readFile func(context.Context, string) (string, error),
+) (path string, document map[string]interface{}, stepsKey string, rawSteps []interface{}, err error) {
+	path = strings.Trim(strings.TrimSpace(workspacePath), "/") + "/" + evaluationPlanRelPath
+	raw, err := readFile(ctx, path)
+	if err != nil {
+		return "", nil, "", nil, fmt.Errorf("read %s: %w", evaluationPlanRelPath, err)
+	}
+	if strings.TrimSpace(raw) == "" {
+		return "", nil, "", nil, fmt.Errorf("%s is empty or missing", evaluationPlanRelPath)
+	}
+	if err := json.Unmarshal([]byte(raw), &document); err != nil {
+		return "", nil, "", nil, fmt.Errorf("parse %s: %w", evaluationPlanRelPath, err)
+	}
+	stepsKey = "steps"
+	steps, ok := document[stepsKey].([]interface{})
+	if !ok {
+		if alt, altOK := document["eval_steps"].([]interface{}); altOK {
+			stepsKey, steps, ok = "eval_steps", alt, true
+		}
+	}
+	if !ok {
+		return "", nil, "", nil, fmt.Errorf("%s has no steps array", evaluationPlanRelPath)
+	}
+	return path, document, stepsKey, steps, nil
+}
+
+// DeleteEvaluationPlanSteps removes one or more steps from
+// evaluation/evaluation_plan.json by id and records the deletion in
+// planning/changelog, mirroring delete_plan_steps for the regular plan.
+//
+// Before this, evaluation_plan.json had update_evaluation_plan but no way to
+// remove a step at all -- the only path was a direct file write, which is
+// exactly what update_evaluation_plan's own doc comment (and PLAT-282) warns
+// against: a direct write leaves no changelog entry, so artifact drift
+// review cannot see or judge the change. Eval steps carry no next_step_id or
+// route graph between each other (applies_to_routes references a ROUTING
+// STEP IN THE MAIN PLAN, never another eval step), so unlike
+// delete_plan_steps this needs no structural graph revalidation after
+// filtering -- only that every requested id actually exists.
+func DeleteEvaluationPlanSteps(
+	ctx context.Context,
+	workspacePath string,
+	stepIDs []string,
+	reason string,
+	readFile func(context.Context, string) (string, error),
+	writeFile func(context.Context, string, string) error,
+	logger loggerv2.Logger,
+) (string, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return "", fmt.Errorf("reason is required: the changelog records why an evaluation step was removed, and drift review cannot judge a deletion without it")
+	}
+
+	orderedIDs := make([]string, 0, len(stepIDs))
+	deletedSet := make(map[string]bool, len(stepIDs))
+	for _, id := range stepIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || deletedSet[id] {
+			continue
+		}
+		deletedSet[id] = true
+		orderedIDs = append(orderedIDs, id)
+	}
+	if len(orderedIDs) == 0 {
+		return "", fmt.Errorf("step_ids is required and must contain at least one non-empty evaluation step id")
+	}
+
+	path, document, stepsKey, rawSteps, err := loadEvaluationPlanDocument(ctx, workspacePath, readFile)
+	if err != nil {
+		return "", err
+	}
+
+	existing := make(map[string]bool, len(rawSteps))
+	for _, entry := range rawSteps {
+		if step, isObject := entry.(map[string]interface{}); isObject {
+			if id, _ := step["id"].(string); id != "" {
+				existing[id] = true
+			}
+		}
+	}
+	missing := make([]string, 0)
+	for _, id := range orderedIDs {
+		if !existing[id] {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		available := make([]string, 0, len(existing))
+		for id := range existing {
+			available = append(available, id)
+		}
+		sort.Strings(available)
+		return "", fmt.Errorf("evaluation step id(s) not found: %s. Available step IDs: %v", strings.Join(missing, ", "), available)
+	}
+
+	// Capture the full JSON of every deleted step before filtering, same as
+	// delete_plan_steps, so the changelog entry can support a manual revert.
+	deletedSteps := make([]json.RawMessage, 0, len(orderedIDs))
+	kept := make([]interface{}, 0, len(rawSteps))
+	for _, entry := range rawSteps {
+		step, isObject := entry.(map[string]interface{})
+		if isObject {
+			if id, _ := step["id"].(string); deletedSet[id] {
+				if stepJSON, err := json.Marshal(step); err == nil {
+					deletedSteps = append(deletedSteps, stepJSON)
+				} else {
+					logger.Warn(fmt.Sprintf("⚠️ Failed to marshal deleted evaluation step %s for changelog: %v", id, err))
+				}
+				continue
+			}
+		}
+		kept = append(kept, entry)
+	}
+
+	document[stepsKey] = kept
+	encoded, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode %s: %w", evaluationPlanRelPath, err)
+	}
+	// Same write-time proof update_evaluation_plan applies: refuse to write a
+	// file the runtime cannot read back as an evaluation plan.
+	var check EvaluationPlan
+	if err := json.Unmarshal(encoded, &check); err != nil {
+		return "", fmt.Errorf("refusing to write: the edited plan no longer parses as an evaluation plan: %w", err)
+	}
+	if len(check.Steps) != len(kept) {
+		return "", fmt.Errorf("refusing to write: the edited plan parses to %d steps, expected %d", len(check.Steps), len(kept))
+	}
+	if err := writeFile(ctx, path, string(encoded)); err != nil {
+		return "", fmt.Errorf("write %s: %w", evaluationPlanRelPath, err)
+	}
+
+	logPlanChange(ctx, workspacePath, PlanChangelogEntry{
+		Tool:         "delete_evaluation_step",
+		Reason:       reason,
+		StepIDs:      orderedIDs,
+		DeletedSteps: deletedSteps,
+	}, readFile, writeFile, logger)
+
+	return fmt.Sprintf("Deleted %d evaluation step(s) (%s) and recorded it in planning/changelog.", len(orderedIDs), strings.Join(orderedIDs, ", ")), nil
 }
 
 // validateSchemaLikeUpdateField round-trips a raw decoded validation_schema
@@ -296,5 +424,38 @@ func createUpdateEvaluationPlanExecutor(
 			}
 		}
 		return UpdateEvaluationPlanStep(ctx, workspacePath, stepID, updates, reason, readFile, writeFile, logger)
+	}
+}
+
+func getDeleteEvaluationPlanStepsSchema() string {
+	return `{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "step_ids": {
+      "type": "array",
+      "description": "IDs of the evaluation step(s) to delete from evaluation/evaluation_plan.json.",
+      "items": {"type": "string"},
+      "minItems": 1
+    },
+    "reason": {"type": "string", "description": "Why these evaluation step(s) are being removed. Recorded in planning/changelog; drift review cannot judge a deletion without it."}
+  },
+  "required": ["step_ids", "reason"]
+}`
+}
+
+func createDeleteEvaluationPlanStepsExecutor(
+	workspacePath string,
+	logger loggerv2.Logger,
+	readFile func(context.Context, string) (string, error),
+	writeFile func(context.Context, string, string) error,
+) func(context.Context, map[string]interface{}) (string, error) {
+	return func(ctx context.Context, args map[string]interface{}) (string, error) {
+		stepIDs, err := extractStringArray(args, "step_ids")
+		if err != nil {
+			return "", err
+		}
+		reason, _ := args["reason"].(string)
+		return DeleteEvaluationPlanSteps(ctx, workspacePath, stepIDs, reason, readFile, writeFile, logger)
 	}
 }

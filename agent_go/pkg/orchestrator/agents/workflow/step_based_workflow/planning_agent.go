@@ -6219,6 +6219,20 @@ func registerPlanModificationTools(
 		return fmt.Errorf("failed to register update_evaluation_plan tool: %w", err)
 	}
 
+	// The evaluation plan had update_evaluation_plan but no way to remove a
+	// step at all -- the only path was a direct file write, the exact
+	// changelog-blind-spot failure update_evaluation_plan above was built to
+	// prevent, just for deletion instead of update (PLAT-282).
+	if err := mcpAgent.RegisterCustomTool(
+		"delete_evaluation_step",
+		"Delete one or more steps from evaluation/evaluation_plan.json by id and record the removal in planning/changelog. Provide step_ids (array, required) and reason (required). Use this instead of editing the file directly: a direct write leaves no changelog entry, so artifact drift review cannot see or judge the change. Fails if any id does not exist in the plan; no partial deletion. Eval steps carry no next_step_id/route graph to each other, so unlike delete_plan_steps this needs no downstream-reference cleanup — only that every step_id exists.",
+		parseSchemaForToolParametersMust(getDeleteEvaluationPlanStepsSchema()),
+		createDeleteEvaluationPlanStepsExecutor(workspacePath, logger, readFile, writeFile),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register delete_evaluation_step tool: %w", err)
+	}
+
 	if logger != nil {
 		logger.Info(fmt.Sprintf("✅ Registered all plan modification tools for %s", agentName))
 	}
