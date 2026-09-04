@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
+	"github.com/manishiitg/multi-llm-provider-go/pkg/adapters/cursorcli"
+	"github.com/manishiitg/multi-llm-provider-go/pkg/adapters/picli"
 )
 
 // claudeNativeTranscriptRuntime is the minimal subset of a persisted builder
@@ -186,15 +188,48 @@ func claudeNativeTranscriptSyncSupported(raw []byte) bool {
 }
 
 // nativeTranscriptSyncSupportedProvider: the coding CLIs whose on-disk
-// transcript this package can read back (claude_native_transcript_sync.go,
-// codex_native_transcript_sync.go). Cursor and Pi have no reader yet, so a
-// retained live-input turn on those still leaves the durable record behind.
+// transcript can be read back -- Claude Code and Codex by readers in this
+// package (claude_native_transcript_sync.go, codex_native_transcript_sync.go),
+// Cursor and Pi by the adapters' own exported readers in
+// multi-llm-provider-go (cursorcli.ReadNativeTranscript,
+// picli.ReadNativeTranscript), since those formats (a sqlite blob store and
+// pi's session JSONL) are already parsed there for turn completion.
 func nativeTranscriptSyncSupportedProvider(provider string) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "claude-code", "codex-cli":
+	case "claude-code", "codex-cli", "cursor-cli", "pi-cli":
 		return true
 	}
 	return false
+}
+
+// builderConversationMessagesFromLLMTypes projects an adapter's text-only
+// transcript into the builder conversation's own shape. Messages without
+// text (tool-only turns) are dropped; system messages never reach here.
+func builderConversationMessagesFromLLMTypes(messages []llmtypes.MessageContent) []builderConversationMessage {
+	out := make([]builderConversationMessage, 0, len(messages))
+	for _, message := range messages {
+		role := ""
+		switch message.Role {
+		case llmtypes.ChatMessageTypeHuman:
+			role = "human"
+		case llmtypes.ChatMessageTypeAI:
+			role = "ai"
+		default:
+			continue
+		}
+		texts := make([]string, 0, len(message.Parts))
+		for _, part := range message.Parts {
+			if text, ok := part.(llmtypes.TextContent); ok && strings.TrimSpace(text.Text) != "" {
+				texts = append(texts, strings.TrimSpace(text.Text))
+			}
+		}
+		text := strings.TrimSpace(strings.Join(texts, "\n\n"))
+		if text == "" {
+			continue
+		}
+		out = append(out, builderConversationMessage{Role: role, Parts: []builderConversationPart{{Text: text}}})
+	}
+	return out
 }
 
 // nativeTranscriptMessagesForRuntime reads the CLI's own transcript for a
@@ -222,6 +257,24 @@ func nativeTranscriptMessagesForRuntime(provider, nativeSessionID, workingDir st
 		}
 		messages, maxTimestamp, err = readCodexTranscriptMessages(transcriptPath)
 		return messages, maxTimestamp, transcriptPath, err == nil, err
+	case "cursor-cli":
+		if nativeSessionID == "" || workingDir == "" {
+			return nil, time.Time{}, "", false, nil
+		}
+		transcript, found, err := cursorcli.ReadNativeTranscript(workingDir, nativeSessionID)
+		if err != nil || !found {
+			return nil, time.Time{}, "", false, err
+		}
+		return builderConversationMessagesFromLLMTypes(transcript.Messages), transcript.UpdatedAt, transcript.Path, true, nil
+	case "pi-cli":
+		if nativeSessionID == "" {
+			return nil, time.Time{}, "", false, nil
+		}
+		transcript, found, err := picli.ReadNativeTranscript(nativeSessionID)
+		if err != nil || !found {
+			return nil, time.Time{}, "", false, err
+		}
+		return builderConversationMessagesFromLLMTypes(transcript.Messages), transcript.UpdatedAt, transcript.Path, true, nil
 	}
 	return nil, time.Time{}, "", false, nil
 }
