@@ -121,10 +121,18 @@ func (c *OrgDashboardConnector) SendUserNotification(ctx context.Context, messag
 
 func normalizedSummaryStatus(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "success", "warning", "danger":
+	case "completed", "failed", "blocked", "waiting_for_user", "waiting_for_platform", "monitoring", "informational", "no_run":
 		return strings.ToLower(strings.TrimSpace(status))
+	// Older notifications used visual severity. Preserve their meaning as a
+	// truthful workflow status when they are read or rewritten.
+	case "success":
+		return "completed"
+	case "warning":
+		return "blocked"
+	case "danger":
+		return "failed"
 	default:
-		return "neutral"
+		return "informational"
 	}
 }
 
@@ -171,7 +179,7 @@ func ensureOrgDashboardSchema(ctx context.Context, db *sql.DB) error {
 			id TEXT PRIMARY KEY,
 			notification_kind TEXT NOT NULL CHECK (notification_kind IN ('run_summary', 'pulse_summary')),
 			title TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT 'neutral',
+			status TEXT NOT NULL DEFAULT 'informational',
 			message TEXT NOT NULL,
 			fields_json TEXT NOT NULL DEFAULT '[]',
 			sections_json TEXT NOT NULL DEFAULT '[]',
@@ -238,6 +246,7 @@ func ListOrgDashboardNotifications(ctx context.Context, rawWorkspacePath string,
 		item.Route = notificationRouteFromFields(item.Fields)
 		item.Fields = notificationFieldsWithoutRoute(item.Fields)
 		_ = json.Unmarshal([]byte(sectionsJSON), &item.Sections)
+		item.Status = normalizedSummaryStatus(item.Status)
 		result.Recent = append(result.Recent, item)
 	}
 	return result, rows.Err()
@@ -263,6 +272,7 @@ func latestOrgDashboardNotification(ctx context.Context, db *sql.DB, workspacePa
 	item.Route = notificationRouteFromFields(item.Fields)
 	item.Fields = notificationFieldsWithoutRoute(item.Fields)
 	_ = json.Unmarshal([]byte(sectionsJSON), &item.Sections)
+	item.Status = normalizedSummaryStatus(item.Status)
 	return &item, nil
 }
 

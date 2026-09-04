@@ -2960,7 +2960,7 @@ func pulseLifecycleNoRunSteps(pulseRunID, reason string, instructions ...workflo
 	}
 	return []pulseLifecycleStep{{"finalize", fmt.Sprintf(
 		"PULSE FINALIZER — WORKFLOW DID NOT RUN. pulse_run_id=%q. The scheduled workflow never started in this invocation, so there is no new run evidence. Gate, reviewers, Fixer, dashboard, and publish were intentionally skipped. Do not run them, do not read old evidence as this run, do not write builder/improve.html, and do not invent an outcome.\n\n"+
-			"Do these actions in order and record every command with record_pulse_result(command=..., result=..., reason=...): dashboard has no record_pulse_result command and needs no receipt — it is already intentionally skipped by not being rendered. (1) run the configured source-hash-gated backup and record its truthful terminal result; (2) mark publish skipped because nothing was produced; (3) call notify_user exactly once with notification_kind=\"run_summary\" and plainly say the workflow did not start, no results were produced, and the next schedule will retry unless the cause is fixed; then record notify truthfully.%s\n\nThe scheduler's reason is:\n%s%s",
+			"Do these actions in order and record every command with record_pulse_result(command=..., result=..., reason=...): dashboard has no record_pulse_result command and needs no receipt — it is already intentionally skipped by not being rendered. (1) run the configured source-hash-gated backup and record its truthful terminal result; (2) mark publish skipped because nothing was produced; (3) call notify_user exactly once with notification_kind=\"run_summary\" and plainly say the workflow did not start, no results were produced, and the next schedule will retry unless the cause is fixed. Set summary_status=\"no_run\"; include title, compact facts, and sections. Then record notify truthfully.%s\n\nThe scheduler's reason is:\n%s%s",
 		pulseRunID, routing, reason, content,
 	)}}
 }
@@ -3037,7 +3037,7 @@ func scheduledRunFinalizeStepWithPulseTiming(runID, pulseTiming string, instruct
 			"mark the whole publish command skipped with that reason. Never suppress a valid report publish merely because backup was partial or failed. Record one truthful terminal result for publish either way; "+
 			"(3) call notify_user exactly once with notification_kind=\"run_summary\" describing plainly and factually what this run "+
 			"itself did (actions taken, errors, outcome) — do not include a Pulse findings/fixes section, since none ran this pass — "+
-			"then record notify truthfully.%s%s%s",
+			"and include summary_title, summary_status, summary_fields, summary_sections, and summary_route when route-scoped. summary_status must directly say what the workflow is doing now: completed, failed, blocked, waiting_for_user, waiting_for_platform, monitoring, informational, or no_run. Explain any blocker in the title, message, facts, or sections. Then record notify truthfully.%s%s%s",
 		runID, routing, content, fastPulseDecision,
 	)}}
 }

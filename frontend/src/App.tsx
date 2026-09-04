@@ -581,7 +581,7 @@ function App() {
     useWorkflowStore.getState().loadPhases()
   }, [])
 
-  // AgentWorks has two product surfaces: Automations and Organization. The
+  // AgentWorks has two product surfaces: Automations and Activity. The
   // former profile-less Chat landing was removed; product-owned chats render
   // outside this shell and continue to use their own agent profiles.
   useEffect(() => {
@@ -828,7 +828,7 @@ function App() {
         restoreMostRecentWorkflowTab()
         return
       }
-      // Ctrl/Cmd + 3 for Organization view
+      // Ctrl/Cmd + 3 for Activity view
       if ((event.ctrlKey || event.metaKey) && event.key === '3') {
         event.preventDefault()
         setShowWorkflowsOverview(true)
@@ -918,7 +918,7 @@ function App() {
         <UpdateProgressToast />
         <GlobalHumanFeedbackPrompt />
         <div className="h-screen bg-background flex">
-          {/* AgentWorks contains Automations and Organization. The former left
+          {/* AgentWorks contains Automations and Activity. The former left
               sidebar was removed; its controls now live in the top bar
               (ModePresetBar → WorkspaceTopBarControls). */}
           <div className="flex-1 flex flex-col min-w-0 min-h-0 relative z-10 overflow-hidden">

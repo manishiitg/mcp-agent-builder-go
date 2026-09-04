@@ -27,6 +27,28 @@ Use `ffprobe` and `ffmpeg` where available to verify:
 
 Useful detectors include `blackdetect`, `freezedetect`, and `volumedetect`. Treat missing audio, wrong dimensions, decode errors, major black/frozen sections, and materially wrong duration as failures.
 
+### Concatenated-delivery timestamp receipt
+
+For a delivery assembled from multiple source clips, technical QA also requires
+a timestamp check at **every** source boundary. Derive each expected boundary
+from the source durations. On the assembled delivery, inspect adjacent video
+frame timestamps from `v:0` on both sides of each boundary and compare the
+interval to the delivery frame duration. Fail the technical check for a
+material extra interval, gap, overlap, or cadence change at a boundary, even if
+the file decodes and the clips otherwise share codecs.
+
+Inspect audio packets from `a:0` separately for gaps or overlaps at those same
+boundaries. Do not cite audio frame spacing as video-frame evidence. A 24 fps
+video should normally advance by about `0.041667` seconds per video frame; use
+the actual stream frame rate and a small rounding tolerance rather than
+hard-coding that value for every delivery.
+
+Capture the boundary times and measured video/audio result in the `technical`
+evidence. Detector commands must preserve their exit status: a command that
+uses `grep` to print matches must not turn "no findings" into a successful
+check or conceal a failed detector. A clean `blackdetect`, `freezedetect`, or
+duplicate-frame result does not replace this timestamp receipt.
+
 ## Visual review
 
 Create a contact sheet containing the opening, each edit boundary, representative middle frames, all text cards, and the final frame.

@@ -29,7 +29,7 @@ export const OrchestratorContext: React.FC<OrchestratorContextProps> = ({
       'planning': { icon: '', name: 'Planning', color: 'blue' },
       'execution': { icon: '', name: 'Execution', color: 'green' },
       'validation': { icon: '', name: 'Validation', color: 'purple' },
-      'organizer': { icon: '', name: 'Organization', color: 'orange' },
+      'organizer': { icon: '', name: 'Activity', color: 'orange' },
       // Workflow phases
       'todo_planner': { icon: '', name: 'Todo Planning', color: 'indigo' },
       'todo_execution': { icon: '', name: 'Todo Execution', color: 'emerald' },

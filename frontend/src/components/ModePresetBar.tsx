@@ -562,7 +562,7 @@ export const ModePresetBar: React.FC = () => {
               <button
                 role="tab"
                 aria-selected={showWorkflowsOverview}
-                aria-label="Switch to Organization view"
+                aria-label="Switch to Activity view"
                 onClick={() => setShowWorkflowsOverview(!showWorkflowsOverview)}
                 className={`relative flex items-center gap-1.5 whitespace-nowrap px-3 py-1 rounded-md text-xs font-medium transition-all duration-150 cursor-pointer ${
                   showWorkflowsOverview
@@ -572,7 +572,7 @@ export const ModePresetBar: React.FC = () => {
                 type="button"
               >
                 <Building2 className="w-3 h-3" />
-                <span>Org</span>
+                <span>Activity</span>
               </button>
             </div>
 
@@ -865,7 +865,7 @@ export const ModePresetBar: React.FC = () => {
                   <div className="space-y-1.5">
                     {[
                       ['Automation', 'Ctrl+1'],
-                      ['Organization', 'Ctrl+3'],
+                      ['Activity', 'Ctrl+3'],
                     ].map(([label, key]) => (
                       <div key={key} className="flex items-center justify-between py-1">
                         <span className="text-sm text-gray-600 dark:text-gray-300">{label}</span>

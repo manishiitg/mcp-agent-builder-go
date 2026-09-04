@@ -70,10 +70,15 @@ Run Backup, Publish, then Notify. Before and after each, call
    `notify_user(notification_kind="pulse_summary")` with only What Pulse did.
    Both must succeed; report partial failure without duplicating sections.
 
-Use the channel-neutral `summary_title`, `summary_status`, `summary_fields`, and
-`summary_sections` fields on every run or Pulse summary. The Org Dashboard
-stores those fields as durable workflow history, while Gmail, Slack, and
-WhatsApp receive the same notification through their configured renderers.
+Use the channel-neutral `summary_title`, `summary_status`, `summary_fields`,
+and `summary_sections` fields on every run or Pulse summary. `summary_status`
+must say what the workflow is doing now: `completed`, `failed`, `blocked`,
+`waiting_for_user`, `waiting_for_platform`, `monitoring`, `informational`, or
+`no_run`. Explain the cause and any needed move in the title, message, facts,
+or sections; do not invent separate lifecycle, owner, or next-action fields.
+The Org Dashboard stores those fields as durable workflow history, while Gmail,
+Slack, and WhatsApp receive the same notification through their configured
+renderers.
 Set `summary_route` to the exact top-level route represented by this run and
 its Pulse activity. Omit it only for genuinely workflow-wide Pulse work that
 is not attributable to one route; never guess a route from prose.

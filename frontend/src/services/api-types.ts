@@ -3219,7 +3219,7 @@ export interface OrgDashboardNotification {
   workspace_path: string
   kind: 'run_summary' | 'pulse_summary'
   title?: string
-  status: 'neutral' | 'success' | 'warning' | 'danger'
+  status: 'completed' | 'failed' | 'blocked' | 'waiting_for_user' | 'waiting_for_platform' | 'monitoring' | 'informational' | 'no_run'
   route?: string
   message: string
   fields?: OrgDashboardNotificationField[]

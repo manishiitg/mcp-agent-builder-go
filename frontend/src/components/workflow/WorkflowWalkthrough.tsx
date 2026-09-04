@@ -12,7 +12,7 @@ const STEPS: WalkthroughStep[] = [
   {
     selector: '[data-tour="top-mode-switcher"]',
     title: 'Top modes',
-    body: 'Use these to move between Automation and Org views. Keyboard shortcuts are Ctrl+1 and Ctrl+3.',
+    body: 'Use these to move between Automation and Activity views. Keyboard shortcuts are Ctrl+1 and Ctrl+3.',
   },
   {
     selector: '[data-tour="workflow-add-edit"]',

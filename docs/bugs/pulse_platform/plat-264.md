@@ -55,7 +55,8 @@ and does not introduce an `update_org_dashboard` tool.
 `notify_user` now accepts:
 
 - `summary_title`
-- `summary_status` (`neutral`, `success`, `warning`, or `danger`)
+- `summary_status` (`completed`, `failed`, `blocked`, `waiting_for_user`,
+  `waiting_for_platform`, `monitoring`, `informational`, or `no_run`)
 - `summary_fields`
 - `summary_sections`
 
@@ -150,6 +151,26 @@ summary recovers `Workflow/demo` across the same registry boundary used by the
 MCP bridge. Existing empty dashboard stores are not populated by this code
 repair; live re-verification still requires one new typed summary per workflow
 or a separately approved truthful backfill.
+
+## 2026-09-04 — Explicit Activity status contract
+
+The first Org view treated every latest `pulse_summary` as an update while the
+all-workflows grid inferred attention only from `run_summary.status`. The
+headline count used both Pulse and run warnings, so an open Pulse action could
+be counted without being presented as a clear current task. Warning color is
+not a reliable action model: a warning can describe a fixed issue, a monitor,
+or a real blocker.
+
+Each classified summary has one semantic `summary_status`: `completed`,
+`failed`, `blocked`, `waiting_for_user`, `waiting_for_platform`, `monitoring`,
+`informational`, or `no_run`. Its title, message, facts, and sections explain
+the why. There is deliberately no secondary state, owner, or next-action
+model. Attention statuses are shown once in **Needs attention**;
+completed/monitoring/informational Pulse work appears in **Pulse updates**;
+pending human inputs remain in **Decisions required**. The renamed **Activity**
+page shows compact facts directly and exposes retained run/Pulse history both
+in the page and per workflow. Older severity values map conservatively to the
+new semantic statuses when read.
 
 ## Decision history
 

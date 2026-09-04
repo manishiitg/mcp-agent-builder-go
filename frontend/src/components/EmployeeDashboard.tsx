@@ -6,7 +6,7 @@ import { openWorkflowPresetPage } from '../utils/workflowSessionRestore'
 import { OrgDashboard } from './org/OrgDashboard'
 
 /**
- * Organization is intentionally a summary-only surface. Workflow editing,
+ * Activity is intentionally a summary-only surface. Workflow editing,
  * execution details, reports, logs, and costs belong to the workflow workspace.
  */
 export const EmployeeDashboard: React.FC = () => {
@@ -46,7 +46,7 @@ export const EmployeeDashboard: React.FC = () => {
   }, [workflowPresets])
 
   if (!workflowPresetsLoaded && presetsLoading && workflows.length === 0) {
-    return <div className="flex h-full min-h-[320px] items-center justify-center text-muted-foreground"><Loader2 className="mr-2 h-5 w-5 animate-spin" />Loading organization…</div>
+    return <div className="flex h-full min-h-[320px] items-center justify-center text-muted-foreground"><Loader2 className="mr-2 h-5 w-5 animate-spin" />Loading activity…</div>
   }
 
   return <div className="h-[calc(100vh-116px)] min-h-[480px] overflow-hidden bg-background"><OrgDashboard workflows={workflows} onOpenWorkflow={handleOpenWorkflow} /></div>

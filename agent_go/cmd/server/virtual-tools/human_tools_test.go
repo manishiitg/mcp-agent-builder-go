@@ -379,7 +379,7 @@ func TestHandleNotifyUserBuildsChannelNeutralOrgDashboardSummary(t *testing.T) {
 		"message_for_user":  "Run completed with one warning.",
 		"notification_kind": "run_summary",
 		"summary_title":     "Daily run",
-		"summary_status":    "warning",
+		"summary_status":    "blocked",
 		"summary_fields": []interface{}{
 			map[string]interface{}{"label": "Processed", "value": "12"},
 		},
@@ -394,11 +394,14 @@ func TestHandleNotifyUserBuildsChannelNeutralOrgDashboardSummary(t *testing.T) {
 			t.Fatalf("neutral summary destination = %#v", dest)
 		}
 		summary := dest.Content.Summary
-		if summary.Kind != "run_summary" || summary.Title != "Daily run" || summary.Status != "warning" {
+		if summary.Kind != "run_summary" || summary.Title != "Daily run" || summary.Status != "blocked" {
 			t.Fatalf("neutral summary = %#v", summary)
 		}
 		if len(summary.Fields) != 1 || summary.Fields[0].Value != "12" {
 			t.Fatalf("neutral summary fields = %#v", summary.Fields)
+		}
+		if summary.Status != "blocked" {
+			t.Fatalf("summary status = %#v", summary)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected Org Dashboard notification contract")
@@ -439,6 +442,18 @@ func TestHandleNotifyUserPreservesWorkspacePathAcrossSessionRegistry(t *testing.
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected Org Dashboard notification contract")
+	}
+}
+
+func TestNotificationSummaryUsesSemanticStatusWithoutLifecycleBookkeeping(t *testing.T) {
+	summary, err := notificationSummaryFromArgs(map[string]interface{}{
+		"summary_status": "waiting_for_user",
+	}, "run_summary", nil, services.SlackWebhookContent{})
+	if err != nil {
+		t.Fatalf("semantic summary status error = %v", err)
+	}
+	if summary.Status != "waiting_for_user" {
+		t.Fatalf("summary status = %q, want waiting_for_user", summary.Status)
 	}
 }
 

@@ -127,8 +127,8 @@ func CreateHumanTools() []llmtypes.Tool {
 		},
 		"summary_status": map[string]interface{}{
 			"type":        "string",
-			"enum":        []string{"neutral", "success", "warning", "danger"},
-			"description": "Channel-neutral factual status used by the Org Dashboard: success only for healthy/completed outcomes, warning for incomplete or attention-needed work, danger for confirmed failure/critical state, otherwise neutral.",
+			"enum":        []string{"completed", "failed", "blocked", "waiting_for_user", "waiting_for_platform", "monitoring", "informational", "no_run"},
+			"description": "Channel-neutral description of what the workflow is doing now. Use completed when done, failed for a confirmed run failure, blocked when work cannot continue, waiting_for_user or waiting_for_platform when that is the specific blocker, monitoring when awaiting natural evidence, informational for an update, and no_run when a scheduled run did not start.",
 		},
 		"summary_route": map[string]interface{}{
 			"type":        "string",
@@ -231,7 +231,7 @@ var sendRichSlackIncomingWebhook = services.SendRichSlackIncomingWebhook
 // knows where its message will actually land. The always-on web UI connector is
 // not framed as an external channel.
 func buildNotifyDescription() string {
-	base := "Send one non-blocking notification through the configured providers. Gmail, Slack, and WhatsApp are external delivery providers; Org Dashboard durably records run_summary and pulse_summary notifications for the current workflow. Use this for FYIs, progress updates, alerts, and completion notices when you do not need to wait for a reply. For workflow, Pulse, Goal Advisor, and other structured summaries, always set the channel-neutral summary_title, summary_status, summary_fields, and summary_sections, plus summary_route when the notification represents one top-level workflow route. Channel-specific rich fields may improve presentation but must not contain facts omitted from the neutral summary. If the workflow has a Slack Incoming Webhook configured, the backend also sends a backend-owned rich Block Kit card there. Never access a SECRET_* webhook variable, construct a webhook payload in shell, post with curl, disable notify_user to avoid duplication, or ask for the URL after an encrypted webhook reference is configured—the backend exclusively owns delivery. If you need the human to answer before continuing, use human_feedback instead. Returns a JSON delivery result — status (delivered|partial|failed|no_recipient|no_channels_configured) plus delivered/skipped/failed channel lists. Report it honestly to the user: do NOT claim an external message was sent when only Org Dashboard succeeded."
+	base := "Send one non-blocking notification through the configured providers. Gmail, Slack, and WhatsApp are external delivery providers; Org Dashboard durably records run_summary and pulse_summary notifications for the current workflow. Use this for FYIs, progress updates, alerts, and completion notices when you do not need to wait for a reply. For workflow, Pulse, Goal Advisor, and other structured summaries, always set the channel-neutral summary_title, summary_status, summary_fields, and summary_sections, plus summary_route when the notification represents one top-level workflow route. summary_status must plainly describe what the workflow is doing now; explain why in the title, message, facts, or sections. Channel-specific rich fields may improve presentation but must not contain facts omitted from the neutral summary. If the workflow has a Slack Incoming Webhook configured, the backend also sends a backend-owned rich Block Kit card there. Never access a SECRET_* webhook variable, construct a webhook payload in shell, post with curl, disable notify_user to avoid duplication, or ask for the URL after an encrypted webhook reference is configured—the backend exclusively owns delivery. If you need the human to answer before continuing, use human_feedback instead. Returns a JSON delivery result — status (delivered|partial|failed|no_recipient|no_channels_configured) plus delivered/skipped/failed channel lists. Report it honestly to the user: do NOT claim an external message was sent when only Org Dashboard succeeded."
 
 	var labels []string
 	gmailOn := false
@@ -803,13 +803,9 @@ func notificationSummaryFromArgs(
 	if strings.TrimSpace(status) == "" {
 		status = slack.Color
 	}
-	status = strings.ToLower(strings.TrimSpace(status))
-	switch status {
-	case "neutral", "success", "warning", "danger":
-	case "":
-		status = "neutral"
-	default:
-		return nil, fmt.Errorf("summary_status must be neutral, success, warning, or danger")
+	status = normalizedNotificationSummaryStatus(status)
+	if status == "" {
+		return nil, fmt.Errorf("summary_status must be completed, failed, blocked, waiting_for_user, waiting_for_platform, monitoring, informational, or no_run")
 	}
 	route, _ := args["summary_route"].(string)
 
@@ -840,6 +836,23 @@ func notificationSummaryFromArgs(
 		Fields:   fields,
 		Sections: sections,
 	}, nil
+}
+
+func normalizedNotificationSummaryStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "neutral":
+		return "informational"
+	case "success":
+		return "completed"
+	case "warning":
+		return "blocked"
+	case "danger":
+		return "failed"
+	case "completed", "failed", "blocked", "waiting_for_user", "waiting_for_platform", "monitoring", "informational", "no_run":
+		return strings.ToLower(strings.TrimSpace(status))
+	default:
+		return ""
+	}
 }
 
 func notificationSummaryFieldsFromArg(raw interface{}) ([]services.NotificationSummaryField, error) {

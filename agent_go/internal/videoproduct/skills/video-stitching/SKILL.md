@@ -44,10 +44,35 @@ editorial treatment only when the user explicitly requests one.
 ## Deterministic assembly
 
 Build the assembly manifest from accepted clips in their intended order. Use a
-plain direct concat. Normalize only when media specifications are technically
-incompatible; do not alter timing, frames, composition, picture, or sound to
-"repair" a normal H3 continuation. Preserve captions or separately approved
-deterministic layers as their own intentional work.
+plain direct concat. Before accepting that output, run the timestamp-boundary
+receipt below. Normalize when the sources are technically incompatible **or**
+when the receipt measures a timestamp discontinuity; do not alter timing,
+frames, composition, picture, or sound to "repair" a normal H3 continuation.
+Preserve captions or separately approved deterministic layers as their own
+intentional work.
+
+## Timestamp-boundary receipt
+
+For an assembly of two or more clips, calculate every expected boundary from
+the accepted source durations. At each boundary, inspect the **output video
+stream** (`v:0`) frame timestamps immediately before and after the cut. The
+observed interval must stay at the output frame duration, within a small
+rounding tolerance. For example, a 24 fps delivery should have approximately
+`0.041667` seconds between adjacent frames; a `0.062333` interval at a cut is a
+technical gap even though both inputs decode and share a codec.
+
+Also inspect audio packets around each boundary (`a:0`) for an unintended gap
+or overlap. Keep video and audio checks separate: audio timestamps do not prove
+the video cadence. Record the expected boundaries, measured maximum video-frame
+interval at each one, audio result, and pass/fail evidence in the final quality
+report.
+
+If the direct concat fails this receipt, reassemble with deterministic timestamp
+normalization (reset each input's video/audio PTS, then concatenate and encode
+to the approved delivery settings). Re-run the same receipt against the new
+file. This corrects mux timing only; it must never be described as fixing a
+pose, camera, expression, lip-sync, or other visual discontinuity. If there is
+no measured timing defect, do not re-encode merely to hide a visible H3 seam.
 
 The output is a new final MP4 containing the source clips in sequence. It is
 not a generated continuation and no source clip is overwritten.
