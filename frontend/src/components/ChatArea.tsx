@@ -1,6 +1,7 @@
 import { isForegroundSessionEvent } from '../../shared/session/foreground'
 import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo, useState, type ComponentType, type ForwardedRef, type ReactNode } from 'react'
 import { normalizeEventViewMode } from '../stores/useChatStore'
+import { intermediateUpdateFromTranscriptChunk } from '../utils/transcriptChunkUpdates'
 import { useRenderLogger, useMemoLogger } from '../utils/renderLogger'
 import { chatSubmissionLane } from '../utils/promiseLane'
 import {
@@ -1660,6 +1661,14 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
 
       if (isStreamingEventType(event.type)) {
         handleLiveStreamingEvent(event, actualSessionId, chatStore)
+        // A coding CLI's whole-message narration ("I'll separate posts from
+        // replies…") must outlive the live buffer, or it vanishes from the chat
+        // while tmux still shows it. Keep it as the same intermediate reply row
+        // the durable restore synthesizes.
+        if (!isSubAgentEvent) {
+          const update = intermediateUpdateFromTranscriptChunk(event)
+          if (update) newEvents.push(update)
+        }
         continue
       }
       // Allow distinct backend user_message events through when there's no
@@ -1678,7 +1687,10 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         }
       }
 
-      if (!isSubAgentEvent && (event.type === 'llm_generation_end' || event.type === 'unified_completion' || event.type === 'agent_end' || event.type === 'conversation_end' || event.type === 'conversation_error' || event.type === 'context_cancelled')) {
+      // An intermediate narration row (intermediateUpdateFromTranscriptChunk)
+      // reuses the llm_generation_end shape but is not the turn's completion.
+      const isIntermediateUpdate = innerData?.restored_intermediate_update === true
+      if (!isSubAgentEvent && !isIntermediateUpdate && (event.type === 'llm_generation_end' || event.type === 'unified_completion' || event.type === 'agent_end' || event.type === 'conversation_end' || event.type === 'conversation_error' || event.type === 'context_cancelled')) {
         hasCompletionEvent = true
       }
 
@@ -1928,6 +1940,10 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       if (isStreamingEventType(event.type)) {
         // Process streaming events immediately for real-time text display.
         handleLiveStreamingEvent(event, actualSessionId, chatStore)
+        // Whole-message narration from a coding CLI is also a durable
+        // intermediate reply; see intermediateUpdateFromTranscriptChunk.
+        const update = intermediateUpdateFromTranscriptChunk(event)
+        if (update) nonStreamingEvents.push(update)
       } else {
         nonStreamingEvents.push(event)
       }

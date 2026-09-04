@@ -231,11 +231,17 @@ const UserTranscriptMessage: React.FC<{ content: string; timestamp: string; comp
 // is one, so tool work reads as part of the reply rather than a stray chip.
 const AssistantTurnHeader: React.FC<{ event: PollingEvent; timestamp: string; label?: string; icon?: React.ReactNode }> = ({ event, timestamp, label = 'Agent', icon }) => {
   const fields = transcriptEventPayload(event)
-  const duration = typeof fields.duration === 'number' && fields.duration > 0
+  // Only a reply event's duration describes the turn. When the header falls
+  // back to the block's first tool call, that event's duration is one shell
+  // command (e.g. "281ms" on a 92-second turn), so say nothing rather than
+  // something misleading. The backend's zero-based `turn` counter is an
+  // internal index that disagrees between event types for the same reply
+  // ("Turn 0" on tool events, "Turn 1" on llm_generation_end); it never
+  // meant anything to a reader and is not shown.
+  const duration = AGENT_RESPONSE_EVENT_TYPES.has(event.type || '') && typeof fields.duration === 'number' && fields.duration > 0
     ? formatDurationCompact(fields.duration)
     : ''
-  const turn = typeof fields.turn === 'number' ? fields.turn : undefined
-  const metadata = [turn != null ? `Turn ${turn}` : '', duration, timestamp].filter(Boolean).join(' · ')
+  const metadata = [duration, timestamp].filter(Boolean).join(' · ')
   return (
     <div data-testid="terminal-clear-assistant-header" className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
       {icon && <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center [&>img]:h-4 [&>img]:w-4 [&>svg]:h-4 [&>svg]:w-4" aria-hidden="true">{icon}</span>}
