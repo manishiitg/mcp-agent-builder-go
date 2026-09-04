@@ -320,6 +320,13 @@ function handleLiveStreamingEvent(
       chatStore.appendExecutionStreamingChunk(actualSessionId, scope.id, chunkIndex, content)
     } else if (scope.kind === 'session') {
       if (chunkIndex === 0 || chunkIndex === 1) chatStore.clearStreamingText(actualSessionId)
+      // A whole-message narration chunk becomes its own durable row (both
+      // callers push intermediateUpdateFromTranscriptChunk's result), so it
+      // must not also go into the live buffer -- block chunks accumulate
+      // there newline-joined for the whole turn, and the tail then re-showed
+      // every narration of the turn concatenated under the rows that already
+      // carried them.
+      if (intermediateUpdateFromTranscriptChunk(event)) return
       chatStore.appendStreamingChunk(actualSessionId, chunkIndex, content, chunkMeta)
     }
     return
