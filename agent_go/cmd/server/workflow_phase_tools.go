@@ -5,6 +5,7 @@ import (
 	"fmt"
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	todo_creation_human "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
 
 	"github.com/manishiitg/mcpagent/llm"
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
@@ -316,11 +318,44 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			// The HTML report is loaded directly from db/reports/index.html. The
 			// builder edits those files with normal workspace tools and validates
 			// each page; there is no report-plan JSON registry or widget layer.
+			// validate_report_html also checks what the static parse cannot:
+			// every literal window.report.query SQL is prepared against the
+			// live db/db.sqlite, and every referenced db/ path is confirmed
+			// to exist. Both go through the same workspace API the Report tab
+			// uses, so a remote workspace validates exactly what it renders.
+			reportWSClient := workspace.NewClient(getWorkspaceAPIURL(), workspace.WithUserID(userID))
+			reportDBPath := filepath.ToSlash(filepath.Join(phaseWorkspacePath, "db", "db.sqlite"))
+			reportHooks := todo_creation_human.ReportHTMLValidationHooks{
+				ExplainSQL: func(ctx context.Context, sqlText string) error {
+					_, err := reportWSClient.QueryAuthorizedWorkflowDB(ctx, workspace.QueryWorkflowDBParams{
+						DBPath:  reportDBPath,
+						SQL:     "EXPLAIN " + sqlText,
+						MaxRows: 1,
+					})
+					return err
+				},
+				FileExists: func(ctx context.Context, relativePath string) (bool, error) {
+					full := filepath.ToSlash(filepath.Join(phaseWorkspacePath, relativePath))
+					listing, exists, err := listWorkspaceFolder(ctx, filepath.ToSlash(filepath.Dir(full)), 1)
+					if err != nil || !exists {
+						return false, err
+					}
+					paths := []string{}
+					collectWorkspaceFilePaths(listing, &paths)
+					for _, candidate := range paths {
+						if strings.Trim(candidate, "/") == strings.Trim(full, "/") {
+							return true, nil
+						}
+					}
+					return false, nil
+				},
+			}
 			if err := todo_creation_human.RegisterHTMLReportTools(
 				definitionAgent,
 				phaseWorkspacePath,
 				api.logger,
 				phaseReadFile,
+				reportHooks,
 			); err != nil {
 				log.Printf("[WORKFLOW_PHASE] Warning: Failed to register HTML report tools in %s: %v", workflowPhaseID, err)
 			} else {

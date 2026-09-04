@@ -42,9 +42,37 @@ them; never add a step or table whose only purpose is feeding this tab.
    meaningful `<title>` and accessible internal navigation when needed. Use
    `window.report.query` for live data, inline CSS/JS, responsive layout, clear
    empty/error states, no external CDN, no fixed body height, and no nested
-   scrolling.
-4. Call `validate_report_html` after editing; repair every error.
-5. When visual review is requested, inspect the Report tab at desktop/tablet/
+   scrolling. Theme off the app, not the OS: style dark mode under
+   `:root.dark` / `[data-theme="dark"]` (or use the injected
+   `hsl(var(--background))`-style tokens) — `prefers-color-scheme` alone
+   ignores the in-app light/dark toggle.
+4. **Markdown belongs in the report as rendered prose, never as raw text.**
+   A markdown file the workflow keeps under `db/` (a weekly summary, a
+   strategy note, a generated brief) drops in with one call, themed to
+   match the page; a markdown string from a query row goes through
+   `renderMarkdown`:
+
+   ```js
+   window.report.ready(async function () {
+     document.getElementById('brief').innerHTML =
+       await window.report.getHtml('db/notes/weekly-brief.md');
+     const rows = await window.report.query("SELECT message FROM org_dashboard_notifications WHERE notification_kind='run_summary' ORDER BY created_at DESC LIMIT 5");
+     document.getElementById('runs').innerHTML =
+       rows.map(r => window.report.renderMarkdown(r.message)).join('');
+   });
+   ```
+
+   Links and images inside that markdown that point at workspace files
+   (`db/assets/chart.png`, `db/reports/proof.pdf`, or paths relative to the
+   .md file) work: images load, links open the in-report file preview.
+   Use `getText` only when you genuinely want the raw source.
+5. Call `validate_report_html` after editing; repair every error. It now
+   also runs every literal `window.report.query` SQL against the live
+   `db/db.sqlite`, checks that every referenced `db/` file exists, rejects
+   external stylesheet/script URLs, and warns when dark mode keys only off
+   the OS scheme. A query built from variables is reported as unchecked —
+   prefer literal SQL so the validator can see it.
+6. When visual review is requested, inspect the Report tab at desktop/tablet/
    mobile widths and both themes; otherwise stop after validation.
 
 Before writing a large report, briefly state the sections/views you will create

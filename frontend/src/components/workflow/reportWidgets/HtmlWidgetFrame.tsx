@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { useReportDataApi } from './reportEmbedContext'
+import { REPORT_OPEN_ATTR, REPORT_SRC_ATTR } from './reportMarkdownLinks'
 
 // Kept behind Vite's development flag: this lets us distinguish an iframe
 // navigation from a normal React render when diagnosing report flicker, without
@@ -389,6 +390,15 @@ function HtmlReportFrameComponent({
         if (!link) return
         const href = link.getAttribute('href') || ''
 
+        // A workspace file link inside rendered markdown (rewritten by
+        // reportMarkdownLinks): open it in the in-report preview modal.
+        const openPath = link.getAttribute(REPORT_OPEN_ATTR)
+        if (openPath) {
+          e.preventDefault()
+          dataApi?.openFile(openPath)
+          return
+        }
+
         // In-page `#anchor` links (the report's tab nav): the srcDoc base URL is
         // about:srcdoc, so a default click reloads the whole document instead of
         // scrolling. Intercept and scroll manually.
@@ -476,6 +486,35 @@ function HtmlReportFrameComponent({
           'unhandled promise rejection',
         )
       })
+    }
+
+    // Images inside rendered markdown (reportMarkdownLinks) carry the
+    // workspace path on a data attribute instead of src, because a relative
+    // src resolves to nothing under about:srcdoc. Load each through the
+    // authenticated blob channel, now and whenever the report inserts more
+    // markdown later (a tab switch, a data refresh).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (dataApi && !(doc as any).__reportImageResolverBound) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(doc as any).__reportImageResolverBound = true
+      const resolveImages = () => {
+        doc.querySelectorAll(`img[${REPORT_SRC_ATTR}]:not([src])`).forEach((node) => {
+          const img = node as HTMLImageElement
+          const path = img.getAttribute(REPORT_SRC_ATTR)
+          if (!path || img.dataset.reportSrcPending) return
+          img.dataset.reportSrcPending = '1'
+          void dataApi.fileUrl(path).then((url) => {
+            if (url) img.src = url
+            else img.alt = img.alt || `Missing file: ${path}`
+          }).catch(() => { /* leave the alt text */ })
+        })
+      }
+      resolveImages()
+      try {
+        new MutationObserver(resolveImages).observe(doc.documentElement, { childList: true, subtree: true })
+      } catch {
+        /* MutationObserver unavailable — only the initial pass runs */
+      }
     }
 
     // Run one report.ready() callback with its errors surfaced rather than

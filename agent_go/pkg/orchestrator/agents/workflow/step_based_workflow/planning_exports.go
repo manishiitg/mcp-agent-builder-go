@@ -2256,8 +2256,9 @@ func RegisterHTMLReportTools(
 	workspacePath string,
 	logger loggerv2.Logger,
 	readFile func(context.Context, string) (string, error),
+	hooks ReportHTMLValidationHooks,
 ) error {
-	return registerHTMLReportTools(mcpAgent, workspacePath, logger, readFile)
+	return registerHTMLReportTools(mcpAgent, workspacePath, logger, readFile, hooks)
 }
 
 // RegisterPlanModificationTools is the exported wrapper for registering plan modification tools

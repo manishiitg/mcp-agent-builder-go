@@ -19,7 +19,20 @@ generation step.
   field on an already-existing row with `window.report.updateField`/
   `updateFields` (see below). Do not bake changing run results into the
   document or add a step that regenerates it each run.
-- After editing, call `validate_report_html()`.
+- A markdown file under `db/` renders inline with
+  `el.innerHTML = await window.report.getHtml('db/notes/brief.md')`; a
+  markdown string from a query row with `window.report.renderMarkdown(text)`.
+  Both come back themed (`.report-markdown`), and links/images inside them
+  that point at workspace files (`db/...`, or paths relative to the .md
+  file) load and open the in-report preview. Never show markdown as raw text.
+- Theme off the app, not the OS: dark styles under `:root.dark` /
+  `[data-theme="dark"]` (or the injected `hsl(var(--token))` palette), with
+  `report:theme` for live re-styling. `prefers-color-scheme` alone follows
+  the viewer's OS and ignores the in-app toggle.
+- After editing, call `validate_report_html()`. Beyond the document shape it
+  runs every literal `window.report.query` SQL against the live
+  `db/db.sqlite`, confirms every referenced `db/` file exists, rejects
+  external stylesheet/script URLs, and warns on OS-only dark mode.
   Open the Report tab to verify visual layout only when requested or needed.
 - Always include one section, as its own top-level tab (not a subsection
   scrolled past within another tab, and not merely an anchored region on a
@@ -132,11 +145,13 @@ captured there is not reachable from the report just because it exists on disk
 for the report to show it.
 
 Referencing a path that was never published produces a broken-image icon and
-nothing else: no error, no log line, no failed run. Verify the file exists at
-its `db/` path, not only at the path the step wrote.
+nothing else at runtime: no error, no log line, no failed run. Verify the file
+exists at its `db/` path, not only at the path the step wrote.
 
-`validate_report_html()` does not catch this. It parses the document; it does
-not execute it or resolve the paths it references.
+`validate_report_html()` checks every literal path the document references
+(`window.report.get/getText/getHtml/fileUrl/openFile('db/...')`, `src="db/..."`,
+`href="db/..."`) and reports the missing ones. A path assembled at runtime from
+variables is invisible to it — prefer literal paths, or verify those yourself.
 
 ### Workshop and Run boundaries
 

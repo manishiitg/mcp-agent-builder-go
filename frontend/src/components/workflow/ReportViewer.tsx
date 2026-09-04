@@ -19,6 +19,7 @@ import ModalPortal from '../ui/ModalPortal'
 import { FilePreviewModal } from './reportWidgets/FilePreviewModal'
 import { HtmlReportFrame } from './reportWidgets/HtmlWidgetFrame'
 import { ReportEmbedProvider, type ReportDataApi } from './reportWidgets/reportEmbedContext'
+import { rewriteReportMarkdownReferences } from './reportWidgets/reportMarkdownLinks'
 import { ReportHumanInputPanel } from './ReportHumanInputPanel'
 
 import { WORKFLOW_REPORT_REFRESH_EVENT } from './reportRefreshEvent'
@@ -76,10 +77,14 @@ function useReportDataApi(workspacePath: string): ReportDataApi {
       const allowed = allowedReportPath(path)
       return allowed ? readWorkspaceText(`${workspacePath}/${allowed}`) : null
     }
-    const renderMarkdown = (markdown: string): string => {
+    // basePath: the folder of the markdown FILE being rendered (getHtml), so
+    // its own relative links/images resolve; a markdown string from data has
+    // no folder and only workspace-root-relative references resolve.
+    const renderMarkdown = (markdown: string, basePath = ''): string => {
       if (!markdown) return ''
       try {
-        return `<div class="report-markdown">${renderToStaticMarkup(createElement(ReactMarkdown, { remarkPlugins: [remarkGfm] }, markdown))}</div>`
+        const rendered = renderToStaticMarkup(createElement(ReactMarkdown, { remarkPlugins: [remarkGfm] }, markdown))
+        return `<div class="report-markdown">${rewriteReportMarkdownReferences(rendered, allowedReportPath, basePath)}</div>`
       } catch {
         return ''
       }
@@ -100,7 +105,10 @@ function useReportDataApi(workspacePath: string): ReportDataApi {
       renderMarkdown,
       getHtml: async (path: string) => {
         const text = await getText(path)
-        return text == null ? null : renderMarkdown(text) || null
+        if (text == null) return null
+        const allowed = allowedReportPath(path)
+        const basePath = allowed.includes('/') ? allowed.slice(0, allowed.lastIndexOf('/')) : ''
+        return renderMarkdown(text, basePath) || null
       },
       fileUrl: async (path: string) => {
         const allowed = allowedReportPath(path)
