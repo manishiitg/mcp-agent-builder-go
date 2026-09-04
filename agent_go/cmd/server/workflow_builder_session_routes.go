@@ -38,6 +38,10 @@ type workflowBuilderSessionResponse struct {
 
 type builderConversationLog struct {
 	SessionID           string                       `json:"session_id"`
+	// UserID makes the workflow-scoped builder transcript private to the
+	// account that created it. The workflow itself can be shared read-only;
+	// that must never imply permission to restore another reader/owner's chat.
+	UserID              string                       `json:"user_id,omitempty"`
 	PhaseID             string                       `json:"phase_id"`
 	UpdatedAt           string                       `json:"updated_at"`
 	ConversationHistory []builderConversationMessage `json:"conversation_history"`
@@ -99,6 +103,10 @@ func (api *StreamingAPI) handleGetWorkflowBuilderSession(w http.ResponseWriter, 
 
 	if presetQueryID == "" && workspacePath == "" {
 		http.Error(w, "preset_query_id or workspace_path is required", http.StatusBadRequest)
+		return
+	}
+	if access, _ := workflowAccessForWorkspacePath(r.Context(), GetUserFromContext(r.Context()), workspacePath); access == WorkflowAccessNone {
+		http.Error(w, "workflow access denied", http.StatusForbidden)
 		return
 	}
 
@@ -217,6 +225,8 @@ func (api *StreamingAPI) restoreLatestBuilderConversation(ctx context.Context, p
 	if workspacePath == "" {
 		return nil, nil
 	}
+	viewerID := GetUserIDFromContext(ctx)
+	workflowAccess, _ := workflowAccessForWorkspacePath(ctx, GetUserFromContext(ctx), workspacePath)
 
 	paths := []string{}
 	conversationFolder := workspacePath + "/builder/conversation"
@@ -248,6 +258,9 @@ func (api *StreamingAPI) restoreLatestBuilderConversation(ctx context.Context, p
 
 		var log builderConversationLog
 		if err := json.Unmarshal([]byte(content), &log); err != nil {
+			continue
+		}
+		if !builderConversationVisibleTo(log.UserID, viewerID, workflowAccess) {
 			continue
 		}
 		updatedAt := parseBuilderConversationUpdatedAt(log.UpdatedAt)
@@ -317,6 +330,19 @@ func (api *StreamingAPI) restoreLatestBuilderConversation(ctx context.Context, p
 		Total:              len(rawEvents),
 		LastProcessedIndex: len(rawEvents) - 1,
 	}, nil
+}
+
+// builderConversationVisibleTo is deliberately stricter than workflow access:
+// sharing a workflow lets a reader inspect/run that workflow, but never view
+// a different person's private builder conversation. Legacy logs predate the
+// user_id field, so only the workflow owner can restore them.
+func builderConversationVisibleTo(logUserID, viewerID string, workflowAccess WorkflowAccessLevel) bool {
+	logUserID = strings.TrimSpace(logUserID)
+	viewerID = strings.TrimSpace(viewerID)
+	if logUserID == "" {
+		return workflowAccess == WorkflowAccessOwner
+	}
+	return viewerID != "" && logUserID == viewerID
 }
 
 func isWorkflowBuilderConversationLogPath(workspacePath, candidatePath string) bool {

@@ -6621,6 +6621,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		if isWorkflowPhase && workflowPhaseFolder != "" && len(persistedHistoryForDisk) > 0 {
 			convData := map[string]interface{}{
 				"session_id":           persistSessionID,
+				"user_id":              currentUserID,
 				"phase_id":             workflowPhaseID,
 				"conversation_history": persistedHistoryForDisk,
 				"updated_at":           time.Now().Format(time.RFC3339),

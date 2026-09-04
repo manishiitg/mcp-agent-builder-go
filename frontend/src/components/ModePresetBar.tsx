@@ -17,6 +17,7 @@ import { useMCPStore } from '../stores/useMCPStore'
 import { useAppStore } from '../stores/useAppStore'
 import { useCommandDialogStore } from '../stores/useCommandDialogStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
+import { useWorkflowManifestStore } from '../stores/useWorkflowManifestStore'
 import { dedupeServerNames } from '../utils/mcpServerAlias'
 import { GlobalActivityMonitor } from './GlobalActivityMonitor'
 import WorkflowWalkthrough from './workflow/WorkflowWalkthrough'
@@ -121,6 +122,15 @@ export const ModePresetBar: React.FC = () => {
   const activePreset = presetModeCategory === null
     ? null
     : getActivePreset(presetModeCategory)
+  const activeWorkspacePath = activePreset?.selectedFolder?.filepath?.replace(/\/+$/, '')
+  const activeWorkflowAccess = useWorkflowManifestStore(state =>
+    activeWorkspacePath ? state.workflows.find(workflow => workflow.workspace_path === activeWorkspacePath)?.my_access : undefined,
+  )
+  // A member may create their own workflows while being a reader on this
+  // particular workflow. Use the manifest-level answer for this header, not
+  // only the account-wide role.
+  const isActiveWorkflowReadOnly = selectedModeCategory === 'workflow' && activeWorkflowAccess === 'read'
+  const isEffectiveReadOnly = isReadOnlyUser || isActiveWorkflowReadOnly
   // Get presets for current mode
   const presetsForMode = presetModeCategory === null
     ? []
@@ -576,7 +586,7 @@ export const ModePresetBar: React.FC = () => {
               </button>
             </div>
 
-            {isReadOnlyUser && (
+            {isEffectiveReadOnly && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <div className="flex shrink-0 items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
@@ -585,7 +595,9 @@ export const ModePresetBar: React.FC = () => {
                   </div>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  Your account has read-only workflow access — you can chat and watch runs, but can't edit plans, secrets, schedules, or config.
+                  {isActiveWorkflowReadOnly
+                    ? 'This automation is shared with you read-only — you can chat and watch runs, but cannot edit its plans, secrets, schedules, or config.'
+                    : "Your account has read-only workflow access — you can chat and watch runs, but can't edit plans, secrets, schedules, or config."}
                 </TooltipContent>
               </Tooltip>
             )}
@@ -634,7 +646,7 @@ export const ModePresetBar: React.FC = () => {
                             Hidden for read-only users (PLAT-262): opens the
                             automation's edit settings, which the backend
                             won't let a read-only session mutate anyway. */}
-                        {activePreset && !isReadOnlyUser && (
+                        {activePreset && !isEffectiveReadOnly && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
@@ -716,7 +728,7 @@ export const ModePresetBar: React.FC = () => {
                                   {/* Edit/Duplicate/Delete buttons */}
                                   {(
                                     <div className="flex gap-1">
-                                      {presetModeCategory !== null && isPresetActive(preset.id, presetModeCategory) && !isReadOnlyUser && (
+                                      {presetModeCategory !== null && isPresetActive(preset.id, presetModeCategory) && !isEffectiveReadOnly && (
                                         <button
                                           onClick={(e) => {
                                             e.stopPropagation()

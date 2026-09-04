@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import { authApi, getAuthToken, setAuthToken, clearAuthToken } from '../services/api'
 import type { AuthUser, AuthProvider } from '../services/api'
 import { getWorkspaceScopedStorageKey } from './useWorkspaceConnectionStore'
+import { useChatStore } from './useChatStore'
 
 // Key for storing OAuth state in sessionStorage
 const OAUTH_STATE_KEY = 'oauth_state'
@@ -90,6 +91,10 @@ export const useAuthStore = create<AuthState>()(
           set({ isLoading: true, error: null })
           try {
             const response = await authApi.login(username, password, provider)
+            // The browser-local chat store was historically scoped only by
+            // workspace. Drop it before switching identities so a user who
+            // signs in after someone else cannot inherit their tabs/messages.
+            useChatStore.getState().discardChatStateForAccountChange()
             setAuthToken(response.token)
             set({
               user: response.user,
@@ -150,6 +155,9 @@ export const useAuthStore = create<AuthState>()(
 
         // Logout action
         logout: async () => {
+          // Forget only local UI state. Do not stop sessions: they can belong
+          // to this account and must continue safely after logout.
+          useChatStore.getState().discardChatStateForAccountChange()
           try {
             await authApi.logout()
           } catch (error) {

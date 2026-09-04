@@ -702,6 +702,10 @@ interface ChatState extends StoreActions {
   // Helper methods
   resetTabChat: (tabId: string, nextSessionId?: string) => void
   resetChatState: () => void
+  // Clears browser-local state when the authenticated account changes. This
+  // deliberately does not stop backend sessions, which may belong to the
+  // account that just signed out.
+  discardChatStateForAccountChange: () => void
   isAtBottom: (element: HTMLDivElement) => boolean
 }
 
@@ -2007,6 +2011,73 @@ export const useChatStore = create<ChatState>()(
         })
 
         // Clear the requiresNewChat flag after successful chat reset
+        useAppStore.getState().clearRequiresNewChat()
+      },
+
+      discardChatStateForAccountChange: () => {
+        const state = get()
+
+        // A browser can be handed from one account to another. Close only the
+        // local observers and timers — never call stopSession here, because a
+        // tab restored from storage can belong to the user who just signed
+        // out and their work must continue independently.
+        Object.values(state.sseConnections).forEach((conn) => conn.close())
+        Object.values(_streamingInactivityTimers).forEach((timer) => clearTimeout(timer))
+        Object.keys(_streamingInactivityTimers).forEach((key) => delete _streamingInactivityTimers[key])
+        Object.values(_executionStreamingInactivityTimers).forEach((timer) => clearTimeout(timer))
+        Object.keys(_executionStreamingInactivityTimers).forEach((key) => delete _executionStreamingInactivityTimers[key])
+        for (const sessionId of _eventBatchTimers.keys()) clearPendingEventBatch(sessionId)
+        tabEventIdSets.clear()
+        if (state.activeSessionsPollingInterval !== null) clearInterval(state.activeSessionsPollingInterval)
+
+        // `chat-store` used to be scoped only by workspace. Remove that
+        // legacy cache before writing the empty state so the next account can
+        // never hydrate another account's tabs or their locally retained chat
+        // messages.
+        useChatStore.persist.clearStorage()
+        set({
+          isStreaming: false,
+          lastEventIndex: -1,
+          pollingInterval: null,
+          currentUserMessage: '',
+          showUserMessage: true,
+          sessionId: null,
+          hasActiveChat: false,
+          autoScroll: true,
+          finalResponse: '',
+          isCompleted: false,
+          isLoadingHistory: false,
+          isApprovingWorkflow: false,
+          restoringWorkflowSessions: {},
+          sessionState: 'loading',
+          isCheckingActiveSessions: false,
+          currentWorkflowPhase: 'planning' as WorkflowPhase,
+          currentWorkflowQueryId: null,
+          toasts: [],
+          chatTabs: {},
+          activeTabId: null,
+          tabEvents: {},
+          tabEventIndices: {},
+          tabHasMoreOlderEvents: {},
+          tabHistoryPagination: {},
+          tabSessionStatus: {},
+          activeSessionsCache: [],
+          activeSessionsCacheTimestamp: null,
+          activeSessionsPollingInterval: null,
+          workflowScheduleSummary: null,
+          streamingText: {},
+          streamingStatus: {},
+          streamingTerminalText: {},
+          streamingTerminalActive: {},
+          terminalOutputOpen: {},
+          lastStreamingChunkIndex: {},
+          lastStreamingTerminalChunkIndex: {},
+          completedStreamingText: {},
+          delegationStreamingText: {},
+          lastDelegationChunkIndex: {},
+          executionStreaming: {},
+          sseConnections: {},
+        })
         useAppStore.getState().clearRequiresNewChat()
       },
 

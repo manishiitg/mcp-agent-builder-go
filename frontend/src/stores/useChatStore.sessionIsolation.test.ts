@@ -99,6 +99,43 @@ describe('concurrent Chat + Schedule session isolation', () => {
     expect(chatIDs).not.toContain('sched-leaked-1')
   })
 
+  it('forgets local tabs and observers when the authenticated account changes', async () => {
+    const useChatStore = await loadStore()
+    const close = vi.fn()
+    useChatStore.setState({
+      chatTabs: {
+        inherited: {
+          tabId: 'inherited',
+          name: 'Admin chat',
+          sessionId: CHAT,
+          isStreaming: true,
+          isCompleted: false,
+          hasRunningBgAgents: false,
+          isSyntheticTurn: false,
+          canSteer: false,
+          hideToolCalls: true,
+          viewMode: 'formatted',
+          createdAt: Date.now(),
+          lastAccessedAt: Date.now(),
+          lastViewedEventCount: 0,
+          lastViewedEventCounts: { micro: 0 },
+          config: {} as never,
+          metadata: { mode: 'multi-agent' },
+        },
+      },
+      activeTabId: 'inherited',
+      tabEvents: { [CHAT]: [ev(CHAT, 'user_message', 'private-message')] },
+      sseConnections: { [CHAT]: { close } } as never,
+    })
+
+    useChatStore.getState().discardChatStateForAccountChange()
+
+    expect(close).toHaveBeenCalledOnce()
+    expect(useChatStore.getState().chatTabs).toEqual({})
+    expect(useChatStore.getState().activeTabId).toBeNull()
+    expect(useChatStore.getState().tabEvents).toEqual({})
+  })
+
   it('holds the invariant while both sessions stream interleaved', async () => {
     const useChatStore = await loadStore()
     const store = useChatStore.getState()

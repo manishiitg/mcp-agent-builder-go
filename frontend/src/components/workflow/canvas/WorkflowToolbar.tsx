@@ -29,7 +29,8 @@ import { getNotificationDotClass } from '../notificationStatus'
 import { loadWorkflowNotificationInfo, type WorkflowNotificationState } from '../../../services/workflow-notifications'
 import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestStore'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip'
-import { hasWorkflowWriteAccess, hasWorkflowOwnerAccess } from '../../../utils/workflowPermissions'
+import { hasWorkflowOwnerAccess } from '../../../utils/workflowPermissions'
+import { useCanWriteWorkflow } from '../../../hooks/useCanWriteWorkflow'
 
 // Execution phase ID - special phase that should be displayed separately
 const EXECUTION_PHASE_ID = 'execution'
@@ -146,7 +147,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   monitorOn,
   className = ''
 }) => {
-  const canWriteWorkflow = useAuthStore(state => hasWorkflowWriteAccess(state.user, state.isMultiUserMode))
+  const canWriteWorkflow = useCanWriteWorkflow(workspacePath)
   const canManageAccess = useAuthStore(state => state.isMultiUserMode && (state.user?.is_admin === true || hasWorkflowOwnerAccess(state.user, state.isMultiUserMode)))
 
   // Workspace store for opening folders

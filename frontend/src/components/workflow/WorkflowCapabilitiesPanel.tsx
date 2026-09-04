@@ -11,8 +11,7 @@ import { agentApi, workflowManifestApi } from '../../services/api'
 import type { WorkflowCapabilities } from '../../services/api-types'
 import { useMCPStore } from '../../stores/useMCPStore'
 import { useWorkflowManifestStore } from '../../stores/useWorkflowManifestStore'
-import { useAuthStore } from '../../stores/useAuthStore'
-import { isWorkflowReadOnly } from '../../utils/workflowPermissions'
+import { useCanWriteWorkflow } from '../../hooks/useCanWriteWorkflow'
 import { toggleServerSelection } from '../../utils/mcpServerAlias'
 import { getWorkspaceView, type CapabilityViewId } from './workspaceViews'
 
@@ -95,7 +94,7 @@ function capabilitiesEqual(a: unknown, b: unknown): boolean {
 }
 
 export default function WorkflowCapabilitiesPanel({ section, workspacePath }: WorkflowCapabilitiesPanelProps) {
-  const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
+  const canWriteWorkflow = useCanWriteWorkflow(workspacePath)
   const [capabilities, setCapabilities] = useState<WorkflowCapabilities>(EMPTY_CAPABILITIES)
   // What the manifest last held, so the footer can tell "edited" from "saved".
   const [loaded, setLoaded] = useState<WorkflowCapabilities>(EMPTY_CAPABILITIES)
@@ -325,7 +324,7 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
           can actually persist for that account, so hide the button that
           implies otherwise rather than let it fail after the fact. Also
           hidden for sections that don't save through the manifest at all. */}
-      {!loading && !isReadOnlyUser && copy.savesViaManifest && (
+      {!loading && canWriteWorkflow && copy.savesViaManifest && (
         <footer className="flex shrink-0 items-center justify-end gap-3 border-t px-4 py-3">
           {dirty && <span className="text-xs text-muted-foreground">Unsaved changes</span>}
           <button
