@@ -149,13 +149,13 @@ Instead, gate it **client-side** with a passphrase — free, one command, identi
 host. Encrypt the static HTML with **StatiCrypt** *after* baking + theming, in the staging dir,
 in **one invocation** so a single unlock covers the whole site for the browser session. The
 password prompt is user-facing UI: do not ship StatiCrypt's default green/white page. Use the
-Runloop dark gate styling below every time.
+AgentWorks dark gate styling below every time.
 
 ```
 cd /tmp/publish-<workflow>
 npx staticrypt dashboard.html pulse.html index.html \
   -p "$SECRET_PUBLISH_PASSWORD" --remember --salt <fixed-32-hex> -d . \
-  --template-title "Runloop Private Report" \
+  --template-title "AgentWorks Private Report" \
   --template-instructions "Enter the publish password to open this report." \
   --template-button "Unlock report" \
   --template-placeholder "Publish password" \
@@ -164,7 +164,7 @@ npx staticrypt dashboard.html pulse.html index.html \
   --template-color-primary "#0ea5e9" \
   --template-color-secondary "#070b12"
 
-cat > runloop-staticrypt-gate.css <<'CSS'
+cat > agentworks-staticrypt-gate.css <<'CSS'
 .staticrypt-html,
 .staticrypt-body {
   min-height: 100%;
@@ -281,7 +281,7 @@ CSS
 
 python3 - <<'PY'
 from pathlib import Path
-css = Path("runloop-staticrypt-gate.css").read_text()
+css = Path("agentworks-staticrypt-gate.css").read_text()
 for name in ("dashboard.html", "pulse.html", "index.html"):
     path = Path(name)
     if not path.exists():
@@ -289,17 +289,17 @@ for name in ("dashboard.html", "pulse.html", "index.html"):
     html = path.read_text()
     if "staticrypt-html" not in html:
         raise SystemExit(f"{name} was not encrypted by StatiCrypt")
-    if "runloop-staticrypt-gate" not in html:
+    if "agentworks-staticrypt-gate" not in html:
         if "</head>" not in html:
             raise SystemExit(f"{name} has no closing </head> tag")
         html = html.replace(
             "</head>",
-            '<style id="runloop-staticrypt-gate">\n' + css + "\n</style>\n</head>",
+            '<style id="agentworks-staticrypt-gate">\n' + css + "\n</style>\n</head>",
             1,
         )
         path.write_text(html)
 PY
-rm -f runloop-staticrypt-gate.css
+rm -f agentworks-staticrypt-gate.css
 ```
 
 Then deploy the (now-encrypted) files. Use `--remember` **plus a shared `--salt`** (any fixed
