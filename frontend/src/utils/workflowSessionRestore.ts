@@ -12,7 +12,7 @@ import { isVisibleActivitySession } from './activitySessions'
 import { normalizeWorkspacePath } from './workspacePathUtils'
 import { activateWorkflowTab, beginWorkflowNavigation, isCurrentWorkflowNavigation, selectWorkflowPreset } from './workflowNavigation'
 import { scheduleTabLabel } from './scheduleTabLabel'
-import { isBlankWorkflowBuilderTab, resolveWorkflowTabForSession } from './workflowTabResolution'
+import { resolveWorkflowTabForSession } from './workflowTabResolution'
 
 type RestoreWorkflowSessionOptions = {
   preset?: CustomPreset | PredefinedPreset
@@ -476,15 +476,6 @@ async function restoreReadOnlyWorkflowRunChat(
     revealWorkflowChat()
     if (options.scrollToBottom !== false) requestChatScrollToBottom()
     return interactiveTab.tabId
-  }
-
-  if (presetId) {
-    const emptyBuilderTabs = Object.values(chatStore.chatTabs)
-      .filter(tab => isBlankWorkflowBuilderTab(tab, presetId, chatStore.tabEvents))
-
-    for (const tab of emptyBuilderTabs) {
-      await chatStore.closeTab(tab.tabId, false)
-    }
   }
 
   // Opened from the Global Activity Monitor / activity list. Same resolution

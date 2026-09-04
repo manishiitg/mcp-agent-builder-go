@@ -195,6 +195,10 @@ describe('isBlankWorkflowBuilderTab', () => {
     expect(isBlankWorkflowBuilderTab(chat({ metadata: { mode: 'workflow', presetQueryId: 'workflow-upwork', phaseId: 'planning' } }), 'workflow-upwork', noEvents)).toBe(false)
   })
 
+  it('is not the Builder once named from a first message, even before its events arrive', () => {
+    expect(isBlankWorkflowBuilderTab(chat({ name: 'fix the login bug' }), 'workflow-upwork', noEvents)).toBe(false)
+  })
+
   it('blankWorkflowBuilderTabId picks the most recently used blank one', () => {
     const older = chat({ tabId: 'older', sessionId: 'a', lastAccessedAt: 10 })
     const newer = chat({ tabId: 'newer', sessionId: 'b', lastAccessedAt: 20 })
@@ -226,11 +230,11 @@ describe("resolveWorkflowTabForSession -- one Chat tab per workflow", () => {
     return { result, createChatTab, updateTabSessionId }
   }
 
-  it("opens a conversation into the workflow's blank Chat tab, not beside it", async () => {
+  it('never opens a conversation into the Builder tab -- it stays blank, the chat opens beside it', async () => {
     const { result, createChatTab, updateTabSessionId } = open([chat({})], {})
-    expect(await result).toEqual({ tabId: 'chat', via: 'lane' })
-    expect(updateTabSessionId).toHaveBeenCalledWith('chat', 'new-session')
-    expect(createChatTab).not.toHaveBeenCalled()
+    expect(await result).toEqual({ tabId: 'new-tab', via: 'created' })
+    expect(updateTabSessionId).not.toHaveBeenCalled()
+    expect(createChatTab).toHaveBeenCalledTimes(1)
   })
 
   it('rebinds an idle Chat tab that already has a conversation -- a different past chat replaces it', async () => {
@@ -245,11 +249,11 @@ describe("resolveWorkflowTabForSession -- one Chat tab per workflow", () => {
     expect(createChatTab).toHaveBeenCalledTimes(1)
   })
 
-  it('prefers a blank tab over an idle one with content', async () => {
-    const used = chat({ tabId: 'used', sessionId: 'u', lastAccessedAt: 50 })
-    const blank = chat({ tabId: 'blank', sessionId: 'b', lastAccessedAt: 5 })
-    const { result } = open([used, blank], { u: [{ type: 'user_message' } as never] })
-    expect((await result).tabId).toBe('blank')
+  it('rebinds the idle Chat tab with content and leaves the Builder alone, whichever was used last', async () => {
+    const used = chat({ tabId: 'used', sessionId: 'u', lastAccessedAt: 5 })
+    const builder = chat({ tabId: 'builder', sessionId: 'b', lastAccessedAt: 50 })
+    const { result } = open([used, builder], { u: [{ type: 'user_message' } as never] })
+    expect((await result).tabId).toBe('used')
   })
 
   it('without tab events it cannot judge blankness and opens a new tab (old behaviour)', async () => {

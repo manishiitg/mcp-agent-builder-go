@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect, useCallback, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { MessageSquare, Plus, Square, X } from 'lucide-react'
+import { MessageSquare, Square, X } from 'lucide-react'
 import { useChatStore, type ChatTab } from '../../stores/useChatStore'
 import { agentApi } from '../../services/api'
 import { activateTab } from '../../utils/activateTab'
@@ -23,11 +23,17 @@ interface WorkflowTabItemProps {
   tab: ChatTab
   isActive: boolean
   canClose: boolean
+  isBlank: boolean
   onTabClick: (tabId: string) => void
   onCloseTab: (tabId: string) => void
   onMakeInteractive: (tabId: string) => void
   onStop: (tabId: string) => void
 }
+
+// TEMPORARY 2026-09-04: schedule/bot tabs cannot be turned into an
+// interactive chat right now, at the user's explicit request. Set back to
+// true to restore the "make interactive" icon.
+const ALLOW_MAKE_SCHEDULE_INTERACTIVE = false
 
 // Per-tab live status — mirrors the backend's consolidated busy/idle/stopped
 // (sessionDisplayStatus). The dot lives in the tab pill instead of the toolbar.
@@ -41,13 +47,14 @@ const WorkflowTabItem = React.memo<WorkflowTabItemProps>(({
   tab,
   isActive,
   canClose,
+  isBlank,
   onTabClick,
   onCloseTab,
   onMakeInteractive,
   onStop,
 }) => {
 	const isReadOnlyUser = useAuthStore(state => isWorkflowReadOnly(state.user, state.isMultiUserMode))
-	const displayName = workflowTabDisplayName(tab)
+	const displayName = workflowTabDisplayName(tab, isBlank)
 
   // Tabs are a product-level conversation switcher. Derive their small status
   // marker from the session's own lifecycle flags rather than polling the
@@ -93,8 +100,10 @@ const WorkflowTabItem = React.memo<WorkflowTabItemProps>(({
         }
       `}
     >
-      {/* Live status dot (busy/idle/stopped) */}
-      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot.cls}`} title={dot.label} aria-label={dot.label} />
+      {/* Live status dot (busy/idle/stopped) -- not on Builder. It's a
+          permanent fixture, not a run with a lifecycle to report on, and the
+          dot never meaningfully left "idle" for it anyway. */}
+      {!isBlank && <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot.cls}`} title={dot.label} aria-label={dot.label} />}
 
       {/* Tab Name */}
       <span className="min-w-0 max-w-[14rem] truncate whitespace-nowrap">{displayName}</span>
@@ -124,8 +133,11 @@ const WorkflowTabItem = React.memo<WorkflowTabItemProps>(({
           would still be Run-mode-restricted server-side, but this button's
           own label ("Interact in Automation Builder") promises full edit
           capability the account doesn't have — same UX-confusion class as
-          the schedule panel's equivalent icon. */}
-      {tab.metadata?.isViewOnly && (tab.metadata?.isScheduledRun || tab.metadata?.isBotRun) && !isReadOnlyUser && (
+          the schedule panel's equivalent icon.
+          TEMPORARILY DISABLED 2026-09-04 at the user's request: don't let
+          anyone turn a schedule tab into a chat right now. Flip
+          ALLOW_MAKE_SCHEDULE_INTERACTIVE back on to restore it. */}
+      {ALLOW_MAKE_SCHEDULE_INTERACTIVE && tab.metadata?.isViewOnly && (tab.metadata?.isScheduledRun || tab.metadata?.isBotRun) && !isReadOnlyUser && (
         <button
           type="button"
           onClick={(e) => {
@@ -179,13 +191,12 @@ WorkflowTabItem.displayName = 'WorkflowTabItem'
  * Only shows workflow tabs that are active (have sessionId or isStreaming)
  */
 interface WorkflowChatTabsProps {
-  onNewChat?: () => void
   // When true, render inline (no bordered/background bar wrapper) so the strip can
   // be embedded inside the WorkflowToolbar row instead of being its own bar.
   embedded?: boolean
 }
 
-export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, embedded = false }) => {
+export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ embedded = false }) => {
   const {
     chatTabs,
     activeTabId,
@@ -250,18 +261,15 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
           tab.metadata?.phaseId === 'workflow-builder' &&
           !tab.metadata?.presetQueryId
         )
-    return visible.sort((a, b) => a.createdAt - b.createdAt)
-  }, [chatTabs, activePresetId, activeTabId])
-
-  // "+ New chat" would just hand back the tab already in front of you --
-  // createFreshWorkflowBuilderTab reuses a blank builder tab rather than
-  // stacking a second one -- so the button is a no-op while that's the
-  // active tab. Hiding it keeps it from reading as a second, competing
-  // "new chat" beside a tab that already reads as one.
-  const activeTabIsBlankBuilder = useMemo(() => {
-    const activeTab = activeTabId ? chatTabs[activeTabId] : undefined
-    return Boolean(activeTab && isBlankWorkflowBuilderTab(activeTab, activePresetId || '', tabEvents))
-  }, [activeTabId, activePresetId, chatTabs, tabEvents])
+    // The blank Builder tab is this workflow's permanent home base: always
+    // first in the strip, never sorted by when it happened to be created.
+    return visible.sort((a, b) => {
+      const aBlank = isBlankWorkflowBuilderTab(a, activePresetId || '', tabEvents)
+      const bBlank = isBlankWorkflowBuilderTab(b, activePresetId || '', tabEvents)
+      if (aBlank !== bBlank) return aBlank ? -1 : 1
+      return a.createdAt - b.createdAt
+    })
+  }, [chatTabs, activePresetId, activeTabId, tabEvents])
 
   // Skip auto-close on initial mount
   const hasRenderedRef = useRef(false)
@@ -351,47 +359,34 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ onNewChat, e
 
   return (
     <>
+    {/* min-w-0 without flex-1: this strip takes only the width its tab pills
+        need, so the toolbar's other controls sit immediately after it. */}
     <div className={embedded
-      ? 'flex min-w-0 flex-1'
+      ? 'flex min-w-0 shrink-0'
       : 'shrink-0 border-b border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800'}>
       <div className={embedded
-        ? 'flex min-w-0 flex-1 items-center gap-1'
+        ? 'flex min-w-0 items-center gap-1'
         : 'flex min-w-0 items-center gap-1 px-2 py-1'}>
         <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
-          {activeWorkflowTabs.map((tab) => (
-            <WorkflowTabItem
-              key={tab.tabId}
-              tab={tab}
-              isActive={tab.tabId === activeTabId}
-              canClose={activeWorkflowTabs.length > 1}
-              onTabClick={handleTabClick}
-              onCloseTab={handleCloseTab}
-              onMakeInteractive={handleMakeInteractive}
-              onStop={handleStopTab}
-            />
-          ))}
+          {activeWorkflowTabs.map((tab) => {
+            const isBlank = isBlankWorkflowBuilderTab(tab, activePresetId || '', tabEvents)
+            return (
+              <WorkflowTabItem
+                key={tab.tabId}
+                tab={tab}
+                isActive={tab.tabId === activeTabId}
+                // Builder is this workflow's permanent home base -- never
+                // closeable, regardless of how many other tabs are open.
+                canClose={!isBlank && activeWorkflowTabs.length > 1}
+                isBlank={isBlank}
+                onTabClick={handleTabClick}
+                onCloseTab={handleCloseTab}
+                onMakeInteractive={handleMakeInteractive}
+                onStop={handleStopTab}
+              />
+            )
+          })}
         </div>
-
-        {/* This starts a fresh conversation. The active tab is the
-            conversation workspace; it is deliberately not another "Chat"
-            label competing with the recent-conversation selector below. */}
-        {onNewChat && !activeTabIsBlankBuilder && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onNewChat()
-            }}
-            className="ml-0.5 inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
-            title="Start a new automation chat"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">New chat</span>
-          </button>
-        )}
-
-        {/* Spacer keeps the session controls aligned at the right edge. */}
-        <div className="min-w-[0.5rem] flex-1" />
       </div>
     </div>
     </>

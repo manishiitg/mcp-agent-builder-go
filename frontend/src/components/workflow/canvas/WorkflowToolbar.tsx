@@ -494,8 +494,10 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
       ${className}
     `}>
       {/* Left side - chat tab strip (grows). Per-tab status dot + Stop live
-          inside each tab pill (WorkflowChatTabs), not as a separate badge here. */}
-      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
+          inside each tab pill (WorkflowChatTabs), not as a separate badge here.
+          No separate "New Chat" action here: the Builder tab (WorkflowChatTabs)
+          is a permanent, always-first, never-closed tab -- it IS that action. */}
+      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
         {chatTabsSlot}
       </div>
 

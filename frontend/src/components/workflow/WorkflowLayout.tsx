@@ -24,7 +24,7 @@ import {
   shouldCatchUpRunningWorkflowTranscript,
   workflowRuntimeTabProjection,
 } from './workflowRuntimeTabProjection'
-import { resolveWorkflowTabForSession } from '../../utils/workflowTabResolution'
+import { isBlankWorkflowBuilderTab, resolveWorkflowTabForSession } from '../../utils/workflowTabResolution'
 import {
   PreviousChatHistoryPanel,
   chatHistoryConversationPath,
@@ -89,7 +89,6 @@ const ChatAreaWithObserverId = forwardRef<ChatAreaRef, {
   )
 })
 import { agentApi, workflowManifestApi } from '../../services/api'
-import ConfirmationDialog from '../ui/ConfirmationDialog'
 import {
   type ActiveSessionInfo,
   type ChatHistorySession,
@@ -99,13 +98,12 @@ import {
 } from '../../services/api-types'
 import { findOrCreateWorkflowTab, isChatCompatiblePhase } from '../../utils/chatSubmitHelpers'
 import { useWorkflowViewPresentations } from './useWorkflowViewPresentations'
-import { hasWorkflowChatContent, workflowTabAlreadyHasContent } from './workflowChatTabConversion'
+import { hasWorkflowChatContent } from './workflowChatTabConversion'
 import { hydrateTabEvents } from '../../utils/sessionRestore'
 import { isPreviewView, isWorkspacePaneView } from './workspaceViews'
 // Inactive workflow tabs hydrate lazily and fall back to workflow-scoped chat history.
 
 const WORKFLOW_RESTORE_TIMEOUT_MS = 8000
-const WORKFLOW_KILL_AND_START_STOP_TIMEOUT_MS = 30_000
 function normalizeWorkflowPath(path?: string | null): string {
   return (path || '').replace(/\/+$/, '')
 }
@@ -287,17 +285,20 @@ const WorkflowPreviousChatsPanel: React.FC<{
       !targetTab ||
       targetTab.metadata?.mode !== 'workflow' ||
       targetTab.metadata?.isViewOnly === true ||
-      (activePresetId && targetPresetId && targetPresetId !== activePresetId)
+      (activePresetId && targetPresetId && targetPresetId !== activePresetId) ||
+      isBlankWorkflowBuilderTab(targetTab, activePresetId || '', chatStore.tabEvents)
     ) {
-      // Restore must target an interactive Chat tab. Reusing the currently
-      // active full-run/Schedule tab corrupts its presentation metadata and
-      // leaves the untouched Chat placeholder beside a fake "Workflow
-      // Builder" runtime tab.
+      // Restore must target an interactive Chat tab -- never the Builder
+      // (it stays blank; a resume from its landing view opens beside it) and
+      // never a full-run/Schedule tab (reusing one corrupts its presentation
+      // metadata). Same resolution as every other opener: the tab already on
+      // this session, else the workflow's idle Chat tab, else a new one.
       const latestStore = useChatStore.getState()
       targetTabId = (await resolveWorkflowTabForSession({
         getTabs: () => useChatStore.getState().chatTabs,
         getTabEvents: () => useChatStore.getState().tabEvents,
         presetQueryId: activePresetId || '',
+        sessionId: session.session_id,
         name: 'Automation Builder',
         metadata: { mode: 'workflow', phaseId: 'workflow-builder', phaseName: 'Automation Builder', presetQueryId: activePresetId || undefined },
         createChatTab: latestStore.createChatTab,
@@ -351,6 +352,13 @@ const WorkflowPreviousChatsPanel: React.FC<{
       restoredConversationRuntimeLabel: chatHistoryRuntimeLabel(session),
       restoredConversationNativeResume: useTerminalRestore || useNativeResume,
     })
+    // A resume started from the Builder landed in a different (Chat) tab;
+    // show it. Reused idle tabs aren't activated by resolution the way
+    // freshly created ones are.
+    if (targetTabId !== startingTabId) {
+      activateTab(targetTabId)
+      setShowChatArea(true)
+    }
     // Both tmux terminal-restore and native-resume sessions reattach into a
     // coding-agent terminal on the backend. Keep that transport restoration,
     // but present its normalized event transcript by default; Raw remains an
@@ -429,104 +437,6 @@ const WorkflowPreviousChatsPanel: React.FC<{
     await resumeChatSessionIntoTab(session, activeTabId, disposition)
   }, [activeTabId, addToast, resumeChatSessionIntoTab, setShowChatArea, workspacePath, activePresetId])
 
-  // Explicit product decision: opening a workflow with nothing currently
-  // happening for it (no live schedule, no live chat, no bg agents -- the
-  // reconnect effect in WorkflowLayout already prefers activating any of
-  // those over leaving this landing panel showing) should not drop the
-  // operator on a bare browse screen. Auto-restore the most recent real
-  // conversation instead; this landing panel still renders for genuinely
-  // fresh workflows (no chat history at all) and while its own fetch runs.
-  const autoRestoredRef = useRef(false)
-  useEffect(() => {
-    if (autoRestoredRef.current) return
-    if (!activeTabId || !workspacePath) return
-    const store = useChatStore.getState()
-    const tab = store.chatTabs[activeTabId]
-    if (!tab || tab.metadata?.mode !== 'workflow') return
-    if (tab.metadata?.isViewOnly || tab.metadata?.isScheduledRun || tab.metadata?.isBotRun) return
-    // An explicit New Chat leaves this same tab blank, which otherwise looks
-    // identical to "just landed here, nothing running" -- respect the
-    // operator's choice instead of immediately reopening what they just left.
-    if (tab.metadata?.skipWorkflowAutoRestore) return
-    // Only the blank builder tab this panel backs is eligible -- never
-    // hijack a tab the user already pointed at something else.
-    if (workflowTabAlreadyHasContent(tab, store.tabEvents)) return
-
-    // Explicit guard, not just an assumption about effect ordering: skip if
-    // ANY other tab for this workflow is actually doing something right now.
-    const somethingElseIsRunning = Object.values(store.chatTabs).some(other =>
-      other.tabId !== activeTabId &&
-      other.metadata?.mode === 'workflow' &&
-      other.metadata?.presetQueryId === activePresetId &&
-      (other.isStreaming || other.hasRunningBgAgents)
-    )
-    if (somethingElseIsRunning) return
-
-    autoRestoredRef.current = true
-    void (async () => {
-      try {
-        // Do not choose the default solely from the lightweight history index.
-        // A warm coding-CLI conversation accepts later turns through live input;
-        // its saved JSON/index can therefore lag the CLI's own native
-        // transcript. The builder-session endpoint reconciles those transcripts
-        // before ranking candidates, then we recover the runtime metadata from
-        // the history list for the actual resume transport.
-        const builderSession = await agentApi.getWorkflowBuilderSession(activePresetId || undefined, workspacePath)
-        let mostRecent: ChatHistorySession | undefined
-        let reconciledEvents: PollingEvent[] | undefined
-        if (builderSession.source === 'workspace' && builderSession.session_id) {
-          const { sessions } = await agentApi.listChatHistorySessions(100, 0, workspacePath, 'chat')
-          mostRecent = sessions.find(session => session.session_id === builderSession.session_id)
-          if (!mostRecent) {
-            // The index is a cache and a very old session can fall beyond the
-            // metadata page even though the reconciled endpoint just proved it
-            // is newest. Keep that answer authoritative and use its display
-            // events; the next history refresh repairs the index naturally.
-            logger.warn('WorkflowLayout', 'Reconciled builder conversation was absent from chat-history index; using the reconciled transcript', {
-              workspacePath,
-              sessionId: builderSession.session_id,
-            })
-            mostRecent = {
-              session_id: builderSession.session_id,
-              agent_mode: 'workflow',
-              status: builderSession.status,
-              user_id: 'default',
-              workspace_path: workspacePath,
-              conversation_path: builderSession.conversation_path,
-              created_at: builderSession.updated_at || '',
-              updated_at: builderSession.updated_at || '',
-              message_count: builderSession.total || 0,
-            }
-            reconciledEvents = builderSession.events
-          }
-        }
-        if (!mostRecent) {
-          const { sessions } = await agentApi.listChatHistorySessions(1, 0, workspacePath, 'chat')
-          mostRecent = sessions[0]
-        }
-        if (!mostRecent) return
-        // Re-check right before applying: this fetch is async, and the
-        // reconnect effect may have activated a live tab in the meantime.
-        const latestStore = useChatStore.getState()
-        const latestTab = latestStore.chatTabs[activeTabId]
-        if (!latestTab) return
-        if (workflowTabAlreadyHasContent(latestTab, latestStore.tabEvents)) return
-        if (latestTab.metadata?.skipWorkflowAutoRestore) return
-        await resumeChatSessionIntoTab(mostRecent, activeTabId, chatHistoryOpenDisposition(mostRecent))
-        if (reconciledEvents?.length) {
-          const restoredStore = useChatStore.getState()
-          restoredStore.setTabEvents(mostRecent.session_id, reconciledEvents)
-          restoredStore.setTabLastEventIndex(
-            mostRecent.session_id,
-            builderSession.last_processed_index ?? reconciledEvents.length - 1,
-          )
-        }
-      } catch (error) {
-        logger.warn('WorkflowLayout', 'Failed to auto-restore the most recent conversation', { workspacePath, error })
-      }
-    })()
-  }, [activeTabId, activePresetId, workspacePath, resumeChatSessionIntoTab])
-
   return (
     <PreviousChatHistoryPanel
       workspacePath={workspacePath}
@@ -571,32 +481,29 @@ function isLiveWorkflowSessionForPreset(session: ActiveSessionInfo, presetId: st
   )
 }
 
-function shouldBlockWorkflowNewChatForSession(
-  session: ActiveSessionInfo,
-  presetId: string,
-  workspacePath?: string | null,
-): boolean {
-  // The one-chat rule applies only to interactive builder chats. Schedules and
-  // bot runs have their own read-only tabs and are allowed to keep running.
-  if (isExternalReadOnlyActiveWorkflowSession(session)) return false
-  if (!isLiveWorkflowSessionForPreset(session, presetId, workspacePath)) return false
-
-  if (
-    session.needs_user_input === true ||
-    session.has_running_background_agents === true ||
-    (session.running_background_agent_count ?? 0) > 0
-  ) {
-    return true
+/**
+ * The Builder tab always exists for a workflow: the fixed, blank first tab
+ * with the Recent/Schedules/Bots landing view. Resolves to the existing one
+ * or creates it. Creating a tab activates it, so callers that have already
+ * chosen what the user should be looking at pass keepSelection to get that
+ * choice back.
+ */
+async function ensureWorkflowBuilderTab(presetId: string, options?: { keepSelection?: boolean }): Promise<string> {
+  const store = useChatStore.getState()
+  const previousActiveTabId = store.activeTabId
+  const { tabId, via } = await resolveWorkflowTabForSession({
+    getTabs: () => useChatStore.getState().chatTabs,
+    getTabEvents: () => useChatStore.getState().tabEvents,
+    presetQueryId: presetId,
+    name: 'Automation Builder',
+    metadata: { mode: 'workflow', phaseId: 'workflow-builder', phaseName: 'Automation Builder', presetQueryId: presetId },
+    createChatTab: store.createChatTab,
+    updateTabSessionId: store.updateTabSessionId,
+  })
+  if (options?.keepSelection && via === 'created' && previousActiveTabId && previousActiveTabId !== tabId) {
+    activateTab(previousActiveTabId)
   }
-
-  const status = (session.status || '').toLowerCase().trim()
-  if (status === 'paused' || status === 'waiting' || status === 'waiting_feedback') {
-    return true
-  }
-
-  // Completed/idle sessions remain internally retained for CLI reuse, but they
-  // are not product-visible work and must not trigger a terminal API lookup.
-  return status === 'running' || status === 'active' || status === 'in_progress'
+  return tabId
 }
 
 // restoreWorkflowStateFromEvents has no timeout of its own (it awaits
@@ -620,25 +527,6 @@ function withWorkflowRestoreTimeout<T>(promise: Promise<T>, label: string, timeo
         window.clearTimeout(timeout)
         reject(error)
       }
-    )
-  })
-}
-
-function stopWorkflowSessionForNewChat(sessionId: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timeout = window.setTimeout(() => {
-      reject(new Error(`Stopping session timed out after ${WORKFLOW_KILL_AND_START_STOP_TIMEOUT_MS / 1000}s`))
-    }, WORKFLOW_KILL_AND_START_STOP_TIMEOUT_MS)
-
-    agentApi.stopSession(sessionId, true).then(
-      () => {
-        window.clearTimeout(timeout)
-        resolve()
-      },
-      error => {
-        window.clearTimeout(timeout)
-        reject(error)
-      },
     )
   })
 }
@@ -847,11 +735,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   // Narrow selectors: bare useChatStore() re-renders on every store update (10x/sec with 2 parallel sessions)
   const currentWorkflowPhase = useChatStore(state => state.currentWorkflowPhase)
   const setCurrentWorkflowPhase = useChatStore(state => state.setCurrentWorkflowPhase)
-  const addToast = useChatStore(state => state.addToast)
-  const activeSessionId = useChatStore(state => {
-    const tab = state.activeTabId ? state.chatTabs[state.activeTabId] : undefined
-    return tab?.metadata?.mode === 'workflow' ? tab.sessionId : undefined
-  })
   // Use workflow store for UI state (single source of truth)
   const activePhase = useWorkflowStore(state => state.activePhase)
   const showChatArea = useWorkflowStore(state => state.showChatArea)
@@ -877,14 +760,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     const tab = state.activeTabId ? state.chatTabs[state.activeTabId] : undefined
     return !!tab?.sessionId && (state.restoringWorkflowSessions[tab.sessionId] ?? 0) > 0
   })
-  // Kill-and-start confirmation when "+ new chat" hits a running workflow session.
-  // Holds the session ID(s) to stop and a human-readable description for the dialog.
-  const [killAndStartState, setKillAndStartState] = useState<{
-    isOpen: boolean
-    sessionIdsToStop: string[]
-    description: string
-    isStopping: boolean
-  }>({ isOpen: false, sessionIdsToStop: [], description: '', isStopping: false })
   const revealWorkflowChat = useCallback((tabId: string) => {
     const chatStore = useChatStore.getState()
     if (chatStore.chatTabs[tabId]) {
@@ -1110,42 +985,11 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
   // on the open path writes a layout preference -- see the invariant in
   // utils/reportPreviewPreference.ts.
 
-  const createFreshWorkflowBuilderTab = useCallback(async (presetId: string, options?: { composerFirst?: boolean; isExplicitNewChat?: boolean }) => {
-    const chatStore = useChatStore.getState()
-
-    // A blank builder tab already IS the new-chat screen (it shows the
-    // Recent/Schedules/Bots landing panel) -- reuse it instead of stacking a
-    // second, identical-looking blank tab next to it. Once it has real
-    // content (see submitQueryImmediately's rename-on-first-message), it's no
-    // longer a match here and a later call legitimately opens a fresh one.
-    const tabId = (await resolveWorkflowTabForSession({
-      getTabs: () => useChatStore.getState().chatTabs,
-      getTabEvents: () => useChatStore.getState().tabEvents,
-      presetQueryId: presetId,
-      name: 'Automation Builder',
-      metadata: {
-        mode: 'workflow',
-        phaseId: 'workflow-builder',
-        phaseName: 'Automation Builder',
-        presetQueryId: presetId,
-        // Only an explicit New Chat marks the tab as intentionally blank. The
-        // preset-switch fallback (landing on a workflow with no open tabs) must
-        // keep auto-restoring the previous conversation -- that's the feature
-        // working as intended, not the bug this flag guards against.
-        skipWorkflowAutoRestore: options?.isExplicitNewChat === true,
-      },
-      createChatTab: chatStore.createChatTab,
-      updateTabSessionId: chatStore.updateTabSessionId,
-    })).tabId
-    if (options?.composerFirst) {
-      // No explicit view: the pane falls back to the last canvas view.
-      setWorkflowWorkspaceView(null)
-      setShowWorkspacePane(true)
-      setFocusedPane('chat')
-    }
+  const createFreshWorkflowBuilderTab = useCallback(async (presetId: string) => {
+    const tabId = await ensureWorkflowBuilderTab(presetId)
     activateTab(tabId)
     setShowChatArea(true)
-  }, [setFocusedPane, setShowChatArea, setShowWorkspacePane, setWorkflowWorkspaceView])
+  }, [setShowChatArea])
 
   useEffect(() => {
     // Re-read this workflow's scoped preference (default Tablet only when it
@@ -1806,23 +1650,14 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           setShowChatArea(true)
         }
 
-        // 6. If no tabs were created/restored, show a blank builder tab. The
-        // previous-automation-chats panel will offer explicit Resume actions;
-        // simply opening/selecting a workflow should not silently resume the
-        // latest saved coding-agent chat.
+        // 6. If no tabs were created/restored, show the Builder tab. The
+        // previous-automation-chats panel offers explicit Resume actions;
+        // simply opening/selecting a workflow restores only what was already
+        // open and never silently resumes the latest saved chat.
         if (!lastTabId) {
           const store = useChatStore.getState()
           if (interactiveExistingWorkflowTabs.length === 0) {
-            const defaultTabId = (await resolveWorkflowTabForSession({
-              getTabs: () => useChatStore.getState().chatTabs,
-              getTabEvents: () => useChatStore.getState().tabEvents,
-              presetQueryId: activePresetId,
-              name: 'Automation Builder',
-              metadata: { mode: 'workflow', phaseId: 'workflow-builder', phaseName: 'Automation Builder', presetQueryId: activePresetId },
-              createChatTab,
-              updateTabSessionId: useChatStore.getState().updateTabSessionId,
-            })).tabId
-            activateTab(defaultTabId)
+            activateTab(await ensureWorkflowBuilderTab(activePresetId))
             setShowChatArea(true)
           } else {
             const streamingTab = interactiveExistingWorkflowTabs.find(t => t.isStreaming || store.getTabStreamingStatus(t.tabId))
@@ -1845,6 +1680,12 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         }
       } catch (error) {
         console.warn('[WorkflowReconnect] Failed to reconnect workflow tabs:', error)
+      } finally {
+        // Whatever was restored or activated above, the Builder tab exists
+        // beside it -- a workflow whose persisted tabs are all Chats or
+        // read-only lanes would otherwise have none. Runs after every early
+        // return above so the selection those made is kept.
+        void ensureWorkflowBuilderTab(activePresetId, { keepSelection: true })
       }
     }
 
@@ -2046,6 +1887,8 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           activateTab(targetTab.tabId)
           setShowChatArea(true)
         }
+        // The Builder tab always exists; keep the selection just made.
+        void ensureWorkflowBuilderTab(activePresetId, { keepSelection: true })
 
         const selectedTarget = useChatStore.getState().chatTabs[targetTab.tabId]
         const targetViewMode = normalizeEventViewMode(selectedTarget?.viewMode || chatStore.eventViewModePreference)
@@ -2212,96 +2055,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
     }
   }, [showRunningDrawer, setShowChatArea])
 
-  const handleWorkflowNewChat = useCallback(async () => {
-    if (activePresetId) {
-      setWorkflowWorkspaceView(null)
-      setShowWorkspacePane(true)
-      setFocusedPane('chat')
-      setShowChatArea(true)
-
-      const sessionsResult = await Promise.allSettled([
-        useChatStore.getState().getActiveSessions(true),
-      ])
-
-      const blockingSessionIds: string[] = []
-      let blockingSessionLabel = ''
-      if (sessionsResult[0].status === 'fulfilled') {
-        const runningSession = sessionsResult[0].value.find(session =>
-          shouldBlockWorkflowNewChatForSession(session, activePresetId, workspacePath)
-        )
-        if (runningSession) {
-          blockingSessionIds.push(runningSession.session_id)
-          blockingSessionLabel = 'automation chat session'
-        }
-      } else {
-        logger.warn('WorkflowLayout', 'Failed to check active sessions before starting new workflow chat:', sessionsResult[0].reason)
-      }
-
-      if (blockingSessionIds.length > 0) {
-        setKillAndStartState({
-          isOpen: true,
-          sessionIdsToStop: blockingSessionIds,
-          description: `Another ${blockingSessionLabel} is currently running for this automation. Starting a new chat will stop it.`,
-          isStopping: false,
-        })
-        return
-      }
-
-      await createFreshWorkflowBuilderTab(activePresetId, { composerFirst: true, isExplicitNewChat: true })
-      return
-    }
-
-    // Likely unreachable: this function's only caller is WorkflowChatTabs'
-    // "New chat" button, which renders solely when showChatArea is already
-    // true, and every setShowChatArea(true) in this file that's easy to trace
-    // back also has activePresetId set. Not proven dead -- showChatArea and
-    // activePresetId are independent state, set from ~18 different call
-    // sites, and nothing here guarantees they stay in lockstep. Left in place
-    // as a harmless fallback rather than deleted without full certainty.
-    setWorkflowWorkspaceView(null)
-    setShowWorkspacePane(true)
-    setFocusedPane('chat')
-    chatAreaRef.current?.handleNewChat()
-  }, [activePresetId, activeSessionId, createFreshWorkflowBuilderTab, setFocusedPane, setShowChatArea, setShowWorkspacePane, setWorkflowWorkspaceView, workspacePath])
-
-  const handleKillAndStart = useCallback(async () => {
-    if (!activePresetId) {
-      setKillAndStartState(prev => ({ ...prev, isOpen: false }))
-      return
-    }
-    setKillAndStartState(prev => ({ ...prev, isStopping: true }))
-    const sessionIds = killAndStartState.sessionIdsToStop
-    const results = await Promise.allSettled(
-      sessionIds.map(stopWorkflowSessionForNewChat)
-    )
-    const failedStops = results.flatMap((result, idx) => {
-      if (result.status === 'fulfilled') return []
-      logger.warn('WorkflowLayout', `Failed to stop session ${sessionIds[idx]} during kill-and-start:`, result.reason)
-      return [sessionIds[idx]]
-    })
-    if (failedStops.length > 0) {
-      setKillAndStartState(prev => ({ ...prev, isStopping: false }))
-      addToast(
-        failedStops.length === 1
-          ? 'Still stopping the running session. Try New Chat again in a moment.'
-          : 'Still stopping running sessions. Try New Chat again in a moment.',
-        'error',
-      )
-      return
-    }
-    setKillAndStartState({ isOpen: false, sessionIdsToStop: [], description: '', isStopping: false })
-    try {
-      await createFreshWorkflowBuilderTab(activePresetId, { composerFirst: true, isExplicitNewChat: true })
-    } catch (err) {
-      logger.error('WorkflowLayout', 'createFreshWorkflowBuilderTab failed after kill-and-start:', err)
-      addToast('Failed to start new chat after stopping the previous one.', 'error')
-    }
-  }, [activePresetId, addToast, createFreshWorkflowBuilderTab, killAndStartState.sessionIdsToStop])
-
-  const handleCloseKillAndStart = useCallback(() => {
-    setKillAndStartState(prev => prev.isStopping ? prev : { isOpen: false, sessionIdsToStop: [], description: '', isStopping: false })
-  }, [])
-
   // No preset selected state
   if (!activeWorkflowPreset && !workspacePath) {
     return (
@@ -2338,7 +2091,7 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       showChatArea={showChatArea}
       toolbarOnly={!workspacePaneVisible && showChatArea}
       sharedToolbar={showChatArea}
-      chatTabsSlot={showChatArea ? <WorkflowChatTabs embedded onNewChat={handleWorkflowNewChat} /> : undefined}
+      chatTabsSlot={showChatArea ? <WorkflowChatTabs embedded /> : undefined}
       paneClassName={canvasPaneClassName}
       onToggleChatArea={handleToggleChatArea}
       className={showChatArea && !workspacePaneVisible ? '!h-auto shrink-0' : 'h-full'}
@@ -2499,18 +2252,6 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
           </div>
         )}
       </div>
-      <ConfirmationDialog
-        isOpen={killAndStartState.isOpen}
-        onClose={handleCloseKillAndStart}
-        onConfirm={handleKillAndStart}
-        title="Stop running session?"
-        message={killAndStartState.description}
-        confirmText={killAndStartState.isStopping ? 'Stopping…' : 'Stop and start new'}
-        cancelText="Cancel"
-        type="warning"
-        isLoading={killAndStartState.isStopping}
-        loadingText="Stopping…"
-      />
     </div>
   )
 }

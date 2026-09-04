@@ -27,7 +27,7 @@ import { resolveChatSurface, resolveWorkflowChatSurface } from './resolveChatSur
 import { PresetSelectionOverlay } from './PresetSelectionOverlay'
 import { ModeSwitchDialog } from './ui/ModeSwitchDialog'
 import type { ChatTab } from '../stores/useChatStore'
-import { workflowTabAlreadyHasContent } from './workflow/workflowChatTabConversion'
+import { isBlankWorkflowBuilderTab } from '../utils/workflowTabResolution'
 import type { CustomPreset } from '../types/preset'
 import { conversationToRestoredEvents, hydrateTabEvents, restoreSession } from '../utils/sessionRestore'
 import { logger } from '../utils/logger'
@@ -2584,7 +2584,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     console.log('[ChatArea] submitQueryWithQuery called', { query: trimmedQuery.substring(0, 80), stack: new Error().stack?.split('\n').slice(1, 4).join(' <- ') })
 
     // Get fresh tab state from store to avoid stale closure issues
-    const freshActiveTab = submissionTab?.tabId ? chatStore.chatTabs[submissionTab.tabId] : submissionTab
+    let freshActiveTab = submissionTab?.tabId ? chatStore.chatTabs[submissionTab.tabId] : submissionTab
 
     // Early validation
     if (!trimmedQuery) {
@@ -2592,25 +2592,24 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       return false
     }
 
-    // A blank workflow builder tab shows the "New chat" landing screen; once
-    // it receives its first real message it's no longer blank, so rename it
-    // from that message (mirrors how the Recent list titles a session) and
-    // let a later "+ New chat" click open a genuinely new tab instead of
-    // reusing this one. Must run before this turn's events are recorded --
-    // workflowTabAlreadyHasContent would otherwise already see this tab as
-    // no-longer-blank.
+    // The workflow's Builder tab is a fixed, permanently blank home base --
+    // a message typed there starts a conversation in a NEW Chat tab (titled
+    // from the message, the way the Recent list titles a session) and the
+    // Builder stays as it is. It used to be renamed and become the chat
+    // itself, which made the Builder vanish from the strip on first send.
+    // The new tab inherits the Builder composer's config (model, attached
+    // files) so the message goes out with what the user just chose.
     if (
       freshActiveTab?.metadata?.mode === 'workflow' &&
-      freshActiveTab.metadata?.phaseId === 'workflow-builder' &&
-      !workflowTabAlreadyHasContent(freshActiveTab, chatStore.tabEvents)
+      isBlankWorkflowBuilderTab(freshActiveTab, freshActiveTab.metadata.presetQueryId ?? '', chatStore.tabEvents)
     ) {
       const normalized = trimmedQuery.replace(/\s+/g, ' ').trim()
-      const newName = normalized.length > 110 ? `${normalized.slice(0, 110)}...` : normalized
-      useChatStore.setState(state => {
-        const tab = state.chatTabs[freshActiveTab.tabId]
-        if (!tab) return state
-        return { chatTabs: { ...state.chatTabs, [freshActiveTab.tabId]: { ...tab, name: newName } } }
-      })
+      const chatName = normalized.length > 110 ? `${normalized.slice(0, 110)}...` : normalized
+      const builderConfig = freshActiveTab.config
+      const chatTabId = await chatStore.createChatTab(chatName, { ...freshActiveTab.metadata })
+      if (builderConfig) chatStore.setTabConfig(chatTabId, { ...builderConfig })
+      activateTab(chatTabId)
+      freshActiveTab = useChatStore.getState().chatTabs[chatTabId]
     }
 
     if (submitModeCategory === 'workflow' && !isRequiredFolderSelected) {
@@ -3361,10 +3360,6 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     if (targetTab) {
       activateTab(targetTab.tabId)
       chatStore.resetTabChat(targetTab.tabId, rotatedConversation?.session_id)
-      // The reset tab is blank on purpose. Without this, the workflow landing
-      // panel's own "nothing else is happening — reopen the last conversation"
-      // effect would see the same blank state and immediately undo New Chat.
-      chatStore.setTabMetadata(targetTab.tabId, { skipWorkflowAutoRestore: true })
       if (rotatedConversation) {
         chatStore.setTabMetadata(targetTab.tabId, {
           agentProfileConversationId: rotatedConversation.conversation_id,
@@ -3687,7 +3682,11 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
         </div>
       </div>
 
-      {/* Input Area - Completely isolated from event updates, hidden in workflow mode */}
+      {/* Input Area - Completely isolated from event updates, hidden in workflow mode.
+          Shown on the workflow landing panel (Recent/Schedules/Bots) too: the
+          Builder tab that backs it is a permanent, always-present, never-closed
+          tab now, and typing here is how you start a genuinely new conversation
+          from it -- there's no separate "New Chat" action that reveals this. */}
       {!hideInput && (
         <ChatInput
           onSubmit={(query, options) => submitQueryWithQuery(query, undefined, options)}

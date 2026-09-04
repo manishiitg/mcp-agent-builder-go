@@ -77,21 +77,26 @@ export function reusableScheduleTabId(
 
 type TabEvents = Record<string, PollingEvent[]>
 
+export const WORKFLOW_BUILDER_TAB_NAME = 'Automation Builder'
+
 /**
- * The one definition of "a blank interactive Chat tab for this workflow" --
- * a tab that can take a conversation without losing anything. Four
- * near-copies of this used to disagree (one keyed on a different event set,
- * one skipped the preset check, one skipped the restored-conversation
- * check), which is how a restore could land beside an identical-looking
- * empty tab instead of in it.
+ * The one definition of the workflow's "Builder" tab: the fixed, blank,
+ * never-closed first tab that shows the Recent/Schedules/Bots landing view
+ * and the composer. No conversation ever lands in it -- typing here opens a
+ * Chat tab, a resume goes to a Chat tab -- so it stays blank for the life of
+ * the workflow. Four near-copies of this used to disagree (one keyed on a
+ * different event set, one skipped the preset check, one skipped the
+ * restored-conversation check), which is how a restore could land beside an
+ * identical-looking empty tab instead of in it.
  *
  * createChatTab always mints a session id, so "has a sessionId" is not
  * "has content" -- content is whether that session has any real chat
- * events (hasWorkflowChatContent, the same test the composer uses to decide
- * when to rename a tab on its first message).
+ * events. The name check is what keeps a just-opened Chat tab (named from
+ * its first message, no events for a moment yet) from reading as a second
+ * Builder.
  */
 export function isBlankWorkflowBuilderTab(
-  tab: Pick<ChatTab, 'sessionId' | 'isStreaming' | 'metadata' | 'config'>,
+  tab: Pick<ChatTab, 'name' | 'sessionId' | 'isStreaming' | 'metadata' | 'config'>,
   presetQueryId: string,
   tabEvents: TabEvents,
 ): boolean {
@@ -100,13 +105,14 @@ export function isBlankWorkflowBuilderTab(
   if (meta.phaseId !== 'workflow-builder') return false
   if (meta.isViewOnly === true) return false
   if (meta.presetQueryId !== presetQueryId) return false
+  if (tab.name !== WORKFLOW_BUILDER_TAB_NAME && tab.name !== 'Workflow Builder') return false
   if (tab.isStreaming) return false
   if (tab.config?.restoredConversationPath) return false
   if (!tab.sessionId) return true
   return !hasWorkflowChatContent(tabEvents[tab.sessionId])
 }
 
-/** The most recently used blank Chat tab for this workflow, if any. */
+/** The workflow's Builder tab, if it exists. */
 export function blankWorkflowBuilderTabId(
   tabs: Record<string, ChatTab>,
   presetQueryId: string,
@@ -118,19 +124,18 @@ export function blankWorkflowBuilderTabId(
 }
 
 /**
- * The workflow's interactive Chat tab that an opened conversation should
- * land in: a blank one first, else the most recently used idle one. A
- * streaming tab is a live conversation and is never taken over. This is the
+ * The workflow's idle Chat tab that an opened conversation should land in:
+ * the most recently used interactive tab that isn't streaming and isn't the
+ * Builder. A streaming tab is a live conversation and is never taken over;
+ * the Builder is never taken over either -- it stays blank. This is the
  * "one Chat tab per workflow" rule -- opening a different past conversation
- * rebinds the tab rather than opening a second "Chat" beside it.
+ * rebinds the idle Chat tab rather than opening a second one beside it.
  */
 function idleWorkflowBuilderTabId(
   tabs: Record<string, ChatTab>,
   presetQueryId: string,
   tabEvents: TabEvents,
 ): string | null {
-  const blank = blankWorkflowBuilderTabId(tabs, presetQueryId, tabEvents)
-  if (blank) return blank
   return Object.values(tabs)
     .filter(tab => {
       const meta = tab.metadata
@@ -138,7 +143,8 @@ function idleWorkflowBuilderTabId(
         meta.phaseId === 'workflow-builder' &&
         meta.isViewOnly !== true &&
         meta.presetQueryId === presetQueryId &&
-        !tab.isStreaming
+        !tab.isStreaming &&
+        !isBlankWorkflowBuilderTab(tab, presetQueryId, tabEvents)
     })
     .sort((a, b) => (b.lastAccessedAt ?? b.createdAt ?? 0) - (a.lastAccessedAt ?? a.createdAt ?? 0))[0]?.tabId ?? null
 }

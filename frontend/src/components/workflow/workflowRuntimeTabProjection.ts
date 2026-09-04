@@ -9,9 +9,14 @@ export interface WorkflowRuntimeTabProjection {
 }
 
 /** Normalize current and persisted legacy names for the interactive workflow
- * conversation. Runtime/schedule lanes keep their own explicit names. */
+ * conversation. Runtime/schedule lanes keep their own explicit names.
+ *
+ * `isBlank` marks the workflow's fixed, never-closed "Builder" tab (no
+ * conversation in it; shows the Recent/Schedules/Bots landing view).
+ * Builder-phase tabs that hold a conversation are "Chat". */
 export function workflowTabDisplayName(
   tab: Pick<ChatTab, 'name' | 'metadata' | 'sessionId'>,
+  isBlank?: boolean,
 ): string {
   // Finished schedule tabs are persisted until the user closes them and no
   // longer pass through live runtime reconciliation. Normalize an older
@@ -23,7 +28,7 @@ export function workflowTabDisplayName(
     tab.metadata?.phaseId === 'workflow-builder' &&
     (tab.name === 'Automation Builder' || tab.name === 'Workflow Builder')
   ) {
-    return 'Chat'
+    return isBlank ? 'Builder' : 'Chat'
   }
   return tab.name
 }
