@@ -2414,6 +2414,10 @@ func runServer(cmd *cobra.Command, args []string) {
 	apiRouter.HandleFunc("/workflow/constants", orchtypes.HandleWorkflowConstants).Methods("GET")
 	apiRouter.HandleFunc("/workflow/active-executions", api.handleGetActiveExecutions).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/workflow/builder-session", api.handleGetWorkflowBuilderSession).Methods("GET", "OPTIONS")
+	// Headless report preview data (preview_report tool). The only API paths a
+	// report-preview scoped token can reach; see report_preview_routes.go.
+	apiRouter.HandleFunc("/workflow/report-preview/file", api.handleReportPreviewFile).Methods("GET")
+	apiRouter.HandleFunc("/workflow/report-preview/query", api.handleReportPreviewQuery).Methods("POST")
 
 	// Generic AgentWorks chat defaults (skills, servers, secrets, browser).
 	MultiAgentConfigRoutes(apiRouter)
@@ -2510,6 +2514,12 @@ func runServer(cmd *cobra.Command, args []string) {
 		w.Header().Set("Cache-Control", "no-store")
 		fmt.Fprintf(w, "window.__APP_RUNTIME_CONFIG__ = {\n  apiBaseUrl: \"http://localhost:%d\",\n  workspaceApiBaseUrl: %q\n};\n", actualPort, workspaceURL)
 	}).Methods("GET")
+
+	// Headless report preview page (preview_report tool): embedded in the
+	// binary, so it works wherever the server runs regardless of how the SPA
+	// is served. Registered before the SPA catch-all below.
+	router.HandleFunc(reportPreviewPagePath, api.reportPreviewPageHandler).Methods("GET")
+	router.HandleFunc(reportPreviewPagePath+"report-preview.js", api.reportPreviewScriptHandler).Methods("GET")
 
 	// Static file serving (for frontend). Unknown GET/HEAD routes fall back to
 	// index.html so dedicated SPA URLs like /report, /file, and /folder work

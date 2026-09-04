@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import { isWorkspaceRelativeReference, rewriteReportMarkdownReferences } from './reportMarkdownLinks'
 
@@ -24,7 +23,8 @@ describe('rewriteReportMarkdownReferences', () => {
     expect(out).toContain('data-report-open="db/reports/proof.pdf"')
     expect(out).toContain('href="#"')
     expect(out).toContain('data-report-src="db/assets/chart.png"')
-    expect(out).not.toContain('src="db/assets/chart.png"')
+    // Substring check must not false-positive on "...report-src=..." above.
+    expect(out).not.toMatch(/(?<!-)\bsrc="db\/assets\/chart\.png"/)
   })
 
   it('leaves external links, anchors and data URIs alone', () => {
@@ -48,5 +48,26 @@ describe('rewriteReportMarkdownReferences', () => {
   it('drops a query string or fragment from the resolved path', () => {
     const out = rewriteReportMarkdownReferences('<a href="db/notes/a.md#h2?x=1">a</a>', allow)
     expect(out).toContain('data-report-open="db/notes/a.md"')
+  })
+
+  it('decodes an HTML-entity-escaped href before resolving', () => {
+    // renderToStaticMarkup escapes & in attribute values.
+    const out = rewriteReportMarkdownReferences('<a href="db/notes/a.md?x=1&amp;y=2">a</a>', allow)
+    expect(out).toContain('data-report-open="db/notes/a.md"')
+  })
+
+  it('preserves a self-closing img tag shape and other attributes/order', () => {
+    const out = rewriteReportMarkdownReferences('<p>before</p><img alt="c" src="db/assets/chart.png" title="t"/><p>after</p>', allow)
+    expect(out).toContain('<p>before</p>')
+    expect(out).toContain('<p>after</p>')
+    expect(out).toContain('alt="c"')
+    expect(out).toContain('title="t"')
+    expect(out).toContain('data-report-src="db/assets/chart.png"')
+    expect(out.match(/<img[^>]*>/)?.[0]).toMatch(/\/>$/)
+  })
+
+  it('leaves an unrelated <a>/<img> without href/src untouched', () => {
+    const html = '<a name="x">anchor</a><img alt="no src">'
+    expect(rewriteReportMarkdownReferences(html, allow)).toBe(html)
   })
 })

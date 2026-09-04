@@ -1,0 +1,221 @@
+package server
+
+import (
+	"encoding/json"
+	"fmt"
+	"mime"
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workspace"
+)
+
+// Headless report preview (preview_report tool).
+//
+// The Go server serves a tiny page at /report-preview/ that renders a
+// workflow's db/reports/index.html through the same host runtime the in-app
+// Report tab uses (frontend/src/report-preview, built by `npm run
+// build:report-preview` to ./static/report-preview.js next to the rest of
+// the deployed frontend -- read from disk on each request, the same way
+// spaStaticFileHandler serves the app, NOT go:embed'd: this directory is
+// deploy-populated and not committed, so embedding it would break `go
+// build` on a fresh checkout). A headless browser loads the page with a
+// short-lived, workspace-bound preview token; the page fetches its data
+// from the two read-only endpoints below, which are the only API paths
+// that token can reach (see scopeAllowsPath in auth_middleware.go).
+
+const (
+	reportPreviewScope     = "report-preview"
+	reportPreviewTokenTTL  = 3 * time.Minute
+	reportPreviewPagePath  = "/report-preview/"
+	reportPreviewAPIPrefix = "/api/workflow/report-preview/"
+)
+
+const reportPreviewPageHTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Report preview</title>
+</head>
+<body>
+<script src="/report-preview/report-preview.js"></script>
+</body>
+</html>
+`
+
+// mintReportPreviewToken issues a token that can only read one workflow's
+// report data for a few minutes. It carries the current user's identity so
+// workspace reads run as that user, but the scope claim keeps it away from
+// every other endpoint.
+func mintReportPreviewToken(claims *UserClaims, workspacePath string) (string, error) {
+	if err := ValidateConfiguredAuthSecret(); err != nil {
+		return "", err
+	}
+	userID, username, email := GetDefaultUserID(), "", ""
+	if claims != nil {
+		userID, username, email = claims.UserID, claims.Username, claims.Email
+	}
+	now := time.Now()
+	preview := &UserClaims{
+		UserID:         userID,
+		Username:       username,
+		Email:          email,
+		Scope:          reportPreviewScope,
+		ScopeWorkspace: strings.Trim(strings.TrimSpace(workspacePath), "/"),
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(now.Add(reportPreviewTokenTTL)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+			Issuer:    "mcp-agent-builder",
+			Subject:   userID,
+		},
+	}
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, preview).SignedString(GetAuthSecret())
+}
+
+// scopeAllowsPath: a scoped token reaches only the paths its scope names.
+// Unscoped (normal session) tokens are unrestricted here.
+func scopeAllowsPath(scope, requestPath string) bool {
+	switch scope {
+	case "":
+		return true
+	case reportPreviewScope:
+		return strings.HasPrefix(requestPath, reportPreviewAPIPrefix)
+	}
+	return false
+}
+
+// reportPreviewAllowedPath mirrors the frontend's allowedReportPath: the
+// durable store and the other authored folders, never a run's scratch output,
+// never a parent traversal.
+func reportPreviewAllowedPath(relative string) (string, bool) {
+	normalized := strings.TrimPrefix(path.Clean("/"+strings.ReplaceAll(strings.TrimSpace(relative), "\\", "/")), "/")
+	if normalized == "" || normalized == "." || strings.HasPrefix(normalized, "../") || strings.Contains(normalized, "/../") {
+		return "", false
+	}
+	for _, root := range []string{"db/", "knowledgebase/", "docs/", "planning/", "evaluation/", "costs/", "variables/"} {
+		if strings.HasPrefix(normalized, root) {
+			return normalized, true
+		}
+	}
+	if normalized == "soul.md" || normalized == "workflow.json" {
+		return normalized, true
+	}
+	return "", false
+}
+
+func reportPreviewWorkspace(r *http.Request, claims *UserClaims, requested string) (string, error) {
+	workspacePath := strings.Trim(strings.TrimSpace(requested), "/")
+	if workspacePath == "" {
+		return "", fmt.Errorf("workspace is required")
+	}
+	if claims != nil && claims.Scope == reportPreviewScope && claims.ScopeWorkspace != "" && claims.ScopeWorkspace != workspacePath {
+		return "", fmt.Errorf("this preview token is bound to another workflow")
+	}
+	_ = r
+	return workspacePath, nil
+}
+
+func (api *StreamingAPI) reportPreviewWorkspaceClient(claims *UserClaims) *workspace.Client {
+	userID := GetDefaultUserID()
+	if claims != nil && claims.UserID != "" {
+		userID = claims.UserID
+	}
+	return workspace.NewClient(getWorkspaceAPIURL(), workspace.WithUserID(userID))
+}
+
+// GET /api/workflow/report-preview/file?workspace=Workflow/x&path=db/reports/index.html
+// Streams the file's bytes with a content type from its extension, so the
+// preview page can fetch text and also point <img src> straight at it.
+func (api *StreamingAPI) handleReportPreviewFile(w http.ResponseWriter, r *http.Request) {
+	claims := GetUserFromContext(r.Context())
+	workspacePath, err := reportPreviewWorkspace(r, claims, r.URL.Query().Get("workspace"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	relative, ok := reportPreviewAllowedPath(r.URL.Query().Get("path"))
+	if !ok {
+		http.Error(w, "path must be under db/, knowledgebase/, docs/, planning/, evaluation/, costs/ or variables/", http.StatusBadRequest)
+		return
+	}
+	full := filepath.ToSlash(filepath.Join(workspacePath, relative))
+	data, err := api.reportPreviewWorkspaceClient(claims).DownloadFile(r.Context(), full)
+	if err != nil {
+		status := http.StatusNotFound
+		if !strings.Contains(strings.ToLower(err.Error()), "not found") && !strings.Contains(err.Error(), "404") {
+			status = http.StatusBadGateway
+		}
+		http.Error(w, fmt.Sprintf("read %s: %v", relative, err), status)
+		return
+	}
+	contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(relative)))
+	if contentType == "" {
+		contentType = http.DetectContentType(data)
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = w.Write(data)
+}
+
+// POST /api/workflow/report-preview/query {"workspace":"Workflow/x","sql":"SELECT ..."}
+// Same read-only query the Report tab runs, shaped like the workspace
+// service's /api/query envelope the report host expects.
+func (api *StreamingAPI) handleReportPreviewQuery(w http.ResponseWriter, r *http.Request) {
+	claims := GetUserFromContext(r.Context())
+	var body struct {
+		Workspace string `json:"workspace"`
+		SQL       string `json:"sql"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	workspacePath, err := reportPreviewWorkspace(r, claims, body.Workspace)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if strings.TrimSpace(body.SQL) == "" {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "sql is required"})
+		return
+	}
+	result, err := api.reportPreviewWorkspaceClient(claims).QueryAuthorizedWorkflowDB(r.Context(), workspace.QueryWorkflowDBParams{
+		DBPath: filepath.ToSlash(filepath.Join(workspacePath, "db", "db.sqlite")),
+		SQL:    body.SQL,
+	})
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "data": result})
+}
+
+// The page and its script are served without auth (they carry nothing
+// themselves; every request the page makes carries the token). Registered in
+// server.go ahead of the SPA catch-all.
+func (api *StreamingAPI) reportPreviewPageHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write([]byte(reportPreviewPageHTML))
+}
+
+func (api *StreamingAPI) reportPreviewScriptHandler(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile(filepath.Join("static", "report-preview.js"))
+	if err != nil {
+		http.Error(w, "report preview runtime is not built into this server; run `npm run build:report-preview` in frontend/", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(data)
+}

@@ -33,7 +33,14 @@ generation step.
   runs every literal `window.report.query` SQL against the live
   `db/db.sqlite`, confirms every referenced `db/` file exists, rejects
   external stylesheet/script URLs, and warns on OS-only dark mode.
-  Open the Report tab to verify visual layout only when requested or needed.
+- `validate_report_html()` is static and fast; it cannot tell you the page
+  actually renders. Call `preview_report()` after it passes, or whenever
+  visual review is requested: it opens the report in a real headless browser
+  through the same runtime the Report tab uses, waits for it to settle, and
+  returns whether it errored, its script/data-fetch errors, its tab labels,
+  any `Loading…` placeholder still on screen, and screenshots per theme/width
+  under `db/reports/preview/` — open them with `read_image`. Prefer it over
+  asking the user to open the Report tab for you.
 - Always include one section, as its own top-level tab (not a subsection
   scrolled past within another tab, and not merely an anchored region on a
   single scrolling page), that reports what the workflow actually did, in

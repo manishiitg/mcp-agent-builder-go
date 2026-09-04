@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { withReportBootstrap } from './HtmlWidgetFrame'
+import { withReportBootstrap } from './reportHostRuntime'
 
 describe('withReportBootstrap', () => {
   it('injects the stub immediately after <head> so it precedes any author script', () => {

@@ -29,6 +29,12 @@ type UserClaims struct {
 	Username string `json:"username"`
 	Email    string `json:"email,omitempty"`
 	Provider string `json:"provider,omitempty"` // Auth provider: "simple", "cognito", "supabase"
+	// Scope, when set, narrows a token to one purpose: the middleware admits it
+	// only to the paths scopeAllowsPath names for that scope. A normal session
+	// token has no scope. Today's only scope is "report-preview" (a headless
+	// browser rendering one workflow's report), bound to ScopeWorkspace.
+	Scope          string `json:"scope,omitempty"`
+	ScopeWorkspace string `json:"scope_workspace,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -215,6 +221,11 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		// keys on to drop the stale token and show the login screen.
 		if directoryUserIsUnknown(claims) {
 			http.Error(w, `{"error": "Session expired: this sign-in predates the current user directory, please sign in again"}`, http.StatusUnauthorized)
+			return
+		}
+		// A scoped token (report preview) is valid only for its own endpoints.
+		if !scopeAllowsPath(claims.Scope, r.URL.Path) {
+			http.Error(w, `{"error": "This token is not valid for this endpoint"}`, http.StatusForbidden)
 			return
 		}
 		// Token is valid, add claims to context

@@ -2,11 +2,8 @@
 // db/reports/index.html. The HTML itself decides whether that experience uses
 // tabs, sections, a sidebar, or a single scrolling page.
 
-import { createElement, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { BarChart3, Loader2, RefreshCw } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { agentApi, workspaceApi } from '../../services/api'
 import { useReportFilePreviewStore } from '../../stores/useReportFilePreviewStore'
 import { useWorkflowStore } from '../../stores/useWorkflowStore'
@@ -19,7 +16,7 @@ import ModalPortal from '../ui/ModalPortal'
 import { FilePreviewModal } from './reportWidgets/FilePreviewModal'
 import { HtmlReportFrame } from './reportWidgets/HtmlWidgetFrame'
 import { ReportEmbedProvider, type ReportDataApi } from './reportWidgets/reportEmbedContext'
-import { rewriteReportMarkdownReferences } from './reportWidgets/reportMarkdownLinks'
+import { allowedReportPath, normalizeReportSource, renderReportMarkdown, reportMarkdownBasePath } from './reportWidgets/reportMarkdown'
 import { ReportHumanInputPanel } from './ReportHumanInputPanel'
 
 import { WORKFLOW_REPORT_REFRESH_EVENT } from './reportRefreshEvent'
@@ -50,9 +47,7 @@ interface ReportViewProps {
   reserveTopControlsSpace?: boolean
 }
 
-function normalizeSource(path: string): string {
-  return path.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+/g, '/')
-}
+const normalizeSource = normalizeReportSource
 
 async function readWorkspaceText(filepath: string): Promise<string | null> {
   try {
@@ -63,32 +58,13 @@ async function readWorkspaceText(filepath: string): Promise<string | null> {
   }
 }
 
-function allowedReportPath(path: string): string {
-  const normalized = normalizeSource(path)
-  if (!normalized || normalized.split('/').includes('..')) return ''
-  const allowedRoots = ['db/', 'knowledgebase/', 'docs/', 'planning/', 'evaluation/', 'costs/', 'variables/']
-  const exactFiles = ['soul.md', 'workflow.json']
-  return allowedRoots.some(root => normalized.startsWith(root)) || exactFiles.includes(normalized) ? normalized : ''
-}
-
 function useReportDataApi(workspacePath: string): ReportDataApi {
   return useMemo(() => {
     const getText = async (path: string): Promise<string | null> => {
       const allowed = allowedReportPath(path)
       return allowed ? readWorkspaceText(`${workspacePath}/${allowed}`) : null
     }
-    // basePath: the folder of the markdown FILE being rendered (getHtml), so
-    // its own relative links/images resolve; a markdown string from data has
-    // no folder and only workspace-root-relative references resolve.
-    const renderMarkdown = (markdown: string, basePath = ''): string => {
-      if (!markdown) return ''
-      try {
-        const rendered = renderToStaticMarkup(createElement(ReactMarkdown, { remarkPlugins: [remarkGfm] }, markdown))
-        return `<div class="report-markdown">${rewriteReportMarkdownReferences(rendered, allowedReportPath, basePath)}</div>`
-      } catch {
-        return ''
-      }
-    }
+    const renderMarkdown = (markdown: string): string => renderReportMarkdown(markdown)
     return {
       workspacePath,
       query: async (sql: string) => {
@@ -106,9 +82,7 @@ function useReportDataApi(workspacePath: string): ReportDataApi {
       getHtml: async (path: string) => {
         const text = await getText(path)
         if (text == null) return null
-        const allowed = allowedReportPath(path)
-        const basePath = allowed.includes('/') ? allowed.slice(0, allowed.lastIndexOf('/')) : ''
-        return renderMarkdown(text, basePath) || null
+        return renderReportMarkdown(text, reportMarkdownBasePath(path)) || null
       },
       fileUrl: async (path: string) => {
         const allowed = allowedReportPath(path)

@@ -72,8 +72,15 @@ them; never add a step or table whose only purpose is feeding this tab.
    external stylesheet/script URLs, and warns when dark mode keys only off
    the OS scheme. A query built from variables is reported as unchecked —
    prefer literal SQL so the validator can see it.
-6. When visual review is requested, inspect the Report tab at desktop/tablet/
-   mobile widths and both themes; otherwise stop after validation.
+6. Call `preview_report` after validation passes. It renders the report in a
+   real headless browser through the same runtime the Report tab uses and
+   reports whether it settled, its script/fetch errors, its tab labels, any
+   `Loading…` text never replaced, and screenshots per theme/width — open
+   them with `read_image` and judge layout, contrast, and empty states
+   directly, rather than asking the user to check.
+7. When deeper visual review is requested beyond what `preview_report`
+   already covers, also inspect the Report tab at desktop/tablet/mobile
+   widths and both themes; otherwise stop after `preview_report`.
 
 Before writing a large report, briefly state the sections/views you will create
 and what each answers, including the required activity/actions section above.

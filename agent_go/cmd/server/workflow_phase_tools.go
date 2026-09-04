@@ -361,6 +361,11 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			} else {
 				log.Printf("[WORKFLOW_PHASE] Registered HTML report tools in %s", workflowPhaseID)
 			}
+			// preview_report: the true-render check (headless browser through the
+			// Report tab's own host runtime), alongside the static validator.
+			if err := api.registerReportPreviewTool(definitionAgent, sessionID, userID, phaseWorkspacePath); err != nil {
+				log.Printf("[WORKFLOW_PHASE] Warning: Failed to register preview_report in %s: %v", workflowPhaseID, err)
+			}
 		} else {
 			log.Printf("[WORKFLOW_PHASE] Skipped HTML report tools in %s mode for %s", phaseTemplateVars["WorkshopMode"], workflowPhaseID)
 		}

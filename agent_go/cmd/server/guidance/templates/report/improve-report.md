@@ -85,15 +85,19 @@ MODE
 
 PASS 1 — STRUCTURAL VALIDATION REVIEW
 Inspect `db/reports/index.html` directly, including each internal section/view. The parent Pulse Fixer will
-call `validate_report_html` before and after any edit. Treat a missing title,
-invalid HTML root, broken live-data query, or inaccessible referenced asset as
-a concrete report defect; propose its exact repair before presentation work.
+call `validate_report_html` (and, before proposing a fix as safe, `preview_report`)
+before and after any edit. Treat a missing title, invalid HTML root, broken
+live-data query, inaccessible referenced asset, a report script error, or a
+`Loading…` placeholder that never resolved (all things `preview_report`
+reports) as a concrete report defect; propose its exact repair before
+presentation work.
 
 PASS 2 — IMPROVEMENT SUGGESTIONS
-Use a rendered Report-tab view supplied by the parent when available, then read
-the actual `db/reports/index.html` document. If no view was supplied, say
-so and inspect the raw responsive HTML/CSS/JS without pretending to have seen
-the rendering. For HTML reports, also sample the data they read: run their
+Use a `preview_report` result (screenshots, tab labels, settle state) supplied
+by the parent when available — read the screenshots with `read_image` rather
+than assuming the layout — then read the actual `db/reports/index.html`
+document. If no preview was supplied, say so and inspect the raw responsive
+HTML/CSS/JS without pretending to have seen the rendering. For HTML reports, also sample the data they read: run their
 queries against `db/db.sqlite` (`sqlite3 db/db.sqlite ".schema"` + `SELECT ... LIMIT`), and check `db/assets/`, `knowledgebase/context/context.md`, and `knowledgebase/notes/`. Use the available view plus raw data/document to propose improvements in these categories:
 
 1. **Live vs stale.** The report is HTML; it should read its numbers live via `window.report.query` so it never goes stale. Flag any report that hardcodes data as static text (it should query the db instead), or that depends on a workflow step regenerating it each run (it shouldn't — author once, read live).
