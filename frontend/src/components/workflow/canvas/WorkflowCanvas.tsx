@@ -1202,6 +1202,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   const changes = planData.changes
 
   const loadPlanRefresh = planData.refresh
+  const refreshEvaluationPlan = evalData.refresh
   const clearChanges = planData.clearChanges
   const setChanges = planData.setChanges
 
@@ -1286,7 +1287,10 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     if (isRefreshingPlan) return
     setIsRefreshingPlan(true)
     try {
-      const reloaded = await loadPlanRefresh()
+      const [reloaded] = await Promise.all([
+        loadPlanRefresh(),
+        refreshEvaluationPlan(),
+      ])
       if (!reloaded) {
         throw new Error('Plan could not be reloaded')
       }
@@ -1844,8 +1848,9 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   // Expose methods via ref
   useImperativeHandle(ref, () => ({
     refresh: async (changedStepIDs?: string[], deletedStepIDs?: string[]) => {
-      // Refresh plan to get latest data
-      await loadPlanRefresh()
+      // The flow combines plan.json and evaluation_plan.json. Refresh both so
+      // deleted evaluation steps cannot remain as cached canvas nodes.
+      await Promise.all([loadPlanRefresh(), refreshEvaluationPlan()])
 
       // If granular change data is provided, use it directly
       if (changedStepIDs || deletedStepIDs) {
@@ -1879,7 +1884,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
       // Use the existing highlightStepNode function
       highlightStepNode(stepId)
     }
-  }), [loadPlanRefresh, plan, setChanges, highlightStepNode])
+  }), [loadPlanRefresh, refreshEvaluationPlan, plan, setChanges, highlightStepNode])
 
   // Store step ID to focus on when changes are detected (will focus after nodes update)
   React.useEffect(() => {

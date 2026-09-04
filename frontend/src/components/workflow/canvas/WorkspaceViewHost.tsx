@@ -500,10 +500,11 @@ export const WorkspaceViewHost = React.memo(forwardRef<WorkflowCanvasRef, Workfl
     }
   }, [workspaceViewTarget, setSelectedFile, setShowFileContent])
   const loadPlanRefresh = planData.refresh
+  const refreshEvaluationPlan = evalData.refresh
   const refreshWorkspaceState = workspace.refresh
   const sharedRefresh = useCallback(async () => {
-    await Promise.all([loadPlanRefresh(), refreshWorkspaceState()])
-  }, [loadPlanRefresh, refreshWorkspaceState])
+    await Promise.all([loadPlanRefresh(), refreshEvaluationPlan(), refreshWorkspaceState()])
+  }, [loadPlanRefresh, refreshEvaluationPlan, refreshWorkspaceState])
   useImperativeHandle(ref, () => ({
     refresh: async (changedStepIDs?: string[], deletedStepIDs?: string[]) => {
       if (kind === 'canvas' && flowRef.current) {
