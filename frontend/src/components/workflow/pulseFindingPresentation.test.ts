@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PulseFindingLifecycle } from '../../services/api-types'
-import { pulseFindingPresentation, pulseFindingProgress } from './pulseFindingPresentation'
+import { pulseFindingPresentation, pulseFindingProgress, pulseFindingReporter } from './pulseFindingPresentation'
 
 function finding(overrides: Partial<PulseFindingLifecycle>): PulseFindingLifecycle {
   return {
@@ -18,6 +18,40 @@ function finding(overrides: Partial<PulseFindingLifecycle>): PulseFindingLifecyc
 }
 
 describe('pulse finding action lanes', () => {
+  it.each(['open', 'acknowledged', 'awaiting_run'])('shows the structured evidence boundary for %s findings', (status) => {
+    expect(pulseFindingPresentation(finding({
+      status,
+      step_id: 'strategic_review',
+      resolution_note: 'Old proposal summary',
+      details: { recommended_route: 'evidence_wait', next_check: 'After 10 completed growth days', reproduction: { safe: true } },
+      events: [{ event_type: 'proposal_recorded', summary: 'An old idea', recorded_at: '2026-08-01' }],
+    }))).toMatchObject({ queue: 'waiting_proof', nextAction: 'After 10 completed growth days' })
+  })
+
+  it.each([
+    ['resolved', 'resolved'], ['rejected', 'resolved'], ['external_action_required', 'platform'],
+    ['fixing', 'needs_action'], ['queued_for_engineering', 'queued_repair'],
+  ])('does not let stale evidence metadata override %s', (status, queue) => {
+    expect(pulseFindingPresentation(finding({ status,
+      details: { recommended_route: 'evidence_wait', reproduction: { safe: true } },
+    })).queue).toBe(queue)
+  })
+
+  it('keeps failed verification actionable even with evidence-wait metadata', () => {
+    expect(pulseFindingPresentation(finding({
+      details: { recommended_route: 'evidence_wait', reproduction: { safe: true } },
+      verifications: [{ verdict: 'failed', check: 'Growth counts', verified_at: '2026-09-05' }],
+    })).queue).toBe('needs_action')
+  })
+
+  it('preserves actual proposals and the original reporting step', () => {
+    expect(pulseFindingPresentation(finding({ status: 'acknowledged',
+      events: [{ event_type: 'proposal_recorded', summary: 'Try a new channel', recorded_at: '2026-09-05' }],
+    })).queue).toBe('proposals')
+    expect(pulseFindingReporter(finding({ module: 'step-revise-draft', step_id: 'step-revise-draft' }), 'Technical review'))
+      .toBe('Step-Revise-Draft')
+  })
+
   it('keeps a deferred safe repair in Pulse’s queue', () => {
     expect(pulseFindingPresentation(finding({ status: 'queued_for_engineering' }))).toMatchObject({
       queue: 'queued_repair', label: 'Queued for Pulse',

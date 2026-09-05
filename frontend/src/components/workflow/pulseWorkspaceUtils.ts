@@ -1,8 +1,10 @@
 import type {
   PulseFindingLifecycle,
   PulseReviewRecord,
+  PulseReviewFocus,
 } from '../../services/api-types'
-import { summarizePulseModule } from './pulseModuleInspectorUtils'
+import { pulseIssueForFinding } from './pulseModuleInspectorUtils'
+import { pulseFindingPresentation, type PulseFindingQueue } from './pulseFindingPresentation'
 
 export type PulseWorkspaceModuleDefinition = {
   id: string
@@ -35,10 +37,56 @@ export function normalizePulseWorkspaceModule(module?: string): string {
   return value
 }
 
+/** A reporting step is not a review area. Explicit reviewer associations can
+ * put an issue in more than one area; never infer ownership from its prose. */
+export function pulseFindingReviewAreas(
+  finding: PulseFindingLifecycle,
+  selections: PulseReviewFocus[] = [],
+): string[] {
+  const areas = new Set<string>()
+  const add = (value?: string) => {
+    const area = normalizePulseWorkspaceModule(value)
+    if (['technical_review', 'strategic_review', 'plan_drift_review'].includes(area)) areas.add(area)
+  }
+  add(finding.module)
+  add(finding.issue?.module)
+  add(finding.step_id)
+  const id = pulseIssueForFinding(finding).id.trim().toUpperCase()
+  if (id !== 'PUL-UNKNOWN') {
+    selections.forEach((selection) => {
+      if (selection.issue_ids?.some((candidate) => candidate.trim().toUpperCase() === id)) add(selection.module)
+    })
+  }
+  return [...areas]
+}
+
+export type PulseFocus = 'all' | PulseFindingQueue
+
+/** Shared by the badges and the result list; counts intentionally ignore the
+ * selected queue, but always respect the selected review area. */
+export function pulseWorkspaceQueueCounts(findings: PulseFindingLifecycle[]): Record<PulseFocus, number> {
+  const counts: Record<PulseFocus, number> = {
+    all: 0, needs_action: 0, queued_repair: 0, waiting_proof: 0,
+    decisions: 0, proposals: 0, blocked: 0, platform: 0, resolved: 0, workflow_reported: 0,
+  }
+  findings.forEach((finding) => {
+    const queue = pulseFindingPresentation(finding).queue
+    counts[queue]++
+    if (pulseFindingMatchesFocus(finding, 'all')) counts.all++
+  })
+  return counts
+}
+
+export function pulseFindingMatchesFocus(finding: PulseFindingLifecycle, focus: PulseFocus): boolean {
+  const queue = pulseFindingPresentation(finding).queue
+  return focus === 'all' ? !['resolved', 'workflow_reported'].includes(queue) : queue === focus
+}
+
 export function buildPulseWorkspaceModuleSummaries(
   definitions: PulseWorkspaceModuleDefinition[],
   findings: PulseFindingLifecycle[],
   reviews: PulseReviewRecord[],
+  selections: PulseReviewFocus[] = [],
 ): PulseWorkspaceModuleSummary[] {
   const latestReviewByModule = new Map<string, PulseReviewRecord>()
   reviews.forEach((review) => {
@@ -52,23 +100,27 @@ export function buildPulseWorkspaceModuleSummaries(
   return definitions.map((definition) => {
     const definitionModule = normalizePulseWorkspaceModule(definition.id)
     const moduleFindings = findings.filter((finding) => (
-      normalizePulseWorkspaceModule(finding.module) === definitionModule
+      pulseFindingReviewAreas(finding, selections).includes(definitionModule)
     ))
-    const lifecycle = summarizePulseModule(moduleFindings)
+    const counts = pulseWorkspaceQueueCounts(moduleFindings)
+    const fixing = moduleFindings.filter((finding) => finding.status === 'fixing'
+      && pulseFindingPresentation(finding).queue === 'needs_action').length
+    const awaitingVerification = moduleFindings.filter((finding) => finding.status === 'awaiting_verification'
+      && pulseFindingPresentation(finding).queue === 'waiting_proof').length
     return {
       ...definition,
       findings: moduleFindings.length,
-      active: lifecycle.open,
-      fixing: lifecycle.fixing,
-      awaitingVerification: lifecycle.awaitingVerification,
-      awaitingRun: lifecycle.awaitingRun,
-      queuedForEngineering: lifecycle.queuedForEngineering,
-      awaitingUser: lifecycle.awaitingUser,
-      blocked: lifecycle.blocked,
-      proposals: lifecycle.proposals,
-      closed: lifecycle.closed,
-      externalAction: lifecycle.externalAction,
-      workflowReported: lifecycle.workflowReported,
+      active: counts.needs_action - fixing,
+      fixing,
+      awaitingVerification,
+      awaitingRun: counts.waiting_proof - awaitingVerification,
+      queuedForEngineering: counts.queued_repair,
+      awaitingUser: counts.decisions,
+      blocked: counts.blocked,
+      proposals: counts.proposals,
+      closed: counts.resolved,
+      externalAction: counts.platform,
+      workflowReported: counts.workflow_reported,
       recurring: moduleFindings.filter((finding) => (
         finding.seen_count > 1
         && finding.status !== 'external_action_required'

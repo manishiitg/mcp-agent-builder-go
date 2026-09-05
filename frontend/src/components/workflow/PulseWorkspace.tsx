@@ -5,6 +5,7 @@ import {
   Lightbulb,
   Loader2,
   Wrench,
+  X,
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type {
@@ -24,6 +25,10 @@ import { isPulseOwnedFinding, pulseIssueForFinding } from './pulseModuleInspecto
 import {
   buildPulseWorkspaceModuleSummaries,
   normalizePulseWorkspaceModule,
+  pulseFindingReviewAreas,
+  pulseFindingMatchesFocus,
+  pulseWorkspaceQueueCounts,
+  type PulseFocus,
 } from './pulseWorkspaceUtils'
 import {
   PULSE_FIXED_COMMANDS,
@@ -77,9 +82,6 @@ function finalCommandLabel(state?: PulseFinalCommandState): string {
   return readable(state?.status)
 }
 
-/** Which slice of the backlog the findings list is showing. */
-type PulseFocus = 'all' | PulseFindingQueue
-
 type ReviewFocusLabel = {
   label: string
   relatedCount: number
@@ -89,7 +91,7 @@ const FOCUS_TITLES: Record<PulseFocus, string> = {
   all: 'Current work',
   needs_action: 'Pulse to fix',
   queued_repair: 'Queued for Pulse',
-  waiting_proof: 'Waiting on a run',
+  waiting_proof: 'Waiting for evidence',
   decisions: 'Your decisions',
   proposals: 'Proposed improvements',
   blocked: 'Paused',
@@ -102,7 +104,7 @@ const FOCUS_HINTS: Record<PulseFocus, string> = {
   all: 'Open work, grouped by who or what can move it forward',
   needs_action: 'Issues Pulse can diagnose, repair, or reopen',
   queued_repair: 'Safe workflow repairs retained for a later Engineering pass',
-  waiting_proof: 'Fixes that need evidence from a future workflow run',
+  waiting_proof: 'Fixes and recommendations waiting for a verification check or future evidence',
   decisions: 'Items that cannot continue without your approval or direction',
   proposals: 'Ideas Pulse recommends considering; these are not waiting for your answer',
   blocked: 'Diagnosed issues with no safe action currently available',
@@ -193,6 +195,10 @@ export function PulseWorkspace({
   }, [workspacePath])
 
   useEffect(() => {
+    setFocus('all')
+    setModuleFilter(null)
+    setExpandedFinding(null)
+    setShowCompleteBacklog(false)
     setFindings([])
     setReviews([])
     setImpact({ interventions: [], observations: [], assessments: [] })
@@ -200,28 +206,18 @@ export function PulseWorkspace({
     void load()
   }, [load])
 
-  const queueCounts = useMemo(() => {
-    const counts: Record<PulseFindingQueue, number> = {
-      needs_action: 0,
-      queued_repair: 0,
-      waiting_proof: 0,
-      decisions: 0,
-      proposals: 0,
-      blocked: 0,
-      platform: 0,
-      resolved: 0,
-      workflow_reported: 0,
-    }
-    findings.forEach((finding) => { counts[pulseFindingPresentation(finding).queue] += 1 })
-    return counts
-  }, [findings])
+  const areaFindings = useMemo(() => findings.filter((finding) => !moduleFilter
+    || pulseFindingReviewAreas(finding, reviewFocusSelections).includes(moduleFilter)),
+  [findings, moduleFilter, reviewFocusSelections])
+  const queueCounts = useMemo(() => pulseWorkspaceQueueCounts(areaFindings), [areaFindings])
   const moduleSummaries = useMemo(
-    () => buildPulseWorkspaceModuleSummaries(PULSE_MODULE_COMMANDS, findings, reviews),
-    [findings, reviews],
+    () => buildPulseWorkspaceModuleSummaries(PULSE_MODULE_COMMANDS, findings, reviews, reviewFocusSelections),
+    [findings, reviews, reviewFocusSelections],
   )
   const reviewFocusByIssueID = useMemo(() => {
     const labels = new Map<string, string[]>()
     reviewFocusSelections.forEach((selection) => {
+      if (moduleFilter && normalizePulseWorkspaceModule(selection.module) !== moduleFilter) return
       const label = `${readable(normalizePulseWorkspaceModule(selection.module))} › ${readable(selection.focus_key)}`
       selection.issue_ids?.forEach((issueID) => {
         const normalizedID = issueID.trim().toUpperCase()
@@ -237,7 +233,7 @@ export function PulseWorkspace({
         { label: focusLabels[0], relatedCount: Math.max(0, focusLabels.length - 1) },
       ]),
     )
-  }, [reviewFocusSelections])
+  }, [reviewFocusSelections, moduleFilter])
 
   const finalCommandStateByID = useMemo(
     () => new Map(finalCommandStates.map((state) => [state.command, state])),
@@ -245,20 +241,8 @@ export function PulseWorkspace({
   )
   const matchingFindings = useMemo(
     () => {
-      const matchesFocus = (finding: PulseFindingLifecycle) => {
-        const queue = pulseFindingPresentation(finding).queue
-        if (focus === 'all') return !['resolved', 'workflow_reported'].includes(queue)
-        return queue === focus
-      }
-      const matched = findings
-        .filter(matchesFocus)
-        // Selecting a module narrows this list too, so the module grid and the
-        // findings list are two views of one selection rather than two lists
-        // that ignore each other.
-        .filter((finding) => (
-          !moduleFilter
-          || normalizePulseWorkspaceModule(finding.module) === moduleFilter
-        ))
+      const matched = areaFindings
+        .filter((finding) => pulseFindingMatchesFocus(finding, focus))
         .sort((a, b) => {
           const rank: Record<PulseFindingQueue, number> = {
             needs_action: 6,
@@ -276,7 +260,7 @@ export function PulseWorkspace({
         })
       return matched
     },
-    [findings, focus, moduleFilter],
+    [areaFindings, focus],
   )
   // Keep the initial dashboard scannable, but never hide the complete backlog
   // behind an unexplained cap. Queue and module filters always show every match;
@@ -339,7 +323,8 @@ export function PulseWorkspace({
             const strategic = area.id === 'strategic_review'
             const actionable = strategic
               ? decisions + proposals
-              : areaModules.reduce((sum, module) => sum + module.active + module.fixing + module.queuedForEngineering, 0)
+              : areaModules.reduce((sum, module) => sum + module.active + module.fixing, 0)
+            const queued = areaModules.reduce((sum, module) => sum + module.queuedForEngineering, 0)
             const waiting = areaModules.reduce((sum, module) => (
               sum + module.awaitingVerification + module.awaitingRun
             ), 0)
@@ -378,11 +363,10 @@ export function PulseWorkspace({
               <button
                 key={area.id}
                 type="button"
+                aria-pressed={moduleFilter === moduleID}
                 onClick={() => {
                   setModuleFilter(moduleID)
-                  if (strategic && (decisions > 0 || proposals > 0)) {
-                    setFocus(decisions > 0 ? 'decisions' : 'proposals')
-                  }
+                  setFocus('all')
                   setShowCompleteBacklog(false)
                 }}
                 className="min-w-0 bg-background p-4 text-left transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
@@ -420,13 +404,14 @@ export function PulseWorkspace({
                   ) : (
                     <>
                       <span><span className="font-semibold text-foreground">{actionable}</span> Pulse to fix</span>
-                      <span><span className="font-semibold text-foreground">{waiting}</span> waiting on run</span>
                       {decisions > 0 && <span><span className="font-semibold text-foreground">{decisions}</span> decisions</span>}
                       {blocked > 0 && <span><span className="font-semibold text-foreground">{blocked}</span> blocked</span>}
                       {external > 0 && <span><span className="font-semibold text-foreground">{external}</span> platform</span>}
                       {proposals > 0 && <span><span className="font-semibold text-foreground">{proposals}</span> ideas</span>}
                     </>
                   )}
+                  <span><span className="font-semibold text-foreground">{waiting}</span> waiting for evidence</span>
+                  {queued > 0 && <span><span className="font-semibold text-foreground">{queued}</span> queued for Pulse</span>}
                 </div>
                 {moduleState && (gateDecision || moduleState.last_reason) && (
                   <div className="mt-3 rounded-md border bg-muted/25 px-2.5 py-2 text-[10px] leading-4 text-muted-foreground">
@@ -502,7 +487,7 @@ export function PulseWorkspace({
       <div className="grid gap-4">
         <section className="overflow-hidden rounded-xl border bg-background">
           <div className="border-b px-4 py-3">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-semibold text-foreground">Issues and follow-through</h3>
                 <p className="mt-0.5 text-[11px] text-muted-foreground">
@@ -515,7 +500,18 @@ export function PulseWorkspace({
                   {' · '}{FOCUS_HINTS[focus]}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {moduleFilter && (
+                  <button
+                    type="button"
+                    aria-label="Clear review area filter"
+                    onClick={() => { setModuleFilter(null); setShowCompleteBacklog(false) }}
+                    className="flex items-center gap-1 rounded-full border border-primary/35 bg-primary/10 px-2 py-1 text-[10px] font-semibold text-primary"
+                  >
+                    {moduleSummaries.find((module) => module.id === moduleFilter)?.label || readable(moduleFilter)}
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
                 {(focus !== 'all' || moduleFilter) && (
                   <button
                     type="button"
@@ -543,10 +539,10 @@ export function PulseWorkspace({
             </div>
             <div className="mt-3 flex flex-wrap gap-1.5" aria-label="Issue filters">
               {([
-                ['all', 'Current', findings.filter((finding) => !['resolved', 'workflow_reported'].includes(pulseFindingPresentation(finding).queue)).length],
+                ['all', 'Current', queueCounts.all],
                 ['needs_action', 'Pulse to fix', queueCounts.needs_action],
                 ['queued_repair', 'Queued for Pulse', queueCounts.queued_repair],
-                ['waiting_proof', 'Waiting on run', queueCounts.waiting_proof],
+                ['waiting_proof', 'Waiting for evidence', queueCounts.waiting_proof],
                 ['decisions', 'Your decisions', queueCounts.decisions],
                 ['proposals', 'Ideas', queueCounts.proposals],
                 ['blocked', 'Paused', queueCounts.blocked],
@@ -575,16 +571,16 @@ export function PulseWorkspace({
               <div className="mt-2 text-sm font-medium text-foreground">
                 {focus === 'resolved' ? 'No resolved issues yet' : 'Nothing in this queue'}
               </div>
-              <div className="mt-1 text-xs text-muted-foreground">Choose another queue or inspect the review modules below.</div>
+              <div className="mt-1 text-xs text-muted-foreground">Choose another queue{moduleFilter ? ' or clear the review area filter' : ' or inspect a review area above'}.</div>
             </div>
           ) : (
             <div className="space-y-2 p-3">
               {attentionFindings.map((finding) => {
-                const moduleID = normalizePulseWorkspaceModule(finding.module)
+                const moduleID = moduleFilter || pulseFindingReviewAreas(finding, reviewFocusSelections)[0]
                 const module = moduleSummaries.find((item) => item.id === moduleID)
                 const issueID = pulseIssueForFinding(finding).id.toUpperCase()
                 const reviewFocus = reviewFocusByIssueID.get(issueID) || (isPulseOwnedFinding(finding)
-                  ? { label: `${module?.label || readable(moduleID)} › Unclassified`, relatedCount: 0 }
+                  ? { label: module ? `${module.label} › Unclassified` : 'Review area unassigned', relatedCount: 0 }
                   : undefined)
                 return (
                   <PulseFindingCard
@@ -596,12 +592,11 @@ export function PulseWorkspace({
                     onToggle={() => setExpandedFinding(
                       expandedFinding === issueID ? null : issueID,
                     )}
-                    onOpenModule={() => {
-                      if (!moduleID) return
+                    onOpenModule={moduleID ? () => {
                       setModuleFilter(moduleID)
                       setFocus('all')
                       setShowCompleteBacklog(false)
-                    }}
+                    } : undefined}
                   />
                 )
               })}

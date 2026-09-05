@@ -407,7 +407,7 @@ export function PulseFindingCard({
           <div className="mt-3 flex flex-wrap items-center gap-2 text-[9px] text-muted-foreground">
             {onOpenModule && (
               <button type="button" onClick={onOpenModule} className="rounded border px-2 py-1 font-semibold text-foreground hover:bg-muted">
-                Open {moduleLabel || finding.module || 'module'} review
+                Show issues in {moduleLabel || finding.module || 'review area'}
               </button>
             )}
             <span>First seen {formatDate(issue.created_at)}</span>

@@ -63,6 +63,11 @@ export function pulseFindingReporter(
     return origin ? `Workflow step · ${origin}` : 'Workflow run'
   }
   if (!origin) return groupedModuleLabel || 'Pulse reviewer'
+  // Review-area membership must not rename the step that originally reported it.
+  if (!['technical_review', 'workflow_review', 'llm_ops_review', 'strategic_review',
+    'strategy_auditor', 'goal_advisor', 'plan_drift_review'].includes(finding.step_id || finding.module || '')) {
+    return titleCase(origin)
+  }
   if (finding.step_id && finding.module && finding.step_id !== finding.module) {
     return titleCase(origin)
   }
@@ -170,7 +175,7 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
       label: 'Waiting for workflow run',
       queue: 'waiting_proof',
       tone: 'warning',
-      nextAction: finding.resolution_note?.trim()
+      nextAction: finding.details?.next_check?.trim() || finding.resolution_note?.trim()
         || 'Run the producing workflow again so Pulse can verify the changed behavior.',
     }
   }
@@ -206,6 +211,19 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
       queue: 'needs_action',
       tone: 'danger',
       nextAction: 'New workflow evidence appeared after the recorded repair. Pulse must compare that run with the repair, then either repair again or record why this is a distinct issue.',
+    }
+  }
+
+  // Current structured evidence requirements supersede legacy proposal events.
+  // Active repairs, failed verification, and terminal states above still win.
+  if (['open', 'acknowledged'].includes(finding.status)
+    && finding.details?.recommended_route === 'evidence_wait') {
+    return {
+      label: 'Waiting for evidence',
+      queue: 'waiting_proof',
+      tone: 'warning',
+      nextAction: finding.details.next_check?.trim()
+        || 'Pulse must record the exact future evidence boundary before revisiting this recommendation.',
     }
   }
 
@@ -270,15 +288,6 @@ export function pulseFindingPresentation(finding: PulseFindingLifecycle): PulseF
   const advisorFinding = finding.phase === 'review'
     && ['strategic_review', 'strategy_auditor', 'goal_advisor'].includes(advisorModule || '')
   if (advisorFinding && finding.details?.recommended_route !== 'fixer_handoff') {
-    if (finding.details?.recommended_route === 'evidence_wait') {
-      return {
-        label: 'Waiting for evidence',
-        queue: 'proposals',
-        tone: 'info',
-        nextAction: finding.details.next_check?.trim()
-          || 'Pulse must record the exact future evidence boundary before revisiting this recommendation.',
-      }
-    }
     return {
       label: 'Untriaged recommendation',
       queue: 'proposals',
