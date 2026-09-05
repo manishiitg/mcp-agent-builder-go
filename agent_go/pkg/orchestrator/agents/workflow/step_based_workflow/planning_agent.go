@@ -5843,6 +5843,20 @@ func registerPlanModificationTools(
 		return fmt.Errorf("failed to register migrate_orchestrator_step_type tool: %w", err)
 	}
 
+	migrateDeclaredModeParams, err := parseSchemaForToolParameters(`{"type":"object","properties":{}}`)
+	if err != nil {
+		return fmt.Errorf("failed to parse migrate_declared_execution_mode schema: %w", err)
+	}
+	if err := mcpAgent.RegisterCustomTool(
+		"migrate_declared_execution_mode",
+		"Product-managed workflow-version migration for contract v1.0.38 (PLAT-287). A step's plan type alone decides its execution model: regular is scripted, message_sequence is conversational. Rewrites planning/plan.json so that is explicit -- every legacy agentic regular step (no declared scripted mode) becomes the message_sequence it already ran as, any message_sequence still declared scripted becomes regular -- then removes declared_execution_mode and declared_execution_mode_reason from every planning/step_config.json entry, validates, and records the change with the removed reasons preserved. Behavior is unchanged. Idempotent. Refuses without changing anything when a regular step is declared scripted but has no learnings/<step-id>/main.py. Call only during the v1.0.38 workflow preflight.",
+		migrateDeclaredModeParams,
+		createMigrateDeclaredExecutionModeExecutor(workspacePath, logger, readFile, writeFile),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register migrate_declared_execution_mode tool: %w", err)
+	}
+
 	// Register workflow-specific plan update tools with "workflow" category
 	// Individual update tools for each step type
 	regularUpdateSchema := getUpdateRegularStepSchema()

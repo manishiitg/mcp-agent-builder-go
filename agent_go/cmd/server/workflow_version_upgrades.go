@@ -57,6 +57,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractOrchestratorStepTypeVersion,
 		workflowContractActivityTabFromRunSummaryVersion,
 		workflowContractScriptedTypeStaysRegularVersion,
+		workflowContractDeclaredExecutionModeRetiredVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -320,6 +321,12 @@ For each matching step, call update_scripted_step(existing_step_id=<its id>, rea
 
 If no step matches, this is a no-op. If update_scripted_step reports an error for any matching step, do not stamp -- leave the mismatch as-is and report what blocked it. Otherwise call set_workflow_contract_version(version="1.0.37") and stop.`
 
+const upgradeDeclaredExecutionModeRetired = `WORKFLOW CONTRACT UPGRADE: A STEP'S PLAN TYPE ALONE DECIDES ITS EXECUTION MODEL (PLAT-287).
+
+Do only this migration. declared_execution_mode is retired: a "regular" plan step is scripted (its work is the checked-in learnings/<step-id>/main.py) and a "message_sequence" step is conversational, full stop. Until now a "regular" step WITHOUT a declared scripted mode was a legacy agentic step that the runtime silently ran as a message_sequence. Call migrate_declared_execution_mode once. It rewrites planning/plan.json so that shape is explicit -- every legacy agentic regular step becomes the message_sequence it already ran as (same id, description, dependencies, validation, position), and any message_sequence still declared scripted becomes regular -- then removes declared_execution_mode and declared_execution_mode_reason from every entry in planning/step_config.json, validates the plan, and records the change with the removed reasons preserved in the changelog. Behavior does not change. A workflow already in this shape is a no-op.
+
+Do not hand-edit plan.json or step_config.json and do not run the workflow. The tool refuses, without changing anything, when a regular step is declared scripted but has no learnings/<step-id>/main.py: that step is already broken, and this migration will not guess whether it should become a sequence or get a script. If it refuses, report exactly which step and why and do not stamp. Otherwise call set_workflow_contract_version(version="1.0.38") and stop.`
+
 const workflowUpgradeWorkspacePathPlaceholder = "{{WORKSPACE_PATH}}"
 
 func bindWorkflowUpgradeWorkspacePath(query, workspacePath string) string {
@@ -403,6 +410,10 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	// workflowContractScriptedTypeStaysRegularVersion ("1.0.37") sits at rank 36.
 	if rank < 36 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractScriptedTypeStaysRegularVersion, label: "upgrade-scripted-type-stays-regular", query: upgradeScriptedTypeStaysRegular})
+	}
+	// workflowContractDeclaredExecutionModeRetiredVersion ("1.0.38") sits at rank 37.
+	if rank < 37 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractDeclaredExecutionModeRetiredVersion, label: "upgrade-declared-execution-mode-retired", query: upgradeDeclaredExecutionModeRetired})
 	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse
