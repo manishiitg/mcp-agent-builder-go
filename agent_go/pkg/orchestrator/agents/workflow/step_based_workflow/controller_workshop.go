@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // WorkshopExecuteOptions holds per-call overrides for ExecuteStepForWorkshop.
@@ -250,8 +251,26 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteStepForWorkshop(
 	}
 
 	// 6. Run via the standard execution pipeline.
+	retryStarted := time.Now().UTC()
+	retryFolder, retryExecutionID, retryRevision := hcpo.selectedRunFolder, "", ""
+	if !isInnerStep && !hcpo.isEvaluationMode {
+		if raw, err := hcpo.ReadWorkspaceFile(ctx, workflowRunMetadataPath(retryFolder)); err == nil {
+			var meta map[string]interface{}
+			if json.Unmarshal([]byte(raw), &meta) == nil && meta["status"] == "failed" {
+				retryExecutionID, _ = meta["execution_id"].(string)
+				if retryExecutionID != "" {
+					retryRevision, _ = hcpo.ensureExecutablePlanRevision(ctx)
+				}
+			}
+		}
+	}
 	var lastOutcome LastExecutedStepOutcome
 	execErr := hcpo.runExecutionPhase(ctx, breakdownSteps, 1, progress, setup.StartFromStep, setup.Context, &lastOutcome)
+	if execErr == nil && lastOutcome.Found && lastOutcome.StepID == stepID && hcpo.selectedRunFolder == retryFolder {
+		if err := hcpo.recordWorkshopRetryRecovery(ctx, retryFolder, retryExecutionID, retryRevision, stepID, totalSteps, retryStarted); err != nil {
+			execErr = fmt.Errorf("step %q succeeded but run recovery evidence could not be persisted: %w", stepID, err)
+		}
+	}
 
 	// 7. Prefer the exact result this call just produced over a log-folder
 	// re-read: a re-read cannot distinguish this call's own file from one an

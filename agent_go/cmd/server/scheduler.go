@@ -3699,6 +3699,11 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 			"[SCHEDULER] skipping run-outcome reconciliation for %s: run-folder listing unavailable (pre-run err=%v, post-run err=%v); this invocation's outcome stands on its session result alone",
 			sctx.Schedule.ID, preRunFoldersErr, postRunFoldersErr)
 	} else if failedFolder, found := reconcileWorkshopRunOutcome(preRunFolderNames, postRunFolders, invocationStartedAt); found {
+		for _, folder := range postRunFolders {
+			if folder.Name == failedFolder && folder.Metadata != nil && folder.Metadata.Recovery["status"] == "step_recovered_run_unverified" {
+				return sessionID, runFolder, fmt.Errorf("workflow run %s remains failed: a step retry succeeded, but whole-run recovery is unverified (%v)", failedFolder, folder.Metadata.Recovery["reason"])
+			}
+		}
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] ⚠️ Workshop session for %s completed normally, but run %s recorded status \"failed\" in its own run_metadata.json", sctx.Schedule.ID, failedFolder)
 		return sessionID, runFolder, fmt.Errorf("workflow run %s failed (its run_metadata.json records status \"failed\"), even though the orchestrating workshop session completed its turns without an infrastructure error", failedFolder)
 	}

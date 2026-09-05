@@ -3185,6 +3185,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 	if hcpo.selectedRunFolder == "" {
 		return fmt.Errorf(fmt.Sprintf("run folder not resolved - this should have been set after plan approval"), nil)
 	}
+	// Record completed work even when a later step fails.
+	receiptFolder, receiptID, receiptRevision := hcpo.beginCompletionReceipts(ctx, breakdownSteps, execCtx)
+	defer func() {
+		hcpo.finishCompletionReceipts(ctx, receiptFolder, receiptID, receiptRevision, breakdownSteps, progress)
+	}()
 	// Route conversations (msgSeqRoutes) are scoped to this execution phase.
 	// Drain them — and close their runtimes — however the phase exits, so a
 	// reused orchestrator instance starts the next iteration/run with fresh

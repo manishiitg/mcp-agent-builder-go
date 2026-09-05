@@ -30,6 +30,19 @@ func newFakeWorkspaceAPIWithContent(t *testing.T, content map[string]string) *or
 	mux.HandleFunc("/api/documents/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/documents/")
 		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPut {
+			var body struct {
+				Content string `json:"content"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+				w.WriteHeader(400)
+				return
+			}
+			content[path] = body.Content
+			_, _ = w.Write([]byte(`{"success":true}`))
+			return
+		}
 
 		body, ok := content[path]
 		if !ok {

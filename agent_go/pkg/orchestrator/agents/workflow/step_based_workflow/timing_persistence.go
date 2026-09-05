@@ -543,6 +543,8 @@ func workflowRunMetadataPath(runFolder string) string {
 
 //nolint:unused // staged for the run-metadata timing persistence rollout.
 func (hcpo *StepBasedWorkflowOrchestrator) upsertRunMetadata(ctx context.Context, runFolder string, mutate func(map[string]interface{})) error {
+	unlock := lockRunMetadata(hcpo.GetWorkspacePath(), runFolder)
+	defer unlock()
 	metadataPath := workflowRunMetadataPath(runFolder)
 	if metadataPath == "" {
 		return fmt.Errorf("run folder is required")
@@ -589,6 +591,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) markRunMetadataStarted(ctx context.Co
 		delete(meta, "completed_at")
 		delete(meta, "duration_ms")
 		meta["status"] = "running"
+		delete(meta, "recovery") // A new execution must not inherit another run's recovery verdict.
+		delete(meta, "required_step_ids")
+		delete(meta, "completion_receipts")
 		// This identity belongs to this producing group execution, not to the
 		// long-lived orchestrator instance or mutable iteration-0 slot.
 		meta["execution_id"] = executionID
