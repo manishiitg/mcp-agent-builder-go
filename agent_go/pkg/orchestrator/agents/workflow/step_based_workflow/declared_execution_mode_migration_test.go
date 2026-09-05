@@ -14,11 +14,11 @@ func runDeclaredModeMigration(t *testing.T, readFile func(context.Context, strin
 	return exec(context.Background(), map[string]interface{}{})
 }
 
-func TestMigrateDeclaredExecutionModeMakesEveryPlanTypeExplicitAndStripsTheField(t *testing.T) {
+func TestMigrateDeclaredExecutionModeMakesEveryPlanTypeExplicitAndLeavesConfigAlone(t *testing.T) {
 	plan := &PlanningResponse{Steps: []PlanStepInterface{
-		// Legacy agentic regular: no declared mode -> ran as a sequence; becomes one.
+		// Legacy agentic regular: no declared scripted mode -> the runtime ran it as a sequence; becomes one.
 		&RegularPlanStep{Type: StepTypeRegular, CommonStepFields: CommonStepFields{ID: "legacy", Title: "Legacy", Description: "Legacy agentic work."}, NextStepID: "scripted"},
-		// True scripted step with its script: stays regular, field stripped.
+		// True scripted step with its script: untouched.
 		&RegularPlanStep{Type: StepTypeRegular, CommonStepFields: CommonStepFields{ID: "scripted", Title: "Scripted", Description: "Deterministic."}},
 		// Plain sequence: untouched.
 		testSequenceStep("talk", "Talk"),
@@ -29,6 +29,8 @@ func TestMigrateDeclaredExecutionModeMakesEveryPlanTypeExplicitAndStripsTheField
 	}
 	files, readFile, writeFile := changeStepTypeHarness(t, plan, configs)
 	files[normalizePathForWorkspaceAPI("learnings/scripted/main.py", changeStepTypeTestWorkspace)] = "print('ok')"
+	configPath := normalizePathForWorkspaceAPI("planning/step_config.json", changeStepTypeTestWorkspace)
+	configBefore := files[configPath]
 
 	out, err := runDeclaredModeMigration(t, readFile, writeFile)
 	if err != nil {
@@ -50,32 +52,40 @@ func TestMigrateDeclaredExecutionModeMakesEveryPlanTypeExplicitAndStripsTheField
 	if talk, _, _ := findStepByID(updated.Steps, "talk"); talk.StepType() != StepTypeMessageSeq {
 		t.Fatalf("a plain sequence must be untouched, got %s", talk.StepType())
 	}
-	for _, id := range []string{"scripted", "legacy"} {
-		cfg := MatchStepConfigByID(id, updatedConfigs)
-		if cfg == nil || cfg.DeclaredExecutionMode != "" || cfg.DeclaredExecutionModeReason != "" {
-			t.Fatalf("declared_execution_mode must be stripped from %q, got %+v", id, cfg)
-		}
+	// The runtime still reads declared_execution_mode to tell a scripted step
+	// from a legacy agentic one; stripping it here would break every scripted
+	// step. step_config.json must be byte-for-byte untouched.
+	if files[configPath] != configBefore {
+		t.Fatal("half 1 must not write step_config.json")
 	}
-	if cfg := MatchStepConfigByID("scripted", updatedConfigs); cfg.ExecutionTier != "low" {
-		t.Fatalf("other step_config fields must survive, got %+v", cfg)
+	if cfg := MatchStepConfigByID("scripted", updatedConfigs); cfg == nil || cfg.DeclaredExecutionMode != StepModeScripted || cfg.DeclaredExecutionModeReason != "pure API call" {
+		t.Fatalf("the scripted step's declaration must survive, got %+v", cfg)
 	}
 
 	entry := findChangelogEntry(t, changeStepTypeTestWorkspace, files, "migrate_declared_execution_mode")
-	sawReason := false
 	sawType := false
 	for _, change := range entry.Changes {
-		if change.Field == "declared_execution_mode_reason" && change.OldValue == "pure API call" {
-			sawReason = true
-		}
 		if change.StepID == "legacy" && change.Field == "type" && change.NewValue == string(StepTypeMessageSeq) {
 			sawType = true
 		}
 	}
-	if !sawReason || !sawType {
-		t.Fatalf("changelog must preserve the removed reasons and record the type change, got %+v", entry.Changes)
+	if !sawType {
+		t.Fatalf("changelog must record the type change, got %+v", entry.Changes)
 	}
 	if len(entry.DeletedSteps) != 1 || len(entry.AddedSteps) != 1 {
 		t.Fatalf("changelog must carry the old/new step JSON for the one type change, got deleted=%d added=%d", len(entry.DeletedSteps), len(entry.AddedSteps))
+	}
+
+	// Idempotent: the converted plan has nothing left to convert.
+	out, err = runDeclaredModeMigration(t, readFile, writeFile)
+	if err != nil {
+		t.Fatalf("second run failed: %v", err)
+	}
+	if !strings.Contains(out, `"status":"no_op"`) {
+		t.Fatalf("second run must be a no-op, got %s", out)
+	}
+	if again, _, _ := findStepByID(updated.Steps, "scripted"); again.StepType() != StepTypeRegular {
+		t.Fatal("a second run must not touch the scripted step")
 	}
 }
 
@@ -88,9 +98,12 @@ func TestMigrateDeclaredExecutionModeRepairsADeclaredScriptedSequence(t *testing
 	if _, err := runDeclaredModeMigration(t, readFile, writeFile); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
-	updated, _ := readTestPlanAndConfigs(t, readFile)
+	updated, configs := readTestPlanAndConfigs(t, readFile)
 	if step, _, _ := findStepByID(updated.Steps, "drifted"); step.StepType() != StepTypeRegular {
 		t.Fatalf("a declared-scripted sequence must become regular (PLAT-280 drift), got %s", step.StepType())
+	}
+	if cfg := MatchStepConfigByID("drifted", configs); cfg == nil || cfg.DeclaredExecutionMode != StepModeScripted {
+		t.Fatalf("its scripted declaration must survive so the runtime keeps running main.py, got %+v", cfg)
 	}
 }
 
@@ -101,21 +114,23 @@ func TestMigrateDeclaredExecutionModeRefusesADeclaredScriptedStepWithoutAScript(
 	}}
 	files, readFile, writeFile := changeStepTypeHarness(t, plan, []StepConfig{{ID: "no-script", AgentConfigs: &AgentConfigs{DeclaredExecutionMode: StepModeScripted}}})
 	planBefore := files[normalizePathForWorkspaceAPI("planning/plan.json", changeStepTypeTestWorkspace)]
-	configBefore := files[normalizePathForWorkspaceAPI("planning/step_config.json", changeStepTypeTestWorkspace)]
 
 	_, err := runDeclaredModeMigration(t, readFile, writeFile)
 	if err == nil || !strings.Contains(err.Error(), "no-script") {
 		t.Fatalf("expected a refusal naming the broken step, got err=%v", err)
 	}
-	if files[normalizePathForWorkspaceAPI("planning/plan.json", changeStepTypeTestWorkspace)] != planBefore ||
-		files[normalizePathForWorkspaceAPI("planning/step_config.json", changeStepTypeTestWorkspace)] != configBefore {
-		t.Fatal("a refusal must leave plan.json and step_config.json untouched -- including the legacy step it would otherwise have converted")
+	if files[normalizePathForWorkspaceAPI("planning/plan.json", changeStepTypeTestWorkspace)] != planBefore {
+		t.Fatal("a refusal must leave plan.json untouched -- including the legacy step it would otherwise have converted")
 	}
 }
 
 func TestMigrateDeclaredExecutionModeIsANoOpOnACleanWorkflow(t *testing.T) {
-	plan := &PlanningResponse{Steps: []PlanStepInterface{testSequenceStep("talk", "Talk")}}
-	files, readFile, writeFile := changeStepTypeHarness(t, plan, []StepConfig{{ID: "talk", AgentConfigs: &AgentConfigs{ExecutionTier: "high"}}})
+	plan := &PlanningResponse{Steps: []PlanStepInterface{
+		testSequenceStep("talk", "Talk"),
+		&RegularPlanStep{Type: StepTypeRegular, CommonStepFields: CommonStepFields{ID: "scripted", Title: "Scripted", Description: "Deterministic."}},
+	}}
+	files, readFile, writeFile := changeStepTypeHarness(t, plan, []StepConfig{{ID: "scripted", AgentConfigs: &AgentConfigs{DeclaredExecutionMode: StepModeScripted}}})
+	files[normalizePathForWorkspaceAPI("learnings/scripted/main.py", changeStepTypeTestWorkspace)] = "print('ok')"
 	before := len(files)
 
 	out, err := runDeclaredModeMigration(t, readFile, writeFile)

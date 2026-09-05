@@ -25,32 +25,34 @@ type declaredModeTypeChange struct {
 	after  PlanStepInterface
 }
 
-// declaredModeRemoval records one step_config entry the field was stripped from.
-type declaredModeRemoval struct {
-	StepID string `json:"step_id"`
-	Mode   string `json:"mode"`
-	Reason string `json:"reason,omitempty"`
-}
-
 type declaredModeMigrationResult struct {
-	Configs     []StepConfig             `json:"-"`
 	TypeChanges []declaredModeTypeChange `json:"type_changes"`
-	Removals    []declaredModeRemoval    `json:"removals"`
 }
 
 func (r *declaredModeMigrationResult) noOp() bool {
-	return len(r.TypeChanges) == 0 && len(r.Removals) == 0
+	return len(r.TypeChanges) == 0
 }
 
 // migrateDeclaredExecutionModeInPlan makes the plan say explicitly what the
-// runtime already did (PLAT-287): a regular step without a declared scripted
-// mode was the legacy agentic shape that ran as a message_sequence, so it
-// becomes one; a message_sequence still declared scripted (PLAT-280 drift)
-// becomes regular; then declared_execution_mode and its reason are stripped
-// from every step_config entry. Two passes: the first only looks for the one
-// case this refuses to guess about -- a step declared scripted with no
-// learnings/<id>/main.py, which is already broken -- so a refusal leaves
-// plan and configs untouched.
+// runtime already did (PLAT-287, half 1): a regular step without a declared
+// scripted mode is the legacy agentic shape that the runtime normalizes to a
+// message_sequence at execution time (shouldNormalizeRegularStepToMessageSequence),
+// so it becomes one on disk; a message_sequence still declared scripted
+// (PLAT-280 drift) becomes regular. After this, every regular step in the
+// plan is a declared scripted step, which is what lets a later release make
+// the plan type alone decide the model and delete the field.
+//
+// It deliberately does NOT strip declared_execution_mode from step_config:
+// today's runtime still reads it to tell a scripted regular step from a
+// legacy agentic one, so removing it here would turn every real scripted
+// step into a message_sequence whose main.py never runs -- caught in review
+// before this ever ran anywhere. The field goes in the same release as the
+// runtime rule that makes it redundant, not before.
+//
+// Two passes: the first only looks for the one case this refuses to guess
+// about -- a step declared scripted with no learnings/<id>/main.py, which is
+// already broken -- so a refusal leaves the plan untouched. Idempotent: a
+// second run finds every regular step declared scripted and does nothing.
 func migrateDeclaredExecutionModeInPlan(plan *PlanningResponse, configs []StepConfig, scriptExists func(stepID string) bool) (*declaredModeMigrationResult, error) {
 	if plan == nil {
 		return nil, fmt.Errorf("plan is unavailable")
@@ -79,8 +81,8 @@ func migrateDeclaredExecutionModeInPlan(plan *PlanningResponse, configs []StepCo
 		return nil, fmt.Errorf("refusing to migrate: step(s) %s are declared scripted but have no learnings/<step-id>/main.py -- they are already broken, and this migration will not guess whether each should become a message_sequence (change_step_type target_type=message_sequence) or get its script written (update_scripted_step code=...); fix them first, then re-run", strings.Join(broken, ", "))
 	}
 
-	// Pass 2: rewrite plan types.
-	result := &declaredModeMigrationResult{Configs: configs}
+	// Pass 2: rewrite plan types so every regular step is a declared scripted one.
+	result := &declaredModeMigrationResult{}
 	replace := func(stepID string, replacement PlanStepInterface) error {
 		replaced, _ := replaceStepRecursively(plan.Steps, stepID, replacement)
 		if !replaced {
@@ -95,7 +97,7 @@ func migrateDeclaredExecutionModeInPlan(plan *PlanningResponse, configs []StepCo
 		switch step := info.Step.(type) {
 		case *RegularPlanStep:
 			if declaredScripted(step.GetID()) {
-				continue // a true scripted step: type already says so
+				continue // a true scripted step: type and declaration agree
 			}
 			replacement := normalizeRegularStepToMessageSequence(step)
 			if err := replace(step.GetID(), replacement); err != nil {
@@ -117,29 +119,15 @@ func migrateDeclaredExecutionModeInPlan(plan *PlanningResponse, configs []StepCo
 			})
 		}
 	}
-
-	// Pass 3: strip the field everywhere, preserving what it said.
-	for i := range result.Configs {
-		cfg := result.Configs[i].AgentConfigs
-		if cfg == nil || (cfg.DeclaredExecutionMode == "" && cfg.DeclaredExecutionModeReason == "") {
-			continue
-		}
-		result.Removals = append(result.Removals, declaredModeRemoval{
-			StepID: result.Configs[i].ID,
-			Mode:   canonicalDeclaredExecutionMode(cfg.DeclaredExecutionMode),
-			Reason: strings.TrimSpace(cfg.DeclaredExecutionModeReason),
-		})
-		cfg.DeclaredExecutionMode = ""
-		cfg.DeclaredExecutionModeReason = ""
-	}
 	return result, nil
 }
 
 // createMigrateDeclaredExecutionModeExecutor is the trusted tool behind the
 // v1.0.38 contract upgrade (see upgradeDeclaredExecutionModeRetired in
-// cmd/server). It changes no behavior: it writes down the execution model
-// each step already had, in the one place that will carry it from now on --
-// the plan type -- and records the removed declarations in the changelog.
+// cmd/server). It changes no behavior and touches only planning/plan.json:
+// it writes down, as the plan type, the execution model each step already
+// had. step_config.json is read (to tell scripted from legacy agentic) but
+// never written.
 func createMigrateDeclaredExecutionModeExecutor(
 	workspacePath string,
 	logger loggerv2.Logger,
@@ -169,7 +157,7 @@ func createMigrateDeclaredExecutionModeExecutor(
 			return "", err
 		}
 		if result.noOp() {
-			return `{"status":"no_op","message":"Every plan type already states its execution model and no step_config entry carries declared_execution_mode."}`, nil
+			return `{"status":"no_op","message":"Every regular step is already a declared scripted step and no message_sequence is declared scripted; the plan already states each step's execution model."}`, nil
 		}
 
 		if err := validatePlanStepIDs(plan.Steps); err != nil {
@@ -184,22 +172,15 @@ func createMigrateDeclaredExecutionModeExecutor(
 		if err := ValidatePlanStructure(plan); err != nil {
 			return "", fmt.Errorf("validate migrated plan: %w", err)
 		}
-
-		if len(result.TypeChanges) > 0 {
-			if err := writePlanToFile(ctx, workspacePath, plan, readFile, writeFile, logger); err != nil {
-				return "", fmt.Errorf("write migrated planning/plan.json: %w", err)
-			}
-		}
-		if len(result.Removals) > 0 {
-			if err := writeStepConfigViaFileCallback(ctx, workspacePath, result.Configs, writeFile); err != nil {
-				return "", fmt.Errorf("plan.json is migrated but writing planning/step_config.json failed: %w -- re-run migrate_declared_execution_mode; it is idempotent", err)
-			}
+		if err := writePlanToFile(ctx, workspacePath, plan, readFile, writeFile, logger); err != nil {
+			return "", fmt.Errorf("write migrated planning/plan.json: %w", err)
 		}
 		after, _ := json.Marshal(plan)
 
-		stepIDs := make([]string, 0, len(result.TypeChanges)+len(result.Removals))
-		changes := make([]PlanFieldChange, 0, len(result.TypeChanges)+2*len(result.Removals))
+		stepIDs := make([]string, 0, len(result.TypeChanges))
+		changes := make([]PlanFieldChange, 0, len(result.TypeChanges))
 		var deleted, added []json.RawMessage
+		toSequence, toRegular := 0, 0
 		for _, change := range result.TypeChanges {
 			stepIDs = append(stepIDs, change.StepID)
 			changes = append(changes, PlanFieldChange{StepID: change.StepID, Field: "type", OldValue: change.From, NewValue: change.To})
@@ -209,18 +190,6 @@ func createMigrateDeclaredExecutionModeExecutor(
 			if raw, err := json.Marshal(change.after); err == nil {
 				added = append(added, raw)
 			}
-		}
-		for _, removal := range result.Removals {
-			stepIDs = append(stepIDs, removal.StepID)
-			changes = append(changes, PlanFieldChange{StepID: removal.StepID, Field: "declared_execution_mode", OldValue: removal.Mode, NewValue: ""})
-			if removal.Reason != "" {
-				// The reason is the one thing the field carried that the plan
-				// type cannot: keep it here rather than lose it.
-				changes = append(changes, PlanFieldChange{StepID: removal.StepID, Field: "declared_execution_mode_reason", OldValue: removal.Reason, NewValue: ""})
-			}
-		}
-		toSequence, toRegular := 0, 0
-		for _, change := range result.TypeChanges {
 			if change.To == string(StepTypeMessageSeq) {
 				toSequence++
 			} else {
@@ -230,10 +199,10 @@ func createMigrateDeclaredExecutionModeExecutor(
 		logPlanChange(ctx, workspacePath, PlanChangelogEntry{
 			Tool: "migrate_declared_execution_mode",
 			Reason: fmt.Sprintf(
-				"Workflow contract v%s (PLAT-287): the plan type alone now states a step's execution model. %d legacy agentic regular step(s) made explicit as message_sequence, %d declared-scripted message_sequence step(s) made regular, declared_execution_mode removed from %d step_config entr(y/ies); behavior unchanged, removed reasons preserved in this entry.",
-				workflowContractDeclaredExecutionModeRetiredVersionLabel, toSequence, toRegular, len(result.Removals),
+				"Workflow contract v%s (PLAT-287, half 1): the plan type now states each step's execution model explicitly. %d legacy agentic regular step(s) made message_sequence (the runtime already ran them as one), %d declared-scripted message_sequence step(s) made regular; step_config.json untouched -- declared_execution_mode stays until the runtime stops reading it.",
+				workflowContractDeclaredExecutionModeRetiredVersionLabel, toSequence, toRegular,
 			),
-			StepIDs:        deduplicateStrings(stepIDs),
+			StepIDs:        stepIDs,
 			Changes:        changes,
 			DeletedSteps:   deleted,
 			AddedSteps:     added,
@@ -242,20 +211,7 @@ func createMigrateDeclaredExecutionModeExecutor(
 		}, readFile, writeFile, logger)
 
 		payload, _ := json.Marshal(result)
-		logger.Info(fmt.Sprintf("✅ migrate_declared_execution_mode: %d type change(s), %d field removal(s)", len(result.TypeChanges), len(result.Removals)))
+		logger.Info(fmt.Sprintf("✅ migrate_declared_execution_mode: %d type change(s)", len(result.TypeChanges)))
 		return fmt.Sprintf(`{"status":"migrated","result":%s}`, payload), nil
 	}
-}
-
-func deduplicateStrings(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
 }
