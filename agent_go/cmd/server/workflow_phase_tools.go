@@ -68,9 +68,9 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 	log.Printf("[PHASE_TOOL_RACE] PHASE_TOOL_REGISTER_START for session=%s phase=%s",
 		sessionID, workflowPhaseID)
 	phaseRegisterStart := time.Now()
-	// Every phase gets the toolbar: opening a view changes nothing in the
-	// workflow, so it needs no write access.
-	if err := api.registerOpenWorkspaceViewTool(definitionAgent, sessionID, phaseWorkspacePath); err != nil {
+	// Only an interactive Builder has a UI to control. Schedules share this
+	// phase, so decide by origin/ownership, not WorkshopMode or write access.
+	if err := api.registerWorkflowUIForCaller(definitionAgent, workflowPhaseID, sessionID, phaseWorkspacePath, syntheticReq); err != nil {
 		return fmt.Errorf("register open_workspace_view: %w", err)
 	}
 	switch workflowPhaseID {

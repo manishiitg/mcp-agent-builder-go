@@ -223,6 +223,7 @@ function InspectorBody({ workspacePath, presetQueryId }: { workspacePath: string
       }
     >
       {renderInspector(workflowWorkspaceView)}
+      <span hidden data-ui-view-mounted />
     </Suspense>
   )
 }
@@ -591,10 +592,13 @@ export const WorkspaceViewHost = React.memo(forwardRef<WorkflowCanvasRef, Workfl
         )}
         <div
           data-tour="workflow-canvas-pane"
+          data-ui-workspace={embeddedPlanOnly ? undefined : workspacePath ?? undefined}
+          data-ui-view={effectiveView}
           data-testid="tour-workflow-canvas-pane"
           className={`${gridToolbar ? 'flex-1 col-start-1 row-start-2 md:col-start-2' : 'flex-1'} ${paneClassName} min-h-0 ${isInspectorKind ? 'overflow-hidden border-l border-border' : ''}`}
         >
           {body}
+          {!isInspectorKind && !toolbarOnly && <span hidden data-ui-view-mounted />}
         </div>
       </div>
     </WorkspaceViewDataContext.Provider>

@@ -4,7 +4,7 @@
 
 | Coordination | Value |
 |---|---|
-| State | Proposed / ready for design breakdown; not implemented |
+| State | Partially implemented locally: acknowledged AgentWorks baseline + Notify expansion; remaining adapters and rollout gates open |
 | Date | 2026-09-05 |
 | Priority | Proposed P1 platform capability |
 | Type | Platform enhancement and UI-action reliability |
@@ -292,7 +292,61 @@ After changing data with a backend tool, request refresh and verify its receipt.
 - Whether later phases allow unsaved form drafts: if added, drafts must be
   explicitly labeled and never auto-submit or override user edits.
 
-## Completion / deployment record
+## Implementation record — 2026-09-05
 
-Ticket created only. No runtime changes, external ticket creation, server
-deployment, user-message send or issue-resolution count change is claimed here.
+Local baseline added after pulling main through `f56feeda9`:
+
+- Builder-only registration: all six UI tools (including legacy open/refresh)
+  are excluded at definition construction for cron/manual schedules, persisted
+  scheduled origins, typed/Pulse children, bots, product profiles and automatic
+  notification turns. Read-only human Builders retain presentation access.
+  Explicit interactive promotion is distinguished from merely observing a run
+  or retaining its native CLI. Role changes invalidate existing UI leases.
+  The synthetic request now preserves the origin fields needed for this decision;
+  shared workflow skills and execution tools are unchanged.
+
+- Canonical embedded `ui_control_contract.json` drives Go capability/tool IDs and
+  generated `frontend/src/platform/ui-control/contract.generated.ts`. A test
+  checks all 22 entries against the actual toolbar registry. Generate with
+  `node frontend/scripts/generate-ui-control.mjs`; `--check` verifies freshness.
+- Four tools: `list_ui_capabilities`, `get_ui_state`, `perform_ui_action`,
+  `get_ui_action_result`. State is bounded to view, visibility, revision and
+  observation time; no DOM/content/secrets or connection discovery.
+- Authenticated `/sessions/{session_id}/ui-control` checks live-session ownership
+  and current workflow access. Opaque per-mount leases remain memory-only;
+  mismatched scopes/tokens, ownerless chats and ambiguous browsers fail closed.
+- SSE is a wake-up only. The broker atomically claims commands for a single
+  binding, waits up to 10 seconds, expires disconnected leases, deduplicates
+  request keys, bounds storage and retains receipts for ten minutes. Scope
+  changes/unmount cancel pending work; an uncertain outcome is never replayed.
+- Shared frontend host acknowledges actual shell mounting and visibility.
+  **Opening does not certify all data loads.** Notify `expand` targets
+  `run_summary` / `pulse_review` additionally verify the real instructions
+  disclosure is open and visible. No sends or settings changes occur.
+- Legacy open/refresh tools remain operational; their results and activity
+  labels now explicitly describe unverified requests, not completed rendering.
+- Logs record request/view/action/status/reason only, not targets, tokens or
+  sensitive snapshots. Guidance explains capability discovery and receipts.
+
+### Verification and remaining work
+
+Focused Go tests cover registry/mutation rejection, disconnected and ambiguous
+browsers, duplicate keys, scope and receipt isolation, stale revisions, expiry,
+unbinding, redacted state and HTTP rejection of foreign/ownerless sessions.
+Frontend contract/disclosure tests and TypeScript compile pass. A Chromium smoke
+test (`node scripts/test-ui-control-browser.mjs` from frontend, with Playwright
+available) exercises the actual Notify component plus semantic adapter: hidden
+pane + lazy mount, stale revision, abort, expired request, missing target and
+user interruption. This is **not** the complete application/backend integration
+test required by acceptance criterion 3.
+
+Still open: runtime adapter intersection beyond this fixed AgentWorks host;
+verified refresh/data completion; deep Plan/Report/Files and remaining view
+adapters; full product/iframe integration; legacy wrappers on the new engine;
+permission-matrix, end-to-end transport, reconnect/multi-user and rollout tests.
+Unsupported deep/refresh actions are rejected, never advertised as no-ops.
+Baseline deployed to RTS on 2026-09-05 as release
+`e2e851bd9-20260905133957` (main plus these local changes). All three services
+were active, `/api/health` reported healthy/idle, and the public site returned
+HTTP 200. This records service health, not full UI acceptance coverage.
+No external sends or ticket-completion claim.

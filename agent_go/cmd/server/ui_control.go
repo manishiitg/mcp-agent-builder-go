@@ -1,0 +1,354 @@
+package server
+
+// The broker holds only allowlisted presentation state. It never accepts DOM,
+// credentials, URLs, or caller-selected user/workflow/product identities.
+import (
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+//go:embed ui_control_contract.json
+var uiControlContractJSON []byte
+
+type uiViewCapability struct {
+	ID      string   `json:"id"`
+	Label   string   `json:"label"`
+	Actions []string `json:"actions"`
+	Targets []string `json:"targets"`
+}
+type uiContract struct {
+	Version int                `json:"version"`
+	Product string             `json:"product"`
+	Views   []uiViewCapability `json:"views"`
+}
+
+var uiControlContract = func() uiContract {
+	var c uiContract
+	if err := json.Unmarshal(uiControlContractJSON, &c); err != nil {
+		panic(err)
+	}
+	return c
+}()
+
+type uiSnapshot struct {
+	ObservedAt time.Time `json:"observed_at"`
+	View       string    `json:"view"`
+	Revision   int64     `json:"revision"`
+	Visible    bool      `json:"visible"`
+}
+type uiAction struct {
+	RequestID                          string    `json:"request_id"`
+	View                               string    `json:"view"`
+	Action                             string    `json:"action"`
+	Target                             string    `json:"target,omitempty"`
+	ExpectedRevision                   *int64    `json:"expected_state_revision,omitempty"`
+	Status                             string    `json:"status"`
+	Code                               string    `json:"code,omitempty"`
+	Visible                            bool      `json:"visible"`
+	Revision                           int64     `json:"state_revision"`
+	ExpiresAt                          time.Time `json:"expires_at"`
+	session, binding, key, fingerprint string
+	done                               chan struct{}
+}
+type uiBinding struct {
+	id, token, session string
+	seen               time.Time
+	state              uiSnapshot
+}
+type uiControlBroker struct {
+	mu       sync.Mutex
+	bindings map[string]*uiBinding
+	actions  map[string]*uiAction
+	scopes   map[string]string
+	now      func() time.Time
+}
+
+func newUIControlBroker() *uiControlBroker {
+	return &uiControlBroker{bindings: map[string]*uiBinding{}, actions: map[string]*uiAction{}, scopes: map[string]string{}, now: time.Now}
+}
+func (api *StreamingAPI) uiBroker() *uiControlBroker {
+	api.uiControlOnce.Do(func() { api.uiControl = newUIControlBroker() })
+	return api.uiControl
+}
+func (b *uiControlBroker) setScope(session, workspace string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if previous := b.scopes[session]; previous != "" && previous != workspace {
+		for id, c := range b.bindings {
+			if c.session == session {
+				delete(b.bindings, id)
+			}
+		}
+		for _, a := range b.actions {
+			if a.session == session {
+				b.finish(a, "cancelled", "inactive_scope")
+			}
+		}
+	}
+	// Registration is server-owned. Scope must never come from a browser body.
+	if len(b.scopes) < 4096 || b.scopes[session] != "" {
+		b.scopes[session] = workspace
+	}
+}
+func (b *uiControlBroker) scope(session string) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.scopes[session]
+}
+func uiTerminal(status string) bool { return status != "accepted" && status != "applying" }
+func (b *uiControlBroker) finish(a *uiAction, status, code string) {
+	if uiTerminal(a.Status) {
+		return
+	}
+	a.Status, a.Code = status, code
+	log.Printf("[UI-CONTROL] request=%s view=%s action=%s status=%s code=%s", a.RequestID, a.View, a.Action, status, code)
+	close(a.done)
+}
+func (b *uiControlBroker) prune() {
+	now := b.now()
+	for id, c := range b.bindings {
+		if now.Sub(c.seen) > 15*time.Second {
+			delete(b.bindings, id)
+			for _, a := range b.actions {
+				if a.binding == id {
+					b.finish(a, "expired", "browser_disconnected")
+				}
+			}
+		}
+	}
+	for id, a := range b.actions {
+		if !now.Before(a.ExpiresAt) {
+			b.finish(a, "expired", "timeout")
+		}
+		if now.Sub(a.ExpiresAt) > 10*time.Minute {
+			delete(b.actions, id)
+		}
+	}
+}
+func (b *uiControlBroker) bind(session string) (*uiBinding, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.prune()
+	if len(b.bindings) >= 256 {
+		return nil, fmt.Errorf("capacity_exceeded")
+	}
+	c := &uiBinding{id: uuid.NewString(), token: uuid.NewString(), session: session, seen: b.now()}
+	b.bindings[c.id] = c
+	copy := *c
+	return &copy, nil
+}
+func (b *uiControlBroker) client(session, id, token string) (*uiBinding, error) {
+	c := b.bindings[id]
+	if c == nil || c.session != session || c.token != token {
+		return nil, fmt.Errorf("inactive_scope")
+	}
+	return c, nil
+}
+func (b *uiControlBroker) unbind(session, id, token string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, err := b.client(session, id, token); err != nil {
+		return err
+	}
+	delete(b.bindings, id)
+	for _, a := range b.actions {
+		if a.binding == id {
+			b.finish(a, "cancelled", "inactive_scope")
+		}
+	}
+	return nil
+}
+func validUIView(view string) bool {
+	for _, v := range uiControlContract.Views {
+		if v.ID == view {
+			return true
+		}
+	}
+	return false
+}
+func validateUIAction(view, action, target string) error {
+	for _, v := range uiControlContract.Views {
+		if v.ID != view {
+			continue
+		}
+		found := false
+		for _, a := range v.Actions {
+			if action == a {
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("unsupported_action")
+		}
+		if action == "open" && target == "" {
+			return nil
+		}
+		if action == "expand" {
+			for _, t := range v.Targets {
+				if t == target {
+					return nil
+				}
+			}
+		}
+		return fmt.Errorf("unsupported_target")
+	}
+	return fmt.Errorf("unsupported_view")
+}
+func (b *uiControlBroker) snapshot(session string) (uiSnapshot, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.prune()
+	c, err := b.onlyClient(session)
+	if err != nil {
+		return uiSnapshot{}, err
+	}
+	return c.state, nil
+}
+func (b *uiControlBroker) onlyClient(session string) (*uiBinding, error) {
+	var found *uiBinding
+	for _, c := range b.bindings {
+		if c.session == session {
+			if found != nil {
+				return nil, fmt.Errorf("ambiguous_client")
+			}
+			found = c
+		}
+	}
+	if found == nil {
+		return nil, fmt.Errorf("browser_disconnected")
+	}
+	return found, nil
+}
+func (b *uiControlBroker) submit(session, view, action, target, key string, revision *int64) (uiAction, bool, error) {
+	if err := validateUIAction(view, action, target); err != nil {
+		return uiAction{}, false, err
+	}
+	if len(key) > 128 {
+		return uiAction{}, false, fmt.Errorf("invalid_idempotency_key")
+	}
+	fp, _ := json.Marshal([]interface{}{view, action, target, revision})
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.prune()
+	if key != "" {
+		for _, a := range b.actions {
+			if a.session == session && a.key == key {
+				if a.fingerprint != string(fp) {
+					return uiAction{}, false, fmt.Errorf("idempotency_conflict")
+				}
+				return *a, false, nil
+			}
+		}
+	}
+	c, err := b.onlyClient(session)
+	if err != nil {
+		return uiAction{}, false, err
+	}
+	if revision != nil && *revision != c.state.Revision {
+		return uiAction{}, false, fmt.Errorf("stale_state")
+	}
+	for _, a := range b.actions {
+		if a.session == session && !uiTerminal(a.Status) {
+			return uiAction{}, false, fmt.Errorf("action_in_progress")
+		}
+	}
+	if len(b.actions) >= 2048 {
+		return uiAction{}, false, fmt.Errorf("capacity_exceeded")
+	}
+	a := &uiAction{RequestID: uuid.NewString(), View: view, Action: action, Target: target, ExpectedRevision: revision, Status: "accepted", ExpiresAt: b.now().Add(10 * time.Second), session: session, binding: c.id, key: key, fingerprint: string(fp), done: make(chan struct{})}
+	b.actions[a.RequestID] = a
+	return *a, true, nil
+}
+
+// Sync atomically claims accepted commands. SSE is a wake-up only; historical
+// presentations and duplicate events cannot re-execute an already claimed action.
+func (b *uiControlBroker) syncClient(session, id, token string, state uiSnapshot) ([]uiAction, error) {
+	if state.Revision < 0 || (state.View != "" && !validUIView(state.View)) {
+		return nil, fmt.Errorf("invalid_state")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.prune()
+	c, err := b.client(session, id, token)
+	if err != nil {
+		return nil, err
+	}
+	if state.Revision < c.state.Revision {
+		return nil, fmt.Errorf("stale_state")
+	}
+	c.seen = b.now()
+	state.ObservedAt = c.seen
+	c.state = state
+	result := []uiAction{}
+	for _, a := range b.actions {
+		if a.binding == id && a.Status == "accepted" {
+			if a.ExpectedRevision != nil && *a.ExpectedRevision != state.Revision {
+				b.finish(a, "rejected", "stale_state")
+				continue
+			}
+			a.Status = "applying"
+			result = append(result, *a)
+		}
+	}
+	return result, nil
+}
+func (b *uiControlBroker) ack(session, id, token, request, status, code string, state uiSnapshot) error {
+	if state.Revision < 0 || (state.View != "" && !validUIView(state.View)) {
+		return fmt.Errorf("invalid_state")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.prune()
+	c, err := b.client(session, id, token)
+	if err != nil {
+		return err
+	}
+	a := b.actions[request]
+	if a == nil || a.session != session || a.binding != id {
+		return fmt.Errorf("unknown_request")
+	}
+	if uiTerminal(a.Status) {
+		return nil
+	}
+	if a.Status != "applying" {
+		return fmt.Errorf("invalid_transition")
+	}
+	if state.Revision < c.state.Revision {
+		return fmt.Errorf("stale_state")
+	}
+	if status == "applied" {
+		if !state.Visible || state.View != a.View || code != "" {
+			return fmt.Errorf("invalid_receipt")
+		}
+	} else if status == "failed" || status == "rejected" || status == "cancelled" {
+		switch code {
+		case "target_not_found", "render_failed", "user_interrupted", "inactive_scope", "stale_state", "timeout":
+		default:
+			return fmt.Errorf("invalid_receipt")
+		}
+	} else {
+		return fmt.Errorf("invalid_receipt")
+	}
+	a.Visible = status == "applied"
+	a.Revision = state.Revision
+	state.ObservedAt = b.now()
+	c.state = state
+	b.finish(a, status, code)
+	return nil
+}
+func (b *uiControlBroker) result(session, id string) (uiAction, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.prune()
+	a := b.actions[id]
+	if a == nil || a.session != session {
+		return uiAction{}, fmt.Errorf("unknown_request")
+	}
+	return *a, nil
+}

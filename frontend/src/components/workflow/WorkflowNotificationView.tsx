@@ -221,7 +221,7 @@ export default function WorkflowNotificationView({
                           {summary.slackWebhooks.map(secret => <span key={secret} className={`${chipChannel} font-mono`} title="Slack webhook secret">#{secret}</span>)}
                         </div>
                         {summary.instructions && (
-                          <NotificationInstructions title={summary.title} instructions={summary.instructions} />
+                          <NotificationInstructions target={summary.key === 'run' ? 'run_summary' : 'pulse_review'} title={summary.title} instructions={summary.instructions} />
                         )}
                       </div>
                     ))}

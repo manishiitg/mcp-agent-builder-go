@@ -8,8 +8,10 @@ semantic actions, browser receipts and generated contracts. Covers all 22
 current workspace views plus AgentWorks, Video Studio, Dominion, Activity,
 file/media previews and report widgets. Includes permissions, privacy,
 multi-tab/reconnect handling, phased rollout and acceptance tests.
-**Proposed; documentation only.** No runtime implementation or deployment and
-no change to live issue-resolution counts.
+**Baseline deployed to RTS; partially implemented.** The acknowledged AgentWorks baseline and
+Notify instruction expansion are implemented; deeper adapters, product coverage
+and full end-to-end rollout proof remain open. No change to live
+issue-resolution counts. See PLAT-292's implementation record.
 
 ## Public finding ID preservation — PLAT-291
 

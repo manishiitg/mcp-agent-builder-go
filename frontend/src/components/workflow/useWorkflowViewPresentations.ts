@@ -8,12 +8,14 @@ import { useChatStore } from '../../stores/useChatStore'
 import { useWorkflowStore } from '../../stores/useWorkflowStore'
 import { usePresentationEvents } from '../../platform/presentations/usePresentationEvents'
 import { isWorkspaceViewId } from './workspaceViews'
+import { useWorkspaceUIControl } from '../../platform/ui-control/useWorkspaceUIControl'
 
 export const WORKFLOW_VIEW_PRESENTATION_KIND = 'workflow.view'
 const KINDS = [WORKFLOW_VIEW_PRESENTATION_KIND]
 
 export function useWorkflowViewPresentations(tabId: string | null | undefined): void {
   const sessionId = useChatStore(state => (tabId ? state.chatTabs[tabId]?.sessionId : undefined))
+  useWorkspaceUIControl(sessionId ?? undefined)
   const openWorkspaceView = useWorkflowStore(state => state.openWorkspaceView)
   const presentations = usePresentationEvents(sessionId ?? undefined, KINDS)
   const handed = useRef<{ sessionId: string; count: number } | null>(null)

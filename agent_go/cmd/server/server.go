@@ -332,6 +332,8 @@ type ActiveSessionInfo struct {
 
 // StreamingAPI represents the streaming API server
 type StreamingAPI struct {
+	uiControlOnce    sync.Once
+	uiControl        *uiControlBroker
 	config           ServerConfig
 	cliSecurityStore *clisecurity.Store
 	agentProfiles    *agentprofiles.Registry
@@ -2152,6 +2154,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	// active sessions + workflow schedule counts in one round trip.
 	apiRouter.HandleFunc("/header-summary", api.handleGetHeaderSummary).Methods("GET")
 	apiRouter.HandleFunc("/sessions/{session_id}/events", api.handleGetSessionEvents).Methods("GET")
+	apiRouter.HandleFunc("/sessions/{session_id}/ui-control", api.handleUIControl).Methods("POST")
 	apiRouter.HandleFunc("/sessions/{session_id}/events/stream", api.handleSSEStream).Methods("GET")
 	apiRouter.HandleFunc("/sessions/{session_id}/reconnect", api.handleReconnectSession).Methods("POST")
 	apiRouter.HandleFunc("/sessions/{session_id}/status", api.handleGetSessionStatus).Methods("GET")
@@ -5983,11 +5986,18 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				// surface — there is no per-turn narrowing for one path to
 				// apply and the other to miss.
 				syntheticReq := QueryRequest{
-					LLMConfig:             req.LLMConfig,
-					ExecutionOptions:      req.ExecutionOptions,
-					SelectedGlobalSecrets: req.SelectedGlobalSecrets,
-					DecryptedSecrets:      req.DecryptedSecrets,
-					PresetQueryID:         req.PresetQueryID,
+					TriggeredBy:                 req.TriggeredBy,
+					ParentSessionID:             req.ParentSessionID,
+					SessionKind:                 req.SessionKind,
+					BotPlatform:                 req.BotPlatform,
+					AgentProfileID:              req.AgentProfileID,
+					IsAutoNotification:          req.IsAutoNotification,
+					UserInteractiveContinuation: req.UserInteractiveContinuation,
+					LLMConfig:                   req.LLMConfig,
+					ExecutionOptions:            req.ExecutionOptions,
+					SelectedGlobalSecrets:       req.SelectedGlobalSecrets,
+					DecryptedSecrets:            req.DecryptedSecrets,
+					PresetQueryID:               req.PresetQueryID,
 				}
 				if err := api.installWorkflowPhaseTools(
 					setupCtx, llmAgent, sessionID, currentUserID,

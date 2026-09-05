@@ -69,7 +69,7 @@ func TestOpenWorkspaceViewToolOpensAKnownViewAndRefusesOthers(t *testing.T) {
 		t.Fatalf("event = %+v err=%v", ev, err)
 	}
 	rv, err := workspaceViewAction("report", "Workflow/x", "refresh", "")
-	if err != nil || rv.Payload["action"] != "refresh" || rv.Activity.Label != "Refreshed" || rv.PresentationID == ev.PresentationID {
+	if err != nil || rv.Payload["action"] != "refresh" || rv.Activity.Label != "Refresh requested" || rv.PresentationID == ev.PresentationID {
 		t.Fatalf("refresh event = %+v err=%v", rv, err)
 	}
 }

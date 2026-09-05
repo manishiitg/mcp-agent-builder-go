@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { WORKSPACE_VIEWS } from './workspaceViews'
+import { UI_CONTROL_CONTRACT } from '../../platform/ui-control/contract.generated'
 
 // The agent's open_workspace_view tool (agent_go/cmd/server/workflow_view_tool.go)
 // carries its own copy of the view ids, since Go cannot read this registry.
@@ -9,10 +10,9 @@ import { WORKSPACE_VIEWS } from './workspaceViews'
 // open and the agent never offers a view that does not exist.
 describe('open_workspace_view mirrors the workspace view registry', () => {
   it('lists exactly the registered view ids', () => {
-    const goFile = resolve(__dirname, '../../../../agent_go/cmd/server/workflow_view_tool.go')
-    const source = readFileSync(goFile, 'utf8')
-    const block = source.slice(source.indexOf('var workflowWorkspaceViews'), source.indexOf('}\n\n', source.indexOf('var workflowWorkspaceViews')))
-    const goIds = Array.from(block.matchAll(/\{"([a-z-]+)", "/g)).map(m => m[1])
-    expect(goIds).toEqual(WORKSPACE_VIEWS.map(v => v.id))
+    const contractFile = resolve(__dirname, '../../../../agent_go/cmd/server/ui_control_contract.json')
+    const contract = JSON.parse(readFileSync(contractFile, 'utf8'))
+    expect(contract).toEqual(UI_CONTROL_CONTRACT)
+    expect(UI_CONTROL_CONTRACT.views.map(v => v.id)).toEqual(WORKSPACE_VIEWS.map(v => v.id))
   })
 })

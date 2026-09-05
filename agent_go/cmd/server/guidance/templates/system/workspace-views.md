@@ -1,6 +1,14 @@
 ## WORKSPACE VIEWS
 
-The right-hand pane of the workflow page shows one view at a time; the toolbar above the chat switches between them. `open_workspace_view(view)` puts a view on the user's screen, `refresh_workspace_view(view)` reloads one you changed. Open the view that holds what you are talking about instead of describing where to click.
+UI-control tools belong only to interactive Workflow Builder chats (including
+read-only Builders). Scheduled runs, manually triggered schedules, Pulse/child
+agents and bot conversations do not receive them. Schedules still use the shared
+workflow tools and selected skills; this is an interactive-host capability gate,
+not a separate schedule skill profile. Do not ask a schedule to open or manipulate
+the foreground workspace. Observing a scheduled conversation does not promote it;
+an explicit supported interactive continuation is required.
+
+The right-hand pane of the workflow page shows one view at a time; the toolbar above the chat switches between them. The legacy `open_workspace_view(view)` and `refresh_workspace_view(view)` emit unverified presentation requests. Prefer the acknowledged UI-control tools described below where supported. Request the view that holds what you are talking about instead of describing where to click, but report only what the receipt actually confirms.
 
 ### Views cluster
 | View id | Shows | Open it when |
@@ -49,3 +57,23 @@ Both tools take an optional `target` — what to focus once the view is up. A vi
 | `schedules` | A schedule id or name. |
 
 Views are independent of the chat: opening one changes nothing in the workflow. Prefer one open per reply, the view that best answers what the user asked.
+# Acknowledged UI actions (PLAT-292 baseline)
+
+Prefer `list_ui_capabilities`, `get_ui_state`, `perform_ui_action` and
+`get_ui_action_result` when available. Discover first; only advertise the
+actions in the returned contract. Initial coverage is AgentWorks workspace
+view-shell opening and Notify instruction expansion (`run_summary` or
+`pulse_review`). Other deep targets, refresh receipts and product adapters
+are not yet supported by this protocol.
+
+`applied` means the browser acknowledged the presentation, not that a human
+read it. Opening acknowledges the mounted shell, not all underlying data.
+`accepted`, `applying`, `expired`, and legacy `requested` are not success.
+When a result is uncertain, retrieve it by request ID; never blindly replay
+with a new idempotency key. Reuse a key only for the same intended action.
+Disconnected or ambiguous browsers require user attention, not broadcasting.
+
+The older open/refresh tools remain for compatibility but return unverified
+requests. Do not say their contents were verified or that a refresh succeeded
+from that response alone. Presentation tools cannot send notifications, edit
+settings, run workflows, reveal secrets, or establish MCP connections.
