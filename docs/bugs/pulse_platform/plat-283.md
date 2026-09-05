@@ -51,6 +51,26 @@ separate, both-fixable gaps stacked on top of each other:
    first time pip (or venv) tries to write its cache. That denial looked
    identical to "installs don't work here" from the agent's vantage point,
    but it's a routing gap, not a wall.
+3. Found only by running a *real* `pip install` against the shipped
+   launcher after gaps 1–2 were fixed (the synthetic cache-write probe
+   passed while the real thing still failed): the Landlock read baseline
+   granted an enumerated dozen `/etc` entries (ssl, resolv.conf, passwd,
+   ld.so.*, fonts, ...), and pip reads two more — `/etc/debian_version`
+   (its vendored `distro` module, building the HTTP User-Agent before any
+   network call; it catches `FileNotFoundError` but Landlock denies with
+   `EACCES`, so the `PermissionError` is fatal) and then
+   `/etc/mime.types`. Granting just the distro files moved the failure to
+   `mime.types`; granting all of `/etc` read-only made the full install
+   succeed end-to-end. Enumerating files is whack-a-mole; every future tool
+   that reads one more config file would be its own ticket. One subtlety,
+   also found live: the existing explicit entries must stay *alongside*
+   the `/etc` grant, not be replaced by it — a Landlock rule on `/etc`
+   covers what lives under it, not what a symlink there points at. On
+   systemd-resolved hosts like Dominion, `/etc/resolv.conf` →
+   `/run/systemd/resolve/stub-resolv.conf`, and a build that granted
+   `/etc` alone failed every DNS lookup in the sandbox ("Temporary failure
+   in name resolution"); `existingCanonicalPaths` resolving each explicit
+   entry individually is what grants the target.
 
 ## What shipped
 
@@ -70,6 +90,22 @@ separate, both-fixable gaps stacked on top of each other:
   deployment using this Landlock launcher, not a Dominion-specific
   env-var carve-out — the fix the user explicitly asked to have "generic
   for linux" rather than a one-off patch.
+- `landlockSystemReadPaths` (`landlock_runner_linux.go`, i.e. the
+  `video-studio-landlock-runner` binary itself) now grants all of `/etc`
+  read-only in addition to the enumerated entries (which must stay — see
+  the `resolv.conf` symlink note above; a regression test pins the
+  resolved target) — closing gap 3. Why this
+  is safe, and the one rule it imposes: it is read-only (the write
+  baseline is untouched); DAC still applies, so it grants nothing the
+  service user cannot already read outside the sandbox — verified on
+  Dominion with `find /etc -type f -readable ! -perm -o=r` returning
+  nothing, i.e. no `/etc` file is readable by the service user without
+  already being world-readable; and the baseline's "keep these narrow"
+  rationale is about `/proc` (other processes' environments and
+  credentials), which stays narrow. Because Landlock rules are additive, a
+  deployment cannot carve a secret back out of this grant, so
+  service-readable secrets must stay out of `/etc` — Dominion keeps them
+  in `/srv/dominion/.env`, which is where they belong anyway.
 
 ## Verification
 
@@ -90,6 +126,23 @@ separate, both-fixable gaps stacked on top of each other:
   against a clean pre-change binary built from the same `origin/main` tip,
   confirming it predates this work and is not a regression from it.
   Everything else passes unchanged.
-- Not yet done: live reverify with an actual `pip3 install <package>` (not
-  just a synthetic cache-write probe) from a real trading-workflow step,
-  the next time one needs a package outside the run image.
+- Real installs run live inside the shipped `video-studio-landlock-runner`
+  on Dominion, with `HOME` left at the unwritable `/srv/dominion/home` and
+  only a scratch directory granted for writes (the exact shape of a
+  workflow step): with all of `/etc` readable, `python3 -m pip install
+  --user yfinance` completed end-to-end — PyPI over HTTPS, numpy/pandas/
+  lxml/curl_cffi and the rest downloaded through the routed cache,
+  installed into the routed user-site, `pip show` reporting yfinance
+  1.7.0. With only the three distro-id files added instead, the same
+  install got past `debian_version` and failed on `mime.types`, which is
+  what settled enumerate-vs-grant-`/etc`. The Debian side is fully
+  provisioned (`python3-venv`, `python3-pip`, and the bundled pip/
+  setuptools wheels are installed), and the same `venv` creation succeeds
+  outside the sandbox, so every failure here was Landlock, not the image.
+- Verification gotcha worth knowing for the next person: the launcher
+  consumes its `--config` policy file (it is gone after one run), so a
+  hand-staged policy is single-use — stage one copy per invocation, or the
+  second run fails with `SANDBOX_UNAVAILABLE: read Landlock policy` before
+  doing anything.
+- Still pending after this ticket: the first real trading-workflow step
+  that needs a package outside the run image is the production reverify.

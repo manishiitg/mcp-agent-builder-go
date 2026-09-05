@@ -276,6 +276,48 @@ actually running the tool from inside a real workflow step, or by
 reproducing directly against the shipped launcher binary the way
 [PLAT-281](../../docs/bugs/pulse_platform/plat-281.md) did.
 
+### A workflow step CAN install packages — and what that relies on (PLAT-283)
+
+Since PLAT-283 (2026-09-05) a landlocked `execute_shell_command` step can run
+`python3 -m venv` + `pip install …`, `pip install --user …`, or `npm install …` —
+proven on this box with a real `pip install yfinance` inside the shipped launcher,
+`HOME` left unwritable and only the step's folder granted for writes. Before that
+every attempt died in one of three places and looked like a permanent limit; it
+never was (Landlock here is filesystem-only, and this box has no egress firewall,
+so the network was never the problem). Nothing is configured on the box for this —
+it is all in two binaries, so a release that ships both is all it takes:
+
+- `dominion-workspace`: native-mode shells now set `PIP_BREAK_SYSTEM_PACKAGES=1`
+  (PEP 668 opt-out), and route `PIP_CACHE_DIR`/`XDG_CACHE_HOME`/`PYTHONUSERBASE`/
+  `npm_config_cache`/`TMPDIR` into `.cache`/`.local`/`.tmp` under the step's own
+  folder instead of the real `$HOME`, which lies outside every step's write grant.
+- `video-studio-landlock-runner`: the read baseline grants all of `/etc` read-only
+  in addition to its explicit entries (pip reads `/etc/debian_version` and
+  `/etc/mime.types`; enumerating files was whack-a-mole). The explicit entries are
+  not redundant: a Landlock rule on `/etc` does not reach a symlink's target, and on
+  this Ubuntu box `/etc/resolv.conf` → `/run/systemd/resolve/stub-resolv.conf` — a
+  build with `/etc` alone broke every DNS lookup in the sandbox.
+
+Two consequences to keep in mind:
+
+- **Never put a secret readable by the `dominion` user under `/etc`.** Landlock rules
+  are additive; a deployment cannot carve one back out of the `/etc` grant.
+  `/srv/dominion/.env` is where secrets live, and DAC still applies (verified: no
+  file under `/etc` is readable by `dominion` without being world-readable).
+- Installs land in the step's folder (its `.local`, `.cache`, or a venv), per step —
+  not system-wide. That is by design; a tool every step needs still goes in
+  `/srv/dominion/tools` per the PLAT-281 section above.
+
+Verifying a sandbox change by hand (what caught the `resolv.conf` gap): run the real
+command through the shipped launcher with a policy granting only a scratch dir, e.g.
+`env -i HOME=/srv/dominion/home PATH=/usr/local/bin:/usr/bin:/bin <routing vars>
+/srv/dominion/current/bin/video-studio-landlock-runner --config <policy.json> -- /bin/sh
+-c '…'`. The launcher deletes its `--config` file after reading it, so stage one
+policy copy per run. After flipping `current`, restart `dominion-workspace` — it
+resolves the launcher next to `/proc/self/exe`, i.e. the old release dir, until it
+does. And run the *real* install, not a stand-in: a synthetic cache-write probe passed
+while `pip` still failed.
+
 ## Verification
 
 Before changing Caddy, validate the three local services as `dominion`:
