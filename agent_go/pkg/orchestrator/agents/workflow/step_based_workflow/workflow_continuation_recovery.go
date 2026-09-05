@@ -57,10 +57,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) recoverPendingWorkflowContinuations(c
 	if hcpo == nil {
 		return summary
 	}
-	if err := hcpo.LoadPlanForWorkshop(context.WithoutCancel(ctx)); err != nil {
-		summary.Errors = append(summary.Errors, fmt.Sprintf("load plan: %v", err))
-		return summary
-	}
 
 	stateFiles := hcpo.discoverWorkflowContinuationStateFiles(ctx)
 	summary.Scanned = len(stateFiles)
@@ -203,15 +199,11 @@ func (hcpo *StepBasedWorkflowOrchestrator) queueWorkflowContinuationRecovery(ctx
 }
 
 func (hcpo *StepBasedWorkflowOrchestrator) buildWorkflowContinuationStepRuntime(ctx context.Context, state *WorkflowContinuationState) (*workflowContinuationStepRuntime, error) {
-	if hcpo.approvedPlan == nil {
-		if err := hcpo.LoadPlanForWorkshop(context.WithoutCancel(ctx)); err != nil {
-			return nil, err
-		}
+	plan, err := hcpo.readRunPlanSnapshot(context.WithoutCancel(ctx), state.RunFolder, hcpo.isEvaluationMode)
+	if err != nil {
+		return nil, fmt.Errorf("read continuation run plan: %w", err)
 	}
-	if hcpo.approvedPlan == nil || len(hcpo.approvedPlan.Steps) == 0 {
-		return nil, fmt.Errorf("plan is not loaded")
-	}
-	stepInfo := findWorkshopStepByID(hcpo.approvedPlan.Steps, state.StepID)
+	stepInfo := findWorkshopStepByID(plan.Steps, state.StepID)
 	if stepInfo == nil || stepInfo.Step == nil {
 		return nil, fmt.Errorf("step %q not found in plan", state.StepID)
 	}
@@ -223,25 +215,18 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildWorkflowContinuationStepRuntime(
 	if stepIndex < 0 {
 		stepIndex = 0
 	}
-	stepConfigs, cfgErr := hcpo.ReadStepConfigs(ctx)
-	if cfgErr != nil {
-		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to read step_config.json for continuation recovery: %v", cfgErr))
-	}
 	step := stepInfo.Step
-	if populated, err := populateStepRuntimeFields(step, stepConfigs); err == nil && populated != nil {
-		step = populated
-	}
 	history := hcpo.loadLatestWorkflowContinuationHistory(ctx, state)
 	executionLLM := "recovered"
 	turnCount := len(history)
-	runtimeStepPath := firstNonEmpty(strings.TrimSpace(state.StepPath), resolveInnerStepPath(hcpo.approvedPlan.Steps, stepInfo))
+	runtimeStepPath := firstNonEmpty(strings.TrimSpace(state.StepPath), resolveInnerStepPath(plan.Steps, stepInfo))
 	agentConfigs := getAgentConfigs(step)
 	return &workflowContinuationStepRuntime{
 		Step:                   step,
 		StepIndex:              stepIndex,
 		StepPath:               runtimeStepPath,
 		LearningPathIdentifier: getEffectiveLearningPathIdentifier(step.GetID(), runtimeStepPath, agentConfigs),
-		TotalSteps:             len(hcpo.approvedPlan.Steps),
+		TotalSteps:             len(plan.Steps),
 		ExecutionHistory:       history,
 		ValidationResponse: &ValidationResponse{
 			IsSuccessCriteriaMet: true,

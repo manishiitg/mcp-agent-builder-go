@@ -93,6 +93,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteEvaluationOnly(ctx context.Con
 		hcpo.GetLogger().Info(fmt.Sprintf("⏭️ Skipped %d non-applicable evaluation step(s) for target run %s", len(skippedStepScores), targetRunFolder))
 	}
 	breakdownSteps := evaluationPlan.ToPlanSteps()
+	ctx = withExecutionPlan(ctx, &PlanningResponse{Steps: breakdownSteps})
 
 	// Set evaluation mode flag — controls step_config.json lookup (evaluation/step_config.json)
 	// and learning-phase skipping for eval steps. Learnings themselves share the learnings/ namespace

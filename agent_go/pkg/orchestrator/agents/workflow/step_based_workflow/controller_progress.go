@@ -113,8 +113,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) emitStepProgressUpdatedEvent(ctx cont
 			}
 		}
 		// Get step ID from the approved plan if available
-		if lastCompletedStep >= 0 && hcpo.approvedPlan != nil && lastCompletedStep < len(hcpo.approvedPlan.Steps) {
-			step := hcpo.approvedPlan.Steps[lastCompletedStep]
+		if lastCompletedStep >= 0 && executionPlanFromContext(ctx) != nil && lastCompletedStep < len(executionPlanFromContext(ctx).Steps) {
+			step := executionPlanFromContext(ctx).Steps[lastCompletedStep]
 			currentStepId = step.GetID()
 		}
 	}
@@ -284,12 +284,12 @@ func collectNestedArtifactFolderNames(step PlanStepInterface, names map[string]s
 	}
 }
 
-func (hcpo *StepBasedWorkflowOrchestrator) getArtifactFolderNamesForStep(stepNumber int) []string {
-	if hcpo.approvedPlan == nil || stepNumber < 1 || stepNumber > len(hcpo.approvedPlan.Steps) {
+func (hcpo *StepBasedWorkflowOrchestrator) getArtifactFolderNamesForStep(ctx context.Context, stepNumber int) []string {
+	if executionPlanFromContext(ctx) == nil || stepNumber < 1 || stepNumber > len(executionPlanFromContext(ctx).Steps) {
 		return nil
 	}
 	names := make(map[string]struct{})
-	collectNestedArtifactFolderNames(hcpo.approvedPlan.Steps[stepNumber-1], names)
+	collectNestedArtifactFolderNames(executionPlanFromContext(ctx).Steps[stepNumber-1], names)
 	result := make([]string, 0, len(names))
 	for name := range names {
 		if name != "" {
@@ -439,7 +439,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) deleteStepExecutionFolder(ctx context
 	runWorkspacePath := fmt.Sprintf("%s/runs/%s", baseWorkspacePath, hcpo.selectedRunFolder)
 	executionWorkspacePath := fmt.Sprintf("%s/execution", runWorkspacePath)
 	stepFolderPath := fmt.Sprintf("%s/step-%d", executionWorkspacePath, stepNumber)
-	artifactFolderNames := hcpo.getArtifactFolderNamesForStep(stepNumber)
+	artifactFolderNames := hcpo.getArtifactFolderNamesForStep(ctx, stepNumber)
 
 	hcpo.GetLogger().Info(fmt.Sprintf("🗑️ Deleting execution folder for step %d: %s", stepNumber, stepFolderPath))
 
@@ -626,7 +626,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) archiveStepExecutionFolder(ctx contex
 	runWorkspacePath := fmt.Sprintf("%s/runs/%s", baseWorkspacePath, hcpo.selectedRunFolder)
 	executionWorkspacePath := fmt.Sprintf("%s/execution", runWorkspacePath)
 	archiveBasePath := fmt.Sprintf("%s/archived/run-%d", executionWorkspacePath, runNumber)
-	artifactFolderNames := hcpo.getArtifactFolderNamesForStep(stepNumber)
+	artifactFolderNames := hcpo.getArtifactFolderNamesForStep(ctx, stepNumber)
 
 	hcpo.GetLogger().Info(fmt.Sprintf("📦 Archiving execution folder for step %d to run-%d", stepNumber, runNumber))
 

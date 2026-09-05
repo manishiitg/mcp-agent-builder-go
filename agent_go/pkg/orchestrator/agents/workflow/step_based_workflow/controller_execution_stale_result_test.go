@@ -86,14 +86,14 @@ func TestLoadSingleStepResultFromLogsPrefersRecentCompletionOverHigherAttemptNum
 	bo := newFakeWorkspaceAPIWithContent(t, content)
 	bo.SetWorkspacePath("Workflow/instagram")
 	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: bo, selectedRunFolder: "test-run"}
-	hcpo.approvedPlan = &PlanningResponse{Steps: []PlanStepInterface{
+	plan := &PlanningResponse{Steps: []PlanStepInterface{
 		&RegularPlanStep{
 			Type:             StepTypeRegular,
 			CommonStepFields: CommonStepFields{ID: "step-create-reel", Title: "Master Reel Orchestrator"},
 		},
 	}}
 
-	result, found := hcpo.loadSingleStepResultFromLogs(t.Context(), 1)
+	result, found := hcpo.loadSingleStepResultFromLogs(withExecutionPlan(t.Context(), plan), 1)
 	if !found {
 		t.Fatal("expected a result to be found")
 	}
@@ -115,14 +115,14 @@ func TestLoadSingleStepResultFromLogsFallsBackToAttemptOrderingWithoutTimestamps
 	bo := newFakeWorkspaceAPIWithContent(t, content)
 	bo.SetWorkspacePath("Workflow/instagram")
 	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: bo, selectedRunFolder: "test-run"}
-	hcpo.approvedPlan = &PlanningResponse{Steps: []PlanStepInterface{
+	plan := &PlanningResponse{Steps: []PlanStepInterface{
 		&RegularPlanStep{
 			Type:             StepTypeRegular,
 			CommonStepFields: CommonStepFields{ID: "step-create-reel", Title: "Master Reel Orchestrator"},
 		},
 	}}
 
-	result, found := hcpo.loadSingleStepResultFromLogs(t.Context(), 1)
+	result, found := hcpo.loadSingleStepResultFromLogs(withExecutionPlan(t.Context(), plan), 1)
 	if !found {
 		t.Fatal("expected a result to be found")
 	}

@@ -63,6 +63,24 @@ func planRevisionForFiles(files map[string]interface{}) (string, []byte, error) 
 func (hcpo *StepBasedWorkflowOrchestrator) ensureExecutablePlanRevision(ctx context.Context) (string, error) {
 	files := make(map[string]interface{}, len(executablePlanRevisionFiles))
 	for _, path := range executablePlanRevisionFiles {
+		// Persist the plan this execution actually loaded, even if a builder
+		// changed the current file between dispatch and run-metadata creation.
+		snapshotPath := "planning/plan.json"
+		if hcpo.isEvaluationMode {
+			snapshotPath = "evaluation/evaluation_plan.json"
+		}
+		if snapshot := executionPlanFromContext(ctx); snapshot != nil && path == snapshotPath {
+			encoded, err := json.Marshal(snapshot)
+			if err != nil {
+				return "", fmt.Errorf("encode execution plan snapshot: %w", err)
+			}
+			value, err := canonicalJSONDocument(string(encoded))
+			if err != nil {
+				return "", err
+			}
+			files[path] = value
+			continue
+		}
 		raw, err := hcpo.ReadWorkspaceFile(ctx, path)
 		if err != nil {
 			if path == "planning/plan.json" {

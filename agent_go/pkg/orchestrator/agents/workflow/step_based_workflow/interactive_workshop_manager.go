@@ -472,11 +472,11 @@ func (iwm *InteractiveWorkshopManager) enrichQueryForComplexStep(
 	ctx context.Context,
 	stepID string,
 ) string {
-	if iwm.controller.approvedPlan == nil {
+	plan, err := iwm.controller.ReadCurrentPlan(ctx, iwm.controller.isEvaluationMode)
+	if err != nil {
 		return ""
 	}
-
-	stepInfo := findWorkshopStepByID(iwm.controller.approvedPlan.Steps, stepID)
+	stepInfo := findWorkshopStepByID(plan.Steps, stepID)
 	if stepInfo == nil || stepInfo.TopIndex < 1 {
 		return ""
 	}
@@ -1741,7 +1741,7 @@ func (iwm *InteractiveWorkshopManager) currentWorkshopModeFromConfigs(stepConfig
 	if mode := canonicalWorkshopMode(iwm.workshopModeOverride); mode != "" {
 		return mode
 	}
-	mode := detectWorkshopMode(iwm.controller.approvedPlan, stepConfigs)
+	mode := detectWorkshopMode(nil, stepConfigs)
 	return mode
 }
 
@@ -2176,9 +2176,8 @@ For the full layout (every log file's schema, timing-debug walkthrough, cost led
 
 // resolveWorkshopStepID resolves a user-provided step reference to an actual step ID from the plan.
 // Accepts exact IDs, 1-based positions ("1", "step-1", "step1"), and falls back with suggestions.
-// Requires plan to be loaded on the controller (call LoadPlanForWorkshop first).
-func resolveWorkshopStepID(controller *StepBasedWorkflowOrchestrator, inputID string) (string, error) {
-	plan := controller.approvedPlan
+// The caller supplies the snapshot appropriate to the query or execution.
+func resolveWorkshopStepID(plan *PlanningResponse, inputID string) (string, error) {
 	if plan == nil || len(plan.Steps) == 0 {
 		return "", fmt.Errorf("no plan loaded")
 	}
@@ -2215,47 +2214,32 @@ func resolveWorkshopStepID(controller *StepBasedWorkflowOrchestrator, inputID st
 }
 
 func resolveWorkshopStepConfigTarget(ctx context.Context, controller *StepBasedWorkflowOrchestrator, inputID string) (resolvedID string, configSubdir string, isEvalStep bool, err error) {
-	originalEvalMode := controller.isEvaluationMode
-	originalPlan := controller.approvedPlan
-	defer func() {
-		controller.isEvaluationMode = originalEvalMode
-		controller.approvedPlan = originalPlan
-	}()
-
-	controller.isEvaluationMode = false
-	if loadErr := controller.LoadPlanForWorkshop(ctx); loadErr == nil {
-		if id, resolveErr := resolveWorkshopStepID(controller, inputID); resolveErr == nil {
+	plan, loadErr := controller.ReadCurrentPlan(ctx, false)
+	if loadErr == nil {
+		if id, resolveErr := resolveWorkshopStepID(plan, inputID); resolveErr == nil {
 			return id, "planning", false, nil
 		}
 	}
-
-	controller.isEvaluationMode = true
-	if loadErr := controller.LoadPlanForWorkshop(ctx); loadErr != nil {
-		return "", "", false, fmt.Errorf("step %q not found in planning/plan.json, and failed to load evaluation/evaluation_plan.json: %w", inputID, loadErr)
+	evalPlan, err := controller.ReadCurrentPlan(ctx, true)
+	if err != nil {
+		if loadErr != nil {
+			return "", "", false, fmt.Errorf("step %q: cannot read planning/plan.json: %w; cannot read evaluation/evaluation_plan.json: %w", inputID, loadErr, err)
+		}
+		return "", "", false, fmt.Errorf("step %q not found in planning/plan.json; cannot read evaluation/evaluation_plan.json: %w", inputID, err)
 	}
-	if id, resolveErr := resolveWorkshopStepID(controller, inputID); resolveErr == nil {
+	if id, resolveErr := resolveWorkshopStepID(evalPlan, inputID); resolveErr == nil {
 		return id, "evaluation", true, nil
 	}
-
 	return "", "", false, fmt.Errorf("step %q not found in planning/plan.json or evaluation/evaluation_plan.json", inputID)
 }
 
-// workshopPlanStepType returns the plan step type for a workflow (non-evaluation)
-// step ID, or "" when the plan cannot be loaded or the step is not in it. It
-// mirrors resolveWorkshopStepConfigTarget's save/restore of controller state so a
-// lookup never leaves the controller pointed at a different plan.
+// workshopPlanStepType reads the current workflow plan without changing controller scope.
 func workshopPlanStepType(ctx context.Context, controller *StepBasedWorkflowOrchestrator, stepID string) StepType {
-	originalEvalMode := controller.isEvaluationMode
-	originalPlan := controller.approvedPlan
-	defer func() {
-		controller.isEvaluationMode = originalEvalMode
-		controller.approvedPlan = originalPlan
-	}()
-	controller.isEvaluationMode = false
-	if err := controller.LoadPlanForWorkshop(ctx); err != nil || controller.approvedPlan == nil {
+	plan, err := controller.ReadCurrentPlan(ctx, false)
+	if err != nil {
 		return ""
 	}
-	info := findWorkshopStepByID(controller.approvedPlan.Steps, stepID)
+	info := findWorkshopStepByID(plan.Steps, stepID)
 	if info == nil || info.Step == nil {
 		return ""
 	}
@@ -2566,10 +2550,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 
 			// Resolve flexible step ID (handles "1", "step-1", "step1" etc.)
-			if err := iwm.controller.LoadPlanForWorkshop(ctx); err != nil {
+			plan, err := iwm.controller.ReadCurrentPlan(ctx, iwm.controller.isEvaluationMode)
+			if err != nil {
 				return fmt.Sprintf("Failed to load plan: %v. Cannot resolve step ID.", err), nil
 			}
-			resolvedID, resolveErr := resolveWorkshopStepID(iwm.controller, stepID)
+			resolvedID, resolveErr := resolveWorkshopStepID(plan, stepID)
 			if resolveErr != nil {
 				return resolveErr.Error(), nil
 			}
@@ -2587,8 +2572,8 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			}
 
 			isScriptedStep := false
-			if iwm.controller.approvedPlan != nil {
-				if stepInfo := findWorkshopStepByID(iwm.controller.approvedPlan.Steps, stepID); stepInfo != nil {
+			if plan != nil {
+				if stepInfo := findWorkshopStepByID(plan.Steps, stepID); stepInfo != nil {
 					if cfg := getAgentConfigs(stepInfo.Step); isScriptedExecutionModeConfig(cfg) {
 						isScriptedStep = true
 					}
@@ -2659,8 +2644,8 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			// would advance (or mark the whole schedule successful) while this
 			// step was still starting.
 			stepDisplayName := stepID
-			if iwm.controller.approvedPlan != nil {
-				if stepInfo := findWorkshopStepByID(iwm.controller.approvedPlan.Steps, stepID); stepInfo != nil {
+			if plan != nil {
+				if stepInfo := findWorkshopStepByID(plan.Steps, stepID); stepInfo != nil {
 					stepDisplayName = stepInfo.Step.GetTitle()
 				}
 			}
@@ -2781,7 +2766,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 							break
 						}
 					}
-					workshopModeForMeta = detectWorkshopMode(iwm.controller.approvedPlan, configs)
+					workshopModeForMeta = detectWorkshopMode(nil, configs)
 				}
 
 				// If the step is locked, surface its locked-script run history so the auto-
@@ -3054,8 +3039,8 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				return "step_id or execution_id is required", nil
 			}
 			if stepID != "" {
-				if err := iwm.controller.LoadPlanForWorkshop(ctx); err == nil {
-					if resolvedID, resolveErr := resolveWorkshopStepID(iwm.controller, stepID); resolveErr == nil {
+				if plan, err := iwm.controller.ReadCurrentPlan(ctx, iwm.controller.isEvaluationMode); err == nil {
+					if resolvedID, resolveErr := resolveWorkshopStepID(plan, stepID); resolveErr == nil {
 						stepID = resolvedID
 					}
 				}
@@ -3289,15 +3274,16 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			iwm.controller.SetSelectedRunFolder(runFolder)
 
 			// Resolve step ID
-			if err := iwm.controller.LoadPlanForWorkshop(ctx); err != nil {
+			plan, err := iwm.controller.ReadCurrentPlan(ctx, iwm.controller.isEvaluationMode)
+			if err != nil {
 				return fmt.Sprintf("Failed to load plan: %v", err), nil
 			}
-			resolvedID, resolveErr := resolveWorkshopStepID(iwm.controller, stepID)
+			resolvedID, resolveErr := resolveWorkshopStepID(plan, stepID)
 			if resolveErr != nil {
 				return resolveErr.Error(), nil
 			}
 
-			stepInfo := findWorkshopStepByID(iwm.controller.approvedPlan.Steps, resolvedID)
+			stepInfo := findWorkshopStepByID(plan.Steps, resolvedID)
 			if stepInfo == nil {
 				return fmt.Sprintf("step %q not found in plan", stepID), nil
 			}
@@ -4084,7 +4070,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			// 1. Validate step ID exists in the plan.
 			// Refresh from disk first so steps just added by other plan-mod tools in the
 			// same turn (e.g. add_todo_task_route on a nested parent) are visible — the
-			// controller's approvedPlan cache is otherwise stale until the next reload.
+			// query must not reuse a snapshot from a prior call.
 			if _, _, _, resolveErr := resolveWorkshopStepConfigTarget(ctx, iwm.controller, stepID); resolveErr != nil {
 				targetFile := "planning/plan.json"
 				if isEvalStep {
@@ -4367,15 +4353,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 			"properties": map[string]interface{}{},
 		},
 		func(ctx context.Context, _ map[string]interface{}) (string, error) {
-			if iwm.controller.approvedPlan == nil {
-				if err := iwm.controller.LoadPlanForWorkshop(ctx); err != nil {
-					return "", fmt.Errorf("load plan for prompt-health review: %w", err)
-				}
+			report, err := iwm.controller.currentPlanPromptHealth(ctx)
+			if err != nil {
+				return "", fmt.Errorf("load plan for prompt-health review: %w", err)
 			}
-			if iwm.controller.approvedPlan == nil {
-				return "no plan loaded; ensure planning/plan.json exists", nil
-			}
-			report := BuildPromptHealthReport(iwm.controller.approvedPlan.Steps)
 			encoded, err := json.MarshalIndent(report, "", "  ")
 			if err != nil {
 				return "", fmt.Errorf("encode prompt-health report: %w", err)
@@ -4425,24 +4406,23 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 
 			routeID, _ := args["route_id"].(string)
 
-			// Ensure plan is loaded (best-effort — for get_step_prompts we only need step index)
-			if iwm.controller.approvedPlan == nil {
-				_ = iwm.controller.LoadPlanForWorkshop(ctx) // ignore error; nil check below handles failure
+			// Resolve historical positions only against the selected run's revision.
+			// Exact stable IDs remain usable when old runs predate plan revisions.
+			if strings.ContainsAny(stepID, `/\`) || stepID == "." || stepID == ".." || strings.ContainsAny(routeID, `/\`) {
+				return "", fmt.Errorf("step_id and route_id must be IDs, not file paths")
 			}
-			if iwm.controller.approvedPlan == nil {
-				return "no plan loaded; run execute_step first or ensure plan.json exists", nil
-			}
-
-			// Resolve flexible step_id
-			resolvedForPrompts, resolveErr := resolveWorkshopStepID(iwm.controller, stepID)
-			if resolveErr != nil {
-				return resolveErr.Error(), nil
-			}
-
-			// Find step info (handles both top-level and inner steps)
-			stepInfo := findWorkshopStepByID(iwm.controller.approvedPlan.Steps, resolvedForPrompts)
-			if stepInfo == nil {
-				return fmt.Sprintf("step %q not found in plan", stepID), nil
+			resolvedForPrompts := stepID
+			var stepInfo *WorkshopStepInfo
+			plan, planErr := iwm.controller.readRunPlanSnapshot(ctx, iwm.controller.selectedRunFolder, iwm.controller.isEvaluationMode)
+			if planErr == nil {
+				resolved, resolveErr := resolveWorkshopStepID(plan, stepID)
+				if resolveErr != nil {
+					return "", resolveErr
+				}
+				resolvedForPrompts = resolved
+				stepInfo = findWorkshopStepByID(plan.Steps, resolved)
+			} else if routeID != "" {
+				return "", fmt.Errorf("cannot resolve historical step position: %w; use an exact step ID without route_id", planErr)
 			}
 
 			attempt := 1
@@ -4465,7 +4445,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 
 			// Determine the correct log path based on step type
 			var stepPath string
-			if routeID != "" && stepInfo.TopIndex > 0 {
+			if routeID != "" && stepInfo != nil && stepInfo.TopIndex > 0 {
 				// Generated route executions retain their historical composite folder name.
 				stepPath = fmt.Sprintf("step-%d-sub-%s", stepInfo.TopIndex, routeID)
 			} else {
@@ -4490,6 +4470,11 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				}
 			}
 			if err != nil {
+				// A legacy ID can itself be "step-1". Accept its actual artifact,
+				// but never translate that reference using today's plan positions.
+				if planErr != nil && isPositionalStepReference(stepID) {
+					return "", fmt.Errorf("no exact prompt artifact and cannot resolve historical position: %w; use the run's exact step ID", planErr)
+				}
 				result.WriteString(fmt.Sprintf("⚠️ Prompts file not found (%s).\nNote: only available for runs after this feature was added.\n\n", promptsPath))
 			} else {
 				var promptsData map[string]interface{}
@@ -9178,9 +9163,6 @@ func (iwm *InteractiveWorkshopManager) runReviewWorkflowTimingAgent(ctx context.
 		stepConfigSummary = sb.String()
 	}
 
-	if err := iwm.controller.LoadPlanForWorkshop(ctx); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ review_workflow_timing: failed to reload plan for objective: %v (using cached value)", err))
-	}
 	workflowObjective, workflowSuccessCriteria := iwm.controller.ResolveWorkflowObjective(ctx)
 
 	readPaths := []string{
@@ -9275,9 +9257,6 @@ func (iwm *InteractiveWorkshopManager) runReviewWorkflowCostsAgent(ctx context.C
 		stepConfigSummary = sb.String()
 	}
 
-	if err := iwm.controller.LoadPlanForWorkshop(ctx); err != nil {
-		logger.Warn(fmt.Sprintf("⚠️ review_workflow_costs: failed to reload plan for objective: %v (using cached value)", err))
-	}
 	workflowObjective, workflowSuccessCriteria := iwm.controller.ResolveWorkflowObjective(ctx)
 
 	readPaths := []string{
@@ -9344,10 +9323,11 @@ func (iwm *InteractiveWorkshopManager) runReviewStepCodeAgent(ctx context.Contex
 	workspacePath := iwm.controller.GetWorkspacePath()
 	logger := iwm.controller.GetLogger()
 
-	if err := iwm.controller.LoadPlanForWorkshop(ctx); err != nil {
+	plan, err := iwm.controller.ReadCurrentPlan(ctx, iwm.controller.isEvaluationMode)
+	if err != nil {
 		return "", fmt.Errorf("failed to load plan: %w", err)
 	}
-	if iwm.controller.approvedPlan == nil {
+	if plan == nil {
 		return "", fmt.Errorf("no approved plan found")
 	}
 
@@ -9355,7 +9335,7 @@ func (iwm *InteractiveWorkshopManager) runReviewStepCodeAgent(ctx context.Contex
 
 	// Collect saved code to review — either a specific step/scoring agent or all
 	// saved main.py scripts across workflow, evaluation, and scoring code.
-	allSteps := collectAllSteps(iwm.controller.approvedPlan.Steps)
+	allSteps := collectAllSteps(plan.Steps)
 	stepConfigs, _ := iwm.controller.ReadStepConfigsFromSubdir(ctx, "planning")
 	workflowStepConfigMap := map[string]*StepConfig{}
 	for i := range stepConfigs {

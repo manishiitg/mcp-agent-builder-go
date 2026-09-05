@@ -2518,10 +2518,10 @@ func readPlanFromFileWithGraphValidation(ctx context.Context, workspacePath stri
 		// delete_plan_steps or update_message_sequence_step can remove or
 		// repair the offending step — even though it fails strict
 		// validation. It can never execute or be persisted in this state:
-		// execution's own preflight (LoadPlanForWorkshop) and every
+		// execution's own preflight and every
 		// writePlanToFile call independently enforce the strict validator.
-		// Mirrors LoadPlanForWorkshop's existing fallback in
-		// controller_workshop.go so mutation tools aren't the one path left
+		// The shared current-plan reader uses this fallback so mutation tools
+		// aren't the one path left
 		// unable to even open a legacy plan to fix it.
 		validateLegacy := validateLoadedPlanStructureCoreAllowLegacyMessageSequenceCode
 		if validateGraph {

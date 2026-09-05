@@ -1,5 +1,15 @@
 # Pulse Platform-Issue Register
 
+## PLAT-285 — Remove stale session plan cache
+
+[PLAT-285](pulse_platform/plat-285.md) resolves the stale prompt-health consumer
+reported by Upwork PUL-07504731 and removes the shared controller plan cache.
+Current tools read fresh workspace plans, executions use context-scoped snapshots,
+and historical prompt/recovery lookups use content-verified retained revisions.
+Local tests pass; deployment and a fresh producing workflow run are not claimed.
+This ticket was prepared locally as PLAT-284 before that ID was published for
+unrelated package-cache work; PLAT-285 is its final identity.
+
 ## Status
 
 Triage snapshot captured 2026-08-03 from the workflow-local Pulse databases.
