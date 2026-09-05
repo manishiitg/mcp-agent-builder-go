@@ -54,7 +54,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
         : 'mx-4 flex max-h-[85vh] w-full max-w-6xl flex-col rounded-xl border border-border bg-card text-card-foreground shadow-2xl'}>
 
         {/* Header */}
-        <ScheduleRunsHeader panel={panel} onClose={onClose} />
+        <ScheduleRunsHeader panel={panel} onClose={onClose} showClose={!embedded} />
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto">
@@ -82,7 +82,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                             : 'border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
                         }`}
                       >
-                        By Automation
+                        Workflows
                       </button>
                     </>
                   )}
@@ -114,7 +114,7 @@ const WorkflowScheduleRunsPanel: React.FC<WorkflowScheduleRunsPanelProps> = ({ o
                     : activeView === 'calendar'
                       ? `${monthlyCalendar.total} scheduled item${monthlyCalendar.total === 1 ? '' : 's'} this month`
                       : activeView === 'by-workflow'
-                        ? `${workflowGroups.length} automation${workflowGroups.length === 1 ? '' : 's'} · ${filteredJobs.length} schedule${filteredJobs.length === 1 ? '' : 's'} shown`
+                        ? `${workflowGroups.length} automation${workflowGroups.length === 1 ? '' : 's'} with schedules`
                         : `${filteredJobs.length} schedule${filteredJobs.length !== 1 ? 's' : ''} · ${activeFilterLabel}`}
                 </div>
                 {activeView === 'schedules' && (

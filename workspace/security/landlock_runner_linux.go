@@ -177,6 +177,20 @@ func landlockSystemReadPaths() []string {
 			paths = append(paths, filepath.Dir(resolved))
 		}
 	}
+	// A deployment can install its own CLI tools outside the standard system
+	// dirs above (Dominion: /srv/dominion/tools/bin, on PATH for every
+	// service). Without an explicit grant here, a landlocked step gets
+	// "Permission denied" (rc=126) trying to exec them -- not a read/config
+	// problem, an exec-rights one: PLACE_PAPER_TRADES on Dominion hit exactly
+	// this trying to launch the alpaca CLI, every run since the tool was
+	// first installed. Colon-separated, same convention as PATH.
+	if extra := strings.TrimSpace(os.Getenv("SANDBOX_EXTRA_SYSTEM_PATHS")); extra != "" {
+		for _, path := range strings.Split(extra, ":") {
+			if path = strings.TrimSpace(path); path != "" {
+				paths = append(paths, path)
+			}
+		}
+	}
 	return existingCanonicalPaths(paths)
 }
 

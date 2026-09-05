@@ -5,61 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
-
-// LoadPlanForWorkshop reads planning/plan.json via the workspace API and caches it as approvedPlan.
-// Called at the start of InteractiveWorkshopOnly and again inside ExecuteStepForWorkshop
-// so that any plan edits made during the workshop session are always picked up.
-// Uses ReadWorkspaceFile (workspace HTTP API) — NOT os.ReadFile — because the workspace
-// path is a logical path resolved by the workspace service, not a local filesystem path.
-func (hcpo *StepBasedWorkflowOrchestrator) LoadPlanForWorkshop(ctx context.Context) error {
-	hcpo.GetLogger().Debug(fmt.Sprintf("[WORKSHOP_DEBUG] LoadPlanForWorkshop: workspacePath=%s, selectedRunFolder=%s, isEvaluationMode=%v",
-		hcpo.GetWorkspacePath(), hcpo.selectedRunFolder, hcpo.isEvaluationMode))
-
-	// In evaluation mode, load the evaluation plan instead
-	if hcpo.isEvaluationMode {
-		planContent, err := hcpo.ReadWorkspaceFile(ctx, "evaluation/evaluation_plan.json")
-		if err != nil {
-			return fmt.Errorf("cannot read evaluation_plan.json: %w", err)
-		}
-		var evalPlan EvaluationPlan
-		if err := json.Unmarshal([]byte(planContent), &evalPlan); err != nil {
-			return fmt.Errorf("cannot parse evaluation_plan.json: %w", err)
-		}
-		// Convert to PlanningResponse so workshop tools work uniformly
-		hcpo.approvedPlan = &PlanningResponse{
-			Steps: evalPlan.ToPlanSteps(),
-		}
-		hcpo.GetLogger().Debug(fmt.Sprintf("[WORKSHOP_DEBUG] LoadPlanForWorkshop: loaded evaluation plan with %d steps", len(evalPlan.Steps)))
-		return nil
-	}
-
-	// ReadWorkspaceFile auto-prepends workspacePath to relative paths
-	planContent, err := hcpo.ReadWorkspaceFile(ctx, "planning/plan.json")
-	if err != nil {
-		hcpo.GetLogger().Warn(fmt.Sprintf("[WORKSHOP_DEBUG] LoadPlanForWorkshop: ReadWorkspaceFile failed: %v", err))
-		return fmt.Errorf("cannot read plan.json: %w", err)
-	}
-
-	hcpo.GetLogger().Debug(fmt.Sprintf("[WORKSHOP_DEBUG] LoadPlanForWorkshop: read %d bytes from planning/plan.json", len(planContent)))
-
-	var plan PlanningResponse
-	if err := json.Unmarshal([]byte(planContent), &plan); err != nil {
-		return fmt.Errorf("cannot parse plan.json: %w", err)
-	}
-	if err := resolvePlanOrphanStepRefs(&plan); err != nil {
-		return fmt.Errorf("cannot resolve orphan step references in plan.json: %w", err)
-	}
-	if err := validateLoadedPlanStructure(&plan); err != nil {
-		if compatibilityErr := validateLoadedPlanStructureAllowLegacyMessageSequenceCode(&plan); compatibilityErr != nil {
-			return fmt.Errorf("plan.json uses an invalid or legacy format: %w", err)
-		}
-		hcpo.GetLogger().Warn("[WORKSHOP] Loaded a plan containing removed message_sequence code items only for the v1.0.10 migration preflight; execution remains blocked until migration succeeds")
-	}
-	hcpo.approvedPlan = &plan
-	hcpo.GetLogger().Debug(fmt.Sprintf("[WORKSHOP_DEBUG] LoadPlanForWorkshop: loaded plan with %d steps", len(plan.Steps)))
-	return nil
-}
 
 // WorkshopExecuteOptions holds per-call overrides for ExecuteStepForWorkshop.
 // When GroupName is set, the controller resolves the run folder and variable values
@@ -142,16 +89,18 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteStepForWorkshop(
 	}
 
 	// 2. Re-read plan.json + populate runtime fields from step_config.json
-	if err := hcpo.LoadPlanForWorkshop(ctx); err != nil {
+	plan, err := hcpo.ReadCurrentPlan(ctx, hcpo.isEvaluationMode)
+	if err != nil {
 		return "", fmt.Errorf("failed to load plan: %w", err)
 	}
+	ctx = withExecutionPlan(ctx, plan)
 	stepConfigs, err := hcpo.ReadStepConfigs(ctx)
 	if err != nil {
 		hcpo.GetLogger().Warn(fmt.Sprintf("[WORKSHOP] Failed to read step_config.json: %v (using defaults)", err))
 		stepConfigs = []StepConfig{}
 	}
 	// Populate runtime fields for ALL steps (top-level + inner)
-	allStepInfos := collectAllSteps(hcpo.approvedPlan.Steps)
+	allStepInfos := collectAllSteps(plan.Steps)
 	for _, info := range allStepInfos {
 		if err := populateRuntimeFields(info.Step, stepConfigs); err != nil {
 			hcpo.GetLogger().Warn(fmt.Sprintf("[WORKSHOP] Failed to populate runtime fields: %v", err))
@@ -159,7 +108,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteStepForWorkshop(
 	}
 
 	// 3. Resolve step ID → find in top-level or inner steps
-	stepInfo := findWorkshopStepByID(hcpo.approvedPlan.Steps, stepID)
+	stepInfo := findWorkshopStepByID(plan.Steps, stepID)
 	if stepInfo == nil {
 		allIDs := make([]string, 0, len(allStepInfos))
 		for _, info := range allStepInfos {
@@ -199,7 +148,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteStepForWorkshop(
 		breakdownSteps = []PlanStepInterface{step}
 		targetIndex = 0
 	} else {
-		breakdownSteps = hcpo.approvedPlan.Steps
+		breakdownSteps = plan.Steps
 		targetIndex = stepInfo.TopIndex - 1 // convert 1-based to 0-based
 	}
 	totalSteps := len(breakdownSteps)
@@ -250,7 +199,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteStepForWorkshop(
 		hcpo.GetLogger().Info(fmt.Sprintf("[WORKSHOP-INNER] Original cleanup scope for inner step %q: CleanAll=%v, CleanFrom=%d, CleanSpecific=%d",
 			stepID, setup.Cleanup.CleanAllSteps, setup.Cleanup.CleanFromStep, setup.Cleanup.CleanSpecificStep))
 		setup.Cleanup = CleanupScope{} // No cleanup — don't delete other steps' outputs
-		innerStepPath := resolveInnerStepPath(hcpo.approvedPlan.Steps, stepInfo)
+		innerStepPath := resolveInnerStepPath(plan.Steps, stepInfo)
 		setup.Context.StepPathOverride = innerStepPath
 		if !isMessageSequenceResume {
 			cleanMessageSequenceRuntime := isMessageSequence && (opts == nil || !opts.MessageSequenceRestart)
@@ -302,8 +251,26 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteStepForWorkshop(
 	}
 
 	// 6. Run via the standard execution pipeline.
+	retryStarted := time.Now().UTC()
+	retryFolder, retryExecutionID, retryRevision := hcpo.selectedRunFolder, "", ""
+	if !isInnerStep && !hcpo.isEvaluationMode {
+		if raw, err := hcpo.ReadWorkspaceFile(ctx, workflowRunMetadataPath(retryFolder)); err == nil {
+			var meta map[string]interface{}
+			if json.Unmarshal([]byte(raw), &meta) == nil && meta["status"] == "failed" {
+				retryExecutionID, _ = meta["execution_id"].(string)
+				if retryExecutionID != "" {
+					retryRevision, _ = hcpo.ensureExecutablePlanRevision(ctx)
+				}
+			}
+		}
+	}
 	var lastOutcome LastExecutedStepOutcome
 	execErr := hcpo.runExecutionPhase(ctx, breakdownSteps, 1, progress, setup.StartFromStep, setup.Context, &lastOutcome)
+	if execErr == nil && lastOutcome.Found && lastOutcome.StepID == stepID && hcpo.selectedRunFolder == retryFolder {
+		if err := hcpo.recordWorkshopRetryRecovery(ctx, retryFolder, retryExecutionID, retryRevision, stepID, totalSteps, retryStarted); err != nil {
+			execErr = fmt.Errorf("step %q succeeded but run recovery evidence could not be persisted: %w", stepID, err)
+		}
+	}
 
 	// 7. Prefer the exact result this call just produced over a log-folder
 	// re-read: a re-read cannot distinguish this call's own file from one an

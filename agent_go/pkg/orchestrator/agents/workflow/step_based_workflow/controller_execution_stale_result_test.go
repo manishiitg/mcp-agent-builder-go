@@ -30,6 +30,19 @@ func newFakeWorkspaceAPIWithContent(t *testing.T, content map[string]string) *or
 	mux.HandleFunc("/api/documents/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/documents/")
 		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPut {
+			var body struct {
+				Content string `json:"content"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+				w.WriteHeader(400)
+				return
+			}
+			content[path] = body.Content
+			_, _ = w.Write([]byte(`{"success":true}`))
+			return
+		}
 
 		body, ok := content[path]
 		if !ok {
@@ -86,14 +99,14 @@ func TestLoadSingleStepResultFromLogsPrefersRecentCompletionOverHigherAttemptNum
 	bo := newFakeWorkspaceAPIWithContent(t, content)
 	bo.SetWorkspacePath("Workflow/instagram")
 	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: bo, selectedRunFolder: "test-run"}
-	hcpo.approvedPlan = &PlanningResponse{Steps: []PlanStepInterface{
+	plan := &PlanningResponse{Steps: []PlanStepInterface{
 		&RegularPlanStep{
 			Type:             StepTypeRegular,
 			CommonStepFields: CommonStepFields{ID: "step-create-reel", Title: "Master Reel Orchestrator"},
 		},
 	}}
 
-	result, found := hcpo.loadSingleStepResultFromLogs(t.Context(), 1)
+	result, found := hcpo.loadSingleStepResultFromLogs(withExecutionPlan(t.Context(), plan), 1)
 	if !found {
 		t.Fatal("expected a result to be found")
 	}
@@ -115,14 +128,14 @@ func TestLoadSingleStepResultFromLogsFallsBackToAttemptOrderingWithoutTimestamps
 	bo := newFakeWorkspaceAPIWithContent(t, content)
 	bo.SetWorkspacePath("Workflow/instagram")
 	hcpo := &StepBasedWorkflowOrchestrator{BaseOrchestrator: bo, selectedRunFolder: "test-run"}
-	hcpo.approvedPlan = &PlanningResponse{Steps: []PlanStepInterface{
+	plan := &PlanningResponse{Steps: []PlanStepInterface{
 		&RegularPlanStep{
 			Type:             StepTypeRegular,
 			CommonStepFields: CommonStepFields{ID: "step-create-reel", Title: "Master Reel Orchestrator"},
 		},
 	}}
 
-	result, found := hcpo.loadSingleStepResultFromLogs(t.Context(), 1)
+	result, found := hcpo.loadSingleStepResultFromLogs(withExecutionPlan(t.Context(), plan), 1)
 	if !found {
 		t.Fatal("expected a result to be found")
 	}

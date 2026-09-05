@@ -47,6 +47,20 @@ func TestNativeEnvironmentDoesNotExposeWorkspaceExecutionToken(t *testing.T) {
 	}
 }
 
+func TestNativeEnvironmentAllowsPipInstallOnExternallyManagedPython(t *testing.T) {
+	t.Setenv("NATIVE_WORKSPACE", "true")
+
+	found := false
+	for _, entry := range BuildSafeEnvironment() {
+		if entry == "PIP_BREAK_SYSTEM_PACKAGES=1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected native environment to opt out of PEP 668's externally-managed-environment guard")
+	}
+}
+
 func TestDockerEnvironmentUsesConfiguredBrowserExecutable(t *testing.T) {
 	t.Setenv("NATIVE_WORKSPACE", "")
 	t.Setenv("AGENT_BROWSER_EXECUTABLE_PATH", "/usr/bin/google-chrome")

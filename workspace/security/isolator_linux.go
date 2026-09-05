@@ -154,8 +154,58 @@ func (iso *Isolator) landlockCommand(ctx context.Context, policy LandlockPolicy,
 	}
 	cmd := exec.CommandContext(ctx, runner, "--config", configPath, "--", "/bin/sh", "-c", fullCommand)
 	cmd.Dir = policy.WorkDir
-	cmd.Env = BuildSafeEnvironment()
+	cmd.Env = append(BuildSafeEnvironment(), packageManagerCacheEnv(policy)...)
 	return cmd, cleanup, nil
+}
+
+// packageManagerCacheEnv redirects the cache/temp directories pip, npm, and
+// venv write to by default (~/.cache/pip, ~/.local, TMPDIR) into a subtree of
+// the step's own granted write path. Landlock only allows writes inside
+// WritePaths; a real $HOME lives outside every step's grant, so without this
+// "pip3 install X" gets PEP 668's externally-managed-environment error, and
+// forcing it past that (--break-system-packages) or even a bare
+// "python3 -m venv" then hits a bare Landlock permission denial the first
+// time it tries to write its download/build cache — not a fundamental
+// inability to install packages, just an unrouted cache path. Confirmed live
+// on the Dominion Hetzner deployment (PLAT-283).
+func packageManagerCacheEnv(policy LandlockPolicy) []string {
+	base := writableCacheBase(policy)
+	if base == "" {
+		return nil
+	}
+	cacheDir := filepath.Join(base, ".cache")
+	pipCacheDir := filepath.Join(cacheDir, "pip")
+	npmCacheDir := filepath.Join(cacheDir, "npm")
+	userBase := filepath.Join(base, ".local")
+	tmpDir := filepath.Join(base, ".tmp")
+	for _, dir := range []string{pipCacheDir, npmCacheDir, userBase, tmpDir} {
+		_ = os.MkdirAll(dir, 0755)
+	}
+	return []string{
+		"PIP_CACHE_DIR=" + pipCacheDir,
+		"XDG_CACHE_HOME=" + cacheDir,
+		"PYTHONUSERBASE=" + userBase,
+		"npm_config_cache=" + npmCacheDir,
+		"TMPDIR=" + tmpDir,
+	}
+}
+
+// writableCacheBase picks a directory the sandboxed process can actually
+// write to: the step's own WorkDir when it falls inside a granted write
+// path (the common case — a step's folder is both), otherwise the first
+// granted write path, otherwise "" (no redirection; callers must leave
+// package-manager defaults alone rather than pointing them somewhere
+// Landlock will also deny).
+func writableCacheBase(policy LandlockPolicy) string {
+	for _, writable := range policy.WritePaths {
+		if pathWithin(policy.WorkDir, writable) {
+			return policy.WorkDir
+		}
+	}
+	if len(policy.WritePaths) > 0 {
+		return policy.WritePaths[0]
+	}
+	return ""
 }
 
 func landlockRunnerPath() (string, error) {

@@ -172,7 +172,13 @@ func isGatewayAPIRoute(path string) bool {
 func apiLoginURL(r *http.Request) string {
 	next := "/"
 	if referer, err := url.Parse(r.Referer()); err == nil && referer.Host == r.Host {
-		next = safeNext(referer.RequestURI())
+		// A protected API request can be made by the login screen itself while
+		// an earlier authenticated request is still settling during logout.
+		// Never use /login as the next destination or every 401 would wrap the
+		// current login URL in another /login?next=... redirect.
+		if referer.Path != "/login" && !strings.HasPrefix(referer.Path, "/login/") {
+			next = safeNext(referer.RequestURI())
+		}
 	}
 	return "/login?next=" + url.QueryEscape(next)
 }

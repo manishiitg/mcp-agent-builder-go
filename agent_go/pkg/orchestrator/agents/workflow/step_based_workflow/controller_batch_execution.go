@@ -319,6 +319,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runBatchExecution(
 		groupSessionID := fmt.Sprintf("session-group-%s-%d", group.Name, time.Now().UnixNano())
 		hcpo.sessionID = groupSessionID
 		hcpo.BaseOrchestrator.SetMCPSessionID(groupSessionID)
+		virtualtools.InheritSessionNotificationDestination(previousSessionID, groupSessionID)
 		hcpo.GetLogger().Info(fmt.Sprintf("🔗 Generated unique MCP session ID for group %s: %s (run folder: %s)", group.Name, groupSessionID, hcpo.selectedRunFolder))
 		if pc := virtualtools.GetParentChat(previousSessionID); pc != nil && pc.SessionID != "" {
 			pcCopy := *pc
@@ -351,6 +352,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) runBatchExecution(
 		defer func() {
 			hcpo.GetLogger().Info(fmt.Sprintf("🔗 Closing MCP session for group %s: %s (browser=%s)", group.Name, groupSessionID, browserSessionID))
 			virtualtools.UnregisterParentChat(groupSessionID)
+			virtualtools.DeleteSessionNotificationDestination(groupSessionID)
 			mcpagent.MarkSessionsStopped([]string{groupSessionID, browserSessionID})
 			mcpagent.CloseSession(groupSessionID)
 			mcpagent.CloseSession(browserSessionID)

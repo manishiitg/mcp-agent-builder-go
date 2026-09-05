@@ -5,8 +5,8 @@
 | Coordination | Value |
 |---|---|
 | Assigned agent | Codex |
-| Ticket state | `runtime workspace-context defect fixed; focused verification passed; live notification/UI reverify pending` |
-| Last synchronized | `2026-09-02` |
+| Ticket state | `parent-to-child notification handoff fixed; server verification passed; live scheduled-run/UI reverify pending` |
+| Last synchronized | `2026-09-04` |
 
 - **Priority:** P1 product-truth and observability boundary.
 - **Related:** [PLAT-018](plat-018.md), [PLAT-083](plat-083.md),
@@ -172,6 +172,55 @@ page shows compact facts directly and exposes retained run/Pulse history both
 in the page and per workflow. Older severity values map conservatively to the
 new semantic statuses when read.
 
+## 2026-09-04 — Scheduled child sessions lost the trusted notification destination
+
+A live `rtslatency` scheduled run exposed a second workspace-context boundary.
+The scheduled parent session had the correct backend-owned notification
+destination, but workflow execution changed identities twice before the digest
+called `notify_user`:
+
+1. the schedule session created a workflow group MCP session;
+2. the `daily-sprint-progress-digest` message-sequence step created its own
+   execution/tool session.
+
+The folder guard and parent-chat metadata were propagated across these
+boundaries, but the notification destination registry was not. Consequently,
+the child recovered an empty `WorkspacePath` and
+`notify_user(notification_kind="run_summary")` failed only for Org Dashboard
+with `org_dashboard requires a workflow workspace path`. A retry that supplied
+`X-Workspace-Path: Workflow/rtslatency` failed correctly: notification routing
+is trusted backend state and must not be authorized by an agent-controlled
+header. Slack could succeed only when retried from a session that still owned
+the destination, which made the failure look connector-specific even though it
+was a session-handoff defect.
+
+The registry now has an explicit clone-based parent-to-child inheritance
+operation. Both workshop and batch group creation inherit the originating
+destination, and every sub-agent/message-sequence tool session inherits from
+its group. This carries the complete trusted contract together — workflow path,
+workflow/user identity, route selections, Slack/WhatsApp/Gmail destinations,
+summary channels, recipients, connection IDs, and webhooks — without sharing
+mutable pointers between sessions. Copied registrations are removed when group
+and message-sequence runtimes close.
+
+### Regression coverage
+
+- Registry coverage proves a child receives the complete destination and owns
+  an independent clone.
+- `notify_user` coverage executes with only the child session ID and proves the
+  Org Dashboard connector receives `WorkspacePath: Workflow/demo`.
+- Orchestrator coverage proves `configureSubAgentSessionGuard` performs the
+  inheritance used by real message-sequence execution.
+- `go test ./cmd/server/virtual-tools
+  ./pkg/orchestrator/agents/workflow/step_based_workflow` passes.
+- `go test ./cmd/server` passes.
+- `git diff --check` passes.
+
+This repair is implemented locally but is not yet deployed. Runtime acceptance
+still requires one new scheduled child-step summary after deployment, followed
+by confirmation that the same summary appears in Org Dashboard and its
+configured external destinations without a fallback send from the parent.
+
 ## Decision history
 
 - **2026-08-31 — New provider, not a new tool.** Reused `notify_user` fan-out so
@@ -180,3 +229,6 @@ new semantic statuses when read.
 - **2026-08-31 — No legacy-card migration.** Old HTML has no trustworthy
   generation timestamp or producing-run link, so importing it would preserve
   the stale-data defect the ticket exists to remove.
+- **2026-09-04 — Inherit trusted routing; do not trust request headers.** Child
+  tool sessions receive a backend-cloned notification destination from their
+  registered parent. Agent-supplied workspace headers remain non-authoritative.

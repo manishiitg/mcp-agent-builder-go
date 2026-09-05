@@ -1,5 +1,14 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
+## Internal reconciliation — 2026-09-05
+
+PUL-28FC41E1: the exact step-origin/no-owning-module update fixture TestPulseFindingIssueIDUpdateReloadsExistingStepFindingAcrossReviewerModule passes. This is narrower evidence than a claim that every intermittent success-without-persistence report is fixed; PUL-2F70A97F stays open.
+
+Resolved in SQLite for internal tracking with previous concern/detail records
+preserved in resolution events. Source/tests verified; deployed replay and
+historical business/module-result repair are not claimed. Full mapping:
+[remaining-report audit](../../audits/platform-open-report-reconciliation-2026-09-05.md).
+
 # PLAT-214 — `record_pulse_finding` no longer reloads through a separate connection; live confirmation of the intermittent failure remains pending
 
 | Coordination | Value |

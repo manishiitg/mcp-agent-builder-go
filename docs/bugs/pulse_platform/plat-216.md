@@ -1,5 +1,14 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
+## Internal tracking resolution — 2026-09-05
+
+Related follow-up resolved: RTS PUL-4FE07CD2. Nonzero saved-script exits can no longer be promoted to success by passing artifact validation. Exit-2 refusal and repair fallback remain unchanged. Focused scripted tests pass; this was separate from the original PLAT-216 fix.
+
+Closed at the user's request for internal tracking. Fixes are tested local,
+uncommitted source changes based on `0babf193ec0efdf33511a3150f82e0b29685814e`;
+deployment verification is pending. No live workflow or historical schedule
+receipt was modified. Prior investigation below is retained as history.
+
 # PLAT-216 — a scripted step's deliberate fail-closed refusal was treated identically to a crash, so the agentic fallback overrode the refusal it agreed was correct
 
 | Coordination | Value |

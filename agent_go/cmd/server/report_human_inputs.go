@@ -971,7 +971,26 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 			}),
 		},
 	}
+	dismissDuplicateTool := llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
+		Name:        "dismiss_duplicate_human_input_request",
+		Description: "Retire only an unlinked duplicate pending decision without answering it. Both requests must be pending with identical question, context, options, source, run, evidence and approval contract. The retained request is untouched. Linked requests are rejected. Never use this to remove an unanswered unique question.",
+		Parameters: llmtypes.NewParameters(map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+			"workspace_path": map[string]interface{}{"type": "string"}, "input_id": map[string]interface{}{"type": "string"},
+			"keep_input_id": map[string]interface{}{"type": "string"}, "reason": map[string]interface{}{"type": "string"},
+		}, "required": []string{"workspace_path", "input_id", "keep_input_id", "reason"}}),
+	}}
 	executors := map[string]interface{}{
+		"dismiss_duplicate_human_input_request": func(ctx context.Context, args map[string]interface{}) (string, error) {
+			ws, _ := args["workspace_path"].(string)
+			id, _ := args["input_id"].(string)
+			keep, _ := args["keep_input_id"].(string)
+			reason, _ := args["reason"].(string)
+			input, err := dismissDuplicateHumanInput(ctx, ws, id, keep, reason, mcpexecutor.SessionIDFromContext(ctx))
+			if err != nil {
+				return "", err
+			}
+			return marshalReportHumanInputToolResult("duplicate_dismissed", input)
+		},
 		"list_approved_fixer_decisions": func(ctx context.Context, args map[string]interface{}) (string, error) {
 			workspacePath, _ := args["workspace_path"].(string)
 			if strings.TrimSpace(workspacePath) == "" {
@@ -1064,13 +1083,14 @@ func createReportHumanInputTools() ([]llmtypes.Tool, map[string]interface{}, map
 		},
 	}
 	categories := map[string]string{
-		"list_approved_fixer_decisions": "human_tools",
-		"get_human_input_request":       "human_tools",
-		"create_human_input_request":    "human_tools",
-		"answer_human_input_request":    "human_tools",
-		"mark_human_input_consumed":     "human_tools",
+		"dismiss_duplicate_human_input_request": "human_tools",
+		"list_approved_fixer_decisions":         "human_tools",
+		"get_human_input_request":               "human_tools",
+		"create_human_input_request":            "human_tools",
+		"answer_human_input_request":            "human_tools",
+		"mark_human_input_consumed":             "human_tools",
 	}
-	return []llmtypes.Tool{getTool, listApprovedFixerTool, createTool, answerTool, consumeTool}, executors, categories
+	return []llmtypes.Tool{getTool, listApprovedFixerTool, createTool, answerTool, consumeTool, dismissDuplicateTool}, executors, categories
 }
 
 func reportHumanInputCreateRequestFromToolArgs(args map[string]interface{}) (ReportHumanInputCreateRequest, error) {

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Activity, AlertTriangle, CheckCircle2, CircleAlert, CircleHelp,
-  LayoutDashboard, Loader2, RefreshCw, Send, X,
+  LayoutDashboard, Loader2, RefreshCw, X,
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { OrgDashboardNotification, ReportHumanInput } from '../../services/api-types'
@@ -84,6 +84,29 @@ const SummaryDetail: React.FC<{ title: string; summary: OrgDashboardNotification
   </section>
 )
 
+const WorkflowSummaryRow: React.FC<{
+  label: 'Run' | 'Pulse'
+  summary: OrgDashboardNotification | null
+  onSelect: () => void
+}> = ({ label, summary, onSelect }) => {
+  if (!summary) {
+    return <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">No {label.toLowerCase()} summary recorded yet.</div>
+  }
+
+  return (
+    <button type="button" onClick={onSelect} className="w-full rounded-md border border-border bg-background/60 px-3 py-2.5 text-left transition-colors hover:border-primary/40 hover:bg-muted/40">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <Pill status={summary.status} label={label} />
+          <span className="truncate text-xs font-semibold text-foreground/90">{summary.title || `${label} summary`}</span>
+        </div>
+        <span className="shrink-0 font-runloop-mono text-[10px] text-muted-foreground">{relativeTime(summary.created_at)}</span>
+      </div>
+      <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-muted-foreground">{summary.message}</p>
+    </button>
+  )
+}
+
 const NotificationDetailModal: React.FC<{
   entry: WorkflowDashEntry
 	summary: OrgDashboardNotification
@@ -158,9 +181,6 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenWor
       pendingInputs: [...entry.pendingInputs].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()),
     }))
     .sort((a, b) => new Date(b.pendingInputs[0].updated_at).getTime() - new Date(a.pendingInputs[0].updated_at).getTime()), [entries])
-  const pulseUpdates = useMemo(() => entries
-	.filter((entry): entry is WorkflowDashEntry & { pulseSummary: OrgDashboardNotification } => !!entry.pulseSummary && !summaryNeedsAttention(entry.pulseSummary))
-	.sort((a, b) => b.pulseSummary.created_at.localeCompare(a.pulseSummary.created_at)), [entries])
   const attentionItems = useMemo(() => entries
     .map(entry => ({ entry, active: latestOpenSummary(entry) }))
     .filter((item): item is { entry: WorkflowDashEntry; active: { kind: 'run' | 'pulse'; summary: OrgDashboardNotification } } => !!item.active)
@@ -168,21 +188,15 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenWor
   const activityHistory = useMemo(() => entries
     .flatMap(entry => entry.recent.map(summary => ({ entry, summary })))
     .sort((a, b) => b.summary.created_at.localeCompare(a.summary.created_at)), [entries])
-  const groups = useMemo(() => {
-	const grouped = new Map<string, WorkflowDashEntry[]>([['Healthy / completed', []], ['Latest activity', []], ['Awaiting first run', []]])
-	entries.forEach(entry => {
-	  // Open work has a dedicated section above. Keep the all-workflows view a
-	  // non-duplicated activity inventory rather than a second alert list.
-	  if (latestOpenSummary(entry)) return
-	  const group = entry.runSummary?.status === 'completed'
-		  ? 'Healthy / completed'
-          : entry.runSummary
-            ? 'Latest activity'
-            : 'Awaiting first run'
-      grouped.get(group)?.push(entry)
+  const workflowActivity = useMemo(() => entries
+    .map(entry => {
+      const latest = [entry.runSummary, entry.pulseSummary]
+        .filter((summary): summary is OrgDashboardNotification => !!summary)
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))[0] || null
+      return { entry, latest }
     })
-    return Array.from(grouped.entries()).filter(([, items]) => items.length)
-  }, [entries])
+    .sort((a, b) => (b.latest?.created_at || '').localeCompare(a.latest?.created_at || '')),
+  [entries])
 
   const header = <div className="flex items-center justify-between gap-3 px-6 pt-6"><div className="flex items-center gap-3"><LayoutDashboard className="h-6 w-6 text-primary" /><div><h2 className="text-xl font-semibold tracking-tight text-foreground">Activity</h2><p className="mt-0.5 text-sm text-muted-foreground">Workflow runs, Pulse work, and decisions</p></div></div><button type="button" onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/90 px-3 py-2 text-sm font-medium text-muted-foreground shadow-sm hover:bg-muted disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button></div>
 
@@ -206,17 +220,22 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenWor
 		<div className="grid gap-3 lg:grid-cols-2">{attentionItems.map(({ entry, active }) => <button key={entry.workspacePath} type="button" onClick={() => setSelectedNotification({ entry, summary: active.summary })} className="rounded-lg border border-amber-500/25 bg-card/95 p-3 text-left shadow-sm hover:border-amber-500/50"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h4 className="truncate text-sm font-semibold text-foreground">{entry.label}</h4><div className="mt-2 flex flex-wrap gap-1.5"><Pill status={active.summary.status} label={active.kind === 'run' ? 'Run' : 'Pulse'} /></div></div><span className="font-runloop-mono shrink-0 text-[10px] text-muted-foreground">{relativeTime(active.summary.created_at)}</span></div><p className="mt-3 line-clamp-1 text-sm font-semibold text-foreground/90">{active.summary.title || 'Action needed'}</p><p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{active.summary.message}</p></button>)}</div>
       </section>}
 
-      <section className="space-y-2">
-        <div className="flex items-center gap-2"><Activity className="h-4 w-4 text-primary" /><h3 className="text-sm font-semibold text-foreground">Pulse updates</h3><span className="font-runloop-mono text-[11px] text-muted-foreground">{pulseUpdates.length} workflow{pulseUpdates.length !== 1 ? 's' : ''}</span></div>
-		{pulseUpdates.length ? <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{pulseUpdates.map(entry => <button key={entry.workspacePath} type="button" onClick={() => setSelectedNotification({ entry, summary: entry.pulseSummary })} className="rounded-lg border border-primary/20 bg-card/95 p-3 text-left shadow-sm hover:border-primary/50"><div className="flex items-start justify-between gap-2"><h4 className="truncate text-sm font-semibold text-foreground">{entry.label}</h4><span className="font-runloop-mono shrink-0 text-[10px] text-muted-foreground">{relativeTime(entry.pulseSummary.created_at)}</span></div><div className="mt-2 flex flex-wrap gap-1.5"><Pill status={entry.pulseSummary.status} />{entry.pulseSummary.route && <span className={`${PILL_BASE} border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-300`}>Route · {entry.pulseSummary.route}</span>}</div><div className="mt-2 text-xs leading-5 text-muted-foreground"><p className="line-clamp-1 font-medium text-foreground/90">{entry.pulseSummary.title || 'Pulse update'}</p>{entry.pulseSummary.fields?.length ? <div className="mt-2 flex flex-wrap gap-1.5">{entry.pulseSummary.fields.slice(0, 3).map((field, index) => <span key={`${field.label}:${index}`} className="rounded border border-border bg-background/70 px-1.5 py-1 font-runloop-mono text-[10px] text-foreground/80">{field.label}: {field.value}</span>)}</div> : <p className="line-clamp-2">{entry.pulseSummary.message}</p>}</div></button>)}</div> : <div className="rounded-lg border border-dashed border-border px-3 py-5 text-center text-xs text-muted-foreground">No completed Pulse updates have been posted yet.</div>}
-      </section>
-
-      <section className="space-y-4">
-        <div className="flex items-center gap-2"><LayoutDashboard className="h-4 w-4 text-muted-foreground" /><h3 className="text-sm font-semibold text-foreground">All workflows</h3><span className="font-runloop-mono text-[11px] text-muted-foreground">{entries.length} total</span></div>
-        {groups.map(([group, items]) => <div key={group} className="space-y-2"><div className="flex items-center gap-2">{group === 'Needs attention' ? <AlertTriangle className="h-4 w-4 text-amber-500" /> : group === 'Awaiting first run' ? <CircleHelp className="h-4 w-4 text-muted-foreground" /> : <Activity className={`h-4 w-4 ${group === 'Latest activity' ? 'text-primary' : 'text-emerald-500'}`} />}<h4 className="text-xs font-semibold text-foreground">{group}</h4><span className="font-runloop-mono text-[10px] text-muted-foreground">{items.length}</span></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{items.map(entry => {
-          const summary = entry.runSummary
-		  return <button key={entry.workspacePath} type="button" disabled={!summary} onClick={() => summary && setSelectedNotification({ entry, summary })} className="rounded-lg border border-border bg-card/95 p-3 text-left shadow-sm enabled:hover:border-primary/40 disabled:cursor-default"><div className="flex justify-between gap-2"><h5 className="truncate text-sm font-semibold text-foreground">{entry.label}</h5>{summary && <span className="font-runloop-mono shrink-0 text-[10px] text-muted-foreground">{relativeTime(summary.created_at)}</span>}</div>{summary ? <><div className="mt-2"><Pill status={summary.status} label="Run" /></div><div className="mt-2 text-xs leading-5 text-muted-foreground"><p className="line-clamp-1 font-medium text-foreground/90">{summary.title || 'Workflow run'}</p><p className="line-clamp-2">{summary.message}</p></div></> : <p className="mt-2 flex items-center gap-1.5 text-xs italic text-muted-foreground"><Send className="h-3.5 w-3.5" />Waiting for the first run notification.</p>}</button>
-        })}</div></div>)}
+      <section className="space-y-3">
+        <div className="flex items-center gap-2"><LayoutDashboard className="h-4 w-4 text-primary" /><h3 className="text-sm font-semibold text-foreground">Workflow activity</h3><span className="font-runloop-mono text-[11px] text-muted-foreground">{entries.length} workflow{entries.length !== 1 ? 's' : ''}</span></div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {workflowActivity.map(({ entry, latest }) => (
+            <article key={entry.workspacePath} className="rounded-lg border border-border bg-card/95 p-3 shadow-sm">
+              <div className="flex items-start justify-between gap-2">
+                <h4 className="truncate text-sm font-semibold text-foreground">{entry.label}</h4>
+                {latest && <span className="font-runloop-mono shrink-0 text-[10px] text-muted-foreground">{relativeTime(latest.created_at)}</span>}
+              </div>
+              <div className="mt-3 space-y-2">
+                <WorkflowSummaryRow label="Run" summary={entry.runSummary} onSelect={() => setSelectedNotification({ entry, summary: entry.runSummary! })} />
+                <WorkflowSummaryRow label="Pulse" summary={entry.pulseSummary} onSelect={() => setSelectedNotification({ entry, summary: entry.pulseSummary! })} />
+              </div>
+            </article>
+          ))}
+        </div>
       </section>
 
       <section className="space-y-3 border-t border-border pt-6">

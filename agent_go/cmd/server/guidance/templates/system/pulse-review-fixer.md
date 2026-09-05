@@ -592,7 +592,13 @@ as `measurement`, and dashboard-only work as `presentation_maintenance`; none
 may claim `direct_goal` impact. Use `inconclusive` or `confounded` rather than
 inventing attribution when observations are missing or interventions overlap.
 
-Record `record_pulse_result` exactly once for every due module. For every finding pass a
+Record `record_pulse_result` once after each due module's child work has actually
+finished. A running child with no checkpoint is not a failed reviewer. If a
+premature failed/blocked result was already recorded, verify the child's terminal
+outcome and persisted work before correcting it for the same `pulse_run_id`.
+Supply `verification` plus `evidence` or `finding_dispositions`; `changed` still
+requires all normal repair proof. The backend preserves the prior receipt and
+updates current module state and audit together. For every finding pass a
 structured `finding_dispositions` row with `issue_id`, disposition, summary,
 changed files, and exact verification objects. Fingerprints and attempt IDs are
 backend-only identifiers.

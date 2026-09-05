@@ -1,5 +1,14 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
+## Internal reconciliation — 2026-09-05
+
+PUL-DD9EDE3C: current browser oversized-result, production spill and every-folder-guard tool_output_folder tests pass; also covered by PLAT-200.
+
+Resolved in SQLite for internal tracking with previous concern/detail records
+preserved in resolution events. Source/tests verified; deployed replay and
+historical business/module-result repair are not claimed. Full mapping:
+[remaining-report audit](../../audits/platform-open-report-reconciliation-2026-09-05.md).
+
 # PLAT-078 — spilled bridge tool output (large agent_browser snapshots) landed outside every granted read path
 
 | Coordination | Value |

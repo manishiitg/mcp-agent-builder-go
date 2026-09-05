@@ -11,9 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
-
-	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/manishiitg/mcpagent/mcpcache"
 	"github.com/manishiitg/mcpagent/mcpclient"
@@ -103,14 +102,8 @@ type RemoveServerRequest struct {
 // should be reported as "needs OAuth" (not_connected) or a genuine error.
 // Only relabel as "needs OAuth" when there's genuinely no token yet.
 // srvCfg.OAuth != nil alone doesn't mean this failure IS an auth failure:
-// runBackgroundDiscovery only reaches this call after its own
-// hasOAuthTokenFile pre-check already found a token on disk, so a connection
-// failure here on an OAuth-configured server can be a transient one (network
-// blip, remote restart, rate limit) on an already-authenticated connector.
-// Mislabeling it "not_connected" put "OAuth" in the error text, which made
-// runBackgroundDiscovery's permanent-failure heuristic wedge an
-// already-working connector as "will not retry" until the user manually
-// reconfigured it.
+// A connection failure can be transient even when OAuth is configured.
+// Preserve the actual error if the account already has a token.
 func classifyConnectionFailure(serverName string, srvCfg mcpclient.MCPServerConfig, connErr error) *ToolStatus {
 	toolStatus := &ToolStatus{
 		Name:         serverName,
@@ -132,6 +125,15 @@ func classifyConnectionFailure(serverName string, srvCfg mcpclient.MCPServerConf
 
 // discoverServerToolsDetailed connects to a specific MCP server and returns detailed tool information using mcpcache
 func (api *StreamingAPI) discoverServerToolsDetailed(ctx context.Context, serverName string) (*ToolStatus, error) {
+	userID, _ := ctx.Value(discoveryUserKey{}).(string)
+	if userID == "" {
+		userID = GetUserIDFromContext(ctx)
+	}
+	key := fmt.Sprintf("%p:%s:%s", api, userID, serverName)
+	lock, _ := discoveryLocks.LoadOrStore(key, &sync.Mutex{})
+	mutex := lock.(*sync.Mutex)
+	mutex.Lock()
+	defer mutex.Unlock()
 	api.appendServerLog(serverName, "info", "Loading configuration...")
 
 	// Load merged config to get server details
@@ -161,15 +163,29 @@ func (api *StreamingAPI) discoverServerToolsDetailed(ctx context.Context, server
 	}
 	api.appendServerLog(serverName, "info", fmt.Sprintf("Connecting to server (protocol: %s)...", protocol))
 
-	// Create temporary merged config file for mcpcache
-	tmpConfigPath, err := api.createTempMergedConfig()
+	// Resolve OAuth credentials before cache lookup; the token path is part of
+	// the configuration-aware cache key. Do not fall back to another user's token.
+	if srvCfg.OAuth != nil {
+		oauthCfg := *srvCfg.OAuth
+		oauthCfg.TokenFile = getUserTokenFilePath(userID, serverName)
+		srvCfg.OAuth = &oauthCfg
+		cfg.MCPServers[serverName] = srvCfg
+	}
+	// Discovery only needs metadata. The runtime connection helper deliberately
+	// ensures live clients even on cache hits, so do not call it for a hit here.
+	if entry, ok := mcpcache.GetCacheManager(api.logger).Get(mcpcache.GenerateUnifiedCacheKey(serverName, srvCfg)); ok {
+		status := api.convertCacheEntryToToolStatus(entry)
+		return &status, nil
+	}
+	tmp, err := os.CreateTemp("", "mcp-discovery-*.json")
 	if err != nil {
-		api.logger.Error(fmt.Sprintf("Failed to create temp merged config: %v", err), err)
-		// Fallback to base config path
-		tmpConfigPath = api.mcpConfigPath
-	} else {
-		// Clean up temp file when done
-		defer os.Remove(tmpConfigPath)
+		return nil, err
+	}
+	tmpConfigPath := tmp.Name()
+	tmp.Close()
+	defer os.Remove(tmpConfigPath)
+	if err := mcpclient.SaveConfig(tmpConfigPath, cfg); err != nil {
+		return nil, err
 	}
 
 	// Use mcpcache.GetCachedOrFreshConnection to get cached or fresh connection
@@ -317,7 +333,7 @@ func (api *StreamingAPI) handleGetTools(w http.ResponseWriter, r *http.Request) 
 	allResults := make([]ToolStatus, 0, len(cfg.MCPServers))
 	for serverName, serverConfig := range cfg.MCPServers {
 		connection := connectionState(serverName, serverConfig, overlay, userID)
-		if cachedStatus, exists := cachedMap[serverName]; exists {
+		if cachedStatus, exists := cachedMap[serverName]; exists && serverConfig.OAuth == nil {
 			// Use cached result but apply user-specific OAuth status
 			userStatus := api.getToolStatusForUser(cachedStatus, userID)
 			userStatus.Connection = connection
@@ -327,7 +343,7 @@ func (api *StreamingAPI) handleGetTools(w http.ResponseWriter, r *http.Request) 
 			allResults = append(allResults, ToolStatus{
 				Name:          serverName,
 				Server:        serverName,
-				Status:        "loading", // Indicate that tools are being discovered
+				Status:        "not_loaded", // Discovery starts only on explicit use
 				Connection:    connection,
 				Description:   serverConfig.Description,
 				ToolsEnabled:  0,
@@ -340,16 +356,6 @@ func (api *StreamingAPI) handleGetTools(w http.ResponseWriter, r *http.Request) 
 	sort.Slice(allResults, func(i, j int) bool {
 		return allResults[i].Name < allResults[j].Name
 	})
-
-	// Check if background discovery is running
-	api.discoveryMux.RLock()
-	isRunning := api.discoveryRunning
-	api.discoveryMux.RUnlock()
-
-	if !isRunning {
-		api.logger.Info("🔄 Starting background discovery for missing servers...")
-		api.startBackgroundDiscovery()
-	}
 
 	// Return comprehensive results showing all servers
 	w.Header().Set("Content-Type", "application/json")
@@ -367,19 +373,6 @@ func (api *StreamingAPI) handleGetToolDetail(w http.ResponseWriter, r *http.Requ
 	// Get user ID from context for per-user OAuth status
 	userID := GetUserIDFromContext(r.Context())
 
-	// Check if we have cached detailed results for this server
-	api.toolStatusMux.RLock()
-	cachedStatus, exists := api.toolStatus[serverName]
-	api.toolStatusMux.RUnlock()
-
-	// If we have cached results with detailed tools, return them with user-specific OAuth status
-	if exists && len(cachedStatus.Tools) > 0 {
-		userStatus := api.getToolStatusForUser(cachedStatus, userID)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(&userStatus)
-		return
-	}
-
 	// If no cached detailed results, fetch them and cache
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
@@ -390,30 +383,14 @@ func (api *StreamingAPI) handleGetToolDetail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Cache the detailed results in mcpcache
-	cacheManager := mcpcache.GetCacheManager(api.logger)
-
-	// Get server config to generate proper cache key
-	api.mcpConfig.ReloadConfig(api.mcpConfigPath, api.logger)
-	cfg := api.mcpConfig
-	serverConfig, configErr := cfg.GetServer(serverName)
-	if configErr != nil {
-		api.logger.Warn(fmt.Sprintf("⚠️ Failed to get server config for %s: %v", serverName, configErr))
-		http.Error(w, "Server configuration error", http.StatusInternalServerError)
-		return
+	// mcpcache already stores metadata using the resolved credential/config key.
+	// Do not recache it under the base configuration or share OAuth tool lists.
+	cfg, configErr := api.loadMergedConfig()
+	if configErr == nil && cfg.MCPServers[serverName].OAuth == nil {
+		api.toolStatusMux.Lock()
+		api.toolStatus[serverName] = *result
+		api.toolStatusMux.Unlock()
 	}
-
-	cacheEntry := api.convertToolStatusToCacheEntry(result, serverName)
-	if err := cacheManager.Put(cacheEntry, serverConfig); err != nil {
-		api.logger.Warn(fmt.Sprintf("⚠️ Failed to write detailed cache for server %s: %v", serverName, err))
-	} else {
-		api.logger.Info(fmt.Sprintf("💾 Cached detailed tools for server: %s (%d tools)", serverName, len(result.Tools)))
-	}
-
-	// Also update in-memory cache for immediate API responses
-	api.toolStatusMux.Lock()
-	api.toolStatus[serverName] = *result
-	api.toolStatusMux.Unlock()
 
 	// Return result with user-specific OAuth status
 	userStatus := api.getToolStatusForUser(*result, userID)
@@ -719,6 +696,10 @@ func (api *StreamingAPI) initializeToolCache() {
 		if !exists {
 			continue
 		}
+		// OAuth metadata belongs to the requesting account, not the catalog.
+		if serverConfig.OAuth != nil {
+			continue
+		}
 
 		// Try to get cached entry using configuration-aware key
 		cacheKey := mcpcache.GenerateUnifiedCacheKey(serverName, serverConfig)
@@ -748,19 +729,8 @@ func (api *StreamingAPI) initializeToolCache() {
 		api.logger.Info(fmt.Sprintf("✅ Loaded %d servers from existing mcpcache", cachedServers))
 	}
 
-	// Check if we need to discover more servers
-	totalServers := len(cfg.MCPServers)
-	if cachedServers < totalServers {
-		missingServers := totalServers - cachedServers
-		api.logger.Info(fmt.Sprintf("🔄 Found %d cached servers, but config has %d servers. Starting background discovery for %d missing servers...",
-			cachedServers, totalServers, missingServers))
-		api.startBackgroundDiscovery()
-	} else {
-		api.logger.Info(fmt.Sprintf("✅ All %d servers found in cache, starting periodic refresh only", cachedServers))
-	}
+	// Cache misses remain idle until a selected server is needed.
 
-	// Always start periodic refresh to keep cache updated
-	api.startPeriodicRefresh()
 }
 
 // convertCacheEntryToToolStatus converts a mcpcache.CacheEntry to ToolStatus
@@ -822,53 +792,6 @@ func (api *StreamingAPI) convertCacheEntryToToolStatus(entry *mcpcache.CacheEntr
 	}
 }
 
-// convertToolStatusToCacheEntry converts a ToolStatus to mcpcache.CacheEntry
-func (api *StreamingAPI) convertToolStatusToCacheEntry(toolStatus *ToolStatus, serverName string) *mcpcache.CacheEntry {
-	// Get cache manager to use configured TTL
-	cacheManager := mcpcache.GetCacheManager(api.logger)
-	ttlMinutes := cacheManager.GetTTL()
-
-	// Convert ToolDetail to llmtypes.Tool format using the centralized conversion function
-	llmTools, err := mcpclient.ToolDetailsAsLLM(toolStatus.Tools)
-	if err != nil {
-		api.logger.Error(fmt.Sprintf("Failed to convert tool details to LLM tools: %v", err), err)
-		// Return empty cache entry on error
-		return &mcpcache.CacheEntry{
-			ServerName:   serverName,
-			Tools:        []llmtypes.Tool{},
-			Prompts:      []mcp.Prompt{},
-			Resources:    []mcp.Resource{},
-			SystemPrompt: "",
-			CreatedAt:    time.Now(),
-			TTLMinutes:   ttlMinutes,
-			Protocol:     "unknown",
-			ServerInfo:   make(map[string]interface{}),
-			IsValid:      false,
-			ErrorMessage: fmt.Sprintf("Tool conversion error: %v", err),
-		}
-	}
-
-	// Create cache entry
-	status := "ok"
-	if toolStatus.Status == "error" {
-		status = "error"
-	}
-
-	return &mcpcache.CacheEntry{
-		ServerName:   serverName,
-		Tools:        llmTools,
-		Prompts:      []mcp.Prompt{},   // Empty for now
-		Resources:    []mcp.Resource{}, // Empty for now
-		SystemPrompt: "",               // Empty for now
-		CreatedAt:    time.Now(),
-		TTLMinutes:   ttlMinutes, // Use configured TTL from cache manager
-		Protocol:     "unknown",  // Will be updated by actual discovery
-		ServerInfo:   make(map[string]interface{}),
-		IsValid:      status == "ok",
-		ErrorMessage: toolStatus.Error,
-	}
-}
-
 // extractServerTools extracts tools specific to a server from the aggregated tool list
 func (api *StreamingAPI) extractServerTools(allTools []llmtypes.Tool, toolToServer map[string]string, serverName string) []llmtypes.Tool {
 	var serverTools []llmtypes.Tool
@@ -882,206 +805,31 @@ func (api *StreamingAPI) extractServerTools(allTools []llmtypes.Tool, toolToServ
 	return serverTools
 }
 
-// startBackgroundDiscovery starts the background tool discovery process
-func (api *StreamingAPI) startBackgroundDiscovery() {
-	api.discoveryMux.Lock()
-	defer api.discoveryMux.Unlock()
-
-	if api.discoveryRunning {
-		return // Already running
-	}
-
-	api.discoveryRunning = true
-	go api.runBackgroundDiscovery()
-}
-
-// runBackgroundDiscovery runs the actual background discovery using mcpcache service
-func (api *StreamingAPI) runBackgroundDiscovery() {
-	defer func() {
-		api.discoveryMux.Lock()
-		api.discoveryRunning = false
-		api.discoveryMux.Unlock()
-	}()
-
-	api.logger.Info("🔄 Starting background tool discovery using mcpcache service...")
-
-	// Get cache manager
-	cacheManager := mcpcache.GetCacheManager(api.logger)
-
-	// Load merged config (base + user additions)
-	cfg, err := api.loadMergedConfig()
-	if err != nil {
-		api.logger.Error(fmt.Sprintf("Failed to load merged config: %v", err), err)
-		// Fallback to base config only
-		api.mcpConfig.ReloadConfig(api.mcpConfigPath, api.logger)
-		cfg = api.mcpConfig
-	}
-
-	// Cleanup: Remove in-memory status for servers that no longer exist in config
-	api.toolStatusMux.Lock()
-	for name := range api.toolStatus {
-		if _, exists := cfg.MCPServers[name]; !exists {
-			delete(api.toolStatus, name)
-			api.logger.Info(fmt.Sprintf("🗑️ Removed deleted server from status: %s", name))
-		}
-	}
-	api.toolStatusMux.Unlock()
-
-	discoveredServers := 0
-	for serverName := range cfg.MCPServers {
-		// Skip servers that previously failed with permanent errors (auth, unauthorized)
-		// These won't recover without config changes, so don't waste time retrying
-		if reason, failed := api.discoveryFailedServers[serverName]; failed {
-			api.logger.Debug(fmt.Sprintf("⏭️ Skipping previously failed server %s: %s", serverName, reason))
-			continue
-		}
-
-		// Get server configuration for cache key generation
-		serverConfig, err := cfg.GetServer(serverName)
+// Discovery is scoped to an explicit server and requesting user. There is no
+// catalog-wide scan or periodic network refresh.
+func (api *StreamingAPI) startServerDiscovery(userID, serverName string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		ctx = context.WithValue(ctx, discoveryUserKey{}, userID)
+		result, err := api.discoverServerToolsDetailed(ctx, serverName)
 		if err != nil {
-			api.logger.Warn(fmt.Sprintf("⚠️ Server %s not found in config, skipping: %v", serverName, err))
-			continue
-		}
-		// Check if we already have valid cached data using configuration-aware key
-		cacheKey := mcpcache.GenerateUnifiedCacheKey(serverName, serverConfig)
-		if entry, exists := cacheManager.Get(cacheKey); exists {
-			// Use existing cached data
-			toolStatus := api.convertCacheEntryToToolStatus(entry)
-			api.toolStatusMux.Lock()
-			api.toolStatus[serverName] = toolStatus
-			api.toolStatusMux.Unlock()
-			discoveredServers++
-			continue
-		}
-
-		// Pre-check: skip OAuth servers with no token file — avoids ~19s of futile retries
-		if !hasOAuthTokenFile(serverConfig) {
-			reason := "OAuth token file not found — authentication required before discovery"
-			api.discoveryFailedServers[serverName] = reason
-			api.logger.Info(fmt.Sprintf("⏭️ Skipping server %s: no OAuth token file", serverName))
-			api.appendServerLog(serverName, "warn", reason)
-
-			api.toolStatusMux.Lock()
-			api.toolStatus[serverName] = ToolStatus{
-				Name:          serverName,
-				Server:        serverName,
-				Status:        "not_connected",
-				Error:         "OAuth authentication required — no token available",
-				RequiresOAuth: true,
-			}
-			api.toolStatusMux.Unlock()
-			continue
-		}
-
-		// No valid cache, discover fresh data
-		api.logger.Info(fmt.Sprintf("🔍 Discovering tools for server: %s", serverName))
-		api.appendServerLog(serverName, "info", "Starting background discovery...")
-
-		// Each server gets its own 5-minute timeout so one slow server
-		// cannot starve subsequent servers of connection time.
-		serverCtx, serverCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		result, err := api.discoverServerToolsDetailed(serverCtx, serverName)
-		serverCancel()
-		if err != nil {
-			errMsg := err.Error()
 			api.appendServerLog(serverName, "error", fmt.Sprintf("Discovery failed: %v", err))
-			api.logger.Warn(fmt.Sprintf("⚠️ Failed to discover tools for server %s: %v", serverName, err))
-
-			// Mark servers with permanent errors so they're not retried on subsequent cycles.
-			// Auth/unauthorized errors won't resolve without config changes.
-			if strings.Contains(errMsg, "unauthorized") || strings.Contains(errMsg, "401") ||
-				strings.Contains(errMsg, "OAuth") || strings.Contains(errMsg, "forbidden") || strings.Contains(errMsg, "403") {
-				api.discoveryFailedServers[serverName] = errMsg
-				api.logger.Info(fmt.Sprintf("🚫 Server %s marked as permanently failed (auth error), will not retry", serverName))
-			}
-
-			// Store the error in toolStatus so the UI shows the failure
-			api.toolStatusMux.Lock()
-			api.toolStatus[serverName] = ToolStatus{
-				Name:   serverName,
-				Server: serverName,
-				Status: "error",
-				Error:  errMsg,
-			}
-			api.toolStatusMux.Unlock()
-			continue
+			return
 		}
-
-		// Check if discovery returned a non-ok status (e.g. OAuth required, auth failed).
-		// discoverServerToolsDetailed returns (toolStatus, nil) for these — the outcome
-		// is in result.Status/result.Error, not in the Go error return value.
-		// "not_connected" means the server is simply awaiting OAuth, not broken; it is
-		// still recorded below so discovery does not retry it until the user connects.
-		if result.Status == "error" || result.Status == "not_connected" {
-			errMsg := result.Error
-			logLevel := "error"
-			if result.Status == "not_connected" {
-				logLevel = "warn"
-			}
-			api.appendServerLog(serverName, logLevel, fmt.Sprintf("Discovery returned %s status: %s", result.Status, errMsg))
-			api.logger.Warn(fmt.Sprintf("⚠️ Server %s discovery returned %s: %s", serverName, result.Status, errMsg))
-
-			if result.RequiresOAuth ||
-				strings.Contains(errMsg, "unauthorized") || strings.Contains(errMsg, "401") ||
-				strings.Contains(errMsg, "OAuth") || strings.Contains(errMsg, "forbidden") || strings.Contains(errMsg, "403") {
-				api.discoveryFailedServers[serverName] = errMsg
-				api.logger.Info(fmt.Sprintf("🚫 Server %s marked as permanently failed (auth error), will not retry", serverName))
-			}
-
-			// Store the error in toolStatus so the UI shows the failure
+		// OAuth tool lists may be account-specific; never publish them globally.
+		cfg, err := api.loadMergedConfig()
+		if err == nil && cfg.MCPServers[serverName].OAuth == nil {
 			api.toolStatusMux.Lock()
 			api.toolStatus[serverName] = *result
 			api.toolStatusMux.Unlock()
-			continue
-		}
-
-		// Convert ToolStatus to CacheEntry and write to mcpcache
-		cacheEntry := api.convertToolStatusToCacheEntry(result, serverName)
-		if err := cacheManager.Put(cacheEntry, serverConfig); err != nil {
-			api.logger.Warn(fmt.Sprintf("⚠️ Failed to write cache for server %s: %v", serverName, err))
-		} else {
-			api.logger.Info(fmt.Sprintf("💾 Cached tools for server: %s (%d tools)", serverName, len(result.Tools)))
-		}
-
-		// Update in-memory cache for immediate API responses
-		api.toolStatusMux.Lock()
-		api.toolStatus[serverName] = *result
-		api.toolStatusMux.Unlock()
-
-		discoveredServers++
-	}
-
-	api.lastDiscovery = time.Now()
-	api.logger.Info(fmt.Sprintf("✅ Background tool discovery completed: %d servers processed", discoveredServers))
-
-	// Persist failed servers to disk so they're skipped on next restart
-	if len(api.discoveryFailedServers) > 0 {
-		api.persistDiscoveryFailedServers()
-	}
-
-	// Start periodic refresh (every 24 hours)
-	api.startPeriodicRefresh()
-}
-
-// startPeriodicRefresh starts periodic background refresh
-func (api *StreamingAPI) startPeriodicRefresh() {
-	api.discoveryMux.Lock()
-	defer api.discoveryMux.Unlock()
-
-	if api.discoveryTicker != nil {
-		return // Already started
-	}
-
-	api.discoveryTicker = time.NewTicker(24 * time.Hour)
-	go func() {
-		for range api.discoveryTicker.C {
-			api.logger.Info("🔄 Starting periodic tool discovery refresh...")
-			api.runBackgroundDiscovery()
 		}
 	}()
-
-	api.logger.Info("⏰ Started periodic tool discovery refresh (every 24 hours)")
 }
+
+type discoveryUserKey struct{}
+
+var discoveryLocks sync.Map
 
 // stopPeriodicRefresh stops the periodic refresh
 func (api *StreamingAPI) stopPeriodicRefresh() {
@@ -1107,11 +855,10 @@ func (api *StreamingAPI) getToolStatusForUser(status ToolStatus, userID string) 
 			// User has authenticated - clear the OAuth required flag
 			status.RequiresOAuth = false
 			status.Error = ""
-			// A "not_connected" status was recorded before this user authenticated,
-			// so it is now stale — rediscovery is pending. Report it as loading
-			// rather than leaving the UI claiming the server is not connected.
+			// The old status predates authentication. Metadata remains idle until
+			// explicitly requested; do not advertise a nonexistent loading job.
 			if status.Status == "not_connected" {
-				status.Status = "loading"
+				status.Status = "not_loaded"
 			}
 			// Note: The tools may still be empty if discovery failed for other reasons
 		}

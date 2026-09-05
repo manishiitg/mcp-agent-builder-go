@@ -1,5 +1,14 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
+## Internal reconciliation — 2026-09-05
+
+PUL-D50AD8BC: historical ordinary-step registration requirement closed as superseded. Current tool-profile exclusion tests pass; normal CONCERNS scraping was not restored.
+
+Resolved in SQLite for internal tracking with previous concern/detail records
+preserved in resolution events. Source/tests verified; deployed replay and
+historical business/module-result repair are not claimed. Full mapping:
+[remaining-report audit](../../audits/platform-open-report-reconciliation-2026-09-05.md).
+
 # PLAT-211 — retain Markdown-wrapped `CONCERNS:` parsing only for legacy/advisor compatibility; normal workflow-step ingestion is retired
 
 | Coordination | Value |

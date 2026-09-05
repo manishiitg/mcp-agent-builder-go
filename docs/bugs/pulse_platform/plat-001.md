@@ -1,5 +1,14 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
+## Internal reconciliation — 2026-09-05
+
+PUL-7B849CC6: keyed-input parser, unknown-ID, sibling/map isolation, explicit-input precedence and opening-prompt tests pass on current source.
+
+Resolved in SQLite for internal tracking with previous concern/detail records
+preserved in resolution events. Source/tests verified; deployed replay and
+historical business/module-result repair are not claimed. Full mapping:
+[remaining-report audit](../../audits/platform-open-report-reconciliation-2026-09-05.md).
+
 # PLAT-001 — `run_full_workflow` drops keyed human input
 
 | Coordination | Value |

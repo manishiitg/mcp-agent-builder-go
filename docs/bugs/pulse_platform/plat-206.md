@@ -2,6 +2,19 @@
 
 # PLAT-206 — a split-dispatch Fixer's supplemental result was rejected as "already terminal," leaving real repairs stuck at queued_for_engineering forever
 
+## 2026-09-05 reconciliation and correction follow-up
+
+Upwork `PUL-565F9ED1` and `PUL-E19F5F1B` were resolved for internal tracking after
+current supplemental-disposition and parent-run receipt tests passed. The first
+report also contained the obsolete child-session review-log gate; that gate was
+removed in a8aaaa012. Prior SQLite concern/detail rows are retained in audit events.
+
+The original implementation narrative below is historical: the local PLAT-258
+follow-up now updates module state and audit together and preserves previous
+receipts, rather than leaving the original module result inconsistent with the
+later audit. New changes are not claimed deployed; no old workflow repair was
+reapplied and no old module result was rewritten by this reconciliation.
+
 | Coordination | Value |
 |---|---|
 | Assigned agent | unassigned |

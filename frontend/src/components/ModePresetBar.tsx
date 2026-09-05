@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { Workflow, Settings, Copy, Keyboard, Building2, HelpCircle, Eye } from 'lucide-react'
+import { Workflow, Settings, Copy, Keyboard, Building2, HelpCircle, Eye, Plus } from 'lucide-react'
 import { useAuthStore } from '../stores/useAuthStore'
 import { isWorkflowReadOnly } from '../utils/workflowPermissions'
 import { useModeStore } from '../stores/useModeStore'
@@ -275,6 +275,18 @@ export const ModePresetBar: React.FC = () => {
 
     setShowPresetModal(true)
   }, [])
+
+  // Keep the create action discoverable beside the automation selector. It is
+  // intentionally rendered for read-only accounts too (so the role can see
+  // how automations are added), but the account-level read-only policy keeps
+  // the action disabled rather than opening a form that can never be saved.
+  const handleAddWorkflow = useCallback(() => {
+    if (isReadOnlyUser) return
+    setEditingPreset(null)
+    setShowPresetDropdown(false)
+    setShowPresetModal(true)
+    setWorkspaceMinimized(true)
+  }, [isReadOnlyUser, setWorkspaceMinimized])
 
   // Listen for external trigger to open preset settings (e.g. from workflow toolbar)
   const showPresetSettings = useCommandDialogStore(s => s.showPresetSettings)
@@ -666,6 +678,21 @@ export const ModePresetBar: React.FC = () => {
                             <Settings className="w-3 h-3 text-gray-300" />
                           </div>
                         )}
+
+                        {/* Keep creation discoverable next to the selected
+                            automation for every role. Account-level readers
+                            see the affordance but cannot submit a new one. */}
+                        <button
+                          type="button"
+                          data-testid="add-workflow-button"
+                          aria-label="Add automation"
+                          onClick={handleAddWorkflow}
+                          disabled={isReadOnlyUser}
+                          title={isReadOnlyUser ? 'Read-only users cannot create automations' : 'Add automation'}
+                          className="border-l border-gray-200 px-2 py-1 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-slate-700 dark:hover:text-gray-200"
+                        >
+                          <Plus className="h-3 w-3" />
+                        </button>
                       </div>
 
                       {/* Preset Dropdown */}
@@ -674,12 +701,9 @@ export const ModePresetBar: React.FC = () => {
                           <div className="p-2 space-y-1 max-h-96 overflow-y-auto">
                             {/* Add New Workflow Option */}
                             <button
-                              onClick={() => {
-                                setEditingPreset(null)
-                                setShowPresetModal(true)
-                                setShowPresetDropdown(false)
-                                setWorkspaceMinimized(true)
-                              }}
+                              onClick={handleAddWorkflow}
+                              disabled={isReadOnlyUser}
+                              title={isReadOnlyUser ? 'Read-only users cannot create automations' : undefined}
                               className="w-full text-left p-2 rounded-md text-sm hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300"
                             >
                               <div className="flex items-center gap-2">

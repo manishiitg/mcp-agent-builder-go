@@ -19,6 +19,13 @@ documentation. 19 were healthy.
 
 ## E1 — `db_access` removed ✅
 
+2026-09-05 reconciliation: Instagram `PUL-51D2EC0F` is closed as superseded by
+this intentional field retirement, not as a new permission repair. Its complaint
+about losing stored `db_access` does not justify restoring an inert grant.
+`TestMergeAgentConfigFieldsCoversEveryField` passes for the supported field set.
+The previous finding is preserved in its SQLite resolution event; no arbitrary
+unknown-field preservation or deployed workflow verification is claimed.
+
 `resolveDBAccess(_ *AgentConfigs)` **ignored its argument entirely** and always
 returned read-write; every read path discarded the field. Yet it kept a live
 setter, documentation, and an enum `["read","read-write"]` that invited agents to

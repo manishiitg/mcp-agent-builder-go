@@ -329,6 +329,12 @@ func ensurePulseModuleStateSchema(ctx context.Context, db *sql.DB) error {
 	stmts := []string{
 		pulseModuleStateSchema,
 		pulseModuleAuditSchema,
+		`CREATE TABLE IF NOT EXISTS pulse_module_result_history (
+			_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			workspace_path TEXT NOT NULL, module TEXT NOT NULL, pulse_run_id TEXT NOT NULL,
+			previous_state_json TEXT NOT NULL, previous_audit_json TEXT NOT NULL,
+			replaced_at TEXT NOT NULL
+		)`,
 		pulseReviewRecoverySchema,
 		pulseRunModeSchema,
 		pulseReviewFocusStateSchema,
@@ -1753,42 +1759,40 @@ func markPulseModuleResultFromAgentWithAuditAndFindings(
 	if changed, err := resultExec.RowsAffected(); err != nil {
 		return nil, err
 	} else if changed == 0 {
-		_ = tx.Rollback()
-		existing, readErr := getPulseModuleStateByModule(ctx, db, normalized, module)
+		existing, readErr := getPulseModuleStateByModule(ctx, tx, normalized, module)
 		if readErr != nil {
 			return nil, fmt.Errorf("Pulse module %q is not an unresolved due module for run %q", module, pulseRunID)
 		}
-		// A same-run, same-result call is a completion-turn replay (idempotent
-		// retry). A same-run call with a DIFFERENT result but real dispositions
-		// is the split reviewer/Fixer contract working as designed: the
-		// reviewer's own terminal write ("done", nothing more to review) and
-		// the Fixer's later supplemental write ("changed", files were
-		// modified) are both true facts about the same pulse_run_id, not a
-		// conflict to reject. Either shape records dispositions/audit without
-		// re-writing the module's own last_result/last_result_reason, which
-		// stay the reviewer's original terminal verdict. A same-run call with
-		// a different result AND no dispositions carries no new evidence to
-		// justify a second write, so it still falls through to the error below.
-		if existing.LastPulseRunID == pulseRunID && (existing.LastResult == result || len(dispositions) > 0) {
-			retryTx, err := db.BeginTx(ctx, nil)
-			if err != nil {
-				return nil, err
-			}
-			defer retryTx.Rollback()
-			if err := recordPulseModuleAudit(ctx, retryTx, normalized, module, pulseRunID, result, reason, evidence, audit, now); err != nil {
-				return nil, err
-			}
-			if err := step_based_workflow.RecordPulseFindingDispositionsTx(
-				ctx, retryTx, module, pulseRunID, dispositions, now,
-			); err != nil {
-				return nil, err
-			}
-			if err := retryTx.Commit(); err != nil {
-				return nil, err
-			}
-			return existing, nil
+		// Accept same-result replays, an evidenced repair after review, and a
+		// verified correction of a premature failure. Never silently update only
+		// the audit while returning the old (possibly failed) live module state.
+		correction := (existing.LastResult == "failed" || existing.LastResult == "blocked" || existing.LastResult == "timed_out") &&
+			(result == "done" || result == "changed") && len(normalizePulseEvidence(audit.Verification)) > 0 &&
+			(len(evidence) > 0 || len(dispositions) > 0)
+		supplement := existing.LastResult == "done" && result == "changed" && len(dispositions) > 0
+		if existing.LastPulseRunID != pulseRunID || existing.LastDecision != "due" ||
+			(existing.LastResult != result && !correction && !supplement) {
+			return nil, fmt.Errorf("Pulse module %q for run %q is already terminal or belongs to another run; correcting failed/blocked/timed_out to done/changed requires verification and evidence or finding_dispositions", module, pulseRunID)
 		}
-		return nil, fmt.Errorf("Pulse module %q for run %q is already terminal or belongs to another run", module, pulseRunID)
+		previous, err := json.Marshal(existing)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO pulse_module_result_history
+			(workspace_path, module, pulse_run_id, previous_state_json, previous_audit_json, replaced_at)
+			SELECT ?, ?, ?, ?, COALESCE((SELECT json_object(
+			'result', result, 'reason', reason, 'evidence_json', evidence_json,
+			'changed_files_json', changed_files_json, 'verification_json', verification_json,
+			'before_refs_json', before_refs_json, 'after_refs_json', after_refs_json, 'recorded_at', recorded_at)
+			FROM pulse_module_audit WHERE workspace_path=? AND module=? AND pulse_run_id=?), '{}'), ?`,
+			normalized, module, pulseRunID, string(previous), normalized, module, pulseRunID, now); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE pulse_module_state SET last_ran_at=?, last_result=?,
+			last_result_reason=?, evidence_json=?, updated_at=? WHERE workspace_path=? AND module=? AND last_pulse_run_id=?`,
+			now, result, reason, string(evidenceJSON), now, normalized, module, pulseRunID); err != nil {
+			return nil, err
+		}
 	}
 	if err := recordPulseModuleAudit(ctx, tx, normalized, module, pulseRunID, result, reason, evidence, audit, now); err != nil {
 		return nil, err
@@ -2250,7 +2254,9 @@ type pulseModuleScanner interface {
 	Scan(dest ...interface{}) error
 }
 
-func getPulseModuleStateByModule(ctx context.Context, db *sql.DB, workspacePath, module string) (*PulseModuleState, error) {
+func getPulseModuleStateByModule(ctx context.Context, db interface {
+	QueryRowContext(context.Context, string, ...interface{}) *sql.Row
+}, workspacePath, module string) (*PulseModuleState, error) {
 	row := db.QueryRowContext(ctx, `SELECT module, workspace_path, last_pulse_run_id, last_checked_at, last_ran_at,
 		last_decision, last_reason, last_gate_decision, last_result, last_result_reason,
 		next_check_at, next_check_after_run_id, cooldown_runs, evidence_json, updated_at
@@ -2430,6 +2436,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 			Name: "record_pulse_result",
 			Description: fmt.Sprintf("Record one Pulse outcome in the workflow's db/db.sqlite. Pass exactly one of module or command.\n"+
 				"module (%s): the terminal result of a selected Pulse module after its review and Fixer work complete — done, changed, blocked, failed, or skipped. This writes the module audit and per-finding lifecycle atomically. For result=changed, changed_files, verification, and finding_dispositions are required.\n"+
+				"Never declare a review failed merely because a checkpoint or receipt is absent while its child executor is active. Wait for terminal child evidence. An evidenced same-run correction from failed/blocked/timed_out to done/changed requires verification plus evidence or finding_dispositions; changed still requires its full repair proof. Accepted corrections update live state and audit together and retain prior receipts in history.\n"+
 				"command (%s): the live or final status of one Pulse final command — running, done, skipped, blocked, or failed. The combined Pulse finalizer marks each command running before work and then terminal immediately after it finishes.\n"+
 				"Fix attempts are opened by the backend from the disposition itself; there is no separate attempt tool and no attempt_id to carry. A fixed_verified finding needs changed_files plus only passed immediate checks. changed_unverified means a repair was successfully applied but no stronger proof was available; it closes immediately, and a later normal workflow observation semantically linked to the same issue_id reopens it. Pulse does not schedule a separate verification run. queued_for_engineering means a safe workflow repair exists but was deliberately not attempted in this pass; it requires next_check naming the next Engineering/Pulse pass and remains in Gate's active queue. external_action_required permanently removes a diagnosed real finding from Pulse's active queue and requires external_owner, reason_code, and reopen_condition; use it only when workflow tools cannot act. A failed immediate check keeps the concern open. awaiting_run is only for a real finding where no fix was applied and required evidence does not exist yet; it requires next_check naming that evidence. blocked means there is genuinely no safe action at all; never use it merely because work was deferred, deprioritized, or not selected in this pass. awaiting_user requires human_input_id naming a still-pending create_human_input_request. For strategic_review, proposal_only is accepted only with a concrete next_check evidence boundary; an actionable recommendation must use awaiting_user linked to a pending strategic_review decision. before_refs and after_refs are paired audit references. issue_id is the sole public identity; inspect existing issue text and history and reuse the issue_id for the same semantic root cause.",
 				strings.Join(pulseModuleOrder, ", "), strings.Join(pulseFinalCommandOrder, ", ")),

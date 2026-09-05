@@ -99,6 +99,12 @@ string. Decode that string exactly once; do not guess that the outer envelope
 is the tool payload and do not repeat the tool call while rediscovering its
 shape:
 
+For `query_workflow_db`, the decoded payload contains `columns` and `rows`.
+Direct/native and MCP tool calls already unwrap this HTTP envelope and return
+that payload. The envelope appears when calling raw HTTP with curl; it is not
+a different SQL result schema. Do not unwrap a direct payload a second time,
+and do not interpret HTTP/tool errors as zero query rows.
+
 ```bash
 response="$(curl --fail-with-body -sS --json "$payload" -H "$MCP_AUTH" "$MCP_CUSTOM/get_pulse_state")"
 jq -e '.success == true' >/dev/null <<<"$response"

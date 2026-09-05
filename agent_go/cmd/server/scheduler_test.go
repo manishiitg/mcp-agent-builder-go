@@ -108,7 +108,7 @@ func TestMergeRuntimeStatePreservesRunningPulseForSameSession(t *testing.T) {
 		Status:     "success",
 		StartedAt:  historyStarted,
 		DurationMs: &duration,
-	}})
+	}}, true, "")
 
 	if got.LastStatus != "running" {
 		t.Fatalf("LastStatus = %q, want running while Pulse owns the session", got.LastStatus)
@@ -132,7 +132,7 @@ func TestMergeRuntimeStateAdoptsGenuinelyNewerRun(t *testing.T) {
 		SessionID:  "new-session",
 		Status:     "success",
 		StartedAt:  historyStarted,
-	}})
+	}}, false, "")
 
 	if got.LastStatus != "success" || got.LastSessionID != "new-session" {
 		t.Fatalf("merged state = %+v, want newer persisted run", got)
@@ -2659,6 +2659,41 @@ func TestReconcileWorkshopRunOutcomeDetectsNewFailedRun(t *testing.T) {
 	}
 	if failedFolder != "iteration-232" {
 		t.Fatalf("failedFolder = %q, want iteration-232", failedFolder)
+	}
+}
+
+func TestWorkshopRunRotationDoesNotAttributeHistoricalFailure(t *testing.T) {
+	since := time.Date(2026, 9, 4, 3, 0, 26, 0, time.UTC)
+	before := map[string]bool{"iteration-0/default": true}
+	old := RunFolderInfo{Name: "iteration-315/default", Metadata: &RunMetadata{
+		Status: "failed", StartedAt: since.Add(-11 * time.Hour), CreatedAt: since.Add(time.Minute),
+	}}
+	for _, baseline := range []map[string]bool{before, {}} {
+		if folder, found := reconcileWorkshopRunOutcome(baseline, []RunFolderInfo{old}, since); found {
+			t.Fatalf("rotated historical failure blamed on current run: %s", folder)
+		}
+		if workshopRunProducedEvidence(baseline, []RunFolderInfo{old}, since) {
+			t.Fatal("rotation alone must not count as execution evidence")
+		}
+	}
+	current := RunFolderInfo{Name: "iteration-0/default", Metadata: &RunMetadata{
+		Status: "completed", StartedAt: since.Add(time.Minute),
+	}}
+	after := []RunFolderInfo{old, current}
+	if _, found := reconcileWorkshopRunOutcome(before, after, since); found {
+		t.Fatal("old failed run must not override the new successful run")
+	}
+	if !workshopRunProducedEvidence(before, after, since) {
+		t.Fatal("current reused-folder execution should count as evidence")
+	}
+	current.Metadata.Status = "failed"
+	if folder, found := reconcileWorkshopRunOutcome(before, after, since); !found || folder != current.Name {
+		t.Fatalf("current failure not detected: %q, %v", folder, found)
+	}
+	old.Metadata.StartedAt = time.Time{}
+	old.Metadata.CreatedAt = since.Add(-time.Hour)
+	if workshopRunProducedEvidence(before, []RunFolderInfo{old}, since) {
+		t.Fatal("old CreatedAt must also prevent name-only attribution")
 	}
 }
 

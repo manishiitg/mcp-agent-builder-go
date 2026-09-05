@@ -409,7 +409,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveDependencyPathsWithWorkspace(
 	resolvedPaths := make([]string, 0, len(deps))
 	for _, dep := range deps {
 		candidates := ResolveDependencyPathCandidates(dep, stepIndex, stepPath, allSteps, executionWorkspacePath, docsRoot, variableValues)
-		candidates = appendUniqueCandidates(candidates, hcpo.findApprovedPlanProducerCandidates(dep, executionWorkspacePath, docsRoot, variableValues))
+		candidates = appendUniqueCandidates(candidates, hcpo.findExecutionPlanProducerCandidates(ctx, dep, executionWorkspacePath, docsRoot, variableValues))
 		if len(candidates) == 0 {
 			resolvedPaths = append(resolvedPaths, dep)
 			continue
@@ -435,17 +435,18 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveDependencyPathsWithWorkspace(
 	return resolvedPaths
 }
 
-func (hcpo *StepBasedWorkflowOrchestrator) findApprovedPlanProducerCandidates(
+func (hcpo *StepBasedWorkflowOrchestrator) findExecutionPlanProducerCandidates(
+	ctx context.Context,
 	dep string,
 	executionWorkspacePath string,
 	docsRoot string,
 	variableValues map[string]string,
 ) []string {
-	if hcpo.approvedPlan == nil || dep == "" || filepath.IsAbs(dep) || strings.Contains(dep, "/") {
+	if executionPlanFromContext(ctx) == nil || dep == "" || filepath.IsAbs(dep) || strings.Contains(dep, "/") {
 		return nil
 	}
 
-	allPlanSteps := collectAllSteps(hcpo.approvedPlan.Steps)
+	allPlanSteps := collectAllSteps(executionPlanFromContext(ctx).Steps)
 	candidates := make([]string, 0, 4)
 	seen := make(map[string]bool)
 
@@ -482,7 +483,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) findApprovedPlanProducerCandidates(
 			legacyStepPath = fmt.Sprintf("step-%d", info.TopIndex)
 		} else {
 			infoCopy := info
-			legacyStepPath = resolveInnerStepPath(hcpo.approvedPlan.Steps, &infoCopy)
+			legacyStepPath = resolveInnerStepPath(executionPlanFromContext(ctx).Steps, &infoCopy)
 		}
 		if legacyStepPath != "" {
 			appendCandidate(filepath.Join(docsRoot, getExecutionFolderPath(executionWorkspacePath, "", legacyStepPath), dep))
@@ -974,8 +975,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) loadSingleStepResultFromLogs(ctx cont
 	stepPath := fmt.Sprintf("step-%d", stepNumber)
 	stepID := stepPath
 	var plannedStep PlanStepInterface
-	if hcpo.approvedPlan != nil && stepNumber >= 1 && stepNumber <= len(hcpo.approvedPlan.Steps) {
-		plannedStep = hcpo.approvedPlan.Steps[stepNumber-1]
+	if executionPlanFromContext(ctx) != nil && stepNumber >= 1 && stepNumber <= len(executionPlanFromContext(ctx).Steps) {
+		plannedStep = executionPlanFromContext(ctx).Steps[stepNumber-1]
 		if id := plannedStep.GetID(); id != "" {
 			stepID = id
 		}
@@ -3178,9 +3179,17 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 	lastOutcome *LastExecutedStepOutcome,
 ) error {
 	// Run folder should already be resolved early (after plan approval)
+	if executionPlanFromContext(ctx) == nil {
+		ctx = withExecutionPlan(ctx, &PlanningResponse{Steps: breakdownSteps})
+	}
 	if hcpo.selectedRunFolder == "" {
 		return fmt.Errorf(fmt.Sprintf("run folder not resolved - this should have been set after plan approval"), nil)
 	}
+	// Record completed work even when a later step fails.
+	receiptFolder, receiptID, receiptRevision := hcpo.beginCompletionReceipts(ctx, breakdownSteps, execCtx)
+	defer func() {
+		hcpo.finishCompletionReceipts(ctx, receiptFolder, receiptID, receiptRevision, breakdownSteps, progress)
+	}()
 	// Route conversations (msgSeqRoutes) are scoped to this execution phase.
 	// Drain them — and close their runtimes — however the phase exits, so a
 	// reused orchestrator instance starts the next iteration/run with fresh

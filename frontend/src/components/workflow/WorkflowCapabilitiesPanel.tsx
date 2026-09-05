@@ -218,6 +218,7 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
               <div className="flex min-h-0 flex-1 flex-col">
                 <SkillsManagerPanel
                   compact
+                  workspacePath={workspacePath}
                   selectedSkills={capabilities.selected_skills}
                   onToggleSkill={(folderName) => setCapabilities(current => ({
                     ...current,
@@ -240,6 +241,7 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
                     agentMode="workflow"
                     hideHeader
                     showSelectedOnly
+                    disabled={!canWriteWorkflow}
                   />
                 </div>
                 <div className="mt-3 flex min-h-0 flex-1 flex-col border-t border-border pt-3">
@@ -249,6 +251,7 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
                   <div className="mt-3 min-h-0 flex-1">
                     <ConnectorsBrowser
                       compact
+                      workspacePath={workspacePath}
                       selectedServers={capabilities.selected_servers}
                       onToggleServer={handleToggleServerForWorkflow}
                     />
@@ -294,6 +297,7 @@ export default function WorkflowCapabilitiesPanel({ section, workspacePath }: Wo
                 cdpError={cdpError}
                 cdpChecking={cdpChecking}
                 onCheckCdpConnection={checkCdpConnection}
+                readOnly={!canWriteWorkflow}
               />
             )}
             {section === 'llm' && (

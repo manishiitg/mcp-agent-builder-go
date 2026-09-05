@@ -317,52 +317,14 @@ func (api *StreamingAPI) loadMergedConfig() (*mcpclient.MCPConfig, error) {
 }
 
 // createTempMergedConfig creates a temporary merged config file and returns its path
-func (api *StreamingAPI) createTempMergedConfig() (string, error) {
-	// Load merged config
-	mergedConfig, err := api.loadMergedConfig()
-	if err != nil {
-		return "", err
-	}
-
-	// Create temporary file
-	tmpFile, err := os.CreateTemp("", "mcp_merged_config_*.json")
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp file: %w", err)
-	}
-	defer tmpFile.Close()
-
-	// Write merged config to temp file
-	if err := mcpclient.SaveConfig(tmpFile.Name(), mergedConfig); err != nil {
-		os.Remove(tmpFile.Name()) // Clean up on error
-		return "", fmt.Errorf("failed to write temp config: %w", err)
-	}
-
-	return tmpFile.Name(), nil
-}
 
 // triggerMCPDiscovery triggers MCP server discovery in the background
 func (api *StreamingAPI) triggerMCPDiscovery() {
-	api.logger.Info("🔄 Triggering MCP server discovery after config change")
-
-	// Clear the failed servers list so that config changes (e.g., adding OAuth tokens)
-	// allow previously failed servers to be retried
-	api.discoveryFailedServers = make(map[string]string)
-	api.deleteDiscoveryFailedServersFile()
-	api.logger.Info("🔄 Cleared failed servers list — all servers eligible for discovery")
-
-	// Use existing tool cache initialization
+	// Configuration updates reload metadata only, never connect to the catalog.
+	api.toolStatusMux.Lock()
+	api.toolStatus = make(map[string]ToolStatus)
+	api.toolStatusMux.Unlock()
 	api.initializeToolCache()
-
-	// Start background discovery if not already running
-	api.discoveryMux.RLock()
-	isRunning := api.discoveryRunning
-	api.discoveryMux.RUnlock()
-
-	if !isRunning {
-		api.startBackgroundDiscovery()
-	}
-
-	api.logger.Info("✅ MCP discovery process initiated")
 }
 
 // handleGetMCPConfigStatus handles GET requests to get config status

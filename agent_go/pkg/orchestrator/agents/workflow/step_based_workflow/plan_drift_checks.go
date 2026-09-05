@@ -334,59 +334,69 @@ func CheckValidationSchemaFileRules(ctx context.Context, fileRules []FileValidat
 
 const scriptedCodeDriftCheckID = "scripted_code_db_queries"
 
-// scriptedCodeExecutePatterns match a Python sqlite3 cursor's .execute("SQL")
-// call in a step's saved scripted learnings/<step-id>/main.py — confirmed as
-// the real, dominant convention (24 of 27 surveyed real main.py files) via
-// `import sqlite3; sqlite3.connect(os.environ["DB_PATH"])` +
-// `cur.execute(...)`, standard ?-placeholder parameterization. Triple-quoted
-// patterns are listed first: matching them before the single-char-quote
-// patterns avoids those spuriously matching the empty "" that opens/closes a
-// """...""" string (harmless either way — extraction dedupes identical SQL
-// text — but checking triple-quote first keeps the common case a single
-// match). The remaining 3 surveyed files (a subprocess/sqlite3-CLI shellout)
-// are not covered by this extractor — a known, documented limitation, not a
-// silent gap: CheckScriptedCodeDBQueries reports 0 queries found rather than
-// claiming compatibility it did not check.
-var scriptedCodeExecutePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?s)\.execute\(\s*"""(.*?)"""`),
-	regexp.MustCompile(`(?s)\.execute\(\s*'''(.*?)'''`),
-	regexp.MustCompile(`\.execute\(\s*"((?:\\.|[^"\\])*)"`),
-	regexp.MustCompile(`\.execute\(\s*'((?:\\.|[^'\\])*)'`),
-}
+// Locate Python sqlite3 .execute calls. The scanner below reads the whole static
+// string argument; dynamic expressions and subprocess/sqlite3 CLI calls are not
+// covered. The checker reports how many queries it could inspect.
+var scriptedCodeExecuteStart = regexp.MustCompile(`\.execute\s*\(\s*`)
 
 // extractScriptedCodeQueries pulls every .execute("SQL"/'SQL'/"""SQL""") call
 // out of a scripted step's main.py, deduplicated in first-seen source
 // position — same shape as extractReportQueries, deliberately, so both
 // extractors are easy to reason about together.
 func extractScriptedCodeQueries(code string) []string {
-	type found struct {
-		pos int
-		sql string
-	}
-	var all []found
-	for _, pattern := range scriptedCodeExecutePatterns {
-		for _, m := range pattern.FindAllStringSubmatchIndex(code, -1) {
-			if len(m) < 4 {
-				continue
-			}
-			sqlText := strings.TrimSpace(unescapeJSStringLiteral(code[m[2]:m[3]]))
-			if sqlText == "" {
-				continue
-			}
-			all = append(all, found{pos: m[0], sql: sqlText})
-		}
-	}
-	sort.Slice(all, func(i, j int) bool { return all[i].pos < all[j].pos })
-	seen := make(map[string]bool, len(all))
-	queries := make([]string, 0, len(all))
-	for _, f := range all {
-		if seen[f.sql] {
+	seen := make(map[string]bool)
+	var queries []string
+	for _, match := range scriptedCodeExecuteStart.FindAllStringIndex(code, -1) {
+		sqlText, ok := scriptedStaticSQLArgument(code, match[1])
+		sqlText = strings.TrimSpace(sqlText)
+		if !ok || sqlText == "" || seen[sqlText] {
 			continue
 		}
-		seen[f.sql] = true
-		queries = append(queries, f.sql)
+		seen[sqlText] = true
+		queries = append(queries, sqlText)
 	}
 	return queries
+}
+
+// Python implicitly concatenates adjacent literals, including across lines and
+// comments inside parentheses. Never EXPLAIN a prefix of a dynamic expression.
+func scriptedStaticSQLArgument(code string, pos int) (string, bool) {
+	var sql strings.Builder
+	for pos < len(code) {
+		switch code[pos] {
+		case ' ', '\t', '\r', '\n':
+			pos++
+			continue
+		case '#':
+			for pos < len(code) && code[pos] != '\n' {
+				pos++
+			}
+			continue
+		case ',', ')':
+			return sql.String(), true
+		}
+		if code[pos] != '\'' && code[pos] != '"' {
+			return "", false
+		}
+		delimiter := code[pos : pos+1]
+		if strings.HasPrefix(code[pos:], strings.Repeat(delimiter, 3)) {
+			delimiter = strings.Repeat(delimiter, 3)
+		}
+		pos += len(delimiter)
+		start := pos
+		for pos < len(code) && !strings.HasPrefix(code[pos:], delimiter) {
+			if code[pos] == '\\' {
+				pos++ // escaped quotes cannot close the literal
+			}
+			pos++
+		}
+		if pos >= len(code) {
+			return "", false
+		}
+		sql.WriteString(unescapeJSStringLiteral(code[start:pos]))
+		pos += len(delimiter)
+	}
+	return "", false
 }
 
 // countSQLPlaceholders counts standalone `?` bind placeholders in a SQL

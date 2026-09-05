@@ -365,6 +365,27 @@ func ResolvePulseFindingIssueID(ctx context.Context, workspacePath, issueID stri
 			matches = append(matches, finding)
 		}
 	}
+	if len(matches) == 0 {
+		db, err := openRunConcernsDB(ctx, workspacePath, false)
+		if err != nil {
+			return PulseFindingLifecycle{}, err
+		}
+		if db != nil {
+			defer db.Close()
+			var fingerprint string
+			err := db.QueryRowContext(ctx, `SELECT fingerprint FROM pulse_finding_issue_aliases WHERE issue_id=?`, issueID).Scan(&fingerprint)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return PulseFindingLifecycle{}, err
+			}
+			if err == nil {
+				for _, finding := range findings {
+					if finding.Fingerprint == fingerprint {
+						matches = append(matches, finding)
+					}
+				}
+			}
+		}
+	}
 	switch len(matches) {
 	case 1:
 		if matches[0].Details != nil && strings.TrimSpace(matches[0].Details.MergedIntoIssueID) != "" {
@@ -574,6 +595,7 @@ func ensurePulseFindingLifecycleSchema(ctx context.Context, db pulseFindingLifec
 		pulseFixVerificationsSchema,
 		pulseFindingEventsSchema,
 		pulseFindingDetailsSchema,
+		pulseFindingIssueAliasesSchema,
 	} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			return err
@@ -1371,6 +1393,9 @@ func mergePulseIdentityGroup(ctx context.Context, db pulseFindingLifecycleDB, ta
 		if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO pulse_finding_events
 			(fingerprint,finding_id,pulse_run_id,attempt_id,event_type,summary,metadata_json,recorded_at)
 			SELECT ?,finding_id,pulse_run_id,attempt_id,event_type,summary,metadata_json,recorded_at FROM pulse_finding_events WHERE fingerprint=?`, target, old); err != nil {
+			return err
+		}
+		if err := preserveMergedPulseIssueID(ctx, db, old, target); err != nil {
 			return err
 		}
 		for _, stmt := range []string{

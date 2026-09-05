@@ -166,7 +166,22 @@ func (hcpo *StepBasedWorkflowOrchestrator) runKBConsolidatePhase(ctx context.Con
 	notesFolderPath := filepath.Join(docsRoot, baseWorkspacePath, KnowledgebaseFolderName, KBNotesFolderName)
 	notesIndexPath := filepath.Join(notesFolderPath, KBNotesIndexFileName)
 
-	contributionsBlock := hcpo.buildKBContributionsBlock()
+	// Consolidation is a builder operation, not a continuation of whichever
+	// execution last ran in this session. Read current declarations explicitly.
+	plan, err := hcpo.ReadCurrentPlan(ctx, false)
+	if err != nil {
+		return "", fmt.Errorf("load current KB contribution plan: %w", err)
+	}
+	configs, err := hcpo.ReadStepConfigsFromSubdir(ctx, "planning")
+	if err != nil {
+		return "", fmt.Errorf("load current KB contribution configuration: %w", err)
+	}
+	for _, info := range collectAllSteps(plan.Steps) {
+		if err := populateRuntimeFields(info.Step, configs); err != nil {
+			return "", err
+		}
+	}
+	contributionsBlock := hcpo.buildKBContributionsBlock(plan)
 	stepOutputFoldersBlock := hcpo.buildStepOutputFoldersBlock(docsRoot, baseWorkspacePath)
 
 	agentName := fmt.Sprintf("kb-consolidate-%d", nano)
@@ -261,8 +276,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) RunKBConsolidate(ctx context.Context,
 // declared knowledgebase_contribution. This is what the consolidate agent uses as the
 // "declared schema" across the workflow — any type-name / property-name drift between
 // these strings is what it should reconcile.
-func (hcpo *StepBasedWorkflowOrchestrator) buildKBContributionsBlock() string {
-	plan := hcpo.approvedPlan
+func (hcpo *StepBasedWorkflowOrchestrator) buildKBContributionsBlock(plan *PlanningResponse) string {
 	if plan == nil || len(plan.Steps) == 0 {
 		return "_No plan loaded — cannot enumerate step contributions._"
 	}

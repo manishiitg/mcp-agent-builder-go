@@ -249,6 +249,7 @@ export const MicButton = forwardRef(function MicButton({
   const pct = engine && engine.total_bytes > 0 ? Math.min(100, Math.round((engine.got_bytes / engine.total_bytes) * 100)) : 0
   const sizeLabel = `${engine?.size_mb ?? 690}MB`
   const shownError = setupError ?? error
+  const transcriptPreview = latestTranscriptPreview(transcript)
 
   const label = recording
     ? 'Stop dictation (tap ⌥)'
@@ -262,7 +263,7 @@ export const MicButton = forwardRef(function MicButton({
             ? `Set up voice (one-time ${sizeLabel} download)`
             : 'Speak your message (tap ⌥, or ⌘⇧M)'
 
-  const bannerClass = 'flex items-center gap-2.5 rounded-2xl bg-slate-900 px-4 py-3 text-sm text-white shadow-[0_14px_32px_rgba(13,35,76,0.3)] dark:bg-slate-950 dark:ring-1 dark:ring-slate-700'
+  const bannerClass = 'flex items-start gap-2.5 rounded-2xl bg-slate-900 px-4 py-3 text-sm text-white shadow-[0_14px_32px_rgba(13,35,76,0.3)] dark:bg-slate-950 dark:ring-1 dark:ring-slate-700'
   const bannerLabelClass = 'shrink-0 text-[11px] font-extrabold uppercase tracking-wider text-amber-300'
   let banner: React.ReactNode = null
   if (preparing) {
@@ -277,9 +278,12 @@ export const MicButton = forwardRef(function MicButton({
     banner = (
       <span className={bannerClass} role="status">
         <span className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-red-500" aria-hidden="true" />
-        <span className={bannerLabelClass}>{recording ? 'Listening' : 'Finishing'}</span>
-        <span className={`min-w-0 flex-1 truncate ${transcript ? '' : 'italic text-slate-300'}`}>
-          {transcript || 'Go ahead — start talking'}
+        <span className="sr-only">{recording ? 'Listening' : 'Finishing'}</span>
+        <span
+          className={`min-w-0 flex-1 whitespace-pre-wrap break-words leading-6 ${transcriptPreview ? '' : 'italic text-slate-300'}`}
+          title={transcript || undefined}
+        >
+          {transcriptPreview || 'Go ahead — start talking'}
         </span>
       </span>
     )
@@ -377,6 +381,17 @@ function friendlyError(message: string): string {
   if (/not reachable|failed to connect/i.test(message)) return 'Voice isn’t available right now — the server didn’t answer.'
   if (/Permission|NotAllowed|denied/i.test(message)) return 'Could not use the microphone. Check permission for this app.'
   return message
+}
+
+// Live dictation can grow for several minutes. Keep the newest wording—the
+// part the speaker is actively refining—rather than clipping the newest text
+// at the bottom of the banner. The full transcript still lands in the composer
+// when dictation stops.
+function latestTranscriptPreview(transcript: string, maxChars = 420): string {
+  if (transcript.length <= maxChars) return transcript
+  const tail = transcript.slice(-maxChars)
+  const firstWordBoundary = tail.search(/\s/)
+  return `…${(firstWordBoundary >= 0 ? tail.slice(firstWordBoundary) : tail).trimStart()}`
 }
 
 function phaseFor(status: VoiceEngineStatus | undefined): SetupPhase {

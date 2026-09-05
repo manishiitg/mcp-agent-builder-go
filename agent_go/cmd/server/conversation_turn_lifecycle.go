@@ -141,7 +141,7 @@ func trackedExecutionParentID(execution *TrackedWorkflowExecution) string {
 // attached descendants from the same stores used by the execution-tree API and
 // Global Monitor runtime snapshot. Unrelated work in the same session is not
 // allowed to hold this turn open or complete it.
-func (api *StreamingAPI) conversationTurnTreeSnapshot(rootExecutionID string) conversationTurnTreeState {
+func (api *StreamingAPI) conversationTurnTreeSnapshot(rootExecutionID string, ignoreRunningIDs ...string) conversationTurnTreeState {
 	state := conversationTurnTreeState{}
 	if api == nil || strings.TrimSpace(rootExecutionID) == "" {
 		return state
@@ -239,6 +239,10 @@ func (api *StreamingAPI) conversationTurnTreeSnapshot(rootExecutionID string) co
 		}
 	}
 
+	ignored := make(map[string]bool, len(ignoreRunningIDs))
+	for _, id := range ignoreRunningIDs {
+		ignored[id] = true
+	}
 	seen := map[string]bool{root.ExecutionID: true}
 	queue := []string{root.ExecutionID}
 	for len(queue) > 0 {
@@ -250,7 +254,7 @@ func (api *StreamingAPI) conversationTurnTreeSnapshot(rootExecutionID string) co
 			}
 			seen[childID] = true
 			queue = append(queue, childID)
-			if statusByID[childID] == trackedExecutionStatusRunning && !progressOnly[childID] {
+			if statusByID[childID] == trackedExecutionStatusRunning && !progressOnly[childID] && !ignored[childID] {
 				state.RunningChildren++
 			}
 			if progressByID[childID].After(state.LastProgressAt) {

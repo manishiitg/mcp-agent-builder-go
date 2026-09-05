@@ -310,3 +310,11 @@ exactly once for the terminal `plan_drift_review` module result, with a
 `external_owner`, `reopen_condition`) for step 4's platform-owned findings.
 Do not render HTML, back up, publish, or notify — those belong to the
 finalizer stage.
+
+A child still running without a checkpoint or receipt is not a failed review.
+Wait for its terminal result before judging it. If a premature failure was
+already recorded for this same `pulse_run_id`, a verified correction to
+`done`/`changed` must include `verification` plus `evidence` or
+`finding_dispositions`. A `changed` correction still needs the normal complete
+repair proof. The backend updates current state and audit atomically and keeps
+the previous receipt in history; do not fabricate proof to clear an error.

@@ -1,9 +1,64 @@
 package step_based_workflow
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 )
+
+// Pin the production nonzero-exit branch, including both successful and failed
+// pre-validation: neither may return success or persist a successful receipt.
+func TestScriptedNonzeroExitCannotBePromotedByValidation(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "controller_scripted.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		branch, ok := n.(*ast.IfStmt)
+		if !ok {
+			return true
+		}
+		condition, ok := branch.Cond.(*ast.BinaryExpr)
+		if !ok || condition.Op != token.LOR {
+			return true
+		}
+		rhs, ok := condition.Y.(*ast.BinaryExpr)
+		if !ok || rhs.Op != token.NEQ {
+			return true
+		}
+		name, ok := rhs.X.(*ast.Ident)
+		if !ok || name.Name != "exitCode" {
+			return true
+		}
+		checked = true
+		ast.Inspect(branch.Body, func(n ast.Node) bool {
+			if field, ok := n.(*ast.KeyValueExpr); ok {
+				key, _ := field.Key.(*ast.Ident)
+				value, _ := field.Value.(*ast.Ident)
+				if key != nil && key.Name == "Success" && value != nil && value.Name == "true" {
+					t.Error("failed execution must not return Success: true")
+				}
+			}
+			if call, ok := n.(*ast.CallExpr); ok {
+				name, _ := call.Fun.(*ast.Ident)
+				if name != nil && name.Name == "buildRunRecord" && len(call.Args) > 0 {
+					value, _ := call.Args[0].(*ast.Ident)
+					if value != nil && value.Name == "true" {
+						t.Error("failed execution must not persist a success receipt")
+					}
+				}
+			}
+			return true
+		})
+		return false
+	})
+	if !checked {
+		t.Fatal("nonzero-exit branch not found")
+	}
+}
 
 // The controller must run a saved script through the same client the agent's own
 // execute_shell_command uses. When it hand-rolled its own request it silently

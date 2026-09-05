@@ -239,6 +239,43 @@ CLAUDE_CODE_OAUTH_TOKEN=... HOME=/srv/dominion/home PATH=/srv/dominion/tools/bin
 # expect: {"is_error":false, ..., "result":"OK", ...}
 ```
 
+### Being on `PATH` is not enough for a tool a WORKFLOW STEP execs (PLAT-281)
+
+`dominion-agent` shelling out to `claude` directly (above) is the trusted
+top-level process calling `exec.LookPath` itself — that call never goes
+through the Landlock sandbox at all. A workflow's own shell steps are
+different: every `execute_shell_command` call a workflow step makes is
+Landlock-sandboxed, and Landlock is allow-list-only by kernel design —
+`landlockSystemReadPaths()` (`workspace/security/landlock_runner_linux.go`)
+grants read+execute on a fixed set of standard system dirs (`/bin`,
+`/usr`, `/lib`, ...) and nothing under `/srv/dominion/tools` or
+`/srv/dominion/home`. A tool a *workflow step* invokes — as opposed to one
+the agent process invokes directly — being on `PATH` is irrelevant if
+Landlock denies executing it: PATH resolution finds the binary, then
+Landlock denies the exec, `rc=126: Permission denied`, no login/config
+error, no hint it's a permissions problem. This is exactly what happened
+to the `alpaca` CLI (`tectonicusadaytrading`'s trading step): installed,
+on PATH, working login — and unable to launch from inside a workflow step
+for the same reason for over a week (see [PLAT-281](../../docs/bugs/pulse_platform/plat-281.md)).
+
+**Any CLI tool installed under `/srv/dominion/tools` that a *workflow
+step* (not the agent process itself) will invoke needs an explicit grant**
+in `/srv/dominion/.env` (read by every service via `EnvironmentFile`):
+
+```
+SANDBOX_EXTRA_SYSTEM_PATHS=/srv/dominion/tools:/srv/dominion/home/.config
+```
+
+Colon-separated; add further paths (e.g. another tool's config directory
+under `/srv/dominion/home/.config`) to the same value rather than
+overwriting it. Restart `dominion-workspace` (and `dominion-agent`, since
+it shares the same `.env`) after changing it. There is no separate
+verification endpoint for this — the `/health` sandbox check only proves
+the launcher itself works, not that a specific path is granted; confirm by
+actually running the tool from inside a real workflow step, or by
+reproducing directly against the shipped launcher binary the way
+[PLAT-281](../../docs/bugs/pulse_platform/plat-281.md) did.
+
 ## Verification
 
 Before changing Caddy, validate the three local services as `dominion`:

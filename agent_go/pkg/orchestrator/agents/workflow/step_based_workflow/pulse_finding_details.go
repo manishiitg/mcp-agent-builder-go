@@ -232,7 +232,13 @@ func RecordPulseReviewFinding(ctx context.Context, workspacePath, pulseRunID, re
 		}
 	} else {
 		fingerprint = pulseFindingCanonicalFingerprint(marker.Module, marker)
-		if historical := existingCanonicalReviewFingerprint(ctx, db, marker.Module, marker.Concern); historical != "" {
+		existing, err := existingPulseFindingIdentity(ctx, db, marker)
+		if err != nil {
+			return PulseReviewFindingRecord{}, err
+		}
+		if existing != "" {
+			fingerprint = existing
+		} else if historical := existingCanonicalReviewFingerprint(ctx, db, marker.Module, marker.Concern); historical != "" {
 			fingerprint = historical
 		}
 	}

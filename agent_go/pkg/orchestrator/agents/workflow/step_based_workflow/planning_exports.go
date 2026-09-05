@@ -799,14 +799,6 @@ func NewWorkshopChatSession(ctx context.Context, cfg *WorkshopConfig) (*Workshop
 		}
 	}
 
-	// Pre-load the plan so list_steps and get_step_prompts work immediately (best-effort).
-	// Use a detached context so SSE streaming or other concurrent request activity cannot
-	// cancel this short, bounded read. context.WithoutCancel preserves values but drops
-	// the cancellation signal.
-	if loadErr := controller.LoadPlanForWorkshop(context.WithoutCancel(ctx)); loadErr != nil {
-		logger.Warn(fmt.Sprintf("[WORKSHOP] Could not pre-load plan (%v) — will retry on first tool call", loadErr))
-	}
-
 	registry := NewWorkshopStepRegistry()
 	wsn := &workshopSubAgentNotifier{registry: registry}
 	controller.SetSubAgentNotifier(wsn)
@@ -1941,7 +1933,8 @@ func RegisterRunFullWorkflowTool(
 			// Validate: if the selected route has human_input steps, human_inputs must cover them.
 			// Route-scoped validation matters for workflows like Upwork where one plan contains
 			// bid/search/profile branches; a search run must not be forced to answer bid approval.
-			if err := session.controller.LoadPlanForWorkshop(ctx); err != nil {
+			plan, err := session.controller.ReadCurrentPlan(ctx, session.controller.isEvaluationMode)
+			if err != nil {
 				return fmt.Sprintf("Failed to load plan: %v", err), nil
 			}
 			// Preflight: refuse to launch when the workflow declares MCP
@@ -1958,17 +1951,17 @@ func RegisterRunFullWorkflowTool(
 				}
 				return formatMissingDependencies(workflowLabel, missing, cfg.MCPConfigPath), nil
 			}
-			if session.controller.approvedPlan != nil {
-				if unknown := unknownWorkflowStepInputIDs(session.controller.approvedPlan.Steps, humanInputs); len(unknown) > 0 {
+			if plan != nil {
+				if unknown := unknownWorkflowStepInputIDs(plan.Steps, humanInputs); len(unknown) > 0 {
 					return fmt.Sprintf("human_inputs contains unknown step ID(s): %s. Read the current plan and key each value by an exact step ID.", strings.Join(unknown, ", ")), nil
 				}
 				var missingSteps []string
 				var legacyRoutingSteps []string
-				validationSteps := session.controller.approvedPlan.Steps
+				validationSteps := plan.Steps
 				if variableValues := workflowRunValidationVariableValues(ctx, session, groupName); len(variableValues) > 0 {
-					validationSteps = routeScopedValidationSteps(session.controller.approvedPlan.Steps, variableValues, humanInputs, routeSelections)
+					validationSteps = routeScopedValidationSteps(plan.Steps, variableValues, humanInputs, routeSelections)
 				} else if len(routeSelections) > 0 {
-					validationSteps = routeScopedValidationSteps(session.controller.approvedPlan.Steps, nil, humanInputs, routeSelections)
+					validationSteps = routeScopedValidationSteps(plan.Steps, nil, humanInputs, routeSelections)
 				}
 				for _, step := range validationSteps {
 					if step.StepType() == StepTypeHumanInput {

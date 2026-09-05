@@ -1,5 +1,14 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
+## SQLite backlog reconciled — 2026-09-05
+
+Resolved PUL-5D2B9495 in the corresponding workflow databases after checking
+the existing implementation and passing focused regression tests. Full evidence
+and the complete remaining inventory: [reconciliation audit](../../audits/platform-backlog-reconciliation-2026-09-05.md).
+This is internal tracking closure, not a claim of a new deployed end-to-end run.
+Previous SQLite records are retained in audit events; unrelated findings remain
+open. No business data or historical schedule outcome was rewritten.
+
 # PLAT-219 — scheduled turns now honor a linked full run’s durable failure instead of waiting hours for a missing completion callback
 
 | Coordination | Value |

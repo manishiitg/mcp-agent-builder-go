@@ -24,6 +24,8 @@ interface ToolSelectionSectionProps {
    * available (connected) server -- for a host that offers a separate way
    * to add new ones (e.g. the workflow panel's connectors browser below). */
   showSelectedOnly?: boolean;
+  /** Keep the selection visible while preventing read-only mutations. */
+  disabled?: boolean;
 }
 
 export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
@@ -36,6 +38,7 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
   fillAvailableHeight = false,
   hideHeader = false,
   showSelectedOnly = false,
+  disabled = false,
 }) => {
   // Generate instance ID from stepId or use a default
   const instanceId = useMemo(() => stepId || `preset-${Date.now()}`, [stepId]);
@@ -171,6 +174,7 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
 
   // Handle server checkbox
   const handleServerToggle = useCallback((serverName: string) => {
+    if (disabled) return;
     const wasSelected = isSelectedServer(selectedServers, serverName);
     const { servers, tools } = toggleServerSelection(serverName, selectedServers, selectedTools);
     onServerChange(servers);
@@ -180,10 +184,11 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
       // Always expand when server is selected so user can choose tool mode
       expandServer(serverName);
     }
-  }, [selectedServers, selectedTools, onServerChange, onToolChange, expandServer]);
+  }, [disabled, selectedServers, selectedTools, onServerChange, onToolChange, expandServer]);
 
   // Handle switching between "all tools" and "specific tools" for a server
   const handleServerToolModeChange = useCallback((serverName: string, mode: 'all' | 'specific') => {
+    if (disabled) return;
     console.log('[ToolSelection] Mode change:', serverName, '->', mode);
     
     // Update mode in store immediately
@@ -217,10 +222,11 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
       // Expand the server when switching to specific mode so user can see tools
       expandServer(serverName);
     }
-  }, [instanceId, selectedTools, onToolChange, expandServer, storeActions]);
+  }, [disabled, instanceId, selectedTools, onToolChange, expandServer, storeActions]);
 
   // Handle tool checkbox
   const handleToolToggle = useCallback((serverName: string, toolName: string) => {
+    if (disabled) return;
     const fullName = `${serverName}:${toolName}`;
     const isSelected = selectedTools.includes(fullName);
     
@@ -229,10 +235,11 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
     } else {
       onToolChange([...selectedTools, fullName]);
     }
-  }, [selectedTools, onToolChange]);
+  }, [disabled, selectedTools, onToolChange]);
 
   // Handle "Select all tools" for a server
   const handleSelectAllServerTools = useCallback((serverName: string) => {
+    if (disabled) return;
     const serverTools = storeActions.getServerTools(serverName) || [];
     if (!Array.isArray(serverTools) || serverTools.length === 0) return;
     
@@ -254,7 +261,7 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
       });
       onToolChange(newTools);
     }
-  }, [storeActions, selectedTools, onToolChange]);
+  }, [disabled, storeActions, selectedTools, onToolChange]);
 
   // Check if all tools from a server are selected
   const areAllServerToolsSelected = useCallback((serverName: string) => {
@@ -353,6 +360,7 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
                   id={`server-${serverName}`}
                   checked={isServerSelected}
                   onCheckedChange={() => handleServerToggle(serverName)}
+                  disabled={disabled}
                 />
 
                 {/* Connector icon with a small connection-status badge on its corner */}
@@ -401,6 +409,8 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
                         console.log('[ToolSelection] All tools button clicked:', serverName);
                         handleServerToolModeChange(serverName, 'all');
                       }}
+                      disabled={disabled}
+                      title={disabled ? 'Read-only access' : undefined}
                       className={`flex items-center space-x-1.5 px-2 py-1 rounded border transition-colors ${
                         toolMode === 'all'
                           ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
@@ -426,6 +436,8 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
                         console.log('[ToolSelection] Specific tools button clicked:', serverName);
                         handleServerToolModeChange(serverName, 'specific');
                       }}
+                      disabled={disabled}
+                      title={disabled ? 'Read-only access' : undefined}
                       className={`flex items-center space-x-1.5 px-2 py-1 rounded border transition-colors ${
                         toolMode === 'specific'
                           ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
@@ -459,6 +471,8 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
                           <button
                             type="button"
                             onClick={() => handleSelectAllServerTools(serverName)}
+                            disabled={disabled}
+                            title={disabled ? 'Read-only access' : undefined}
                             className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1"
                           >
                             {allToolsSelected ? (
@@ -484,6 +498,7 @@ export const ToolSelectionSection: React.FC<ToolSelectionSectionProps> = ({
                                   id={`tool-${fullName}`}
                                   checked={isToolSelected}
                                   onCheckedChange={() => handleToolToggle(serverName, tool.name)}
+                                  disabled={disabled}
                                   className="mt-1"
                                 />
                                 <label

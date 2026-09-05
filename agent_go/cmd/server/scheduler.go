@@ -937,11 +937,32 @@ func (s *SchedulerService) GetRuntimeState(scheduleID string) ScheduleRuntimeSta
 func (s *SchedulerService) GetRuntimeStateForWorkflow(workspacePath, scheduleID string) ScheduleRuntimeState {
 	key := workflowScheduleRuntimeKey(workspacePath, scheduleID)
 	merged := s.getRuntimeStateByKey(key)
+	s.runCancelsMu.Lock()
+	ownsActiveRun := merged.ActiveRunID != "" && s.runCancels[merged.ActiveRunID] != nil
+	s.runCancelsMu.Unlock()
 	_ = s.reconcileWorkflowScheduleRuns(context.Background(), workspacePath, scheduleID)
 	runs, err := ReadScheduleRuns(context.Background(), workspacePath)
 	if err == nil {
-		merged = mergeRuntimeStateWithRuns(merged, scheduleID, runs)
+		durableRunID := ""
+		// The durable scheduler receipt includes Pulse's terminal outcome;
+		// workflow-only file history must not erase a partial/stopped result.
+		if !ownsActiveRun {
+			latest := -1
+			for i := range runs {
+				if runs[i].ScheduleID == scheduleID && (latest < 0 || runs[i].StartedAt.After(runs[latest].StartedAt)) {
+					latest = i
+				}
+			}
+			if latest >= 0 {
+				if status, message, _, ok := s.durableScheduleRunProjection(context.Background(), runs[latest].ID); ok {
+					runs[latest].Status, runs[latest].Error = status, message
+					durableRunID = runs[latest].ID
+				}
+			}
+		}
+		merged = mergeRuntimeStateWithRuns(merged, scheduleID, runs, ownsActiveRun, durableRunID)
 	}
+	merged.NextRunAt = s.nextWorkflowScheduleRunAt(workspacePath, scheduleID, time.Now())
 	s.stateStoreMu.RLock()
 	if s.stateStore != nil {
 		if pending, pendingErr := s.stateStore.GetPendingOccurrence(context.Background(), "workflow", workspacePath, scheduleID); pendingErr == nil {
@@ -1107,7 +1128,7 @@ func (s *SchedulerService) reconciledScheduleRunStatus(run *ScheduleRunEntry, no
 // live work as interrupted.
 var scheduleRunAbandonedAfter = 6 * time.Hour
 
-func mergeRuntimeStateWithRuns(state ScheduleRuntimeState, scheduleID string, runs []ScheduleRunEntry) ScheduleRuntimeState {
+func mergeRuntimeStateWithRuns(state ScheduleRuntimeState, scheduleID string, runs []ScheduleRunEntry, ownsActiveRun bool, durableRunID string) ScheduleRuntimeState {
 	var filtered []ScheduleRunEntry
 	for _, run := range runs {
 		if run.ScheduleID == scheduleID {
@@ -1118,6 +1139,7 @@ func mergeRuntimeStateWithRuns(state ScheduleRuntimeState, scheduleID string, ru
 		return state
 	}
 
+	sort.SliceStable(filtered, func(i, j int) bool { return filtered[i].StartedAt.After(filtered[j].StartedAt) })
 	latest := filtered[0]
 	if state.RunCount < len(filtered) {
 		state.RunCount = len(filtered)
@@ -1125,15 +1147,21 @@ func mergeRuntimeStateWithRuns(state ScheduleRuntimeState, scheduleID string, ru
 	// File history records the workflow result before Pulse finishes. Preserve
 	// the live in-memory state for that same run so the UI cannot report success
 	// and admit another trigger while Pulse still owns the session.
-	if state.LastStatus == "running" &&
-		(state.LastSessionID == "" || latest.SessionID == "" || latest.SessionID == state.LastSessionID) {
+	if state.LastStatus == "running" && ownsActiveRun {
 		return state
 	}
 
 	shouldAdoptLatest := state.LastRunAt == nil || latest.StartedAt.After(*state.LastRunAt)
 	sameRun := state.LastRunAt != nil && latest.StartedAt.Equal(*state.LastRunAt)
+	// Session identity alone is insufficient: resumed sessions span many runs.
+	if state.ActiveRunID != "" && latest.ID == state.ActiveRunID {
+		sameRun = true
+	}
+	staleRunning := state.LastStatus == "running" && !ownsActiveRun && sameRun && latest.Status != "running"
 
-	if shouldAdoptLatest {
+	durableSameRun := !ownsActiveRun && sameRun && durableRunID != "" && latest.ID == durableRunID
+	if shouldAdoptLatest || staleRunning || durableSameRun {
+		state.ActiveRunID = ""
 		startedAt := latest.StartedAt
 		state.LastRunAt = &startedAt
 		state.LastStatus = latest.Status
@@ -1150,7 +1178,7 @@ func mergeRuntimeStateWithRuns(state ScheduleRuntimeState, scheduleID string, ru
 		if state.LastSessionID == "" {
 			state.LastSessionID = latest.SessionID
 		}
-		if state.LastError == "" {
+		if state.LastError == "" && state.LastStatus == latest.Status {
 			state.LastError = latest.Error
 		}
 		if state.LastDurationMs == nil {
@@ -2088,7 +2116,6 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 
 	// Calculate results
 	durationMs := time.Since(startTime).Milliseconds()
-	nextRun := getNextRunTime(sctx.Schedule.CronExpression, sctx.Schedule.Timezone)
 
 	status := "success"
 	errMsg := ""
@@ -2223,6 +2250,7 @@ func (s *SchedulerService) runJob(ctx context.Context, sctx *ScheduleContext, ru
 			s.sessionLogf(sctx, sessionID, "[PULSE] failed to finalize one-off Pulse run history: %v", err)
 		}
 	}
+	nextRun := s.nextWorkflowScheduleRunAt(sctx.WorkspacePath, schedID, time.Now())
 	s.updateRuntimeState(runtimeKey, func(state *ScheduleRuntimeState) {
 		state.ActiveRunID = ""
 		state.LastStatus = overallStatus
@@ -3699,6 +3727,11 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 			"[SCHEDULER] skipping run-outcome reconciliation for %s: run-folder listing unavailable (pre-run err=%v, post-run err=%v); this invocation's outcome stands on its session result alone",
 			sctx.Schedule.ID, preRunFoldersErr, postRunFoldersErr)
 	} else if failedFolder, found := reconcileWorkshopRunOutcome(preRunFolderNames, postRunFolders, invocationStartedAt); found {
+		for _, folder := range postRunFolders {
+			if folder.Name == failedFolder && folder.Metadata != nil && folder.Metadata.Recovery["status"] == "step_recovered_run_unverified" {
+				return sessionID, runFolder, fmt.Errorf("workflow run %s remains failed: a step retry succeeded, but whole-run recovery is unverified (%v)", failedFolder, folder.Metadata.Recovery["reason"])
+			}
+		}
 		s.sessionLogf(sctx, sessionID, "[SCHEDULER] ⚠️ Workshop session for %s completed normally, but run %s recorded status \"failed\" in its own run_metadata.json", sctx.Schedule.ID, failedFolder)
 		return sessionID, runFolder, fmt.Errorf("workflow run %s failed (its run_metadata.json records status \"failed\"), even though the orchestrating workshop session completed its turns without an infrastructure error", failedFolder)
 	}
@@ -3784,22 +3817,29 @@ func workshopRunStartedDuringInvocation(after []RunFolderInfo, since time.Time) 
 
 func workshopRunProducedEvidence(before map[string]bool, after []RunFolderInfo, since time.Time) bool {
 	for _, folder := range after {
-		if folder.Name == "" {
-			continue
-		}
-		if !before[folder.Name] {
+		if workshopRunStartedSince(before, folder, since) {
 			return true
-		}
-		if folder.Metadata == nil {
-			continue
-		}
-		for _, stamp := range []time.Time{folder.Metadata.StartedAt, folder.Metadata.CreatedAt} {
-			if !stamp.IsZero() && !stamp.Before(since) {
-				return true
-			}
 		}
 	}
 	return false
+}
+
+// Rotation changes folder names, not execution timestamps. Prefer StartedAt
+// over CreatedAt so copying/rotating metadata cannot rejuvenate an old run.
+// Name-only evidence is retained solely for legacy metadata without timestamps.
+func workshopRunStartedSince(before map[string]bool, folder RunFolderInfo, since time.Time) bool {
+	if folder.Name == "" {
+		return false
+	}
+	if folder.Metadata != nil {
+		if !folder.Metadata.StartedAt.IsZero() {
+			return !folder.Metadata.StartedAt.Before(since)
+		}
+		if !folder.Metadata.CreatedAt.IsZero() {
+			return !folder.Metadata.CreatedAt.Before(since)
+		}
+	}
+	return !before[folder.Name]
 }
 
 // scheduledWorkflowExecutionProducedEvidence uses the execution receipt linked
@@ -3834,11 +3874,10 @@ func (s *SchedulerService) scheduledWorkflowExecutionProducedEvidence(sessionID 
 	return false
 }
 
-// reconcileWorkshopRunOutcome finds the run folder this invocation actually
-// touched — either newly created (its name absent from before) or an
-// existing folder whose metadata was (re)started during this invocation's own
-// window, per its StartedAt/CreatedAt versus since — whose own
-// run_metadata.json recorded status "failed".
+// reconcileWorkshopRunOutcome finds explicit failures started in the invocation
+// window. Timestamps take precedence over names because iteration rotation
+// moves historical runs into newly named folders. Legacy timestamp-less records
+// still use the before-set as a best-effort fallback.
 //
 // The since-based fallback matters because a workflow that reuses the same
 // run-folder name every cycle (e.g. iteration-0/<group>, confirmed live on
@@ -3860,16 +3899,7 @@ func reconcileWorkshopRunOutcome(before map[string]bool, after []RunFolderInfo, 
 		if folder.Name == "" || folder.Metadata == nil {
 			continue
 		}
-		touchedThisInvocation := !before[folder.Name]
-		if !touchedThisInvocation {
-			for _, stamp := range []time.Time{folder.Metadata.StartedAt, folder.Metadata.CreatedAt} {
-				if !stamp.IsZero() && !stamp.Before(since) {
-					touchedThisInvocation = true
-					break
-				}
-			}
-		}
-		if !touchedThisInvocation {
+		if !workshopRunStartedSince(before, folder, since) {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(folder.Metadata.Status), "failed") {

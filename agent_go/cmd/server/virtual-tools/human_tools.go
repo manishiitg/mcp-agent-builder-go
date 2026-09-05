@@ -113,7 +113,7 @@ func CreateHumanTools() []llmtypes.Tool {
 		"exclude_channels": map[string]interface{}{
 			"type":        "array",
 			"items":       map[string]interface{}{"type": "string", "enum": []string{"gmail", "slack", "whatsapp"}},
-			"description": "Optional one-off override to SKIP account-level delivery channels for THIS notification only, by name (\"gmail\", \"slack\", \"whatsapp\"). The DURABLE per-workflow preference belongs in workflow.json notifications.exclude_channels and is applied automatically on every send — use this arg only for a one-time skip beyond that. Suppresses the channel for this send only; never changes the account-wide configuration. Omit to deliver to every enabled channel not already excluded by workflow.json. The always-on web UI and any configured workflow Slack webhook are unaffected.",
+			"description": "Optional one-off override to SKIP delivery channels for THIS notification only, by name (\"gmail\", \"slack\", \"whatsapp\"). The DURABLE per-workflow preference belongs in workflow.json notifications.exclude_channels and is applied automatically on every send — use this arg only for a one-time skip beyond that. Suppresses the channel for this send only; never changes the account-wide configuration. Omit to deliver to every enabled channel not already excluded by workflow.json. Excluding slack suppresses BOTH account Slack and every workflow Slack webhook. A workflow Slack webhook replaces the global Slack destination; it does not send an extra copy. The always-on web UI is unaffected.",
 		},
 		"notification_kind": map[string]interface{}{
 			"type":        "string",
@@ -167,7 +167,7 @@ func CreateHumanTools() []llmtypes.Tool {
 	if gmailEnabled() {
 		notifyProps["email_subject"] = map[string]interface{}{
 			"type":        "string",
-			"description": "Custom subject line for the email rendering (Gmail). When Gmail is enabled, set this by default for workflow/Pulse/Goal Advisor notifications unless the user explicitly asked not to email. Other channels ignore this.",
+			"description": "Required non-empty plain-text subject whenever this notification sends Gmail, including general notifications. summary_title is not a substitute. Omit only when Gmail is excluded or not used. Do not supply MIME-encoded text or line breaks.",
 		}
 		notifyProps["email_to"] = map[string]interface{}{
 			"type":        "array",
@@ -231,7 +231,7 @@ var sendRichSlackIncomingWebhook = services.SendRichSlackIncomingWebhook
 // knows where its message will actually land. The always-on web UI connector is
 // not framed as an external channel.
 func buildNotifyDescription() string {
-	base := "Send one non-blocking notification through the configured providers. Gmail, Slack, and WhatsApp are external delivery providers; Org Dashboard durably records run_summary and pulse_summary notifications for the current workflow. Use this for FYIs, progress updates, alerts, and completion notices when you do not need to wait for a reply. For workflow, Pulse, Goal Advisor, and other structured summaries, always set the channel-neutral summary_title, summary_status, summary_fields, and summary_sections, plus summary_route when the notification represents one top-level workflow route. summary_status must plainly describe what the workflow is doing now; explain why in the title, message, facts, or sections. Channel-specific rich fields may improve presentation but must not contain facts omitted from the neutral summary. If the workflow has a Slack Incoming Webhook configured, the backend also sends a backend-owned rich Block Kit card there. Never access a SECRET_* webhook variable, construct a webhook payload in shell, post with curl, disable notify_user to avoid duplication, or ask for the URL after an encrypted webhook reference is configured—the backend exclusively owns delivery. If you need the human to answer before continuing, use human_feedback instead. Returns a JSON delivery result — status (delivered|partial|failed|no_recipient|no_channels_configured) plus delivered/skipped/failed channel lists. Report it honestly to the user: do NOT claim an external message was sent when only Org Dashboard succeeded."
+	base := "Send one non-blocking notification through the configured providers. Gmail, Slack, and WhatsApp are external delivery providers; Org Dashboard durably records run_summary and pulse_summary notifications for the current workflow. Use this for FYIs, progress updates, alerts, and completion notices when you do not need to wait for a reply. For workflow, Pulse, Goal Advisor, and other structured summaries, always set the channel-neutral summary_title, summary_status, summary_fields, and summary_sections, plus summary_route when the notification represents one top-level workflow route. summary_status must plainly describe what the workflow is doing now; explain why in the title, message, facts, or sections. Channel-specific rich fields may improve presentation but must not contain facts omitted from the neutral summary. If the workflow has a Slack Incoming Webhook configured, the backend sends a backend-owned rich Block Kit card there instead of using the global Slack connector. Excluding slack suppresses both delivery paths. Never access a SECRET_* webhook variable, construct a webhook payload in shell, post with curl, disable notify_user to avoid duplication, or ask for the URL after an encrypted webhook reference is configured—the backend exclusively owns delivery. If you need the human to answer before continuing, use human_feedback instead. Returns a JSON delivery result — status (delivered|partial|failed|no_recipient|no_channels_configured) plus delivered/skipped/failed channel lists. Report it honestly to the user: do NOT claim an external message was sent when only Org Dashboard succeeded."
 
 	var labels []string
 	gmailOn := false
@@ -409,7 +409,7 @@ func IsHumanToolCategory(category string) bool {
 // non-blocking Pulse/report question lifecycle stored in the workflow-local
 // db/db.sqlite.
 func WorkshopHumanToolNames() []string {
-	return []string{"human_feedback", "notify_user", "get_human_input_request", "list_approved_fixer_decisions", "create_human_input_request", "answer_human_input_request", "mark_human_input_consumed"}
+	return []string{"human_feedback", "notify_user", "get_human_input_request", "list_approved_fixer_decisions", "create_human_input_request", "answer_human_input_request", "mark_human_input_consumed", "dismiss_duplicate_human_input_request"}
 }
 
 // HumanToolNamesForWorkshopMode narrows the registered human-tool surface for
@@ -549,10 +549,25 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 		excludeChannels = append(excludeChannels, excludedNotificationChannels(routedChannels)...)
 	}
 
+	expectedGmail := gmailEnabled() || containsNotificationChannel(routedChannels, "gmail") || gc != nil ||
+		(dest.Gmail != nil && (dest.Gmail.Email != "" || len(dest.Gmail.ConnectionIDs) > 0))
+	if err := validateNotificationEmailSubject(args, expectedGmail, excludeChannels); err != nil {
+		return "", err
+	}
+
 	// Synchronous send so we can report real per-channel delivery to the agent
 	// (and so the send isn't killed when this turn's context is canceled).
-	results := notificationManager.SendUserNotificationSync(ctx, messageForUser, "", dest, excludeChannels...)
-	webhookAllowed := len(routedChannels) == 0 || containsNotificationChannel(routedChannels, "slack")
+	webhooks := webhooksForKind(dest, notificationKind)
+	// Workflow delivery replaces the account Slack destination, never duplicates
+	// it or falls back to it after a webhook failure.
+	accountExclusions := append([]string{}, excludeChannels...)
+	if len(webhooks) > 0 {
+		accountExclusions = append(accountExclusions, "slack")
+	}
+	results := notificationManager.SendUserNotificationSync(ctx, messageForUser, "", dest, accountExclusions...)
+	results = explainMissingGmail(results, expectedGmail, excludeChannels, services.GetGmailService())
+	webhookAllowed := !containsNotificationChannel(excludeChannels, "slack") &&
+		(len(routedChannels) == 0 || containsNotificationChannel(routedChannels, "slack"))
 	if webhookAllowed {
 		// Each webhook is its own Slack channel, so a summary configured for two
 		// channels posts twice. Results are reported per webhook: one channel
@@ -560,7 +575,6 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 		// label stays the plain "slack_webhook" for a single channel so existing
 		// delivery reports keep their shape, and is qualified by secret name only
 		// when there is more than one channel to tell apart.
-		webhooks := webhooksForKind(dest, notificationKind)
 		for _, webhook := range webhooks {
 			msgID, sendErr := sendRichSlackIncomingWebhook(ctx, webhook.URL, messageForUser, slackContent)
 			result := services.ConnectorResult{
@@ -574,6 +588,16 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 			results = append(results, result)
 		}
 	}
+
+	expectedChannels := append([]string{}, routedChannels...)
+	expectedChannels = append(expectedChannels, notificationManager.ListEnabledConnectors()...)
+	if dest.Slack != nil {
+		expectedChannels = append(expectedChannels, "slack")
+	}
+	if dest.WhatsApp != nil {
+		expectedChannels = append(expectedChannels, "whatsapp")
+	}
+	results = explainMissingChannels(results, expectedChannels, excludeChannels)
 
 	delivered := []string{}
 	skipped := []string{}

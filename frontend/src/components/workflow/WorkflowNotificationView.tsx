@@ -15,6 +15,7 @@ import {
   type WorkflowNotificationState,
 } from '../../services/workflow-notifications'
 import { formatNotificationStateLabel } from './notificationStatus'
+import NotificationInstructions from './NotificationInstructions'
 
 interface WorkflowNotificationViewProps {
   workspacePath: string | null
@@ -220,7 +221,7 @@ export default function WorkflowNotificationView({
                           {summary.slackWebhooks.map(secret => <span key={secret} className={`${chipChannel} font-mono`} title="Slack webhook secret">#{secret}</span>)}
                         </div>
                         {summary.instructions && (
-                          <p className="truncate pl-0 text-xs italic text-muted-foreground sm:pl-[7.75rem]" title={summary.instructions}>“{summary.instructions}”</p>
+                          <NotificationInstructions title={summary.title} instructions={summary.instructions} />
                         )}
                       </div>
                     ))}

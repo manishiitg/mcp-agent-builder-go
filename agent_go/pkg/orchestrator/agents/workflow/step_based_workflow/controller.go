@@ -101,8 +101,7 @@ type StepBasedWorkflowOrchestrator struct {
 	// Evaluation mode tracking
 	isEvaluationMode bool // Whether we're running evaluation steps
 
-	// Approved plan storage
-	approvedPlan *PlanningResponse // Store approved plan
+	// Plans are passed through execution contexts, never cached on a chat session.
 
 	// Run folder management
 	selectedRunFolder string // Current run folder name (iteration-0 for full workflow runs)
@@ -376,6 +375,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) switchWorkshopGroupSession(groupName 
 	previousSessionID := hcpo.GetMCPSessionID()
 	hcpo.sessionID = groupSessionID
 	hcpo.BaseOrchestrator.SetMCPSessionID(groupSessionID)
+	virtualtools.InheritSessionNotificationDestination(previousSessionID, groupSessionID)
 	if pc := virtualtools.GetParentChat(previousSessionID); pc != nil && pc.SessionID != "" {
 		pcCopy := *pc
 		if pcCopy.GroupName == "" {
@@ -507,6 +507,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) closeWorkshopGroupSessions(sessionsBy
 		browserSessionID := hcpo.resolveWorkshopBrowserSessionID(groupName)
 		hcpo.GetLogger().Info(fmt.Sprintf("[WORKSHOP] %s: group=%s session=%s browser=%s", action, groupName, sessionID, browserSessionID))
 		virtualtools.UnregisterParentChat(sessionID)
+		virtualtools.DeleteSessionNotificationDestination(sessionID)
 		// Mark all sessions as stopped BEFORE closing to prevent in-flight tool calls
 		// from resurrecting connections via broken pipe handlers.
 		mcpagent.MarkSessionsStopped([]string{sessionID})
@@ -761,8 +762,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) CreateTodoList(ctx context.Context, o
 	breakdownSteps := existingPlan.Steps // Use PlanStepInterface directly
 	hcpo.GetLogger().Info(fmt.Sprintf("✅ Prepared existing plan: %d steps with runtime fields populated", len(breakdownSteps)))
 
-	// Store approved plan for access during execution
-	hcpo.approvedPlan = existingPlan
+	// Pin this execution to its loaded plan; builder reads cannot replace it.
+	ctx = withExecutionPlan(ctx, existingPlan)
 
 	// Note: Learning integration phase removed - execution agent now auto-discovers learning files and scripts
 
@@ -1205,11 +1206,6 @@ func (hcpo *StepBasedWorkflowOrchestrator) getWorkflowID() string {
 func (hcpo *StepBasedWorkflowOrchestrator) SetRunSingleStepMode(enabled bool, stepIndex int) {
 	hcpo.runSingleStepOnly = enabled
 	hcpo.singleStepTarget = stepIndex
-}
-
-// SetApprovedPlan sets the approved plan for the orchestrator
-func (hcpo *StepBasedWorkflowOrchestrator) SetApprovedPlan(plan *PlanningResponse) {
-	hcpo.approvedPlan = plan
 }
 
 // SetSkipHumanInput sets the skip human input mode (runs learning but skips human feedback)

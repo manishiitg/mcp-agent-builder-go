@@ -502,6 +502,25 @@ func TestCountSQLPlaceholders(t *testing.T) {
 	}
 }
 
+func TestExtractScriptedCodeQueriesAdjacentLiterals(t *testing.T) {
+	code := `conn.execute(
+    "INSERT INTO leads " # comment between adjacent literals
+    '(id, status) '
+    """VALUES (?, ?)""", (id, status))
+conn.execute("SELECT id " "FROM leads")
+conn.execute("SELECT id FROM leads")
+conn.execute("SELECT " + columns)
+conn.execute("SELECT %s" % columns)
+conn.execute("SELECT {}".format(columns))
+conn.execute(f"SELECT {columns}")
+conn.execute("unterminated)
+`
+	want := []string{"INSERT INTO leads (id, status) VALUES (?, ?)", "SELECT id FROM leads"}
+	if got := extractScriptedCodeQueries(code); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+}
+
 func TestCheckScriptedCodeDBQueriesPassesWhenSchemaMatches(t *testing.T) {
 	ctx := context.Background()
 	dbPath := setupPlanDriftDBTest(t, "Workflow/drift-test")
@@ -516,7 +535,11 @@ func TestCheckScriptedCodeDBQueriesPassesWhenSchemaMatches(t *testing.T) {
 
 	readFile := func(_ context.Context, path string) (string, error) {
 		if path == "Workflow/drift-test/learnings/step-log/main.py" {
-			return `cur.execute("SELECT id FROM leads WHERE status = ?", (status,))`, nil
+			return `cur.execute("SELECT id "
+                "FROM leads "
+                "WHERE status = ?", (status,))
+                cur.execute("INSERT INTO leads "
+                "(id, status) VALUES (?, ?)", (id, status))`, nil
 		}
 		return "", os.ErrNotExist
 	}

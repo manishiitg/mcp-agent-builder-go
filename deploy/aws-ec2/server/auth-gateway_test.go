@@ -109,6 +109,19 @@ func TestUnauthenticatedAPIRequestIgnoresExternalReferer(t *testing.T) {
 	}
 }
 
+func TestUnauthenticatedAPIRequestDoesNotNestLoginReferer(t *testing.T) {
+	gateway := &gateway{secret: []byte("test-secret-that-is-long-enough")}
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	req.Header.Set("Referer", "https://video.example/login?next=%2Flogin%3Fnext%3D%252F")
+	response := httptest.NewRecorder()
+
+	gateway.ServeHTTP(response, req)
+
+	if got := response.Header().Get(authRequiredHeader); got != "/login?next=%2F" {
+		t.Fatalf("login header = %q, want a clean login target", got)
+	}
+}
+
 func TestUnauthenticatedFrontendRequestStillRedirectsToLogin(t *testing.T) {
 	gateway := &gateway{secret: []byte("test-secret-that-is-long-enough")}
 	req := httptest.NewRequest(http.MethodGet, "/projects/123", nil)

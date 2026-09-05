@@ -10,9 +10,11 @@ type ScheduleRunsHeaderProps = {
     | 'isSchedulerPaused' | 'isReadOnlyUser' | 'handleToggleGlobalPause' | 'isUpdatingSchedulerPause' | 'loadJobs'
   >
   onClose: () => void
+  /** Embedded workspace views are closed by their parent layout, not here. */
+  showClose?: boolean
 }
 
-export const ScheduleRunsHeader: React.FC<ScheduleRunsHeaderProps> = ({ panel, onClose }) => {
+export const ScheduleRunsHeader: React.FC<ScheduleRunsHeaderProps> = ({ panel, onClose, showClose = true }) => {
   const {
     panelTitle,
     isLoading,
@@ -42,10 +44,12 @@ export const ScheduleRunsHeader: React.FC<ScheduleRunsHeaderProps> = ({ panel, o
                 {workflowScheduleSummary.workflows} automation{workflowScheduleSummary.workflows === 1 ? '' : 's'}
               </span>
             )}
-            <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground">
-              {summary.total} schedule{summary.total === 1 ? '' : 's'}
-            </span>
-            {summary.total > 0 && (
+            {isWorkflowScoped && (
+              <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground">
+                {summary.total} schedule{summary.total === 1 ? '' : 's'}
+              </span>
+            )}
+            {isWorkflowScoped && summary.total > 0 && (
               <span
                 className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground"
                 title={formatExactDateTime(summary.lastRunAt)}
@@ -53,24 +57,41 @@ export const ScheduleRunsHeader: React.FC<ScheduleRunsHeaderProps> = ({ panel, o
                 Last ran {formatLastRunLabel(summary.lastRunAt)}
               </span>
             )}
-            {summary.running > 0 && (
+            {!isWorkflowScoped && workflowScheduleSummary.running > 0 && (
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
+                {workflowScheduleSummary.running} running
+              </span>
+            )}
+            {!isWorkflowScoped && workflowScheduleSummary.attention > 0 && (
+              <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-600 dark:text-red-300">
+                {workflowScheduleSummary.attention} need attention
+              </span>
+            )}
+            {!isWorkflowScoped && workflowScheduleSummary.fullyPaused > 0 && (
+              <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                {workflowScheduleSummary.fullyPaused} fully paused
+              </span>
+            )}
+            {!isWorkflowScoped && workflowScheduleSummary.partlyPaused > 0 && (
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-700 dark:text-amber-300">
+                {workflowScheduleSummary.partlyPaused} partly paused
+              </span>
+            )}
+            {isWorkflowScoped && summary.running > 0 && (
               <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
                 {summary.running} running
               </span>
             )}
-            {summary.missed > 0 && !isWorkflowScoped && (
-              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
-                {summary.missed} missed
+            {isWorkflowScoped && (
+              <span className={`rounded-full border px-2 py-0.5 text-xs ${
+                isSchedulerPaused
+                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                  : 'border-border bg-background text-muted-foreground'
+              }`}
+              >
+                {isSchedulerPaused ? 'globally paused' : `${summary.enabled} active`}
               </span>
             )}
-            <span className={`rounded-full border px-2 py-0.5 text-xs ${
-              isSchedulerPaused
-                ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-                : 'border-border bg-background text-muted-foreground'
-            }`}
-            >
-              {isSchedulerPaused ? 'globally paused' : `${summary.enabled} active`}
-            </span>
           </div>
         )}
       </div>
@@ -98,18 +119,21 @@ export const ScheduleRunsHeader: React.FC<ScheduleRunsHeaderProps> = ({ panel, o
         <Tooltip>
           <TooltipTrigger asChild>
             <button
-              onClick={() => loadJobs()}
-              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              aria-label="Refresh schedule status"
+              onClick={() => loadJobs(true)}
+              disabled={isLoading}
+              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-wait disabled:opacity-60"
+              aria-label={isLoading ? 'Refreshing schedule status' : 'Refresh schedule status'}
             >
-              <RefreshCw className="w-4 h-4" />
+              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Refresh</TooltipContent>
+          <TooltipContent side="bottom">{isLoading ? 'Refreshing…' : 'Refresh'}</TooltipContent>
         </Tooltip>
-        <button onClick={onClose} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
-          <X className="w-4 h-4" />
-        </button>
+        {showClose && (
+          <button onClick={onClose} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors" aria-label="Close schedules">
+            <X className="w-4 h-4" />
+          </button>
+        )}
       </div>
     </div>
   )

@@ -211,7 +211,7 @@ func (g *GmailService) ReloadConfig(ctx context.Context) error {
 		gwsPath = "gws"
 	}
 
-	// Enabled requires: the flag on, a default recipient, and a resolvable
+	// Enabled requires: the flag on and a resolvable
 	// gws binary. Without a binary every send would fail, so we report
 	// disabled rather than register a dead connector.
 	binaryOK := true
@@ -227,7 +227,7 @@ func (g *GmailService) ReloadConfig(ctx context.Context) error {
 	// knobs are unchanged keeps its cached status, so editing one account does
 	// not force every other one back to a spinner.
 	g.authCaches = retainedGmailAuthCaches(g.authCaches, previous, cfg)
-	g.enabled = cfg.Enabled && g.defaultTo != "" && binaryOK
+	g.enabled = cfg.Enabled && binaryOK
 
 	if cfg.Enabled && !g.enabled {
 		log.Printf("[GMAIL] Service disabled: enabled=%v, hasDefaultTo=%v, gwsFound=%v",
@@ -461,6 +461,10 @@ func (g *GmailService) IsEnabled() bool {
 // when every resolved recipient was blocked — the caller treats that as
 // "skip silently", which is correct because there is genuinely nowhere to send.
 func (g *GmailService) pickRecipient(dest *NotificationDestination) string {
+	return g.pickRecipientWithContext(context.Background(), dest)
+}
+
+func (g *GmailService) pickRecipientWithContext(ctx context.Context, dest *NotificationDestination) string {
 	candidate := ""
 	if dest != nil && dest.Gmail != nil && strings.TrimSpace(dest.Gmail.Email) != "" {
 		candidate = strings.TrimSpace(dest.Gmail.Email)
@@ -475,7 +479,28 @@ func (g *GmailService) pickRecipient(dest *NotificationDestination) string {
 		g.mu.RUnlock()
 	}
 	if candidate == "" {
-		return ""
+		// Last resort: the configured sending account's own inbox. Never pick
+		// an arbitrary connection or override an explicitly supplied denylisted To.
+		cfg := g.GetConfig()
+		if len(cfg.Connections) > 0 {
+			id := cfg.DefaultConnectionID
+			if dest != nil && dest.Gmail != nil && len(dest.Gmail.ConnectionIDs) > 0 {
+				if len(dest.Gmail.ConnectionIDs) != 1 {
+					return ""
+				}
+				id = dest.Gmail.ConnectionIDs[0]
+			}
+			if conn, ok := g.GetConnection(id); ok && conn.Enabled && conn.Status == GmailConnectionConnected {
+				candidate = strings.TrimSpace(conn.Email)
+			}
+		} else {
+			authCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			status := g.AuthStatus(authCtx)
+			cancel()
+			if status.Authenticated && status.HasGmailScope {
+				candidate = strings.TrimSpace(status.Email)
+			}
+		}
 	}
 	recipients, dropped := g.filterRecipients([]string{candidate}, destBlockedRecipients(dest)...)
 	if len(dropped) > 0 {
@@ -548,7 +573,7 @@ func (g *GmailService) SendNotification(ctx context.Context, uniqueID string, me
 	if !g.IsEnabled() {
 		return "", nil
 	}
-	to := g.pickRecipient(dest)
+	to := g.pickRecipientWithContext(ctx, dest)
 	if to == "" {
 		return "", nil
 	}
@@ -585,7 +610,7 @@ func (g *GmailService) SendUserNotification(ctx context.Context, message string,
 	if !g.IsEnabled() {
 		return "", nil
 	}
-	to := g.pickRecipient(dest)
+	to := g.pickRecipientWithContext(ctx, dest)
 	if to == "" {
 		return "", nil
 	}
@@ -876,7 +901,11 @@ func (g *GmailService) SendTestWithBlockedRecipients(ctx context.Context, to str
 func (g *GmailService) sendTest(ctx context.Context, connectionID, to string, blockedRecipients []string, hasBlockedOverride bool) (string, error) {
 	to = strings.TrimSpace(to)
 	if to == "" {
-		to = g.GetConfig().DefaultTo
+		dest := &NotificationDestination{Gmail: &GmailDest{}}
+		if connectionID != "" {
+			dest.Gmail.ConnectionIDs = []string{connectionID}
+		}
+		to = g.pickRecipientWithContext(ctx, dest)
 	}
 	if to == "" {
 		return "", fmt.Errorf("no recipient: set a default address first")

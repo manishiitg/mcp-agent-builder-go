@@ -606,31 +606,6 @@ func populateRuntimeFields(typedStep PlanStepInterface, stepConfigs []StepConfig
 	}
 }
 
-// populateStepRuntimeFields populates runtime fields on a PlanStepInterface and returns it
-// This function populates AgentConfigs and other runtime fields from step_config.json
-// For execution, use plan steps directly with populated runtime fields
-func populateStepRuntimeFields(typedStep PlanStepInterface, stepConfigs []StepConfig) (PlanStepInterface, error) {
-	// Populate runtime fields on the plan step
-	if err := populateRuntimeFields(typedStep, stepConfigs); err != nil {
-		return nil, err
-	}
-
-	// Recursively populate runtime fields for nested steps
-	switch typedStep.(type) {
-	case *EvaluationStep:
-		// No nested steps for evaluation steps currently
-
-	case *RoutingPlanStep:
-		// Routing step is flattened - no nested steps to populate
-
-	case *BranchPlanStep:
-		// Branch step is flattened - no nested steps to populate (same as routing)
-	}
-
-	// Return the step with populated runtime fields
-	return typedStep, nil
-}
-
 // EmitTodoStepsExtractedEvent emits an event when todo steps are extracted from a plan
 // Public method that accepts BaseOrchestrator and other parameters
 func EmitTodoStepsExtractedEvent(ctx context.Context, bo *orchestrator.BaseOrchestrator, extractedSteps []PlanStepInterface, planSource, extractionMethod, runFolder, workspacePath string) {

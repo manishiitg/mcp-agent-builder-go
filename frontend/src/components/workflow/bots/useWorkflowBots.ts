@@ -48,7 +48,7 @@ export function useWorkflowBots(workspacePath: string | null) {
   const workflowLabel = (id: string) => workflows.find(w => w.manifest.id === id)?.manifest.label || id
   // Every write here lands in shared connector config immediately -- there's
   // no Save step for the panel to gate -- so each mutating control disables.
-  const readOnly = !useCanWriteWorkflow()
+  const readOnly = !useCanWriteWorkflow(workspacePath)
 
   useEffect(() => {
     if (workflows.length === 0) void refreshWorkflows()

@@ -30,6 +30,7 @@ interface BrowserAutomationSettingsProps {
   cdpError: string | null
   cdpChecking: boolean
   onCheckCdpConnection: (port: number) => void
+  readOnly?: boolean
 }
 
 interface CommandBlockProps {
@@ -80,6 +81,7 @@ const BrowserAutomationSettings: React.FC<BrowserAutomationSettingsProps> = ({
   cdpError,
   cdpChecking,
   onCheckCdpConnection,
+  readOnly = false,
 }) => {
   const platform = typeof navigator !== 'undefined' ? navigator.platform : undefined
   const isMac = platform?.includes('Mac')
@@ -120,7 +122,7 @@ const BrowserAutomationSettings: React.FC<BrowserAutomationSettingsProps> = ({
             ? 'border-cyan-500 bg-cyan-500/10'
             : 'border-gray-200 hover:bg-gray-500/5 dark:border-gray-700'
         }`}>
-          <input type="radio" name="presetBrowserMode" checked={browserMode === 'auto'} onChange={() => onBrowserModeChange('auto')} className="mt-0.5 h-4 w-4 accent-cyan-500" />
+          <input type="radio" name="presetBrowserMode" checked={browserMode === 'auto'} disabled={readOnly} onChange={() => onBrowserModeChange('auto')} className="mt-0.5 h-4 w-4 accent-cyan-500" />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-gray-900 dark:text-gray-100">
               <Sparkles className="h-3.5 w-3.5 text-cyan-500" />
@@ -138,7 +140,7 @@ const BrowserAutomationSettings: React.FC<BrowserAutomationSettingsProps> = ({
             ? 'border-emerald-500 bg-emerald-500/10'
             : 'border-gray-200 hover:bg-gray-500/5 dark:border-gray-700'
         }`}>
-          <input type="radio" name="presetBrowserMode" checked={browserMode === 'cdp'} onChange={() => onBrowserModeChange('cdp')} className="mt-0.5 h-4 w-4 accent-emerald-500" />
+          <input type="radio" name="presetBrowserMode" checked={browserMode === 'cdp'} disabled={readOnly} onChange={() => onBrowserModeChange('cdp')} className="mt-0.5 h-4 w-4 accent-emerald-500" />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 text-sm font-medium text-gray-900 dark:text-gray-100">
               <Monitor className="h-3.5 w-3.5 text-emerald-500" />
@@ -155,7 +157,7 @@ const BrowserAutomationSettings: React.FC<BrowserAutomationSettingsProps> = ({
             ? 'border-blue-500 bg-blue-500/10'
             : 'border-gray-200 hover:bg-gray-500/5 dark:border-gray-700'
         }`}>
-          <input type="radio" name="presetBrowserMode" checked={browserMode === 'headless'} onChange={() => onBrowserModeChange('headless')} className="mt-0.5 h-4 w-4 accent-blue-500" />
+          <input type="radio" name="presetBrowserMode" checked={browserMode === 'headless'} disabled={readOnly} onChange={() => onBrowserModeChange('headless')} className="mt-0.5 h-4 w-4 accent-blue-500" />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 text-sm font-medium text-gray-900 dark:text-gray-100">
               <MonitorOff className="h-3.5 w-3.5 text-blue-500" />
@@ -172,7 +174,7 @@ const BrowserAutomationSettings: React.FC<BrowserAutomationSettingsProps> = ({
             ? 'border-gray-500 bg-gray-500/10'
             : 'border-gray-200 hover:bg-gray-500/5 dark:border-gray-700'
         }`}>
-          <input type="radio" name="presetBrowserMode" checked={browserMode === 'none'} onChange={() => onBrowserModeChange('none')} className="mt-0.5 h-4 w-4 accent-gray-500" />
+          <input type="radio" name="presetBrowserMode" checked={browserMode === 'none'} disabled={readOnly} onChange={() => onBrowserModeChange('none')} className="mt-0.5 h-4 w-4 accent-gray-500" />
           <div className="min-w-0">
             <div className="text-sm font-medium text-gray-900 dark:text-gray-100">No browser</div>
             <p className="mt-1 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
@@ -206,6 +208,7 @@ const BrowserAutomationSettings: React.FC<BrowserAutomationSettingsProps> = ({
                 <input
                   type="number"
                   value={cdpPort}
+                  disabled={readOnly}
                   onChange={(event) => onCdpPortChange(parseInt(event.target.value, 10) || 9222)}
                   className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-emerald-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                   min={1}

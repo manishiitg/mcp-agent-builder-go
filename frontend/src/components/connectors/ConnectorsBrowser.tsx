@@ -33,6 +33,7 @@ const statusIndicator = (connection: string | undefined, status: string | undefi
   if (connection === 'connected') {
     if (status === 'error') return { dot: 'bg-amber-500', title: 'Connected — unreachable' }
     if (status === 'loading') return { dot: 'bg-gray-400 animate-pulse', title: 'Connected — checking...' }
+    if (status === 'not_loaded') return { dot: 'bg-gray-400', title: 'Connected — tools load when used' }
     return { dot: 'bg-green-500', title: 'Connected' }
   }
   return { dot: 'bg-gray-300 dark:bg-gray-600', title: 'Not connected' }
@@ -59,9 +60,10 @@ interface ConnectorsBrowserProps {
   // until it's connected via the OAuthStatusBadge action first.
   selectedServers?: string[]
   onToggleServer?: (serverName: string) => void
+  workspacePath?: string | null
 }
 
-export default function ConnectorsBrowser({ compact = false, selectedServers, onToggleServer }: ConnectorsBrowserProps) {
+export default function ConnectorsBrowser({ compact = false, selectedServers, onToggleServer, workspacePath }: ConnectorsBrowserProps) {
   const {
     toolList,
     isLoadingTools,
@@ -86,7 +88,7 @@ export default function ConnectorsBrowser({ compact = false, selectedServers, on
   // Connect/disconnect and the JSON-config import write shared MCP config
   // immediately; add-to-workflow changes this workflow's selection. All
   // disable for read-only users. Browsing, tool lists, and logs stay open.
-  const readOnly = !useCanWriteWorkflow()
+  const readOnly = !useCanWriteWorkflow(workspacePath)
   const loadServerTools = useToolSelectionStore(state => state.loadServerTools)
   const getServerTools = useToolSelectionStore(state => state.getServerTools)
   const toggleToolsDisclosure = (serverName: string) => {

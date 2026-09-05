@@ -1,5 +1,14 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
+## SQLite backlog reconciled — 2026-09-05
+
+Resolved PUL-01B1E294, PUL-439F126E, PUL-C796CD97, PUL-F7362B0B in the corresponding workflow databases after checking
+the existing implementation and passing focused regression tests. Full evidence
+and the complete remaining inventory: [reconciliation audit](../../audits/platform-backlog-reconciliation-2026-09-05.md).
+This is internal tracking closure, not a claim of a new deployed end-to-end run.
+Previous SQLite records are retained in audit events; unrelated findings remain
+open. No business data or historical schedule outcome was rewritten.
+
 # PLAT-280 — `upwork`'s scripted-mode DB steps lose `$DB_PATH` because their plan type never matched their declared execution mode
 
 | Coordination | Value |

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/services"
 	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
@@ -657,6 +658,30 @@ func newAgentFactoryTestOrchestrator(t *testing.T) *StepBasedWorkflowOrchestrato
 		t.Fatalf("NewBaseOrchestrator returned error: %v", err)
 	}
 	return &StepBasedWorkflowOrchestrator{BaseOrchestrator: base}
+}
+
+func TestConfigureSubAgentSessionGuardInheritsNotificationDestination(t *testing.T) {
+	const parentSessionID = "workflow-notification-parent"
+	const childSessionID = "workflow-notification-child"
+	hcpo := newAgentFactoryTestOrchestrator(t)
+	hcpo.SetWorkspacePath("Workflow/demo")
+	hcpo.SetMCPSessionID(parentSessionID)
+	virtualtools.RegisterSessionNotificationDestination(parentSessionID, &services.NotificationDestination{
+		WorkflowName:  "demo",
+		WorkspacePath: "Workflow/demo",
+	})
+	t.Cleanup(func() {
+		virtualtools.DeleteSessionNotificationDestination(parentSessionID)
+		virtualtools.DeleteSessionNotificationDestination(childSessionID)
+		common.ClearSessionShellConfig(childSessionID)
+	})
+
+	hcpo.configureSubAgentSessionGuard(childSessionID, "message-sequence", "daily-digest", nil, nil)
+	ctx := context.WithValue(context.Background(), common.ChatSessionIDKey, childSessionID)
+	dest := virtualtools.NotificationDestinationFromContext(ctx)
+	if dest == nil || dest.WorkspacePath != "Workflow/demo" || dest.WorkflowName != "demo" {
+		t.Fatalf("child notification destination = %#v", dest)
+	}
 }
 
 func TestInjectStepEnvIntoShellExecutor_OverridesStaleMCPSessionEnv(t *testing.T) {

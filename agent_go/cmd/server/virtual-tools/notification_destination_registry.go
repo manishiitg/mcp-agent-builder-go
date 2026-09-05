@@ -81,6 +81,29 @@ func RegisterSessionNotificationDestination(sessionID string, dest *services.Not
 	sessionNotificationDestinations.values[sessionID] = current
 }
 
+// InheritSessionNotificationDestination copies the backend-owned notification
+// routing from a trusted parent session to a child tool session. Workflow groups
+// and execution steps use distinct MCP session IDs, but notifications emitted by
+// those children must retain the originating workflow path and delivery routes.
+// The destination is cloned so later child-specific updates cannot mutate the
+// parent's registration.
+func InheritSessionNotificationDestination(parentSessionID, childSessionID string) bool {
+	parentSessionID = strings.TrimSpace(parentSessionID)
+	childSessionID = strings.TrimSpace(childSessionID)
+	if parentSessionID == "" || childSessionID == "" || parentSessionID == childSessionID {
+		return false
+	}
+
+	sessionNotificationDestinations.Lock()
+	defer sessionNotificationDestinations.Unlock()
+	parent := cloneNotificationDestination(sessionNotificationDestinations.values[parentSessionID])
+	if notificationDestinationEmpty(parent) {
+		return false
+	}
+	sessionNotificationDestinations.values[childSessionID] = parent
+	return true
+}
+
 // UpdateSessionSlackWebhook applies a workflow webhook change immediately to
 // subsequent notify_user calls in the same coding-agent session. The URL stays
 // in backend memory and is never returned to the model.

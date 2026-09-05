@@ -11,7 +11,7 @@ import {
 } from '../utils/workflowSessionRestore'
 import { useAppStore } from '../stores/useAppStore'
 import { isLocalActivityFallbackTab } from '../utils/activityFallback'
-import { hasLiveBackgroundAgents, isVisibleActivitySession, nonWorkflowActivityTitle } from '../utils/activitySessions'
+import { hasLiveBackgroundAgents, isProductProjectSession, isVisibleActivitySession, nonWorkflowActivityTitle } from '../utils/activitySessions'
 import { runtimeNeedsUserInput } from '../utils/runtimeActivity'
 import {
   currentSessionId as resolveCurrentSessionId,
@@ -169,7 +169,9 @@ export const GlobalActivityMonitor: React.FC = () => {
       !isInternalChildSession({
         parentSessionId: session.parent_session_id,
         sessionKind: session.session_kind,
-      }) && isVisibleActivitySession(session)
+      }) &&
+      !isProductProjectSession(session) &&
+      isVisibleActivitySession(session)
     )
   }, [activeSessionsCache])
 

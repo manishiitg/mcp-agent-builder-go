@@ -1,12 +1,22 @@
 package step_based_workflow
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"sort"
 	"strings"
 	"unicode/utf8"
 )
+
+// currentPlanPromptHealth measures a fresh authored snapshot, never the run snapshot.
+func (hcpo *StepBasedWorkflowOrchestrator) currentPlanPromptHealth(ctx context.Context) (PromptHealthReport, error) {
+	plan, err := hcpo.ReadCurrentPlan(ctx, hcpo.isEvaluationMode)
+	if err != nil {
+		return PromptHealthReport{}, err
+	}
+	return BuildPromptHealthReport(plan.Steps), nil
+}
 
 // PromptHealthStep is the compact, deterministic description-size record for
 // one authored plan step. It deliberately measures only authored description

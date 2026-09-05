@@ -1,5 +1,14 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
+## Internal reconciliation — 2026-09-05
+
+PUL-D50AD8BC: superseded by subsequent deliberate ordinary-step record_run_concern retirement (PLAT-211). Current default/explicit step-tool tests confirm exclusion; do not restore the tool to satisfy the obsolete requirement.
+
+Resolved in SQLite for internal tracking with previous concern/detail records
+preserved in resolution events. Source/tests verified; deployed replay and
+historical business/module-result repair are not claimed. Full mapping:
+[remaining-report audit](../../audits/platform-open-report-reconciliation-2026-09-05.md).
+
 # PLAT-123 — record_run_concern was never registered for the default workflow-step tool path
 
 | Coordination | Value |

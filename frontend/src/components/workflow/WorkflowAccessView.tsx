@@ -34,7 +34,8 @@ export default function WorkflowAccessView({ workspacePath }: WorkflowAccessView
   )
   const canShareWorkflow = isMultiUser && !!workspacePath && (isAdmin || myAccess === 'owner' || myAccess === 'write')
 
-  const workflowTab = canShareWorkflow && !!workspacePath
+  const workflowTab = isMultiUser && !!workspacePath && (canShareWorkflow || myAccess === 'read')
+  const workflowReadOnly = !canShareWorkflow
   const usersTab = canManageUsers
   const firstTab: AccessTab = workflowTab ? 'workflow' : 'users'
   const [tab, setTab] = useState<AccessTab>(firstTab)
@@ -77,7 +78,7 @@ export default function WorkflowAccessView({ workspacePath }: WorkflowAccessView
         {!workflowTab && !usersTab ? (
           <p className="px-5 py-6 text-sm text-muted-foreground">You can't manage access for this workflow.</p>
         ) : tab === 'workflow' && workflowTab && workspacePath ? (
-          <WorkflowSharePopup embedded isOpen onClose={closePane} workspacePath={workspacePath} />
+          <WorkflowSharePopup embedded isOpen onClose={closePane} workspacePath={workspacePath} readOnly={workflowReadOnly} />
         ) : usersTab ? (
           <UsersAdminPanel embedded isOpen onClose={closePane} />
         ) : null}

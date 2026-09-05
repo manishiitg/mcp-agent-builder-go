@@ -470,7 +470,7 @@ func (api *StreamingAPI) handleOAuthStart(w http.ResponseWriter, r *http.Request
 		// polling.
 		api.clearDiscoveryFailure(req.ServerName)
 		api.appendServerLog(req.ServerName, "info", "Authentication succeeded, rediscovering tools...")
-		api.startBackgroundDiscovery()
+		api.startServerDiscovery(userID, req.ServerName)
 	}()
 
 	// Return auth URL for the frontend to open
@@ -659,8 +659,8 @@ func (api *StreamingAPI) removeOverlayEntry(serverName string) error {
 	return nil
 }
 
-// invalidateServerDiscovery drops cached discovery for a server and kicks off a
-// fresh pass. /api/tools answers from the discovery cache, so a connection change
+// invalidateServerDiscovery drops cached discovery without opening connections.
+// /api/tools answers from the discovery cache, so a connection change
 // that skips this leaves the connector reporting its previous state.
 func (api *StreamingAPI) invalidateServerDiscovery(serverName, logMessage string) {
 	cacheManager := mcpcache.GetCacheManager(api.logger)
@@ -676,7 +676,7 @@ func (api *StreamingAPI) invalidateServerDiscovery(serverName, logMessage string
 
 	api.clearDiscoveryFailure(serverName)
 	api.appendServerLog(serverName, "info", logMessage)
-	go api.startBackgroundDiscovery()
+
 }
 
 // handleConnectServer connects a server by writing it into the user config
@@ -743,6 +743,7 @@ func (api *StreamingAPI) handleConnectServer(w http.ResponseWriter, r *http.Requ
 	}
 
 	api.invalidateServerDiscovery(req.ServerName, "Connected — discovering tools...")
+	api.startServerDiscovery(GetUserIDFromContext(r.Context()), req.ServerName)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{

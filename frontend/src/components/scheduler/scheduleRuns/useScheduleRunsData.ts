@@ -43,7 +43,6 @@ export type UseScheduleRunsDataArgs = {
 }
 
 export function useScheduleRunsData({ onClose, onJobsLoaded, workflowScope }: UseScheduleRunsDataArgs) {
-  const isReadOnlyUser = !useCanWriteWorkflow()
   const [jobs, setJobs] = useState<ScheduledJob[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -97,6 +96,7 @@ export function useScheduleRunsData({ onClose, onJobsLoaded, workflowScope }: Us
   const scopePresetId = workflowScope?.presetQueryId ?? null
   const scopePath = workflowScope?.workspacePath ?? null
   const scopeLabel = workflowScope?.label ?? null
+  const isReadOnlyUser = !useCanWriteWorkflow(scopePath)
   const stableScope = useMemo<WorkflowScope | undefined>(
     () => (isWorkflowScoped ? { presetQueryId: scopePresetId, workspacePath: scopePath, label: scopeLabel } : undefined),
     [isWorkflowScoped, scopePresetId, scopePath, scopeLabel],
@@ -160,15 +160,26 @@ export function useScheduleRunsData({ onClose, onJobsLoaded, workflowScope }: Us
   const isSchedulerPaused = !!schedulerConfig?.globally_paused
 
   const workflowScheduleSummary = useMemo(() => {
-    const workflowKeys = new Set<string>()
+    const workflows = new Map<string, { enabled: number; paused: number; running: number; attention: boolean }>()
 
     panelJobs.forEach((job) => {
-      const workflowKey = getWorkflowFilterMeta(job, presetMap).value
-      workflowKeys.add(workflowKey)
+      const key = getWorkflowFilterMeta(job, presetMap).value
+      const current = workflows.get(key) ?? { enabled: 0, paused: 0, running: 0, attention: false }
+      if (job.enabled) current.enabled += 1
+      else current.paused += 1
+      if (job.last_status === 'running') current.running += 1
+      if (isMissedSchedule(job) || isScheduleIssueStatus(job.last_status)) current.attention = true
+      workflows.set(key, current)
     })
 
+    const values = Array.from(workflows.values())
+
     return {
-      workflows: workflowKeys.size,
+      workflows: values.length,
+      running: values.filter(workflow => workflow.running > 0).length,
+      attention: values.filter(workflow => workflow.attention).length,
+      fullyPaused: values.filter(workflow => workflow.enabled === 0).length,
+      partlyPaused: values.filter(workflow => workflow.enabled > 0 && workflow.paused > 0).length,
     }
   }, [panelJobs, presetMap])
 

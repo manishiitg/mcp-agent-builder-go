@@ -99,7 +99,7 @@ type WorkflowDBToolRegistry struct {
 func workflowDBQueryToolDefinition() llmtypes.Tool {
 	return llmtypes.Tool{Type: "function", Function: &llmtypes.FunctionDefinition{
 		Name:        "query_workflow_db",
-		Description: "Read the current workflow SQLite database. Pass sql to run one statement; query is accepted as a compatibility alias. It opens read-only and cannot mutate. Use action=describe to inspect an unfamiliar table, or action=integrity_check for the guarded SQLite integrity check. The backend resolves the database; never pass a path. Single-statement, row-bounded, WAL-aware.",
+		Description: "Read the current workflow SQLite database. Pass sql to run one statement; query is accepted as a compatibility alias. It opens read-only and cannot mutate. Use action=describe to inspect an unfamiliar table, or action=integrity_check for the guarded SQLite integrity check. The backend resolves the database; never pass a path. Single-statement, row-bounded, WAL-aware. Response: direct/native and MCP tool calls return JSON containing columns and rows. Raw shell HTTP calls to $MCP_CUSTOM/query_workflow_db return the transport envelope {success,result,error}; first require success=true, then JSON-decode the result string once to obtain the same columns/rows payload. Do not repeat a query to discover its shape or treat a failed envelope as an empty result.",
 		Parameters: llmtypes.NewParameters(map[string]any{
 			"type": "object",
 			"properties": map[string]any{

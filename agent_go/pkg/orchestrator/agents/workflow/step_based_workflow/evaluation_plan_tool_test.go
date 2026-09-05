@@ -289,6 +289,175 @@ func TestWorkshopBlocksDirectWritesToTheEvaluationPlan(t *testing.T) {
 	}
 }
 
+// TestDeleteEvaluationPlanStepsRemovesTheStepAndRecordsTheChangelog is
+// PLAT-282: before this tool, removing an evaluation step had no sanctioned
+// path at all and could only happen by editing evaluation_plan.json
+// directly, leaving nothing in planning/changelog for drift review to see.
+func TestDeleteEvaluationPlanStepsRemovesTheStepAndRecordsTheChangelog(t *testing.T) {
+	plan := `{"steps":[
+		{"id":"eval-a","title":"A","max_score":10,"some_future_field":{"kept":true}},
+		{"id":"eval-b","title":"B","max_score":4}
+	]}`
+	workspacePath, files, read, write := evalPlanHarness(t, plan)
+
+	out, err := DeleteEvaluationPlanSteps(context.Background(), workspacePath,
+		[]string{"eval-a"}, "Retired: superseded by eval-c.", read, write, loggerv2.NewNoop())
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if !strings.Contains(out, "eval-a") {
+		t.Fatalf("result did not name the deleted step: %s", out)
+	}
+
+	var document map[string]interface{}
+	if err := json.Unmarshal([]byte(files[workspacePath+"/"+evaluationPlanRelPath]), &document); err != nil {
+		t.Fatalf("written plan does not parse: %v", err)
+	}
+	steps := document["steps"].([]interface{})
+	if len(steps) != 1 {
+		t.Fatalf("expected 1 remaining step, got %d: %#v", len(steps), steps)
+	}
+	if remaining := steps[0].(map[string]interface{}); remaining["id"] != "eval-b" {
+		t.Fatalf("the wrong step survived: %#v", remaining)
+	}
+
+	backlog := CollectPlanChangeBacklog(workspacePath)
+	if backlog == nil || len(backlog.Changes) == 0 {
+		t.Fatal("the deletion produced no changelog entry, so drift review would never see it")
+	}
+	var found bool
+	for _, change := range backlog.Changes {
+		if change.Tool == "delete_evaluation_step" && strings.Contains(change.Reason, "Retired") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no delete_evaluation_step changelog entry with its rationale recorded: %+v", backlog.Changes)
+	}
+
+	// The backlog projection doesn't carry DeletedSteps; read the raw
+	// changelog entry to confirm the deleted step's own content was captured
+	// (needed to support a manual revert, same as delete_plan_steps).
+	entry := findChangelogEntry(t, workspacePath, files, "delete_evaluation_step")
+	if len(entry.DeletedSteps) != 1 || !strings.Contains(string(entry.DeletedSteps[0]), "eval-a") {
+		t.Fatalf("changelog entry did not capture the deleted step's own JSON: %+v", entry)
+	}
+	if !strings.Contains(string(entry.DeletedSteps[0]), "some_future_field") {
+		t.Fatalf("changelog capture must be the full step, not a partial projection: %s", entry.DeletedSteps[0])
+	}
+}
+
+// findChangelogEntry scans the in-memory workspace for the planning/changelog
+// file this test run wrote and returns the entry for the given tool.
+func findChangelogEntry(t *testing.T, workspacePath string, files map[string]string, tool string) PlanChangelogEntry {
+	t.Helper()
+	prefix := workspacePath + "/planning/changelog/"
+	for path, content := range files {
+		if !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		var clog PlanChangelog
+		if err := json.Unmarshal([]byte(content), &clog); err != nil {
+			continue
+		}
+		for _, entry := range clog.Entries {
+			if entry.Tool == tool {
+				return entry
+			}
+		}
+	}
+	t.Fatalf("no changelog entry found for tool %q", tool)
+	return PlanChangelogEntry{}
+}
+
+// TestDeleteEvaluationPlanStepsRemovesMultipleAtOnce covers the batch case,
+// mirroring delete_plan_steps' deleted_step_ids shape for the regular plan.
+func TestDeleteEvaluationPlanStepsRemovesMultipleAtOnce(t *testing.T) {
+	plan := `{"steps":[
+		{"id":"eval-a","title":"A"},
+		{"id":"eval-b","title":"B"},
+		{"id":"eval-c","title":"C"}
+	]}`
+	workspacePath, files, read, write := evalPlanHarness(t, plan)
+
+	if _, err := DeleteEvaluationPlanSteps(context.Background(), workspacePath,
+		[]string{"eval-a", "eval-c", "eval-a"}, // a duplicate id must not be an error
+		"Consolidating into eval-b.", read, write, loggerv2.NewNoop()); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	var document map[string]interface{}
+	if err := json.Unmarshal([]byte(files[workspacePath+"/"+evaluationPlanRelPath]), &document); err != nil {
+		t.Fatalf("written plan does not parse: %v", err)
+	}
+	steps := document["steps"].([]interface{})
+	if len(steps) != 1 || steps[0].(map[string]interface{})["id"] != "eval-b" {
+		t.Fatalf("expected only eval-b to survive: %#v", steps)
+	}
+}
+
+// TestDeleteEvaluationPlanStepsRejectsAnyMissingIDWithNoPartialDeletion
+// mirrors delete_plan_steps: a batch delete either fully succeeds or leaves
+// the plan completely unchanged, never a partial removal.
+func TestDeleteEvaluationPlanStepsRejectsAnyMissingIDWithNoPartialDeletion(t *testing.T) {
+	plan := `{"steps":[{"id":"eval-a","title":"A"},{"id":"eval-b","title":"B"}]}`
+	workspacePath, files, read, write := evalPlanHarness(t, plan)
+	original := files[workspacePath+"/"+evaluationPlanRelPath]
+
+	_, err := DeleteEvaluationPlanSteps(context.Background(), workspacePath,
+		[]string{"eval-a", "eval-does-not-exist"}, "why", read, write, loggerv2.NewNoop())
+	if err == nil || !strings.Contains(err.Error(), "eval-does-not-exist") {
+		t.Fatalf("a missing step id was not rejected: %v", err)
+	}
+	if files[workspacePath+"/"+evaluationPlanRelPath] != original {
+		t.Fatal("a rejected batch delete must not partially modify the plan file")
+	}
+}
+
+func TestDeleteEvaluationPlanStepsRequiresReasonAndNonEmptyStepIDs(t *testing.T) {
+	workspacePath, _, read, write := evalPlanHarness(t, `{"steps":[{"id":"eval-a","title":"A"}]}`)
+	ctx := context.Background()
+	logger := loggerv2.NewNoop()
+
+	if _, err := DeleteEvaluationPlanSteps(ctx, workspacePath, []string{"eval-a"}, "", read, write, logger); err == nil ||
+		!strings.Contains(err.Error(), "reason is required") {
+		t.Fatalf("a deletion with no rationale was accepted: %v", err)
+	}
+	if _, err := DeleteEvaluationPlanSteps(ctx, workspacePath, nil, "why", read, write, logger); err == nil ||
+		!strings.Contains(err.Error(), "step_ids") {
+		t.Fatalf("an empty step_ids list was accepted: %v", err)
+	}
+	if _, err := DeleteEvaluationPlanSteps(ctx, workspacePath, []string{"  "}, "why", read, write, logger); err == nil ||
+		!strings.Contains(err.Error(), "step_ids") {
+		t.Fatalf("a whitespace-only step id was accepted: %v", err)
+	}
+}
+
+// TestDeleteEvaluationPlanStepsHonorsTheLegacyEvalStepsKey mirrors
+// UpdateEvaluationPlanStep's own support for the pre-migration "eval_steps"
+// array name.
+func TestDeleteEvaluationPlanStepsHonorsTheLegacyEvalStepsKey(t *testing.T) {
+	plan := `{"eval_steps":[{"id":"eval-a","title":"A"},{"id":"eval-b","title":"B"}]}`
+	workspacePath, files, read, write := evalPlanHarness(t, plan)
+
+	if _, err := DeleteEvaluationPlanSteps(context.Background(), workspacePath,
+		[]string{"eval-a"}, "why", read, write, loggerv2.NewNoop()); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	var document map[string]interface{}
+	if err := json.Unmarshal([]byte(files[workspacePath+"/"+evaluationPlanRelPath]), &document); err != nil {
+		t.Fatalf("written plan does not parse: %v", err)
+	}
+	if _, stillSteps := document["steps"]; stillSteps {
+		t.Fatal("the legacy key must not be rewritten to \"steps\"")
+	}
+	remaining := document["eval_steps"].([]interface{})
+	if len(remaining) != 1 || remaining[0].(map[string]interface{})["id"] != "eval-b" {
+		t.Fatalf("unexpected remaining steps under eval_steps: %#v", remaining)
+	}
+}
+
 // TestWorkshopClaimsNoProtectionItDoesNotProvide keeps the deny list honest for
 // sessions that could not write evaluation/ anyway.
 func TestWorkshopClaimsNoProtectionItDoesNotProvide(t *testing.T) {

@@ -14,12 +14,12 @@ export const READ_ONLY_TITLE = 'Read-only access'
  * decide whether THIS workflow is theirs to edit. A workflow shared
  * read-only is read-only even for a member who owns others.
  *
- * The capabilities panel hides its Save button and the toolbar hides the
- * capability cluster on this, but the section components underneath write
- * account-wide state immediately (bot routes, API keys, secrets, skills, MCP
- * connections) and several are reachable from surfaces that never pass
- * through either gate. Every one of those mutating controls disables on this
- * so a read-only user can't mutate through the side door.
+ * The toolbar keeps capability views visible for readers, while the
+ * capabilities panel hides its Save button and the section components
+ * underneath disable their writes. Those components may write account-wide
+ * state immediately (bot routes, API keys, secrets, skills, MCP connections)
+ * and can be reachable through surfaces that never pass through the toolbar,
+ * so every mutating control must honor this guard.
  */
 export function useCanWriteWorkflow(workspacePath?: string | null): boolean {
   const accountCanWrite = useAuthStore(state => hasWorkflowWriteAccess(state.user, state.isMultiUserMode))

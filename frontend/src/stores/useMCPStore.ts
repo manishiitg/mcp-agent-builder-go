@@ -163,8 +163,7 @@ export const useMCPStore = create<MCPState>()(
             })
 
             // If any server is still being discovered, poll again after 2s.
-            // This handles the race where initializeToolCache() hasn't finished
-            // by the time the first getTools() response arrives.
+            // Idle/not_loaded catalog entries must not trigger polling.
             const hasLoadingServers = toolList.some((t: ToolDefinition) => t.status === 'loading')
             if (hasLoadingServers) {
               setTimeout(() => get().refreshTools(), 2000)

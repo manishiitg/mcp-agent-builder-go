@@ -11,6 +11,8 @@ interface WorkflowSharePopupProps {
   workspacePath: string
   /** Render only the body, for a host (WorkflowAccessView) that supplies the pane shell and header. */
   embedded?: boolean
+  /** Readers may inspect membership but cannot change grants. */
+  readOnly?: boolean
 }
 
 /**
@@ -19,7 +21,7 @@ interface WorkflowSharePopupProps {
  * server refuses anything else and never lets the last owner go.
  * docs/design/user_accounts_and_workflow_sharing.md, phase 3.
  */
-const WorkflowSharePopup: React.FC<WorkflowSharePopupProps> = ({ isOpen, onClose, workspacePath, embedded = false }) => {
+const WorkflowSharePopup: React.FC<WorkflowSharePopupProps> = ({ isOpen, onClose, workspacePath, embedded = false, readOnly = false }) => {
   const me = useAuthStore((s) => s.user)
   const refreshWorkflows = useWorkflowManifestStore((s) => s.refreshWorkflows)
   const [info, setInfo] = useState<WorkflowAccessInfo | null>(null)
@@ -49,6 +51,7 @@ const WorkflowSharePopup: React.FC<WorkflowSharePopupProps> = ({ isOpen, onClose
   }, [isOpen, load])
 
   const save = useCallback(async (owners: string[], readers: string[]) => {
+    if (readOnly) return
     setSaving(true)
     setError(null)
     try {
@@ -60,7 +63,7 @@ const WorkflowSharePopup: React.FC<WorkflowSharePopupProps> = ({ isOpen, onClose
     } finally {
       setSaving(false)
     }
-  }, [workspacePath, refreshWorkflows])
+  }, [readOnly, workspacePath, refreshWorkflows])
 
   const ownerIds = useMemo(() => (info?.owners ?? []).map((u) => u.id), [info])
   const readerIds = useMemo(() => (info?.readers ?? []).map((u) => u.id), [info])
@@ -86,24 +89,25 @@ const WorkflowSharePopup: React.FC<WorkflowSharePopupProps> = ({ isOpen, onClose
     <>
           <div className="px-4 pt-3 pb-2 text-xs text-muted-foreground">
             <span className="font-mono">{workspacePath}</span>. Owners edit, run, share and delete. Read-only people can chat, run and watch, but change nothing.
+            {readOnly && <span className="mt-1 block font-medium text-amber-600 dark:text-amber-400">Read-only: access membership is visible, but all changes are disabled.</span>}
             {info?.legacy && <span className="block mt-1 text-amber-600">Nothing recorded yet: every member can edit this workflow until you save a first grant.</span>}
           </div>
           <div className="px-4 pb-3 border-b border-border flex flex-col gap-2 sm:flex-row sm:items-end">
             <div className="flex-1">
               <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Add a person</label>
-              <select value={pickId} onChange={(e) => setPickId(e.target.value)} className="w-full mt-1 px-2 py-1.5 text-sm bg-muted/40 border border-border rounded">
+            <select value={pickId} disabled={readOnly} onChange={(e) => setPickId(e.target.value)} className="w-full mt-1 px-2 py-1.5 text-sm bg-muted/40 border border-border rounded disabled:cursor-not-allowed disabled:opacity-50">
                 <option value="">Choose a user…</option>
                 {candidates.map((u) => <option key={u.id} value={u.id}>{u.username}{u.email ? ` · ${u.email}` : ''}</option>)}
               </select>
             </div>
             <div className="sm:w-36">
               <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">As</label>
-              <select value={pickRole} onChange={(e) => setPickRole(e.target.value as 'reader' | 'owner')} className="w-full mt-1 px-2 py-1.5 text-sm bg-muted/40 border border-border rounded">
+              <select value={pickRole} disabled={readOnly} onChange={(e) => setPickRole(e.target.value as 'reader' | 'owner')} className="w-full mt-1 px-2 py-1.5 text-sm bg-muted/40 border border-border rounded disabled:cursor-not-allowed disabled:opacity-50">
                 <option value="reader">Read-only</option>
                 <option value="owner">Owner</option>
               </select>
             </div>
-            <button onClick={add} disabled={!pickId || saving} className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
+            <button onClick={add} disabled={readOnly || !pickId || saving} title={readOnly ? 'Read-only access' : undefined} className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
               {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />} Add
             </button>
           </div>
@@ -121,8 +125,8 @@ const WorkflowSharePopup: React.FC<WorkflowSharePopupProps> = ({ isOpen, onClose
                   <div key={u.id} className="flex items-center justify-between py-1.5 border-t border-border">
                     <span>{label(u)}{u.email && <span className="ml-1 text-xs text-muted-foreground">{u.email}</span>}</span>
                     <span className="flex items-center gap-1">
-                      <button className="text-xs px-2 py-0.5 rounded border border-border hover:bg-accent" disabled={saving || info.owners.length < 2} title={info.owners.length < 2 ? 'A workflow needs at least one owner' : 'Make read-only'} onClick={() => demote(u.id)}>Make read-only</button>
-                      <button className="p-1 rounded hover:bg-destructive/10 text-destructive" disabled={saving || info.owners.length < 2} title="Remove" onClick={() => remove(u.id)}><Trash2 className="w-3.5 h-3.5" /></button>
+                      <button className="text-xs px-2 py-0.5 rounded border border-border hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50" disabled={readOnly || saving || info.owners.length < 2} title={readOnly ? 'Read-only access' : info.owners.length < 2 ? 'A workflow needs at least one owner' : 'Make read-only'} onClick={() => demote(u.id)}>Make read-only</button>
+                      <button className="p-1 rounded hover:bg-destructive/10 text-destructive disabled:cursor-not-allowed disabled:opacity-50" disabled={readOnly || saving || info.owners.length < 2} title={readOnly ? 'Read-only access' : 'Remove'} onClick={() => remove(u.id)}><Trash2 className="w-3.5 h-3.5" /></button>
                     </span>
                   </div>
                 ))}
@@ -132,8 +136,8 @@ const WorkflowSharePopup: React.FC<WorkflowSharePopupProps> = ({ isOpen, onClose
                   <div key={u.id} className="flex items-center justify-between py-1.5 border-t border-border">
                     <span>{label(u)}{u.email && <span className="ml-1 text-xs text-muted-foreground">{u.email}</span>}</span>
                     <span className="flex items-center gap-1">
-                      <button className="text-xs px-2 py-0.5 rounded border border-border hover:bg-accent" disabled={saving} onClick={() => promote(u.id)}>Make owner</button>
-                      <button className="p-1 rounded hover:bg-destructive/10 text-destructive" disabled={saving} title="Remove" onClick={() => remove(u.id)}><Trash2 className="w-3.5 h-3.5" /></button>
+                      <button className="text-xs px-2 py-0.5 rounded border border-border hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50" disabled={readOnly || saving} title={readOnly ? 'Read-only access' : undefined} onClick={() => promote(u.id)}>Make owner</button>
+                      <button className="p-1 rounded hover:bg-destructive/10 text-destructive disabled:cursor-not-allowed disabled:opacity-50" disabled={readOnly || saving} title={readOnly ? 'Read-only access' : 'Remove'} onClick={() => remove(u.id)}><Trash2 className="w-3.5 h-3.5" /></button>
                     </span>
                   </div>
                 ))}

@@ -1,5 +1,14 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
+## Internal reconciliation — 2026-09-05
+
+PUL-0B679A3D and PUL-517B83AD: old verification marker/allowlist and record_pulse_verification pending-attempt flow are retired; current applied-fix, no-attempt history and real MCP applied-fix tests pass.
+
+Resolved in SQLite for internal tracking with previous concern/detail records
+preserved in resolution events. Source/tests verified; deployed replay and
+historical business/module-result repair are not claimed. Full mapping:
+[remaining-report audit](../../audits/platform-open-report-reconciliation-2026-09-05.md).
+
 # PLAT-198 — Pulse kept applied fixes active behind a second verification queue and exposed text-derived identity
 
 | Coordination | Value |

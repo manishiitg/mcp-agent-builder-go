@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -30,8 +32,9 @@ import (
 //	MCP stdio bridge -> custom tool executor -> workspace DB HTTP handler -> SQLite.
 //
 // It proves a WAL-resident committed row is queryable and an explicitly
-// authorized mutation reaches the live workflow database. No executor is
-// called directly by the operation under test.
+// authorized mutation reaches the live workflow database. A direct executor
+// query also supplies the canonical payload for transport-equivalence checks.
+// The custom HTTP facade below models the executor service's envelope.
 func TestWorkflowStepDatabaseToolsThroughMCPBridge(t *testing.T) {
 	root := t.TempDir()
 	workspacePath := "Workflow/db-bridge-e2e"
@@ -150,6 +153,56 @@ func TestWorkflowStepDatabaseToolsThroughMCPBridge(t *testing.T) {
 	}
 	if !strings.Contains(fmt.Sprint(queryResult.Content), "committed-in-wal") {
 		t.Fatalf("bridge query did not see committed WAL row: %#v", queryResult.Content)
+	}
+	// Pin the exact payload, not just a substring that would also pass for a
+	// double-encoded transport envelope. Raw HTTP has an envelope; native and
+	// MCP callers receive the same decoded tool result.
+	decode := func(value string) map[string]any {
+		t.Helper()
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(value), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["columns"] == nil || payload["rows"] == nil || payload["success"] != nil {
+			t.Fatalf("not a canonical DB payload: %s", value)
+		}
+		return payload
+	}
+	arguments := map[string]any{"action": "query", "sql": "SELECT id, value FROM facts ORDER BY id"}
+	native, err := registry.Executors["query_workflow_db"](context.WithValue(context.Background(), common.ChatSessionIDKey, sessionID), arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPayload := decode(native)
+	if len(queryResult.Content) != 1 {
+		t.Fatalf("unexpected MCP content: %#v", queryResult.Content)
+	}
+	content, ok := queryResult.Content[0].(mcp.TextContent)
+	if !ok || !reflect.DeepEqual(decode(content.Text), wantPayload) {
+		t.Fatalf("MCP result differs from native: %#v", queryResult.Content)
+	}
+	body, _ := json.Marshal(arguments)
+	request, err := http.NewRequest(http.MethodPost, customAPI.URL+"/tools/custom/query_workflow_db", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("X-Session-ID", sessionID)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Success bool   `json:"success"`
+		Result  string `json:"result"`
+		Error   string `json:"error"`
+	}
+	err = json.NewDecoder(response.Body).Decode(&envelope)
+	response.Body.Close()
+	if err != nil || !envelope.Success || envelope.Error != "" {
+		t.Fatalf("HTTP envelope: %+v, %v", envelope, err)
+	}
+	if !reflect.DeepEqual(decode(envelope.Result), wantPayload) {
+		t.Fatalf("decoded HTTP result differs: %+v", envelope)
 	}
 
 	mutation := mcp.CallToolRequest{}

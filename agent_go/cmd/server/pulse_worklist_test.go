@@ -1007,9 +1007,8 @@ func TestRecordPulseResultAcceptsFixerSupplementalDispositionsAfterReviewerTermi
 		t.Fatalf("Fixer supplemental write was rejected: %v", err)
 	}
 
-	// The module's own terminal verdict stays the reviewer's original "done"
-	// -- the Fixer's write records a disposition, it does not relitigate what
-	// the review itself concluded.
+	// Live state and the audit must agree with the Fixer's evidenced result;
+	// the original reviewer receipt is retained separately in history.
 	states, err := getPulseModuleStates(context.Background(), workspacePath)
 	if err != nil {
 		t.Fatalf("get states: %v", err)
@@ -1018,8 +1017,8 @@ func TestRecordPulseResultAcceptsFixerSupplementalDispositionsAfterReviewerTermi
 	for _, state := range states {
 		if state.Module == pulseModuleTechnicalReview {
 			found = true
-			if state.LastResult != "done" {
-				t.Fatalf("module's own terminal result was overwritten: got %q, want %q", state.LastResult, "done")
+			if state.LastResult != "changed" {
+				t.Fatalf("module result is stale: got %q, want changed", state.LastResult)
 			}
 		}
 	}

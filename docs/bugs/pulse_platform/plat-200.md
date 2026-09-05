@@ -1,5 +1,14 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
+## Internal reconciliation — 2026-09-05
+
+PUL-DD9EDE3C: bounded snapshot output, recovery guidance, granted full-result spill and folder read access verified with focused tests; PLAT-078's historical report is covered.
+
+Resolved in SQLite for internal tracking with previous concern/detail records
+preserved in resolution events. Source/tests verified; deployed replay and
+historical business/module-result repair are not claimed. Full mapping:
+[remaining-report audit](../../audits/platform-open-report-reconciliation-2026-09-05.md).
+
 # PLAT-200 — oversized `agent_browser` snapshots were silently discarded, not just poorly retried; `--depth` was also wrongly listed as an equal-weight retry option on wide/flat pages
 
 | Coordination | Value |

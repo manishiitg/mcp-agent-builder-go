@@ -1,5 +1,40 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
+## Premature review failures and result correction — 2026-09-05
+
+Local fixes for Sales Outreach `PUL-09511B0E` and `PUL-4719B06D`:
+
+- The production `record_pulse_result` executor now checks the caller's current
+  conversation tree before accepting a module failure. Active descendant work
+  blocks premature parent failure; unrelated turns and a child's own failure do
+  not. The wrapper is installed at all three production custom-tool setup sites.
+- An evidenced same-run correction of failed/blocked/timed_out to done/changed
+  updates `pulse_module_state` and `pulse_module_audit` in the same transaction.
+  The prior state and audit receipt are retained in `pulse_module_result_history`.
+  A reviewer done → Fixer changed supplement also updates both projections.
+  Unsupported transitions and other-run replacements remain rejected.
+- Regression tests cover proof requirements, stale-run rejection, atomic rollback,
+  previous-receipt preservation, same-result retries, protection against stale
+  failure downgrades, active descendants, unrelated children, and own-child failure.
+
+Changes are local, not committed/deployed. No historical module result was
+rewritten. The subsequent verified backlog batch resolves `PUL-09511B0E` and
+`PUL-4719B06D` for internal tracking, preserving their prior SQLite records in
+audit events. It also resolves the obsolete child-session receipt reports
+`PUL-E3F22BCC`, `PUL-76329350`, and `PUL-F9BA8AF2`: the conflicting checker was
+removed in a8aaaa012 and remains absent. Current parent-run scoped and terminal
+module-validation tests pass. This does not claim a new live-run verification
+or restore another receipt-identity layer.
+
+## Internal tracking resolution — 2026-09-05
+
+SQL-checker findings resolved: Sales Outreach PUL-68B9A284, PUL-EEFF4258, PUL-7E6F78B1, PUL-F645A646, PUL-3DFE2419, and PUL-F1A8B489. Adjacent Python literals are joined before EXPLAIN; dynamic expressions are skipped instead of validating prefixes. Focused extractor/SQLite and plan-drift tests pass. Other PLAT-258 work is unaffected.
+
+Closed at the user's request for internal tracking. Fixes are tested local,
+uncommitted source changes based on `0babf193ec0efdf33511a3150f82e0b29685814e`;
+deployment verification is pending. No live workflow or historical schedule
+receipt was modified. Prior investigation below is retained as history.
+
 # PLAT-258 — Dedicated `plan_drift_review` Pulse module (all acceptance items built)
 
 | Coordination | Value |

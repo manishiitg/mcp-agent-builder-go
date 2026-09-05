@@ -1188,7 +1188,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) tryRunSavedScriptedScript(
 		} else {
 			execErrMsg = fmt.Sprintf("exit code %d:\n%s", exitCode, output)
 		}
-		// Even with non-zero exit, check if the script produced valid output.
+		// Collect output diagnostics, but valid artifacts cannot override a failed process.
 		preValResults, _ := RunPreValidation(ctx, getValidationSchema(step), stepExecutionRelPath, hcpo.BaseOrchestrator)
 		if preValResults != nil {
 			hcpo.emitPreValidationCompletedEvent(ctx, step, stepIndex, stepPath, false, preValResults)
@@ -1198,14 +1198,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) tryRunSavedScriptedScript(
 					PreValidationAttempt{ExecutionMode: "scripted", ValidationPhase: "saved-script", ExecutionAttempt: 1, ValidationAttempt: 1})
 			}
 		}
-		if preValResults != nil && preValResults.OverallPass {
-			hcpo.GetLogger().Info(fmt.Sprintf("🐍 [scripted] Saved script exited %d but pre-validation passed — treating as success for step %d", exitCode, stepIndex+1))
-			hcpo.updateScriptedRunStats(ctx, stepID, buildRunRecord(true, "", ""), isLocked)
-			return &ScriptedFastPathResult{RanScript: true, Success: true, ExitCode: exitCode, Output: output, ExistingScript: existingScript}
-		}
 		validationErrMsg := ""
 		failureReason := "execution_error"
-		if preValResults != nil {
+		if preValResults != nil && !preValResults.OverallPass {
 			validationErrMsg = formatWorkspaceResults(preValResults)
 			failureReason = "execution_and_validation_error"
 		}

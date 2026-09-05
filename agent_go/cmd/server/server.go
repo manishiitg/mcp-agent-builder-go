@@ -3779,6 +3779,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// Create custom tools for workflow agents (workspace tools + human tools).
 		// Workflow agents can be Simple or ReAct agents, tools are registered based on mode.
 		allTools, allExecutors, toolCategories := createCustomTools(true, currentUserID, sessionID) // Workflow mode: session-aware
+		api.guardPulseResultExecutor(allExecutors, sessionID)
 
 		// NOTE: Workspace executor replacement with session + secrets happens after secrets are merged (see below).
 
@@ -5286,6 +5287,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 			// this, notify_user was never registered as a custom tool, so it never landed
 			// in a.customTools and was invisible to CLI agents via get_api_spec.
 			allTools, allExecutors, toolCategories := createCustomTools(isWorkflowPhase, currentUserID, sessionID) // session-aware
+			api.guardPulseResultExecutor(allExecutors, sessionID)
 
 			// Register each custom tool with the agent
 			// This updates the custom-tool registry and invalidates affected API specifications.
@@ -9280,6 +9282,7 @@ func (api *StreamingAPI) buildWorkshopConfig(
 	// (/s/{session_id}/...) so per-tool HTTP calls from inside Docker hit the
 	// session-scoped route and get the correct executor.
 	allTools, allExecutors, toolCategories := createCustomTools(true, currentUserID, sessionID)
+	api.guardPulseResultExecutor(allExecutors, sessionID)
 
 	// Track preset's global secret selection (overrides req.SelectedGlobalSecrets which is nil for phase chat)
 	var presetGlobalSecretNames *[]string

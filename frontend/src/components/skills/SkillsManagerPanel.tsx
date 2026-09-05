@@ -16,9 +16,10 @@ interface SkillsManagerPanelProps {
   // place, mirroring ConnectorsBrowser.
   selectedSkills?: string[]
   onToggleSkill?: (folderName: string) => void
+  workspacePath?: string | null
 }
 
-export default function SkillsManagerPanel({ compact = false, selectedSkills, onToggleSkill }: SkillsManagerPanelProps) {
+export default function SkillsManagerPanel({ compact = false, selectedSkills, onToggleSkill, workspacePath }: SkillsManagerPanelProps) {
   const [skills, setSkills] = useState<Skill[]>([])
   const [query, setQuery] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -27,7 +28,7 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
   // Import and delete write the shared skills library immediately; the
   // add/remove toggle changes this workflow's selection. All disable for
   // read-only users.
-  const readOnly = !useCanWriteWorkflow()
+  const readOnly = !useCanWriteWorkflow(workspacePath)
 
   const loadSkills = useCallback(async () => {
     setIsLoading(true)
@@ -57,6 +58,7 @@ export default function SkillsManagerPanel({ compact = false, selectedSkills, on
   }, [loadSkills])
 
   const handleDelete = async (folderName: string) => {
+    if (readOnly) return
     if (!confirm(`Are you sure you want to delete the skill "${folderName}"?`)) {
       return
     }

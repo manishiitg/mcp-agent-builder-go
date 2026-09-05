@@ -27,7 +27,6 @@ import { getBackupDotClass } from '../backupStatus'
 import { getPublishDotClass } from '../publishStatus'
 import { getNotificationDotClass } from '../notificationStatus'
 import { loadWorkflowNotificationInfo, type WorkflowNotificationState } from '../../../services/workflow-notifications'
-import { useWorkflowManifestStore } from '../../../stores/useWorkflowManifestStore'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip'
 import { hasWorkflowOwnerAccess } from '../../../utils/workflowPermissions'
 import { useCanWriteWorkflow } from '../../../hooks/useCanWriteWorkflow'
@@ -195,11 +194,6 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
   const [notificationState, setNotificationState] = useState<WorkflowNotificationState | 'loading'>('loading')
   // Share is for this workflow's owners (or an admin), multi-user mode only.
   const isMultiUser = useAuthStore(state => state.isMultiUserMode)
-  const isAdminUser = useAuthStore(state => state.user?.is_admin === true)
-  const myWorkflowAccess = useWorkflowManifestStore(state =>
-    workspacePath ? state.workflows.find(w => w.workspace_path === normalizeWorkspacePath(workspacePath))?.my_access : undefined,
-  )
-  const canShareWorkflow = isMultiUser && !!workspacePath && (isAdminUser || myWorkflowAccess === 'owner' || myWorkflowAccess === 'write')
   const [workflowScheduleStats, setWorkflowScheduleStats] = useState<WorkflowScheduleStats>(EMPTY_WORKFLOW_SCHEDULE_STATS)
   const [manualPulseStarting, setManualPulseStarting] = useState(false)
   const [openGroups, setOpenGroups] = useState<Record<ToolbarGroupId, boolean>>(() => readOpenGroups())
@@ -681,8 +675,9 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
             </ToolbarGroup>
           )}
 
-        {/* Workflow capabilities — write-only (read users don't see this) */}
-        {canWriteWorkflow && (
+        {/* Workflow capabilities remain discoverable for readers. Each panel
+            owns its read-only state and disables mutations in place. */}
+        {workspacePath && (
           <ToolbarGroup
             label="Setup"
             open={openGroups.setup}
@@ -706,7 +701,7 @@ export const WorkflowToolbar: React.FC<WorkflowToolbarProps> = ({
             {/* Access lives with the rest of setup: one button, one panel
                 with two tabs -- who may see or edit THIS workflow, and (for
                 admins) the deployment's accounts, roles and products. */}
-            {(canShareWorkflow || canManageAccess) && (
+            {isMultiUser && workspacePath && (
               <>
                 <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
                 <Tooltip>

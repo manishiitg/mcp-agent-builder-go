@@ -6,6 +6,17 @@ export function normalizedActivityStatus(status?: string): string {
   return (status || '').toLowerCase().trim()
 }
 
+/**
+ * Product project conversations use the durable `<product-id>:project:<id>`
+ * identity. They are deliberately visible inside their own product surfaces,
+ * but AgentWorks' global monitor represents AgentWorks work only. Keep the
+ * recognition structural rather than hard-coding Video Studio so future
+ * project-based products inherit the boundary automatically.
+ */
+export function isProductProjectSession(session: Pick<ActiveSessionInfo, 'session_id'>): boolean {
+  return /^[a-z][a-z0-9-]*:project:/i.test(session.session_id.trim())
+}
+
 export function isTerminalActivityStatus(status?: string): boolean {
   const normalized = normalizedActivityStatus(status)
   return normalized === 'completed' ||

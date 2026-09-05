@@ -4,6 +4,7 @@ import {
   hasActiveSessionWork,
   hasIdleAliveCodingAgent,
   hasLiveBackgroundAgents,
+  isProductProjectSession,
   isTerminalActivityStatus,
   isVisibleActivitySession,
   nonWorkflowActivityTitle,
@@ -11,6 +12,13 @@ import {
 } from './activitySessions'
 
 describe('activity session helpers', () => {
+  it('recognizes product-project sessions so AgentWorks can keep them out of its monitor', () => {
+    expect(isProductProjectSession({ session_id: 'video-studio:project:new-video' })).toBe(true)
+    expect(isProductProjectSession({ session_id: 'future-product:project:launch-1' })).toBe(true)
+    expect(isProductProjectSession({ session_id: 'schedule-cron--workflow_1' })).toBe(false)
+    expect(isProductProjectSession({ session_id: 'chat-123' })).toBe(false)
+  })
+
   it('does not treat an idle retained session as active work', () => {
     expect(hasActiveSessionWork({ status: 'completed' })).toBe(false)
   })

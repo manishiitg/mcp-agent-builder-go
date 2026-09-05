@@ -111,6 +111,123 @@ func TestLandlockEnforcesExternalFolderAccess(t *testing.T) {
 	}
 }
 
+// TestPackageManagerCacheEnvPointsIntoTheGrantedWritePath is a pure unit
+// test of the PLAT-283 fix: pip/npm/venv default to caching under $HOME,
+// which lives outside every step's Landlock write grant, so
+// packageManagerCacheEnv must redirect them into a subtree of a path the
+// step can actually write to.
+func TestPackageManagerCacheEnvPointsIntoTheGrantedWritePath(t *testing.T) {
+	writableDir := t.TempDir()
+	policy := LandlockPolicy{WritePaths: []string{writableDir}, WorkDir: writableDir}
+
+	env := packageManagerCacheEnv(policy)
+	want := map[string]string{
+		"PIP_CACHE_DIR=":    filepath.Join(writableDir, ".cache", "pip"),
+		"XDG_CACHE_HOME=":   filepath.Join(writableDir, ".cache"),
+		"PYTHONUSERBASE=":   filepath.Join(writableDir, ".local"),
+		"npm_config_cache=": filepath.Join(writableDir, ".cache", "npm"),
+		"TMPDIR=":           filepath.Join(writableDir, ".tmp"),
+	}
+	for prefix, wantValue := range want {
+		found := false
+		for _, entry := range env {
+			if strings.HasPrefix(entry, prefix) {
+				found = true
+				if got := strings.TrimPrefix(entry, prefix); got != wantValue {
+					t.Errorf("%s = %q, want %q", prefix, got, wantValue)
+				}
+				if info, err := os.Stat(strings.TrimPrefix(entry, prefix)); err != nil || !info.IsDir() {
+					t.Errorf("%s target %q was not pre-created as a directory: %v", prefix, wantValue, err)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("missing env entry with prefix %q", prefix)
+		}
+	}
+}
+
+// TestPackageManagerCacheEnvFallsBackWhenWorkDirIsNotWritable covers a step
+// whose WorkDir sits outside its own write grant (e.g. a read-only scripted
+// step): redirection must still land somewhere the sandbox will actually
+// allow, not silently point at an unwritable WorkDir.
+func TestPackageManagerCacheEnvFallsBackWhenWorkDirIsNotWritable(t *testing.T) {
+	readOnlyWorkDir := t.TempDir()
+	writableDir := t.TempDir()
+	policy := LandlockPolicy{WritePaths: []string{writableDir}, WorkDir: readOnlyWorkDir}
+
+	env := packageManagerCacheEnv(policy)
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "PIP_CACHE_DIR=") {
+			got := strings.TrimPrefix(entry, "PIP_CACHE_DIR=")
+			want := filepath.Join(writableDir, ".cache", "pip")
+			if got != want {
+				t.Errorf("PIP_CACHE_DIR = %q, want %q (the granted write path, not the unwritable WorkDir)", got, want)
+			}
+			return
+		}
+	}
+	t.Fatal("missing PIP_CACHE_DIR entry")
+}
+
+// TestPackageManagerCacheEnvNoOpsWithoutAnyWritePath must not fabricate a
+// path when the policy grants no writes at all -- pointing pip at a
+// non-existent, non-granted directory would just trade one failure mode for
+// a more confusing one.
+func TestPackageManagerCacheEnvNoOpsWithoutAnyWritePath(t *testing.T) {
+	if env := packageManagerCacheEnv(LandlockPolicy{WorkDir: t.TempDir()}); env != nil {
+		t.Fatalf("expected no redirection without a write grant, got %v", env)
+	}
+}
+
+// TestLandlockCommandCanInstallIntoItsOwnCache is the live reproduction of
+// the PLAT-283 incident on the Dominion Hetzner deployment (2026-08-31 /
+// 2026-09-05): a workflow step tried "pip3 install yfinance" and, after
+// working around PEP 668's externally-managed-environment refusal with
+// --break-system-packages, hit a Landlock permission denial writing pip's
+// download cache -- and a bare "python3 -m venv" failed the same way, since
+// both default to caching under $HOME, which sits outside every step's
+// write grant. This does not require python3: it reproduces the exact
+// failure shape directly by writing into $PIP_CACHE_DIR the way pip itself
+// would, which packageManagerCacheEnv must now route into the granted
+// write path instead of the sandbox's unwritable default $HOME.
+func TestLandlockCommandCanInstallIntoItsOwnCache(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	isolator := &Isolator{
+		BaseDir:    workspaceRoot,
+		WorkDir:    workspaceRoot,
+		ReadPaths:  []string{workspaceRoot},
+		WritePaths: []string{workspaceRoot},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if abi, err := landlockABI(); err != nil || abi < 1 {
+		t.Skipf("Landlock is unavailable in this Linux environment: ABI=%d err=%v", abi, err)
+	}
+	policy, err := isolator.landlockPolicy()
+	if err != nil {
+		t.Fatalf("landlockPolicy() failed: %v", err)
+	}
+	command := `test -n "$PIP_CACHE_DIR" && echo cached > "$PIP_CACHE_DIR/probe.whl"`
+	cmd, cleanup, err := isolator.landlockCommand(ctx, policy, command, nil)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "SANDBOX_UNAVAILABLE") {
+			t.Skipf("Landlock launcher is unavailable in this environment: %v", err)
+		}
+		t.Fatalf("landlockCommand() failed: %v", err)
+	}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("writing to the redirected pip cache was denied inside the sandbox: %v\noutput: %s", err, output)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspaceRoot, ".cache", "pip", "probe.whl")); statErr != nil {
+		t.Errorf("redirected pip cache write did not land in the granted write path: %v", statErr)
+	}
+}
+
 // TestMountNamespaceFallbackEnforcesLandlockRejectedOverlapPolicy is the
 // proper, repeatable server-side reproduction of the live incident on the
 // Dominion Hetzner deployment 2026-08-28/29 -- run this directly on any

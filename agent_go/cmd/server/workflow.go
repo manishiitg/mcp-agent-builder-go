@@ -648,13 +648,15 @@ type RunMetadataModels struct {
 
 // RunMetadata stores lifecycle information for a run folder
 type RunMetadata struct {
-	CreatedAt   time.Time          `json:"created_at"`
-	StartedAt   time.Time          `json:"started_at,omitempty"`
-	CompletedAt *time.Time         `json:"completed_at,omitempty"`
-	DurationMs  *int64             `json:"duration_ms,omitempty"`
-	Status      string             `json:"status"`                 // "running", "completed", "failed", "canceled"
-	TriggeredBy string             `json:"triggered_by,omitempty"` // "manual", "cron", "workflow_builder"
-	Models      *RunMetadataModels `json:"models,omitempty"`       // LLM config used for this run
+	Recovery        map[string]interface{}   `json:"recovery,omitempty"`
+	RecoveryHistory []map[string]interface{} `json:"recovery_history,omitempty"`
+	CreatedAt       time.Time                `json:"created_at"`
+	StartedAt       time.Time                `json:"started_at,omitempty"`
+	CompletedAt     *time.Time               `json:"completed_at,omitempty"`
+	DurationMs      *int64                   `json:"duration_ms,omitempty"`
+	Status          string                   `json:"status"`                 // "running", "completed", "failed", "canceled"
+	TriggeredBy     string                   `json:"triggered_by,omitempty"` // "manual", "cron", "workflow_builder"
+	Models          *RunMetadataModels       `json:"models,omitempty"`       // LLM config used for this run
 }
 
 // RunFolderInfo represents information about a single run folder

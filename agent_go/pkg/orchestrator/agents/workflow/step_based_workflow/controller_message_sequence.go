@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/costobserver"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
@@ -1302,6 +1303,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) closeMessageSequenceRuntime(session *
 	}
 	closeMessageSequenceCodingSession(runtime.Provider, runtime.SessionID, reason)
 	common.ClearSessionShellConfig(runtime.SessionID)
+	virtualtools.DeleteSessionNotificationDestination(runtime.SessionID)
 	// Reclaim the isolated coding-CLI workspace for this runtime. Agent.Close
 	// above deliberately leaves it in place — a new Agent is built per turn, so
 	// closing one turn's agent must not delete the workspace the next turn

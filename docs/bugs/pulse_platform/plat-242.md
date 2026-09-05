@@ -1,12 +1,21 @@
 [← Pulse platform index](../pulse_platform_issue_register.md)
 
+## Internal tracking resolution — 2026-09-05
+
+Resolved locally: rotation now uses StartedAt/CreatedAt before folder-name changes. Covers social-media PUL-6403A889 and rtslatency PUL-BA1C940F. Focused scheduler regression tests pass. Timestamp-less legacy metadata retains its name-only fallback; general concurrent-run identity is not addressed.
+
+Closed at the user's request for internal tracking. Fixes are tested local,
+uncommitted source changes based on `0babf193ec0efdf33511a3150f82e0b29685814e`;
+deployment verification is pending. No live workflow or historical schedule
+receipt was modified. Prior investigation below is retained as history.
+
 # PLAT-242 — A schedule-run history entry's error text can name a different iteration than its own `run_folder` field
 
 | Coordination | Value |
 |---|---|
 | Assigned agent | Claude Code |
-| Ticket state | `anomaly confirmed live — exact root cause not fully isolated, deferred` |
-| Last synchronized | `2026-08-29` |
+| Ticket state | `resolved locally — deployment verification pending` |
+| Last synchronized | `2026-09-05` |
 
 - **Priority:** harness_issue, severity high.
 - **Findings:** Twitter/social-media `PUL-6403A889` — the 2026-08-25 Daily

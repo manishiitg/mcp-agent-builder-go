@@ -221,7 +221,7 @@ export default function WorkflowLLMConfigurationPanel({ workspacePath, llmConfig
   // A locked deployment (LLM_CONFIG_LOCKED) shows the same list, fully
   // disabled: the published provider reads "In use", every other row is
   // visible for reference but cannot be tested, selected or configured.
-  const readOnly = !useCanWriteWorkflow() || llmConfigLocked
+  const readOnly = !useCanWriteWorkflow(workspacePath) || llmConfigLocked
   const disabledTitle = llmConfigLocked ? 'Set by your administrator for this deployment' : READ_ONLY_TITLE
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null)
   const [query, setQuery] = useState('')

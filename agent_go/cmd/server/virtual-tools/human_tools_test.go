@@ -445,6 +445,80 @@ func TestHandleNotifyUserPreservesWorkspacePathAcrossSessionRegistry(t *testing.
 	}
 }
 
+func TestChildSessionInheritsNotificationDestination(t *testing.T) {
+	const parentSessionID = "notification-parent-session"
+	const childSessionID = "notification-child-session"
+	RegisterSessionNotificationDestination(parentSessionID, &services.NotificationDestination{
+		UserID:             "user-1",
+		WorkflowName:       "demo",
+		WorkspacePath:      "Workflow/demo",
+		RouteSelections:    map[string]string{"org_dashboard": "enabled", "slack": "enabled"},
+		RunSummaryChannels: []string{"org_dashboard", "slack"},
+	})
+	t.Cleanup(func() {
+		DeleteSessionNotificationDestination(parentSessionID)
+		DeleteSessionNotificationDestination(childSessionID)
+	})
+
+	if !InheritSessionNotificationDestination(parentSessionID, childSessionID) {
+		t.Fatal("expected child notification destination inheritance")
+	}
+	child := sessionNotificationDestination(childSessionID)
+	if child == nil || child.WorkspacePath != "Workflow/demo" || child.WorkflowName != "demo" {
+		t.Fatalf("inherited child destination = %#v", child)
+	}
+
+	// Prove the child owns an independent clone rather than an alias of parent
+	// routing state.
+	child.RouteSelections["org_dashboard"] = "disabled"
+	child.RunSummaryChannels[0] = "changed"
+	parent := sessionNotificationDestination(parentSessionID)
+	if parent == nil || parent.RouteSelections["org_dashboard"] != "enabled" || parent.RunSummaryChannels[0] != "org_dashboard" {
+		t.Fatalf("child mutation changed parent destination: %#v", parent)
+	}
+}
+
+func TestChildSessionNotifyUserUsesInheritedWorkspacePath(t *testing.T) {
+	ch := make(chan *services.NotificationDestination, 1)
+	connector := &testUserNotificationConnector{name: "org_dashboard_child_session_contract", ch: ch}
+	manager := services.GetNotificationManager()
+	manager.RegisterConnector(connector)
+	t.Cleanup(func() { manager.UnregisterConnector(connector.Name()) })
+
+	const parentSessionID = "org-dashboard-parent-session"
+	const childSessionID = "org-dashboard-child-session"
+	RegisterSessionNotificationDestination(parentSessionID, &services.NotificationDestination{
+		WorkspacePath: "Workflow/demo",
+	})
+	if !InheritSessionNotificationDestination(parentSessionID, childSessionID) {
+		t.Fatal("expected child notification destination inheritance")
+	}
+	t.Cleanup(func() {
+		DeleteSessionNotificationDestination(parentSessionID)
+		DeleteSessionNotificationDestination(childSessionID)
+	})
+
+	ctx := context.WithValue(context.Background(), common.ChatSessionIDKey, childSessionID)
+	_, err := handleNotifyUser(ctx, map[string]interface{}{
+		"message_for_user":  "Child run completed.",
+		"notification_kind": "run_summary",
+		"summary_title":     "Child run",
+		"summary_status":    "success",
+	})
+	if err != nil {
+		t.Fatalf("handleNotifyUser returned error: %v", err)
+	}
+
+	select {
+	case dest := <-ch:
+		if dest == nil || dest.WorkspacePath != "Workflow/demo" {
+			t.Fatalf("child notification workspace path = %#v, want Workflow/demo", dest)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected child Org Dashboard notification contract")
+	}
+}
+
 func TestNotificationSummaryUsesSemanticStatusWithoutLifecycleBookkeeping(t *testing.T) {
 	summary, err := notificationSummaryFromArgs(map[string]interface{}{
 		"summary_status": "waiting_for_user",
@@ -615,6 +689,7 @@ func TestHandleNotifyUserEnforcesSummaryChannelRoute(t *testing.T) {
 		PulseSummaryChannels: []string{"gmail"},
 	})
 	if _, err := handleNotifyUser(ctx, map[string]interface{}{
+		"email_subject":     "Notification routing test",
 		"message_for_user":  "Run complete",
 		"notification_kind": "run_summary",
 	}); err != nil {
@@ -632,6 +707,7 @@ func TestHandleNotifyUserEnforcesSummaryChannelRoute(t *testing.T) {
 	}
 
 	if _, err := handleNotifyUser(ctx, map[string]interface{}{
+		"email_subject":     "Notification routing test",
 		"message_for_user":  "Pulse complete",
 		"notification_kind": "pulse_summary",
 	}); err != nil {
@@ -669,6 +745,7 @@ func TestHandleNotifyUserSuppressesWorkflowSlackWebhookForGmailOnlyPulse(t *test
 		PulseSummaryChannels: []string{"gmail"},
 	})
 	if _, err := handleNotifyUser(ctx, map[string]interface{}{
+		"email_subject":     "Notification routing test",
 		"message_for_user":  "Pulse complete",
 		"notification_kind": "pulse_summary",
 	}); err != nil {
@@ -763,6 +840,7 @@ func TestHandleNotifyUserEmailToOverridesDestination(t *testing.T) {
 	})
 
 	if _, err := handleNotifyUser(ctx, map[string]interface{}{
+		"email_subject":    "Notification routing test",
 		"message_for_user": "FYI: done",
 		"email_to":         []interface{}{"Override@Example.com", "ops@example.com"},
 		"email_cc":         []interface{}{"cc@example.com"},
@@ -809,6 +887,7 @@ func TestEmailToKeepsWorkflowBlockedRecipients(t *testing.T) {
 	})
 
 	if _, err := handleNotifyUser(ctx, map[string]interface{}{
+		"email_subject":    "Notification routing test",
 		"message_for_user": "FYI: done",
 		"email_to":         []interface{}{"ops@example.com"},
 	}); err != nil {
@@ -866,6 +945,7 @@ func TestNotifyUserRoutesToConfiguredRecipientsByKind(t *testing.T) {
 			ctx = context.WithValue(ctx, BotNotificationDestinationKey, baseDest())
 
 			if _, err := handleNotifyUser(ctx, map[string]interface{}{
+				"email_subject":     "Notification routing test",
 				"message_for_user":  "FYI: done",
 				"notification_kind": tc.kind,
 			}); err != nil {
@@ -900,6 +980,7 @@ func TestExplicitEmailToBeatsConfiguredRecipients(t *testing.T) {
 	})
 
 	if _, err := handleNotifyUser(ctx, map[string]interface{}{
+		"email_subject":     "Notification routing test",
 		"message_for_user":  "FYI: done",
 		"notification_kind": "run_summary",
 		"email_to":          []interface{}{"just-this-once@example.com"},
@@ -934,6 +1015,7 @@ func TestConfiguredRecipientsKeepWorkflowDenylist(t *testing.T) {
 	})
 
 	if _, err := handleNotifyUser(ctx, map[string]interface{}{
+		"email_subject":     "Notification routing test",
 		"message_for_user":  "FYI: done",
 		"notification_kind": "run_summary",
 	}); err != nil {

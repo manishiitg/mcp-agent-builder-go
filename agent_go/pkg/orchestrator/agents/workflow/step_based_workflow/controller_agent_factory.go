@@ -1011,6 +1011,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) configureSubAgentSessionGuard(session
 	common.SetSessionFolderGuard(sessionID, readPaths, writePaths)
 	configureWorkflowFolderAccessSession(sessionID, hcpo.GetWorkspacePath(), readOnlyPaths, folderEnv)
 	hcpo.grantSessionCDPHostDownloadsReadWrite(sessionID)
+	virtualtools.InheritSessionNotificationDestination(hcpo.GetMCPSessionID(), sessionID)
 
 	// Set the child identity's cwd directly. The run cwd used to be recorded on
 	// httpSessionID, while shell calls carry this dedicated sessionID. Group
