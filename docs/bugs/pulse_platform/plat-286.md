@@ -1,53 +1,90 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-286 — Preserve public finding IDs across automatic identity consolidation
+# PLAT-286 — No tool could change a step's type, so moving a message_sequence to scripted meant rebuilding it
 
 | Coordination | Value |
 |---|---|
-| State | Fixed locally; persistence/identity regression tests pass; not deployed |
-| Date | 2026-09-05 |
-| Evidence | Sales-outreach PUL-2F70A97F contains the complaint; its detail and later events also track a separate LinkedIn browser failure |
+| Assigned agent | Claude Fable 5.1 |
+| Ticket state | `fixed` |
+| Last synchronized | `2026-09-05` |
 
-## Reproduced cause
+- **Priority:** P2 — a builder-workflow gap, not a runtime failure, but one
+  that made the platform's own recommended shape (deterministic work in a
+  scripted step, judgment in a sequence around it) expensive to reach for an
+  existing step, so agents either rebuilt steps by hand or left them
+  conversational.
+- **Owner:** `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/change_step_type_tool.go`
+  (+ registration in `planning_agent.go`, allowlist in
+  `interactive_workshop_manager.go`, `IsPlanModificationTool` in
+  `planning_management.go`, `cmd/server/toolset_invariant_test.go`).
+- **Related:** PLAT-280 (the drift this tool structurally prevents: plan type
+  and declared mode disagreeing), PLAT-282 (same "tool surface has update but
+  not the other operation" shape, for eval-plan deletion).
 
-A legacy harness finding can have the same target key but a different stored
-fingerprint from the current canonical hash. `record_pulse_finding` created a new
-row, persisted concern/detail/event records and returned its ID. A subsequent
-backlog read ran identity consolidation, moved its evidence to the older
-canonical row, then deleted the duplicate. The returned ID no longer resolved.
+## What was found
 
-An isolated diagnostic on the production write/read functions confirmed rows in
-all three tables before the backlog read, then zero rows under the returned ID
-and a failed ID lookup afterward. Thus the write succeeded; identity loss made
-it appear not to have persisted. The live report has an explicit
-`filed:identity_merge:f96c8912` event, consistent with this mechanism. The exact
-original PUL-7AC60412 call is not retained, so its history is not claimed proven.
+The trading workflow's agent, asked to make `place-paper-trades` scripted like
+it had just done for three other steps, reported that this one was different:
+those were already `regular`-type steps running agentic (a one-field flip);
+`place-paper-trades` is a `message_sequence`, and "scripted mode" is a
+step_config setting that exists only for the `regular` type. Checked on
+`origin/main`: correct. `update_step_config` refuses
+`declared_execution_mode="scripted"` on a message_sequence (the plan type and
+the mode would disagree and the scripted executor would never run it), and
+`update_scripted_step`'s PLAT-280 conversion only fires for a sequence that
+was *already* declared scripted — a drift repair, not a converter. So the only
+path was `add_scripted_step` + `delete_plan_steps` + rewiring every
+`context_dependencies`/`context_output`/route by hand.
 
-## Repair
+`declared_execution_mode` itself turned out to be the leftover of the old
+model where type and mode were independent: today it is implied on one type
+(`regular` is scripted by definition; without it a regular step is the legacy
+agentic shape that runs as a sequence) and forbidden on the other. A type
+change *is* the mode change; there was just no tool that did both.
 
-- Before writing a new typed finding, reuse the stored identity matching the
-  same migration rules: explicit finding identity, or a harness-only target key.
-  Unrelated workflow findings are not merged merely for sharing a target.
-- Automatic merges preserve deleted rows' public IDs in the workflow-local
-  `pulse_finding_issue_aliases` table before deletion. Further merges repoint
-  aliases directly to the surviving fingerprint.
-- Public ID resolution accepts those aliases; updates through an old ID write
-  the surviving canonical row and return its current ID. Explicit semantic
-  merge behavior remains unchanged.
+## What shipped
 
-Schema addition is additive and initialized by the existing lifecycle schema
-path. No live workflow database was changed during implementation. Previously
-deleted IDs cannot be reconstructed when their identity evidence is absent;
-the implementation does not fabricate aliases for them.
+`change_step_type(step_id, target_type: scripted | message_sequence, reason)`:
 
-## Verification and scope
+- Converts in place using the converters the runtime already used for its
+  own compatibility paths (`normalizeMessageSequenceStepToRegular`,
+  `normalizeRegularStepToMessageSequence`), so id, title, description,
+  dependencies, outputs, validation_schema, next_step_id and position are
+  kept, nested and orphan steps included.
+- To scripted: plan type → `regular`, items dropped (a scripted step's work
+  lives in `learnings/<id>/main.py`), step_config declares scripted with the
+  reason as `declared_execution_mode_reason`, `use_code_execution_mode`
+  synced; the result says whether `main.py` already exists or the step will
+  fail until `update_scripted_step(code=...)` writes it. A legacy agentic
+  regular step just gets the declaration (its type already matches).
+- To message_sequence: plan type → `message_sequence` with one
+  execute-and-verify item, declared mode and `lock_code` cleared, and a
+  warning if a now-orphaned `main.py` remains.
+- Plan and config are written as one operation, plan first; the tool is
+  idempotent, so if the second write fails a re-run finishes the mode half —
+  the plan type and the declared mode can never end up disagreeing, which is
+  exactly PLAT-280's failure. Idempotent no-op when already the target (and
+  a sequence carrying a stray scripted declaration gets it cleared).
+- Full plan validation before writing; a revertable changelog entry carrying
+  the full step JSON before and after (`deleted_steps`/`added_steps`, the
+  same revert data `delete_plan_steps` records — snapshots are only hashed
+  into `before_ref`/`after_ref`, never stored) plus per-field changes; the
+  dependent-artifact review notice; registered in the Workshop allowlist and
+  `IsPlanModificationTool`. `update_step_config`'s rejection and
+  `update_scripted_step`'s description now point at this tool, and the
+  workshop guidance says to use it rather than add + delete.
 
-Tests cover legacy identity reuse, persistence across repeated backlog reads,
-case-insensitive IDs/targets, two successive merges, updating through the old
-ID, preserved events, and unknown-ID rejection. Existing identity, typed-write,
-semantic-merge and workflow-target isolation tests remain passing.
+## Verification
 
-PUL-2F70A97F is **not closed**: its surviving canonical record also describes an
-unresolved LinkedIn invite flow. This repair fixes the demonstrated platform
-identity defect, not that browser behavior. No invitations were sent, no
-historical business data was repaired, and no original report count changed.
+- `change_step_type_tool_test.go`: sequence → scripted (fields kept, items
+  dropped, config declared with reason and synced, changelog with distinct
+  before/after refs, the type change, and the old/new step JSON), scripted → sequence (one item, chain kept, mode and
+  lock cleared, orphaned-script warning), legacy agentic regular → scripted
+  (config entry created), no-op writes nothing, orphan steps convert,
+  routing/unknown steps rejected, `IsPlanModificationTool`.
+- PLAT-280 compat tests and `TestToolSetInvariants` (the guard that catches
+  a registered-but-invisible tool) pass with it.
+- Not yet done: a live conversion of a real step on a deployment; the first
+  candidate is `place-paper-trades` on Dominion, which the user has not yet
+  decided to convert (the agent's own recommendation is a split: scripted
+  placement, judgment kept in the surrounding sequence).

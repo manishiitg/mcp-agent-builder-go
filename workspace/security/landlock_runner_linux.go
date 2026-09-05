@@ -155,13 +155,35 @@ func addLandlockPathRule(rulesetFD int, path string, allowed uint64) error {
 func landlockSystemReadPaths() []string {
 	paths := []string{
 		"/bin", "/sbin", "/usr", "/lib", "/lib64",
+		// All of /etc, read-only. This used to be an enumerated dozen entries
+		// (ssl, resolv.conf, passwd, ld.so.*, fonts, ...), so any tool that
+		// read one more config file died with EACCES: pip needs
+		// /etc/debian_version (distro id for its User-Agent) and then
+		// /etc/mime.types, and each surfaced as its own live "installing
+		// packages is impossible" failure on Dominion (PLAT-283). Read-only
+		// /etc is what every ordinary program assumes. DAC still applies, so
+		// this grants nothing the service user cannot already read outside
+		// the sandbox -- verified on Dominion: no file under /etc is readable
+		// by the service user without also being world-readable. Landlock
+		// rules are additive, so a deployment cannot carve a secret back out
+		// of this grant: keep service-readable secrets out of /etc (Dominion
+		// keeps them in /srv/dominion/.env). /proc stays narrow, see below.
+		"/etc",
+		// The explicit entries below are NOT redundant with "/etc" above: a
+		// path_beneath rule on /etc covers what lives under /etc, not what a
+		// symlink there points at. On systemd-resolved hosts (Ubuntu, i.e.
+		// Dominion) /etc/resolv.conf -> /run/systemd/resolve/stub-resolv.conf,
+		// so with "/etc" alone every DNS lookup in the sandbox failed
+		// ("Temporary failure in name resolution") -- found live while
+		// verifying PLAT-283. existingCanonicalPaths resolves each of these
+		// individually, which is what grants the target.
 		"/etc/ssl", "/etc/ca-certificates", "/etc/resolv.conf", "/etc/hosts",
 		"/etc/nsswitch.conf", "/etc/passwd", "/etc/group", "/etc/localtime",
 		"/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d",
 		// Headless Chromium needs font metadata and a small set of read-only
-		// kernel/cpu facts during startup. Keep these entries narrow: granting
-		// all of /proc would let a guarded command inspect other processes'
-		// environments, including service credentials.
+		// kernel/cpu facts during startup. Keep the /proc entries narrow:
+		// granting all of /proc would let a guarded command inspect other
+		// processes' environments, including service credentials.
 		"/etc/fonts", "/usr/share/fonts",
 		// /proc/self is bound to the already-sanitized launcher process. The
 		// launcher execs Chromium in place, so this does not expose unrelated

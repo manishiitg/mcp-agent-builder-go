@@ -26,7 +26,7 @@ const WorkflowManifestSchemaVersion = 1
 // contract version. Unlike schema_version, this gates agent-run workflow
 // upgrades: Pulse can add version-specific messages and stamp this value only
 // after the workflow has been checked or migrated.
-const WorkflowContractCurrentVersion = "1.0.37"
+const WorkflowContractCurrentVersion = "1.0.38"
 
 const workflowContractInitialVersion = "1.0.0"
 const workflowContractMessageSequenceCodeVersion = "1.0.10"
@@ -56,6 +56,15 @@ const workflowContractPulseActionableBacklogVersion = "1.0.34"
 const workflowContractOrchestratorStepTypeVersion = "1.0.35"
 const workflowContractActivityTabFromRunSummaryVersion = "1.0.36"
 const workflowContractScriptedTypeStaysRegularVersion = "1.0.37"
+
+// workflowContractDeclaredExecutionModeRetiredVersion (PLAT-287): a step's
+// plan type alone decides its execution model -- regular is scripted,
+// message_sequence is conversational -- so declared_execution_mode is
+// retired. The migration makes every plan explicit (legacy agentic regular
+// steps become the message_sequence they already ran as) and strips the
+// field from step_config.json; the field itself is deleted from the code in
+// a later release, once every live workflow is on this version.
+const workflowContractDeclaredExecutionModeRetiredVersion = "1.0.38"
 
 const (
 	DefaultRunRetentionCount = 10

@@ -890,6 +890,23 @@ func TestEveryFolderGuardBuilderGrantsToolOutputFolder(t *testing.T) {
 			t.Fatalf("read paths missing %q: %v", want, readPaths)
 		}
 	})
+	// PLAT-284: every execution step gets the workflow's persistent
+	// .sandbox-cache writable, even a read-only one with no root-wide grant --
+	// that is what lets "pip install --user" on run 1 be "already satisfied"
+	// on run 2 instead of a fresh PyPI download in the rotating run folder.
+	t.Run("execution grants the persistent sandbox cache", func(t *testing.T) {
+		// Literal on purpose: the on-disk name is the cross-module contract the
+		// sandbox matches on (security.SandboxPersistentDirName); renaming the
+		// constant without renaming folders must fail here.
+		const cache = "Workflow/testing/.sandbox-cache"
+		readPaths, writePaths := newOrch().setupExecutionFolderGuard("step-1", "s", KBAccessNone, LearningsAccessNone, DBAccessRead, nil)
+		if !slices.Contains(writePaths, cache) {
+			t.Fatalf("write paths missing %q: %v", cache, writePaths)
+		}
+		if !slices.Contains(readPaths, cache) {
+			t.Fatalf("read paths missing %q: %v", cache, readPaths)
+		}
+	})
 	t.Run("message_sequence", func(t *testing.T) {
 		readPaths, _ := newOrch().setupMessageSequenceFolderGuard("step-1", "s", nil, MessageSequenceWriteAccess{})
 		if !slices.Contains(readPaths, want) {

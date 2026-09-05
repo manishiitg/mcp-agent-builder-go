@@ -77,3 +77,44 @@ func TestLandlockSystemReadPathsUnsetLeavesBaselineUnchanged(t *testing.T) {
 		t.Fatal("expected the standard system baseline even with no extra paths configured")
 	}
 }
+
+// PLAT-283: the baseline used to enumerate a dozen /etc entries, so any tool
+// that read one more config file died with EACCES -- a real pip install
+// inside the shipped launcher failed on /etc/debian_version, and with just
+// the distro files added, on /etc/mime.types next. All of /etc is granted
+// read-only now; the write baseline must not follow.
+func TestLandlockSystemReadPathsGrantAllOfEtcReadOnly(t *testing.T) {
+	t.Setenv("SANDBOX_EXTRA_SYSTEM_PATHS", "")
+
+	readable := false
+	for _, p := range landlockSystemReadPaths() {
+		if p == "/etc" {
+			readable = true
+			break
+		}
+	}
+	if !readable {
+		t.Fatal("expected all of /etc in the Landlock read baseline")
+	}
+	// A rule on /etc does not reach a symlink's target: on systemd-resolved
+	// hosts /etc/resolv.conf points into /run, and granting "/etc" alone
+	// killed every DNS lookup in the sandbox. The resolved target must be
+	// granted explicitly.
+	if target, err := filepath.EvalSymlinks("/etc/resolv.conf"); err == nil {
+		found := false
+		for _, p := range landlockSystemReadPaths() {
+			if p == target {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected the resolved /etc/resolv.conf target %q in the read baseline", target)
+		}
+	}
+	for _, p := range landlockSystemWritePaths() {
+		if p == "/etc" || filepath.HasPrefix(p, "/etc/") {
+			t.Fatalf("/etc must never be in the Landlock write baseline, got %v", landlockSystemWritePaths())
+		}
+	}
+}

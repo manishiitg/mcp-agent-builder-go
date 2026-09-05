@@ -30,7 +30,7 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 	// 385c95158 without a matching entry here, which left this invariant red.
 	add("LLM capability discovery tools", "list_llm_capabilities")
 	add("workshop plan tools",
-		"create_plan", "validate_plan_change", "migrate_message_sequence_code_items", "migrate_orchestrator_step_type",
+		"create_plan", "validate_plan_change", "migrate_message_sequence_code_items", "migrate_orchestrator_step_type", "migrate_declared_execution_mode",
 		"add_orchestrator_step", "add_orchestrator_route", "update_orchestrator_step", "update_orchestrator_route", "delete_orchestrator_route",
 		"add_scripted_step", "add_message_sequence_step", "add_routing_step", "add_branch_step",
 		"add_human_input_step", "add_todo_task_step", "add_todo_task_route",
@@ -38,6 +38,7 @@ func knownWorkshopRegisteredToolNamesOutsideWorkflowPool() map[string]string {
 		"update_human_input_step", "update_todo_task_step", "update_todo_task_route",
 		"delete_todo_task_route", "delete_plan_steps", "cleanup_orphan_step_configs",
 		"update_validation_schema", "update_evaluation_plan", "delete_evaluation_step",
+		"change_step_type",
 		"record_plan_drift_review",
 	)
 	add("workshop execution tools",

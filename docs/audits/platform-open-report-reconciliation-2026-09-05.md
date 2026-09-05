@@ -2,14 +2,14 @@
 
 ## G25 follow-up — identity defect fixed, mixed report remains open
 
-PLAT-286 reproduces successful finding persistence followed by automatic merging
+PLAT-291 reproduces successful finding persistence followed by automatic merging
 that deletes the returned public ID. The local repair reuses existing identities
 and retains aliases across merges. PUL-2F70A97F also contains the underlying
 LinkedIn invite-flow failure, so it is not closed and no backlog count changes.
 
 ## Subsequent prompt-health fix — latest status
 
-[PLAT-284](../bugs/pulse_platform/plat-284.md) reproduces and fixes G26's
+[PLAT-290](../bugs/pulse_platform/plat-290.md) reproduces and fixes G26's
 PUL-07504731 through the registered tool: every probe now reads the current
 workspace plan instead of a stale controller cache. The exact SQLite report is
 resolved with prior records preserved; local tests pass, deployment unverified.
@@ -18,7 +18,7 @@ original 120** are closed. The inventories below are historical snapshots.
 
 ## Subsequent Substack closure — latest status
 
-[PLAT-283](../bugs/pulse_platform/plat-283.md) subsequently verified and closed all
+[PLAT-289](../bugs/pulse_platform/plat-289.md) subsequently verified and closed all
 ten G09 research-folder reports, corrected three stale learning statements and
 added a real guarded file-write/readback test. The retained September 5 source
 packets and parent summary reconcile to 57 findings. **78** typed reports now

@@ -20,7 +20,7 @@ findings and ten unclassified candidates were not changed by this batch.
 | salesoutreach | PUL-E3F22BCC | Conflicting child-session receipt checker removed in a8aaaa012; parent-run validation verified |
 | hetznerssh | PUL-76329350 | Same retired receipt-checker defect |
 | tectonicusadaytrading | PUL-F9BA8AF2 | Same retired receipt-checker defect |
-| build-in-public | PUL-FF23BCD5 | PLAT-282 local fix: Workshop fast_path_only gate was inverted; saved-script safety checks retained |
+| build-in-public | PUL-FF23BCD5 | PLAT-288 local fix: Workshop fast_path_only gate was inverted; saved-script safety checks retained |
 | instagram | PUL-51D2EC0F | PLAT-061 superseded field: db_access was intentionally retired and never enforced the claimed grant |
 
 Each closure preserves the full previous run_concerns row inside an append-only

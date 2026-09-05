@@ -1,8 +1,8 @@
 # Pulse Platform-Issue Register
 
-## Shared agent UI control framework — PLAT-287
+## Shared agent UI control framework — PLAT-292
 
-[PLAT-287](pulse_platform/plat-287.md) proposes a scoped, acknowledged UI-control
+[PLAT-292](pulse_platform/plat-292.md) proposes a scoped, acknowledged UI-control
 framework building on PLAT-278: capability discovery, UI-state inspection,
 semantic actions, browser receipts and generated contracts. Covers all 22
 current workspace views plus AgentWorks, Video Studio, Dominion, Activity,
@@ -11,9 +11,9 @@ multi-tab/reconnect handling, phased rollout and acceptance tests.
 **Proposed; documentation only.** No runtime implementation or deployment and
 no change to live issue-resolution counts.
 
-## Public finding ID preservation — PLAT-286
+## Public finding ID preservation — PLAT-291
 
-[PLAT-286](pulse_platform/plat-286.md) fixes a reproduced apparent non-persistence
+[PLAT-291](pulse_platform/plat-291.md) fixes a reproduced apparent non-persistence
 case: writes succeeded, but a later automatic merge deleted the returned issue
 ID. New writes reuse matching legacy identities and automatic merges preserve
 public-ID aliases. Tests pass locally; not deployed. The mixed LinkedIn report
@@ -21,12 +21,12 @@ PUL-2F70A97F stays open, so the remaining report count is unchanged.
 
 ## Prompt-health stale snapshot — 2026-09-05 (latest)
 
-Owner-requested follow-up in PLAT-284 removes the session plan cache entirely:
+Owner-requested follow-up in PLAT-290 removes the session plan cache entirely:
 current tools read fresh workspace plans, execution uses context-scoped
 snapshots, and historical prompt/recovery lookups use retained run revisions.
 No additional SQLite issues are closed by this architectural follow-up.
 
-[PLAT-284](pulse_platform/plat-284.md) fixes Upwork PUL-07504731: the actual
+[PLAT-290](pulse_platform/plat-290.md) fixes Upwork PUL-07504731: the actual
 registered `get_plan_prompt_health` tool reused `approvedPlan` after persisted
 descriptions changed. It now reads a fresh workspace snapshot on every call,
 leaves the execution cache untouched, and fails explicitly on read/parse errors.
@@ -40,7 +40,7 @@ and uncommitted; deployment and a fresh producing Upwork run are not claimed.
 
 ## Substack research contract reconciliation — 2026-09-05 (latest)
 
-[PLAT-283](pulse_platform/plat-283.md) closes ten repeated research-folder reports:
+[PLAT-289](pulse_platform/plat-289.md) closes ten repeated research-folder reports:
 PUL-AB711AC1, PUL-01F790F3, PUL-5903292F, PUL-137C5EDF, PUL-22656D6C,
 PUL-F7B23729, PUL-9CE79401, PUL-32C03E39, PUL-B8FC2F51, PUL-224A1885.
 
@@ -97,7 +97,7 @@ from 103 to 96 (24 closed across today's three batches, from the original 120).
 | Ticket | Exact disposition | Verification boundary |
 |---|---|---|
 | [PLAT-258](pulse_platform/plat-258.md) | PUL-4719B06D / PUL-09511B0E: correction consistency and premature parent failure fixed; PUL-E3F22BCC / PUL-76329350 / PUL-F9BA8AF2: conflicting child-session checker retired | Focused Pulse, conversation lifecycle and guidance tests pass; new fixes local, deployment pending |
-| [PLAT-282](pulse_platform/plat-282.md) | PUL-FF23BCD5: inverted Workshop scripted fast-path gate fixed | Mode-gate and scripted tests pass; no live preflight run |
+| [PLAT-288](pulse_platform/plat-288.md) | PUL-FF23BCD5: inverted Workshop scripted fast-path gate fixed | Mode-gate and scripted tests pass; no live preflight run |
 | [PLAT-061](pulse_platform/plat-061.md) | PUL-51D2EC0F: superseded inert db_access field | Supported-field merge guard passes; no permission expansion |
 
 DB response-envelope findings PUL-25BDBC42, PUL-76F2EE72 and PUL-A14F764F remain
@@ -106,6 +106,15 @@ now distinguishes transports, but the exact historical inconsistent calls have
 not been reproduced. See [the dated audit](../audits/platform-backlog-reconciliation-2026-09-05.md)
 for scope, tests and the earlier inventory; do not treat its original 111-row
 snapshot as a fresh status query.
+## PLAT-285 — Remove stale session plan cache
+
+[PLAT-285](pulse_platform/plat-285.md) resolves the stale prompt-health consumer
+reported by Upwork PUL-07504731 and removes the shared controller plan cache.
+Current tools read fresh workspace plans, executions use context-scoped snapshots,
+and historical prompt/recovery lookups use content-verified retained revisions.
+Local tests pass; deployment and a fresh producing workflow run are not claimed.
+This ticket was prepared locally as PLAT-284 before that ID was published for
+unrelated package-cache work; PLAT-285 is its final identity.
 
 ## Status
 
@@ -559,6 +568,13 @@ Rules:
 | [PLAT-279](pulse_platform/plat-279.md) | The required report activity tab had no sanctioned data source, so workflows added a step or table just to fill it — while every notify_user run summary was already writing the same facts into org_dashboard_notifications in the report's own db.sqlite | Claude Code | `implemented` — run summaries are the documented default source (markdown rendered via window.report.renderMarkdown), a bespoke view is now the parent's explicit choice, and contract `1.0.36` offers existing workflows the switch without deleting anything unasked (agent_go `8b24ae459`, `f66cd6aa2`, `134cac35e`) | `agent_go/cmd/server/guidance/templates/system/reporting-policy.md`, `agent_go/cmd/server/workflow_version_upgrades.go` |
 | [PLAT-280](pulse_platform/plat-280.md) | `upwork`'s scripted-mode DB steps (`search-save-jobs`, `bid-record`, `outreach-record`, `improve-read-history`) lost `$DB_PATH` because their plan type (`message_sequence`) never matched their declared execution mode (`scripted`) — user-reported live, jobs found were never saved | Claude Code | `fixed` — `update_scripted_step` now atomically converts a declared-scripted `message_sequence` step to true `regular` in place (mirrors the existing reverse legacy-upgrade path); `update_step_config` rejects the invalid combination going forward; contract `1.0.37` migrates any other workflow with the same drift; upwork's 4 steps converted live and verified | `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/planning_agent.go`, `controller_message_sequence.go`, `interactive_workshop_manager.go`, `agent_go/cmd/server/workflow_manifest.go`, `workflow_version_upgrades.go`; SQLite backlog reconciled 2026-09-05 — verified stale records resolved; see [audit](../audits/platform-backlog-reconciliation-2026-09-05.md), deployed verification not claimed |
 | [PLAT-281](pulse_platform/plat-281.md) | Landlock's fixed system baseline had no grant for a deployment's own installed CLI tools outside standard system dirs, so every exec of one from a workflow step failed `rc=126: Permission denied` — Dominion's `tectonicusadaytrading` had placed zero paper trades since 2026-08-31 because `place-paper-trades` could never launch the `alpaca` CLI, regardless of login state; a second gap (the CLI's `$HOME/.config` lookup also outside every granted path) surfaced once the first was fixed | Claude Sonnet 5 | `fixed, live-verified on the Dominion deployment` — new `SANDBOX_EXTRA_SYSTEM_PATHS` env var (`landlockSystemReadPaths`, same pattern as `AGENT_BROWSER_EXECUTABLE_PATH`) lets a deployment grant its own tool/config paths without a code change; Dominion's `.env` now covers `/srv/dominion/tools` and `/srv/dominion/home/.config`; verified end-to-end against the real shipped binary on the actual target OS (rc=126 before, real `alpaca account get` response after); next scheduled run is the live reverify | `workspace/security/landlock_runner_linux.go`, `landlock_runner_linux_test.go` |
+| [PLAT-280](pulse_platform/plat-280.md) | `upwork`'s scripted-mode DB steps (`search-save-jobs`, `bid-record`, `outreach-record`, `improve-read-history`) lost `$DB_PATH` because their plan type (`message_sequence`) never matched their declared execution mode (`scripted`) — user-reported live, jobs found were never saved | Claude Code | `fixed` — `update_scripted_step` now atomically converts a declared-scripted `message_sequence` step to true `regular` in place (mirrors the existing reverse legacy-upgrade path); `update_step_config` rejects the invalid combination going forward; contract `1.0.37` migrates any other workflow with the same drift; upwork's 4 steps converted live and verified | `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/planning_agent.go`, `controller_message_sequence.go`, `interactive_workshop_manager.go`, `agent_go/cmd/server/workflow_manifest.go`, `workflow_version_upgrades.go` |
+| [PLAT-281](pulse_platform/plat-281.md) | Landlock's fixed system baseline had no grant for a deployment's own installed CLI tools outside standard system dirs, so every exec of one from a workflow step failed `rc=126: Permission denied` — Dominion's `tectonicusadaytrading` had placed zero paper trades since 2026-08-31 because `place-paper-trades` could never launch the `alpaca` CLI, regardless of login state; a second gap (the CLI's `$HOME/.config` lookup also outside every granted path) surfaced once the first was fixed | Claude Sonnet 5 | `fixed, live-verified on the Dominion deployment` — new `SANDBOX_EXTRA_SYSTEM_PATHS` env var (`landlockSystemReadPaths`, same pattern as `AGENT_BROWSER_EXECUTABLE_PATH`) lets a deployment grant its own tool/config paths without a code change; Dominion's `.env` now covers `/srv/dominion/tools` and `/srv/dominion/home/.config`; verified end-to-end against the real shipped binary on the actual target OS (rc=126 before, real `alpaca account get` response after); next scheduled run is the live reverify | `workspace/security/landlock_runner_linux.go`, `landlock_runner_linux_test.go` |
+| [PLAT-282](pulse_platform/plat-282.md) | `evaluation/evaluation_plan.json` had `update_evaluation_plan` but no way to delete a step, so an agent removing one had no sanctioned path and edited the file directly — the exact changelog-blind-spot failure `update_evaluation_plan` itself exists to prevent (AR-20260729-2), just for deletion instead of update | Claude Sonnet 5 | `fixed` — new `delete_evaluation_step` mirrors `delete_plan_steps` (batch, required reason, atomic all-or-nothing, full deleted-step JSON captured for revert) but needs no downstream-reference revalidation, since eval steps carry no graph to each other; registered in both the tool registrar and the Workshop-mode allowlist (missing the latter would have shipped an invisible tool — `TestToolSetInvariants` caught it); 6 new tests, full `step_based_workflow`/`cmd/server` suites pass | `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/{evaluation_plan_tool.go,planning_agent.go,interactive_workshop_manager.go}`, `agent_go/cmd/server/toolset_invariant_test.go` |
+| [PLAT-283](pulse_platform/plat-283.md) | A sandboxed step could never install a Python/Node package on any Linux deployment — `pip3 install X` was refused as externally-managed, `--break-system-packages` then hit a raw Landlock permission error, and even `python3 -m venv` failed the same way; documented on 2026-08-31 as a permanent limit, but Landlock here is filesystem-only (no network rule exists) and no Linux deployment has an egress firewall, so PyPI was always reachable | Claude Sonnet 5 | `fixed, live-verified on the Dominion deployment` — three stacked gaps: native-mode shells now set `PIP_BREAK_SYSTEM_PACKAGES=1` (Docker mode already did); Landlock shells now redirect `PIP_CACHE_DIR`/`XDG_CACHE_HOME`/`PYTHONUSERBASE`/`npm_config_cache`/`TMPDIR` into a subtree of the step's own granted write path instead of the unwritable real `$HOME`; and the launcher's read baseline grants all of `/etc` read-only alongside the enumerated entries (a real install died on `/etc/debian_version`, then `/etc/mime.types` — enumerating was whack-a-mole; read-only `/etc` exposes nothing DAC doesn't already allow, verified on the box; the explicit entries stay because a rule on `/etc` doesn't reach a symlink's target — `resolv.conf` → `/run/...` on systemd-resolved hosts, and `/etc` alone broke DNS). Generic to every Linux deployment using this launcher. Proven with a real `pip install --user yfinance` completing end-to-end inside the shipped runner (PyPI over HTTPS, yfinance 1.7.0) | `workspace/security/environment.go`, `workspace/security/isolator_linux.go`, `workspace/security/landlock_runner_linux.go` |
+| [PLAT-284](pulse_platform/plat-284.md) | PLAT-283 made installs possible but routed them into the step's run folder (`runs/iteration-N/`), which rotates — so every run reinstalled ~15 packages from PyPI and carried PyPI/network/version-drift risk forever; the workflow folder itself persists, nothing pointed pip at it | Claude Fable 5.1 | `fixed, live-verified on the Dominion deployment` — one reserved `Workflow/<id>/.sandbox-cache/` granted writable to every execution step; the sandbox recognises it by name and routes pip user-site/cache, npm cache+prefix, Go, Cargo, pipx into it with their `bin/` folders on PATH and `SANDBOX_PERSISTENT_DIR` exported; applied on all three backends; run 1 installs, run 2 `pip install --user --no-index` (no network allowed) is already satisfied; backups skip it; agents told via tool description + guidance | `workspace/security/sandbox_tool_env.go`, `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/controller_agent_factory.go`, `agent_go/pkg/workspace/advanced_tools.go`, `agent_go/cmd/server/workflow_backup.go` |
+| [PLAT-286](pulse_platform/plat-286.md) | No tool could change a step's type: "scripted mode" is a step_config setting that exists only for the internal `regular` type, `update_step_config` rightly refuses it on a `message_sequence`, and PLAT-280's conversion only repairs a sequence already declared scripted — so moving a conversational step to scripted meant `add_scripted_step` + `delete_plan_steps` + rewiring by hand (found when the trading agent was asked to make `place-paper-trades` scripted) | Claude Fable 5.1 | `fixed` — new `change_step_type(step_id, target_type, reason)` converts scripted ↔ message_sequence in place using the runtime's existing normalizers (id/description/dependencies/validation/next_step_id/position kept, nested + orphan steps), writes plan and step_config as one idempotent operation so type and declared mode can never disagree (PLAT-280's failure), full plan validation, revertable before/after changelog entry; `update_step_config`/`update_scripted_step`/workshop guidance now point at it; 7 tests + `TestToolSetInvariants` | `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/{change_step_type_tool.go,planning_agent.go,interactive_workshop_manager.go,planning_management.go}` |
+| [PLAT-287](pulse_platform/plat-287.md) | `declared_execution_mode` is a leftover of the model where plan type and execution mode were independent: implied on `regular` (scripted by definition; a regular step WITHOUT it is the legacy agentic shape the runtime silently runs as a sequence), forbidden on `message_sequence` — 41 files reference it; deleting it outright would flip every legacy agentic regular step on disk to scripted with no `main.py` | Claude Fable 5.1 | `implemented` (half 1) — trusted, idempotent, behavior-preserving `migrate_declared_execution_mode` makes every plan type explicit (legacy agentic regular → the sequence it already ran as; declared-scripted sequence → regular), strips the field + reason from every step_config entry with both preserved in the changelog, refuses without touching anything when a declared-scripted step has no `main.py`; contract v1.0.38 rolls it out per workflow on the next Builder preflight; 5 tests + ladder tests + `TestToolSetInvariants`. Half 2 (delete the field from code, with a validation guard for stragglers) waits until both boxes grep clean | `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/declared_execution_mode_migration.go`, `agent_go/cmd/server/workflow_manifest.go`, `agent_go/cmd/server/workflow_version_upgrades.go` |
 | [PLAT-162](pulse_platform/plat-162.md) | HTTP-backed workflow tools published schemas through direct definitions/get_api_spec but executed unchecked argument maps, so guessed plan-tool fields reached handlers and caused repeated retry storms | Codex | `implemented` — canonical registration-boundary validation and corrected plan schemas; restart/runtime reverify pending | `mcpagent/agent`, AgentWorks plan-tool registration |
 | [PLAT-163](pulse_platform/plat-163.md) | Technical and strategic reviews need durable route-aware focus rotation, one canonical technical identity, and visible coverage history | Codex | `implemented` — canonical technical migration, both focus catalogs, agentic route-aware focus counts, slash/scheduled parity, and visible selected/next-focus UI shipped; live Pulse verification remains | Pulse module registry/migrations, Gate, reviewer/Fixer contracts, focus persistence, and Pulse UI |
 | [PLAT-165](pulse_platform/plat-165.md) | The Schedule history UI is a filtered chat archive, so it cannot show which durable schedule occurrences ran, were missed, failed, or can resume | unassigned | `partially implemented` — UI now projects durable job/run records; unified occurrence read model/stage aggregation remains | scheduler occurrence history + workflow Schedule activity UI |
@@ -966,6 +982,8 @@ priority and historical run context.
 | [PLAT-270](pulse_platform/plat-270.md) | [PLAT-271](pulse_platform/plat-271.md) | [PLAT-272](pulse_platform/plat-272.md) | [PLAT-273](pulse_platform/plat-273.md) |
 | [PLAT-274](pulse_platform/plat-274.md) | [PLAT-275](pulse_platform/plat-275.md) | [PLAT-276](pulse_platform/plat-276.md) | [PLAT-277](pulse_platform/plat-277.md) |
 | [PLAT-278](pulse_platform/plat-278.md) | [PLAT-279](pulse_platform/plat-279.md) | [PLAT-280](pulse_platform/plat-280.md) | [PLAT-281](pulse_platform/plat-281.md) |
+| [PLAT-282](pulse_platform/plat-282.md) | [PLAT-283](pulse_platform/plat-283.md) | [PLAT-284](pulse_platform/plat-284.md) | [PLAT-285](pulse_platform/plat-285.md) |
+| [PLAT-286](pulse_platform/plat-286.md) | [PLAT-287](pulse_platform/plat-287.md) | | |
 
 ## Explicitly not platform issues
 

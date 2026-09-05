@@ -1,74 +1,85 @@
 [← Pulse platform issue index](../pulse_platform_issue_register.md)
 
-# PLAT-284 — Prompt-health tool reused a stale session plan after managed edits
+# PLAT-284 — Packages a step installed were thrown away with the run folder, so every run reinstalled them from PyPI
 
 | Coordination | Value |
 |---|---|
-| State | Fixed locally; registered-tool regression passes; deployment not verified |
-| Date | 2026-09-05 |
-| Report | Upwork PUL-07504731 (fingerprint `33f26e14056e14e3`), G26 in the remaining-report audit |
+| Assigned agent | Claude Fable 5.1 |
+| Ticket state | `fixed`, live-verified on the Dominion deployment |
+| Last synchronized | `2026-09-05` |
 
-## Cause and repair
+- **Priority:** P2 — PLAT-283 made installs *possible*; this makes them
+  *sensible*. Without it every run pays a full PyPI download (~15 packages
+  for `yfinance`) and inherits PyPI/network/version-drift risk on every
+  single run, forever — the trading agent's own follow-up objection, and a
+  correct one.
+- **Owner:** `workspace/security/sandbox_tool_env.go` (routing, all three
+  backends), `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/controller_agent_factory.go`
+  (`setupExecutionFolderGuard` grant), `agent_go/pkg/workspace/advanced_tools.go`
+  (tool description), guidance `code-authoring.md` / `backup-strategy.md`,
+  `agent_go/cmd/server/workflow_backup.go` (hash skip).
+- **Related:** PLAT-283 (installs at all), PLAT-281 (deployment-installed
+  CLIs in `/srv/dominion/tools` — the box-level complement to this).
 
-`get_plan_prompt_health` loaded the authored plan only when `approvedPlan` was
-nil. Once a workshop controller held a plan, later managed writes or another
-session's changes could leave its description counts and duplicate clusters
-pinned to an older snapshot. The report's September 1 evidence explicitly
-compared fresh canonical descriptions with two stale tool responses.
+## What was found
 
-The registered tool now reads a fresh snapshot through the workspace API on
-every invocation. Normal workflow mode uses the existing canonical plan reader,
-including its normalization, mutex and validation. Evaluation mode retains its
-evaluation-plan source but also reloads each time. The read-only report does not
-overwrite `approvedPlan`, reload execution state, or silently fall back to stale
-data when the current file cannot be read or parsed.
+PLAT-283's routing chose the step's `WorkDir` as the base for pip's user
+site and cache. Live on Dominion that is
+`runs/iteration-0/default/execution` — the per-run folder that rotates on
+the next run — so an install survived exactly one run. The agent's framing
+("a completely fresh, disposable sandbox with nothing carried over") was
+half wrong, though: the *policy* is per-run, the filesystem is not. The
+same live `[SHELL ISOLATOR]` line shows the workflow root
+`Workflow/tectonicusadaytrading` in the step's write grant, and it persists.
+There was already a place that survives runs; nothing pointed pip at it.
+
+Two related facts that shaped the fix: a step can never install
+system-wide (`/usr` is read-only to it and the service user has no sudo —
+that is the sandbox doing its job), so "persistent" can only mean
+per-workflow; and the default step grant is only its own step folder +
+Downloads + db — the trading workflow's root-wide write is the exception,
+so the persistent folder needs an explicit grant to work everywhere.
+
+## What shipped
+
+- One reserved folder per workflow, `Workflow/<id>/.sandbox-cache/`
+  (`security.SandboxPersistentDirName`). `setupExecutionFolderGuard` grants
+  it writable to every execution step (and generic agents), so it is
+  materialized like every other platform-managed grant on first use.
+- The sandbox recognises the folder by name in the write grant — the two
+  modules only meet over HTTP, so the name is the contract, no new request
+  plumbing — and routes into it: `PYTHONUSERBASE`, `PIP_CACHE_DIR`,
+  `XDG_CACHE_HOME`, `npm_config_cache` + `npm_config_prefix`, `GOPATH` /
+  `GOCACHE`, `CARGO_HOME`, `PIPX_HOME` / `PIPX_BIN_DIR`; its `bin/`,
+  `python/bin`, `npm-global/bin`, `go/bin`, `cargo/bin` lead `PATH`; and
+  `SANDBOX_PERSISTENT_DIR` names it so an agent can put a venv or a
+  downloaded binary there deliberately. `TMPDIR` stays in the run folder —
+  scratch must not accumulate in the one place that survives. Without the
+  grant (older orchestrator, non-workflow caller) PLAT-283's run-folder
+  fallback stands unchanged.
+- The routing moved out of the Landlock-only file into a shared
+  `sandbox_tool_env.go` and is applied by all three backends (Landlock,
+  mount namespace, macOS Seatbelt), so a workflow installs the same way on
+  a dev Mac as on a Linux box — the macOS default profile never blocked
+  `$HOME`, which is why none of PLAT-281/283/284 ever reproduced locally.
+- Agents are told: the `execute_shell_command` description and the
+  code-authoring guidance now say installs work and persist, distinguish
+  `$SANDBOX_PERSISTENT_DIR` (tooling) from `db/assets/` (files), and say
+  root/`apt` is not possible from a step.
+- Backups skip it (`shouldSkipBackupHashFile`, alongside `runs/`), and the
+  backup-strategy guidance lists it with the other never-back-this-up
+  folders.
 
 ## Verification
 
-`TestRegisteredPromptHealthReadsCurrentPlan` invokes the actual registered tool
-with a stale execution cache and a workspace HTTP test endpoint. Before the fix
-it failed with the cached single-step metrics instead of the current two-step
-counts and duplicate cluster. After the fix it verifies successive snapshots,
-duplicate removal, missing/invalid-file errors, one workspace read per call and
-an untouched execution cache.
-
-`TestCurrentPromptHealthEvaluationSnapshot` verifies the evaluation source,
-fresh reads after step removal and no execution-cache initialization.
-Existing prompt-health and workshop-registration tests also pass. This verifies
-the consumer/transport path; it does not rerun the historical Upwork workflow or
-claim a deployed server/session has adopted this source change.
-
-## Follow-up: remove the session cache entirely
-
-Per owner request, removed `approvedPlan`, its setter, the preload at chat
-creation and `LoadPlanForWorkshop`. `ReadCurrentPlan(ctx, evaluation)` is the
-single fresh workspace reader for builder lookups, config targeting, current
-reviews, prompt health and run preflight. Config lookups no longer temporarily
-swap the controller's evaluation mode or plan. KB consolidation reads current
-plan/config declarations rather than whichever execution last populated a cache.
-
-Full-workflow, workshop-step and evaluation execution bind their loaded plan to
-the execution context. Progress, dependency and artifact helpers use that scoped
-snapshot. A fresh tool read or another execution cannot replace it on a shared
-controller. This addresses plan ownership, not all other mutable controller state.
-Run revision creation also uses that loaded plan instead of rereading a possibly
-edited current file at metadata-write time.
-
-Historical prompt lookup and continuation recovery use content-verified retained
-run revisions, including the revision's step configuration. Exact prompt artifact
-IDs remain readable for legacy runs without revisions. Positional lookup cannot
-guess from today's plan; recovery without a retained revision returns an explicit
-error instead of silently executing a changed contract. No old revisions are
-fabricated or workflow runs restarted.
-
-Regression coverage includes successive reads/deleted steps, independently
-scoped execution contexts, planning/evaluation lookup without mode mutation,
-historical prompts after plan deletion, legacy exact-ID reads and rejected
-revision tampering. Workflow package and focused race tests pass locally.
-
-## Original report tracking
-
-The exact internal report is resolved in SQLite with its prior concern and
-detail records preserved in a `platform_tracking_resolved` event. Resolution is
-local implementation/test completion, not deployment sign-off. No workflow
-plan, historical run, schedule or business data is repaired or rewritten.
+- Unit: `sandbox_tool_env_test.go` (persistent routing, run-folder
+  fallback, unwritable WorkDir, no-grant no-op, persistent-only TMPDIR, the
+  `Isolator.toolEnv` path the macOS/mount backends use) run on macOS and,
+  cross-compiled, on Dominion; the folder-guard suite with a new subtest
+  pinning the grant; `TestBackupHashSkipsTheSandboxCache`.
+- Live on Dominion after deploy: see the register row / the end of this
+  ticket for the two-run proof — run 1 `pip install --user yfinance`
+  downloads and installs into `.sandbox-cache/python`; run 2, in a fresh
+  run folder, `pip install --user --no-index yfinance` succeeds —
+  `--no-index` forbids any network, so it can only pass if the install
+  truly persisted.
