@@ -736,3 +736,41 @@ func (g *GmailService) EnableIfAuthenticated(ctx context.Context) (bool, error) 
 	}
 	return true, nil
 }
+
+// autoDefaultGmailRecipient reports the address a fresh config should default
+// its recipient to: the account's own authenticated sending address, and only
+// when no recipient has ever been set. A running gws login already answers
+// "which Google account", so a human should not have to retype that same
+// address into a second field before Gmail can actually deliver anything.
+// Never overrides an existing value -- an operator who wants a different
+// recipient, or an empty one, is respected once DefaultTo has been set once.
+func autoDefaultGmailRecipient(cfg *GmailConfig, st GmailAuthStatus) (string, bool) {
+	if cfg == nil || strings.TrimSpace(cfg.DefaultTo) != "" {
+		return "", false
+	}
+	if !st.Authenticated || !st.HasGmailScope {
+		return "", false
+	}
+	email := strings.TrimSpace(st.Email)
+	if email == "" {
+		return "", false
+	}
+	return email, true
+}
+
+// AutoDefaultRecipientIfMissing sets DefaultTo to the authenticated sending
+// address the first time gws is connected and no recipient has been
+// configured yet, so a fresh connection is usable without an extra manual
+// step. Reports whether it did.
+func (g *GmailService) AutoDefaultRecipientIfMissing(ctx context.Context) (bool, error) {
+	cfg := g.GetConfig()
+	email, ok := autoDefaultGmailRecipient(cfg, g.EffectiveAuthStatus(ctx))
+	if !ok {
+		return false, nil
+	}
+	cfg.DefaultTo = email
+	if err := g.SaveConfig(ctx, cfg); err != nil {
+		return false, err
+	}
+	return true, nil
+}

@@ -26,3 +26,30 @@ func TestShouldAutoEnableGmail(t *testing.T) {
 		}
 	}
 }
+
+// A gws login already names one Google account; the recipient defaults to
+// that same address the first time, and never again once a value is set —
+// including an operator who deliberately blanked it back out.
+func TestAutoDefaultGmailRecipient(t *testing.T) {
+	authenticated := GmailAuthStatus{Authenticated: true, HasGmailScope: true, Email: "trader@example.com"}
+	cases := []struct {
+		name      string
+		cfg       *GmailConfig
+		st        GmailAuthStatus
+		wantEmail string
+		wantOK    bool
+	}{
+		{"fresh config with no recipient defaults to the authenticated address", &GmailConfig{}, authenticated, "trader@example.com", true},
+		{"an existing recipient is never overridden", &GmailConfig{DefaultTo: "ops@example.com"}, authenticated, "", false},
+		{"not authenticated", &GmailConfig{}, GmailAuthStatus{HasGmailScope: true}, "", false},
+		{"no gmail scope", &GmailConfig{}, GmailAuthStatus{Authenticated: true}, "", false},
+		{"authenticated but no address known", &GmailConfig{}, GmailAuthStatus{Authenticated: true, HasGmailScope: true}, "", false},
+		{"nil config", nil, authenticated, "", false},
+	}
+	for _, tc := range cases {
+		email, ok := autoDefaultGmailRecipient(tc.cfg, tc.st)
+		if ok != tc.wantOK || email != tc.wantEmail {
+			t.Errorf("%s: got (%q, %v), want (%q, %v)", tc.name, email, ok, tc.wantEmail, tc.wantOK)
+		}
+	}
+}

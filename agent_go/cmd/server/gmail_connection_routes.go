@@ -163,7 +163,7 @@ func listGmailConnectionsHandler(api *StreamingAPI) http.HandlerFunc {
 		} else if adopted {
 			log.Printf("[GMAIL] adopted the host's authenticated gws account as the default connection")
 		}
-		autoEnableGmailIfAuthenticated(r.Context(), svc)
+		autoConfigureGmailIfAuthenticated(r.Context(), svc)
 		defaultID := svc.GetConfig().DefaultConnectionID
 		conns := svc.ListConnections()
 		out := GmailConnectionsResponse{

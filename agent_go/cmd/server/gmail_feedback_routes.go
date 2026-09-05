@@ -80,7 +80,7 @@ func getGmailConfigHandler(api *StreamingAPI) http.HandlerFunc {
 			http.Error(w, fmt.Sprintf("failed to initialize Gmail service: %v", err), http.StatusInternalServerError)
 			return
 		}
-		autoEnableGmailIfAuthenticated(r.Context(), svc)
+		autoConfigureGmailIfAuthenticated(r.Context(), svc)
 		cfg := svc.GetConfig()
 		auth := svc.EffectiveAuthStatus(r.Context())
 		w.Header().Set("Content-Type", "application/json")
@@ -88,15 +88,23 @@ func getGmailConfigHandler(api *StreamingAPI) http.HandlerFunc {
 	}
 }
 
-// autoEnableGmailIfAuthenticated flips the channel on when gws is
-// authenticated with the Gmail scope; a failure to persist is logged, never
+// autoConfigureGmailIfAuthenticated flips the channel on, and (the first time
+// only, when no recipient has ever been set) defaults the recipient to the
+// account gws just authenticated as, whenever gws is authenticated with the
+// Gmail scope. A gws login already names one Google account; a human should
+// not also have to retype that same address into a second field before
+// Gmail can deliver anything. A failure to persist either is logged, never
 // surfaced, because the read the caller is serving still has an answer.
-func autoEnableGmailIfAuthenticated(ctx context.Context, svc *services.GmailService) {
-	enabled, err := svc.EnableIfAuthenticated(ctx)
-	if err != nil {
+func autoConfigureGmailIfAuthenticated(ctx context.Context, svc *services.GmailService) {
+	if enabled, err := svc.EnableIfAuthenticated(ctx); err != nil {
 		log.Printf("[GMAIL] auto-enable failed: %v", err)
 	} else if enabled {
 		log.Printf("[GMAIL] channel enabled automatically: gws is authenticated with the Gmail scope")
+	}
+	if defaulted, err := svc.AutoDefaultRecipientIfMissing(ctx); err != nil {
+		log.Printf("[GMAIL] auto-default recipient failed: %v", err)
+	} else if defaulted {
+		log.Printf("[GMAIL] default recipient set automatically to the authenticated gws account")
 	}
 }
 
@@ -131,7 +139,7 @@ func getGmailStatusHandler(api *StreamingAPI) http.HandlerFunc {
 			http.Error(w, fmt.Sprintf("failed to initialize Gmail service: %v", err), http.StatusInternalServerError)
 			return
 		}
-		autoEnableGmailIfAuthenticated(r.Context(), svc)
+		autoConfigureGmailIfAuthenticated(r.Context(), svc)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(svc.EffectiveAuthStatus(r.Context()))
 	}
