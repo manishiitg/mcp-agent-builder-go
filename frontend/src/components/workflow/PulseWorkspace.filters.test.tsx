@@ -12,6 +12,7 @@ vi.mock('./ReportHumanInputPanel', () => ({ ReportHumanInputPanel: () => null })
 
 import { agentApi } from '../../services/api'
 import { PulseWorkspace } from './PulseWorkspace'
+import { WORKFLOW_LOG_REFRESH_EVENT } from './workflowEvents'
 
 function finding(id: string, module: string, status: string): PulseFindingLifecycle {
   return { finding_id: id, module, step_id: module, kind: 'issue', phase: 'review', status,
@@ -60,6 +61,19 @@ describe('Pulse workspace filter interactions', () => {
   afterEach(async () => {
     await act(async () => root.unmount())
     container.remove()
+  })
+
+  it('reloads changed findings on a decision update without resetting the selected filter', async () => {
+    await click('Queued for Pulse')
+    shownCount(2)
+    vi.mocked(agentApi.getPulseFindings).mockResolvedValue({ success: true,
+      findings: records.map(item => item.finding_id === 'PUL-Q1' ? { ...item, status: 'resolved' } : item),
+    })
+    await act(async () => window.dispatchEvent(new CustomEvent(WORKFLOW_LOG_REFRESH_EVENT)))
+    expect(button('Queued for Pulse').getAttribute('aria-pressed')).toBe('true')
+    shownCount(1)
+    expect(container.textContent).not.toContain('PUL-Q1')
+    expect(container.textContent).toContain('PUL-Q2')
   })
 
   it('clicks all nine queues and resets both category and area', async () => {

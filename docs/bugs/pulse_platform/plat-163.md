@@ -10,9 +10,119 @@
 
 | Coordination | Value |
 |---|---|
-| Assigned agent | unassigned |
-| Ticket state | `implemented` — canonical `technical_review` migration, technical/strategic focus catalogs, durable review counts, slash/scheduled parity, and visible focus coverage shipped; live Pulse verification remains |
-| Last synchronized | `2026-08-23` |
+| Assigned agent | Codex |
+| Ticket state | `implemented` — original focus/coverage work shipped; 2026-09-05 impact-aware Gate and evidence-accumulation correction implemented and tested; rebuild/deployment and live Pulse verification remain |
+| Last synchronized | `2026-09-05` |
+
+## 2026-09-05 correction — recovered tool errors must not monopolize review selection
+
+### Report and root cause
+
+The user observed that routine tool errors could continually select Technical
+Review, leaving Strategic Review without a turn. They explicitly requested
+that Gate judge whether an error actually affected a step's job, consider
+step-raised concerns, and wait for more relevant workflow runs after a recent
+review when there is insufficient new evidence. Skipping all three reviewers
+is a valid result.
+
+The code confirmed the selection problem:
+
+- `pulseintake.CheckRuntime` reports an errored/canceled child call in a
+  completed run as `runtime_status_disagreement`, and also reports structured
+  tool failures and non-completed runs. These facts do not establish whether
+  recovery succeeded or the final required outcome was harmed.
+- `validateDeterministicIntakeRouting` nevertheless forced Technical Review
+  whenever a new runtime signal existed. Recovery/impact judgment happened
+  only after Technical Review had already taken the review slot.
+- The current worklist permits at most one reviewer per pass, with Plan Drift
+  taking priority. A repeated error in each new run could therefore keep
+  displacing otherwise eligible Strategic Review.
+- Gate updates `last_checked_at` on skips and clears current-pass result
+  fields. The last actual review timestamp and audit receipt survive, but
+  current-pass state alone does not retain the previous review conclusion.
+
+### Agreed behavior and implementation
+
+1. **Runtime signals are advisory evidence.** Removed the runtime-error
+   mandatory-routing branch; kept the collector and its typed evidence in
+   `get_pulse_state(view="module")`. Gate may choose Technical, Strategic, or
+   no review. No keyword classifier or fixed error-count threshold replaces
+   the removed rule.
+2. **Impact and recovery are assessed before selection.** Gate reads the
+   smallest relevant step summary, validation/output receipt, or trace. A
+   verified retry/fallback can justify skipping; `completed` alone cannot.
+   Missing/partial/stale output, failed required side effects, uncertain
+   recovery, or material retry cost/latency can justify focused Technical
+   Review. New critical regressions and security/data-loss risks must not wait
+   for sample accumulation; this is an agentic selection obligation, not a
+   new Go semantic classifier.
+3. **Use fresh step concerns without reviving the old backlog.** Gate reads
+   `CONCERNS:` from relevant retained step summaries. `open_concerns` is the
+   accepted canonical issue backlog; historical workflow-observation rows
+   remain audit-only. Missing concerns do not prove health, especially for
+   scripted steps or crashed agents.
+4. **Accumulate evidence since the actual review.** Use `last_ran_at`, the
+   retained terminal receipt, and relevant focus/route history—not
+   `last_checked_at`. Compare distinct completed, comparable workflow runs;
+   chat turns, tool calls, retries, unrelated routes, and repeated reads of
+   the same run are not new data points. State retention/provenance gaps.
+   The agent chooses the necessary sample or outcome boundary; there is no
+   universal minimum run count.
+5. **Preserve the waiting boundary.** Record the prior outcome, new relevant
+   sample, remaining uncertainty, and next boundary in existing worklist
+   reason/evidence and scheduling fields. Do not restart the cooldown or move
+   the boundary forward merely because Gate checked again. A due boundary
+   prompts reassessment, not an automatic expensive review.
+6. **Expose the real baseline directly.** Added `last_review_receipts` and
+   `last_review_receipts_error` to the module view. Three bounded lookups read
+   existing `pulse_module_audit` records, excluding skips; no new table or
+   copied history. A failed/blocked/timed-out receipt is not a completed
+   assessment. Missing or unreadable history is explicitly not a clean review.
+7. **Keep deterministic plan safeguards.** Non-empty plan-drift candidates
+   still force Plan Drift. Missing current-contract plan-dependency receipts
+   still require Technical Review unless Plan Drift takes the pass. The
+   one-review limit, interrupted-review recovery, and review/fix authorization
+   boundaries are unchanged. This correction adds no schedule or recurring job.
+
+### Verification and delivery status
+
+**Implemented and tested; not yet rebuilt/restarted or verified in a live
+scheduled Pulse pass as part of this correction.** Earlier
+shipped work elsewhere in this ticket retains its historical status.
+
+Passing targeted checks:
+
+- `TestPulseWorklistRuntimeSignalsDoNotReserveReviewSlot`: nine combinations
+  of errored child calls, success-labeled structured failures, and known
+  failed runs with observe/Strategic/Technical selection. Signals remain
+  present and Gate's chosen reviewer is not overridden.
+- `TestPulseSkippedChecksPreserveActualReviewBaseline`: repeated skips
+  preserve the actual Technical/Strategic review timestamp, retained
+  conclusion, and explicitly supplied next-check boundary.
+- `TestPulseModuleViewExposesActualReviewAfterSkip`: module view returns the
+  actual prior review rather than a later skip, isolates workflows, does not
+  create a DB just to read absent history, and exposes malformed receipt
+  evidence as a read error instead of silently claiming clean history.
+- Existing worklist/plan-drift/plan-dependency routing tests and
+  `pkg/pulseintake` tests pass.
+- Rendered guidance tests pin impact assessment, fresh concerns, comparable
+  runs, no sliding evidence window, all-review skips, critical-failure
+  exceptions, and the current one-review limit. `git diff --check` passes.
+
+Remaining runtime acceptance after rebuild/restart:
+
+- A recovered error with verified required output may produce an evidenced
+  Technical skip; eligible Strategic work is not rejected by the backend.
+- Repeated insufficient samples retain the original review baseline and
+  meaningful future boundary rather than repeatedly launching a reviewer.
+- A new materially harmful failure receives focused diagnosis; no concern or
+  an outer success label alone is treated as recovery proof.
+- Plan Drift still wins when candidates exist. With no mandatory plan check
+  and no useful new technical/strategic evidence, `observe` skips all three.
+
+Implementation: `agent_go/cmd/server/pulse_worklist.go`,
+`pulse_worklist_test.go`, `guidance/templates/system/pulse-gate.md`,
+`guidance/pulse_gate_evidence_test.go`, and `guidance/render_all_test.go`.
 
 - **Priority:** P1 — technical and strategic reviews are expensive, yet the
   platform cannot currently explain which deep theme a pass selected, why it

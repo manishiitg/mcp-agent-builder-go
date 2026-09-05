@@ -1359,10 +1359,10 @@ func recordPulseModuleDueForManualReview(ctx context.Context, workspacePath, pul
 	return writePulseModuleDueRow(ctx, workspacePath, pulseRunID, module, reason)
 }
 
-// validateDeterministicIntakeRouting closes the gap between a failed objective
-// check and the agentic review that interprets it. It never creates an issue or
-// authorizes a repair: it only prevents Gate from suppressing Technical Review
-// when retained structured evidence already proves that review is needed.
+// validateDeterministicIntakeRouting enforces missing plan-dependency receipts
+// only. Runtime signals remain visible to Gate, but a failed child call alone
+// cannot prove an unresolved step outcome or reserve the only review slot.
+// Gate assesses recovery, impact, prior reviews, and fresh comparable evidence.
 func validateDeterministicIntakeRouting(ctx context.Context, workspacePath string, decisions []PulseWorklistDecision) error {
 	// Pulse deliberately runs one review mode per pass. When deterministic plan
 	// drift is already selected, retain runtime evidence for the next Gate
@@ -1373,21 +1373,6 @@ func validateDeterministicIntakeRouting(ctx context.Context, workspacePath strin
 		}
 	}
 	reasons := []string{}
-	runtimeResult := pulseintake.CheckRuntime(workspacePath, time.Now().UTC())
-	lastTechnicalCheck := lastPulseModuleCheck(ctx, workspacePath, pulseModuleTechnicalReview)
-	newRuntimeFindings := 0
-	for _, finding := range runtimeResult.Findings {
-		observedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(finding.ObservedAt))
-		// Module checkpoints are stored at second precision. Compare at that
-		// same precision so a run written earlier in the checkpoint's second is
-		// not misclassified as new forever because its filesystem mtime has nanos.
-		if err != nil || lastTechnicalCheck.IsZero() || observedAt.Truncate(time.Second).After(lastTechnicalCheck) {
-			newRuntimeFindings++
-		}
-	}
-	if newRuntimeFindings > 0 && runtimeResult.CoverageStatus != pulseintake.CoverageUnavailable {
-		reasons = append(reasons, fmt.Sprintf("runtime intake reported %d new structured failure signal(s)", newRuntimeFindings))
-	}
 	planBacklog := step_based_workflow.CollectPlanChangeBacklog(workspacePath)
 	planResult := step_based_workflow.BuildPlanChangeDependencyIntake(planBacklog)
 	if planResult.Failed {
@@ -1404,9 +1389,8 @@ func validateDeterministicIntakeRouting(ctx context.Context, workspacePath strin
 	return fmt.Errorf("technical_review must be due because deterministic intake failed: %s. Route these facts to an agentic Technical Review; they are not automatic Pulse issues and do not authorize a Fixer", strings.Join(reasons, "; "))
 }
 
-// validatePlanDriftRouting is plan_drift_review's due-ness enforcement,
-// mirroring validateDeterministicIntakeRouting's treatment of
-// technical_review. Unlike technical_review's cadence-plus-evidence judgment
+// validatePlanDriftRouting is plan_drift_review's due-ness enforcement.
+// Unlike technical_review's cadence-plus-evidence judgment
 // call, plan_drift_review's due condition is a plain fact: does any step lack
 // a drift_review record, or carry one flagged needs_review==true. There is no
 // cadence math and no judgment for Gate to exercise here — if the fact is
@@ -1441,23 +1425,6 @@ func validatePlanDriftRouting(ctx context.Context, workspacePath string, decisio
 		stepIDs = append(stepIDs, c.StepID)
 	}
 	return fmt.Errorf("plan_drift_review must be due: %d step(s) have no drift_review record or are flagged needs_review (%s). This is a plain fact, not a judgment call — mark it due", len(candidates), strings.Join(stepIDs, ", "))
-}
-
-func lastPulseModuleCheck(ctx context.Context, workspacePath, module string) time.Time {
-	states, err := getPulseModuleStates(ctx, workspacePath)
-	if err != nil {
-		return time.Time{}
-	}
-	for _, state := range states {
-		if normalizePulseModule(state.Module) != module {
-			continue
-		}
-		checkedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(state.LastCheckedAt))
-		if err == nil {
-			return checkedAt
-		}
-	}
-	return time.Time{}
 }
 
 func recordPulseWorklistOnce(ctx context.Context, workspacePath, pulseRunID string, decisions []PulseWorklistDecision) ([]PulseModuleState, error) {
@@ -1836,6 +1803,48 @@ func recordPulseModuleAudit(ctx context.Context, execer pulseModuleAuditExecer, 
 		workspacePath, module, pulseRunID, result, reason, marshal(evidence),
 		marshal(audit.ChangedFiles), marshal(audit.Verification), marshal(audit.BeforeRefs), marshal(audit.AfterRefs), recordedAt)
 	return err
+}
+
+// latestPulseReviewReceipts supplies an actual review baseline independently
+// of current-pass state, whose result is cleared whenever Gate records a skip.
+// Three bounded lookups; no new store or full historical transcript is needed.
+func latestPulseReviewReceipts(ctx context.Context, workspacePath string) ([]PulseModuleAudit, error) {
+	normalized, db, err := openPulseModuleStateDB(ctx, workspacePath, false)
+	if err != nil {
+		return nil, err
+	}
+	receipts := []PulseModuleAudit{}
+	if db == nil {
+		return receipts, nil
+	}
+	defer db.Close()
+	var exists int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pulse_module_audit'`).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if exists == 0 {
+		return receipts, nil
+	}
+	for _, module := range pulseModuleOrder {
+		receipt := PulseModuleAudit{WorkspacePath: normalized, Module: module}
+		var evidenceJSON string
+		err := db.QueryRowContext(ctx, `SELECT pulse_run_id, result, reason, evidence_json, recorded_at
+			FROM pulse_module_audit WHERE workspace_path=? AND module=?
+			AND result IN ('done','changed','failed','blocked','timed_out')
+			ORDER BY recorded_at DESC, rowid DESC LIMIT 1`, normalized, module).Scan(
+			&receipt.PulseRunID, &receipt.Result, &receipt.Reason, &evidenceJSON, &receipt.RecordedAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(evidenceJSON), &receipt.Evidence); err != nil {
+			return nil, fmt.Errorf("decode %s review receipt evidence: %w", module, err)
+		}
+		receipts = append(receipts, receipt)
+	}
+	return receipts, nil
 }
 
 const pulseShadowDetectorLoopClosure = "loop_closure"
@@ -2388,7 +2397,7 @@ func createPulseWorklistTools() ([]llmtypes.Tool, map[string]interface{}, map[st
 								"evidence":                map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
 								"next_check_at":           map[string]interface{}{"type": "string", "description": "Optional RFC3339 timestamp or YYYY-MM-DD date for the next normal check."},
 								"next_check_after_run_id": map[string]interface{}{"type": "string", "description": "Optional run id/folder after which to check again."},
-								"cooldown_runs":           map[string]interface{}{"type": "integer", "minimum": 0, "description": "Optional number of future runs to skip unless new evidence overrides it."},
+								"cooldown_runs":           map[string]interface{}{"type": "integer", "minimum": 0, "description": "Optional evidence-collection wait in relevant workflow runs, not chat turns or tool calls. Explain comparable route/group scope and the baseline review in reason/evidence. Reassess progress without blindly restarting the wait at every Gate check; new materially harmful evidence can override it."},
 							},
 							"required": []string{"module", "due", "reason"},
 						},
@@ -2849,6 +2858,12 @@ func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID str
 		log.Printf("[PULSE] get_pulse_state(view=module): review recovery state unavailable for %s: %v", workspacePath, recoveryErr)
 		pendingRecoveries = []PulseReviewRecovery{}
 	}
+	lastReviews, lastReviewsErr := latestPulseReviewReceipts(ctx, workspacePath)
+	lastReviewsError := ""
+	if lastReviewsErr != nil {
+		lastReviewsError = lastReviewsErr.Error()
+		lastReviews = []PulseModuleAudit{}
+	}
 	var runMode *PulseRunMode
 	if strings.TrimSpace(pulseRunID) != "" {
 		var modeErr error
@@ -2858,7 +2873,10 @@ func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID str
 		}
 	}
 	payload, _ := json.Marshal(map[string]interface{}{
-		"modules": states,
+		"modules":                    states,
+		"last_review_receipts":       lastReviews,
+		"last_review_receipts_error": lastReviewsError,
+		"last_review_receipts_note":  "Latest actual terminal review per module, excluding skips. These survive subsequent Gate checks; use recorded_at, result, reason, and evidence as the baseline for accumulating comparable workflow runs. A failed/blocked/timed_out receipt is not a completed assessment; inspect pending review recovery. Missing receipts or read errors mean unknown history, not a clean review. Current modules.last_result may be empty after a skip.",
 		// Backward-compatible aliases now intentionally mean canonical issues.
 		"open_concerns":              pulseLifecycleAgentProjection(issues, "issue_id"),
 		"open_concern_count":         len(issues),
@@ -2883,7 +2901,7 @@ func readPulseModuleStateView(ctx context.Context, workspacePath, pulseRunID str
 		"plan_drift_candidates":          planDriftCandidates,
 		"plan_drift_candidates_error":    planDriftErrorText,
 		"plan_drift_candidates_note":     "Steps with no drift_review record, one flagged needs_review==true, or one below the contract version required for its step_type (evidence from any prior review is preserved on the step's own record in step_config.json, not duplicated here), each with Go-precomputed Check 1/2/4/9 results (report query compatibility, validation_schema db[] rules from step_config.json only, scripted-code queries, db/README.md contract). Checks 5 (validation_schema file rules) and 13 (orphaned tables) are not precomputed here; the plan_drift_review reviewer checks those directly. Each supported step type requires one reference-backed agentic check: scripted_best_practices, message_sequence_best_practices, orchestrator_best_practices (legacy orchestrator_best_practices accepted), routing_best_practices, or branch_best_practices; record_plan_drift_review rejects a step without its matching check. A failed precomputed check is still evidence, not a filed finding — the reviewer turn records the merged result via record_plan_drift_review and files a Pulse finding for anything unresolved. A candidate with step_id==\"" + step_based_workflow.WorkflowDriftReviewStepID + "\" is not a real plan step: it means one or more steps were deleted since the last workflow-level audit, and dependent-artifact fallout from that deletion needs tracing — see plan-drift-review.md's workflow-level deletion audit section; clear it the same way, via record_plan_drift_review(step_id=\"" + step_based_workflow.WorkflowDriftReviewStepID + "\", ...). A non-empty plan_drift_candidates_error means this scan itself failed (unreadable/malformed plan.json or step_config.json) — the candidate list above is empty because it is unknown, not because nothing is due; validatePlanDriftRouting requires plan_drift_review or technical_review due in that case.",
-		"deterministic_intake_note":      "Read-only typed evidence from retained runtime receipts and current-contract plan-change dependency receipts. A failed signal requires agentic Technical Review, but is not an automatic Pulse issue or Fixer authorization. coverage_status must be verified before an empty findings list means clean.",
+		"deterministic_intake_note":      "Read-only typed evidence, not automatic Pulse issues or Fixer authorization. Runtime errors do not force Technical Review: Gate must assess step concerns, required outcomes, recovery, material impact, prior review dispositions, and new comparable runs since last_ran_at. A completed status alone does not prove recovery; missing concerns or incomplete coverage do not prove health. Skip with a concrete evidence/recheck boundary when another review has no useful new evidence; a new critical failure must not wait for sample accumulation. Failed plan_change_dependencies still requires Technical Review unless Plan Drift is selected. coverage_status must be verified before an empty findings list means clean.",
 		"module_review_history":          reviewHistory,
 		"review_history_note":            "What each reviewer concluded the last few times it ran, most recently run first. A module absent from this list has not run in the retained window at all. Use it to justify each skip: a module that keeps returning real findings is a poor candidate for another cooldown, and one that has come back clean repeatedly is a good one. A verdict here is the reviewer's conclusion, which is not the same as whether anything was then fixed.",
 		"review_focus_history":           focusHistory,

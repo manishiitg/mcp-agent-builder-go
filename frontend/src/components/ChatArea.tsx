@@ -50,6 +50,7 @@ import { activateTab } from '../utils/activateTab'
 import { selectWorkflowPreset } from '../utils/workflowNavigation'
 import { ProductChatSurface } from '../platform/chat/ProductChatSurface'
 import { WORKFLOW_LOG_REFRESH_EVENT } from './workflow/workflowEvents'
+import { decisionMutationNeedsRefresh } from '../utils/decisionRefresh'
 
 // Stable empty array to avoid infinite re-render loops in Zustand selectors
 // (a new [] on every selector call breaks referential equality checks)
@@ -1845,11 +1846,16 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     const isCompletionLike = hasCompletionEvent || newEvents.some(e => e.type === 'background_agent_completed')
     // Reviewer/fixer turns can create typed Pulse findings, decisions, review
     // receipts, and changelog entries without touching a workspace file. Those
-    // panels intentionally do not poll while empty, so completion is the
-    // canonical point to refresh their lightweight API projections. Limit the
+    // panels intentionally do not poll while empty. A saved decision receipt
+    // refreshes them immediately; completion remains a fallback. Limit the
     // event to the active workflow preset; background work for another preset
     // must not perturb the workflow currently on screen.
-    if (isCompletionLike && selectedModeCategory === 'workflow' && isActivePresetTab !== false) {
+    const presetState = useGlobalPresetStore.getState()
+    const visibleWorkspace = presetState.workflowPresets.find(
+      preset => preset.id === presetState.activePresetIds.workflow,
+    )?.selectedFolder?.filepath ?? ''
+    const hasDecisionMutation = newEvents.some(event => decisionMutationNeedsRefresh(event, visibleWorkspace))
+    if ((isCompletionLike || hasDecisionMutation) && selectedModeCategory === 'workflow' && isActivePresetTab) {
       window.dispatchEvent(new CustomEvent(WORKFLOW_LOG_REFRESH_EVENT))
     }
     // A foreground terminal event is the per-turn completion contract. Settle

@@ -741,7 +741,7 @@ func TestStrategyAuditorGuidanceRequiresLongitudinalEvidenceAndReadOnlyHandoff(t
 		"activity and outcomes diverge",
 		"Missing telemetry is",
 		"Never make one reviewer due merely because another reviewer",
-		"Select **at most two** due modules, chosen agentically",
+		"Select **at most one** due module per Pulse pass",
 		"Strategic Review combines the former Strategy Auditor and Goal Advisor",
 		"Strategic Review for business usefulness or strategic headroom",
 		"opportunity phase runs only when",

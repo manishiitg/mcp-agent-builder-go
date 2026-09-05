@@ -13,9 +13,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/loopclosure"
 	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/pulseintake"
 	mcpexecutor "github.com/manishiitg/mcpagent/executor"
 )
 
@@ -484,31 +486,162 @@ func TestPulseWorklistRequiresTechnicalReviewForFailedPlanDependencyIntake(t *te
 	}
 }
 
-func TestPulseWorklistRequiresTechnicalReviewForFailedRuntimeIntake(t *testing.T) {
+func TestPulseWorklistRuntimeSignalsDoNotReserveReviewSlot(t *testing.T) {
+	for _, fixture := range []struct{ name, status, timing, kind string }{
+		{"child_error", "completed", `{"step_id":"step-a","tools":{"errored_count":1}}`, "runtime_status_disagreement"},
+		{"structured_failure", "completed", `{"step_id":"step-a","tools":{"calls":[{"tool_name":"shell","status":"success","result":{"exit_code":1}}]}}`, "tool_success_with_structured_failure"},
+		{"known_failed_run", "failed", `{}`, "run_not_completed"},
+	} {
+		for _, selected := range []string{"observe", pulseModuleStrategicReview, pulseModuleTechnicalReview} {
+			t.Run(fixture.name+"/"+selected, func(t *testing.T) {
+				root := t.TempDir()
+				t.Setenv("WORKSPACE_DOCS_PATH", root)
+				workspacePath := "Workflow/example"
+				runDir := filepath.Join(root, workspacePath, "runs", "iteration-0", "default")
+				if err := os.MkdirAll(filepath.Join(runDir, "logs"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(runDir, "run_metadata.json"), []byte(`{"status":"`+fixture.status+`"}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(runDir, "logs", "execution-attempt-0-timing.json"), []byte(fixture.timing), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				intake := pulseintake.CheckRuntime(workspacePath, time.Now())
+				if len(intake.Findings) != 1 || intake.Findings[0].Kind != fixture.kind {
+					t.Fatalf("runtime evidence lost: %+v", intake)
+				}
+				decisions := completePulseWorklistDecisions(nil)
+				for i := range decisions {
+					decisions[i].Reason = "Reviewed prior disposition and required outputs; no new unresolved impact. Wait for comparable runs."
+					decisions[i].Evidence = []string{"runs/iteration-0/default/run_metadata.json", "runs/iteration-0/default/logs/execution-attempt-0-timing.json"}
+					if decisions[i].Module == selected {
+						decisions[i].Due = true
+						decisions[i].Reason = "New relevant evidence warrants this focused review."
+					}
+				}
+				if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-runtime-check", decisions); err != nil {
+					t.Fatalf("Gate judgment rejected: %v", err)
+				}
+				worklist, ok, err := getPulseWorklistForRun(context.Background(), workspacePath, "pulse-runtime-check")
+				if err != nil || !ok {
+					t.Fatalf("read recorded worklist: %v", err)
+				}
+				for module, state := range worklist {
+					if (state.LastDecision == "due") != (module == selected) {
+						t.Fatalf("selection changed: %+v", state)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestPulseSkippedChecksPreserveActualReviewBaseline(t *testing.T) {
+	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
+	ctx := context.Background()
+	ws := "Workflow/evidence-window"
+	for _, module := range []string{pulseModuleTechnicalReview, pulseModuleStrategicReview} {
+		id := "review-" + module
+		if _, err := recordPulseWorklist(ctx, ws, id, completePulseWorklistDecisions(map[string]PulseWorklistDecision{
+			module: {Module: module, Due: true, Reason: "Review current evidence."},
+		})); err != nil {
+			t.Fatal(err)
+		}
+		completed, err := markPulseModuleResult(ctx, ws, module, id, "done", "Need three more comparable growth runs.", []string{"runs/iteration-0/default"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for pass := 0; pass < 3; pass++ {
+			decisions := completePulseWorklistDecisions(nil)
+			for i := range decisions {
+				decisions[i].Reason = "Only one additional comparable run; retain the existing assessment boundary."
+				decisions[i].NextCheckAt = "2099-01-01"
+			}
+			if _, err := recordPulseWorklist(ctx, ws, fmt.Sprintf("wait-%s-%d", module, pass), decisions); err != nil {
+				t.Fatal(err)
+			}
+			states, err := getPulseModuleStates(ctx, ws)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, state := range states {
+				if state.Module == module && (state.LastRanAt != completed.LastRanAt || state.NextCheckAt != "2099-01-01") {
+					t.Fatalf("Gate skip overwrote actual review baseline/boundary: %+v", state)
+				}
+			}
+			receipts, err := latestPulseReviewReceipts(ctx, ws)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, receipt := range receipts {
+				if receipt.Module == module {
+					found = true
+					if receipt.Reason != completed.LastResultReason || receipt.RecordedAt != completed.LastRanAt || receipt.PulseRunID != id {
+						t.Fatalf("lost actual review receipt after skip: %+v", receipt)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("missing actual review receipt")
+			}
+		}
+	}
+}
+
+func TestPulseModuleViewExposesActualReviewAfterSkip(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
-	workspacePath := "Workflow/example"
-	runDir := filepath.Join(root, workspacePath, "runs", "iteration-0", "default")
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
+	ctx := context.Background()
+	ws := "Workflow/receipts"
+	if receipts, err := latestPulseReviewReceipts(ctx, ws); err != nil || len(receipts) != 0 {
+		t.Fatalf("empty history: %v %v", receipts, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ws, "db", "db.sqlite")); !os.IsNotExist(err) {
+		t.Fatalf("history read created database: %v", err)
+	}
+	if _, err := markPulseModuleResult(ctx, ws, pulseModuleTechnicalReview, "review-old", "done", "Recovery verified; collect more growth outcomes.", []string{"runs/iteration-0/default/validation.json"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(runDir, "run_metadata.json"), []byte(`{"status":"failed"}`), 0o644); err != nil {
+	// A more recent scheduler skip must not masquerade as an actual review.
+	if _, err := markPulseModuleResult(ctx, ws, pulseModuleTechnicalReview, "skip-new", "skipped", "Still waiting.", nil); err != nil {
 		t.Fatal(err)
 	}
-
-	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-runtime-check", completePulseWorklistDecisions(nil)); err == nil ||
-		!strings.Contains(err.Error(), "runtime intake") || !strings.Contains(err.Error(), "technical_review must be due") {
-		t.Fatalf("failed runtime intake was allowed to skip Technical Review: %v", err)
+	if _, err := markPulseModuleResult(ctx, "Workflow/other", pulseModuleTechnicalReview, "other", "done", "Other workflow", nil); err != nil {
+		t.Fatal(err)
 	}
-
-	due := completePulseWorklistDecisions(map[string]PulseWorklistDecision{
-		pulseModuleTechnicalReview: {Module: pulseModuleTechnicalReview, Due: true, Reason: "Review the new runtime failure."},
-	})
-	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-runtime-review", due); err != nil {
-		t.Fatalf("record Technical Review routing: %v", err)
+	view, err := readPulseModuleStateView(ctx, ws, "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := recordPulseWorklist(context.Background(), workspacePath, "pulse-runtime-after-review", completePulseWorklistDecisions(nil)); err != nil {
-		t.Fatalf("already-checked retained runtime failure forced another review: %v", err)
+	var payload struct {
+		Receipts     []PulseModuleAudit `json:"last_review_receipts"`
+		ReceiptError string             `json:"last_review_receipts_error"`
+	}
+	if err := json.Unmarshal([]byte(view), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Receipts) != 1 || payload.Receipts[0].PulseRunID != "review-old" || payload.Receipts[0].Reason != "Recovery verified; collect more growth outcomes." || len(payload.Receipts[0].Evidence) != 1 || payload.ReceiptError != "" {
+		t.Fatalf("Gate missing isolated review baseline: %+v", payload)
+	}
+	_, db, err := openPulseModuleStateDB(ctx, ws, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `UPDATE pulse_module_audit SET evidence_json='not-json' WHERE pulse_run_id='review-old'`); err != nil {
+		t.Fatal(err)
+	}
+	view, err = readPulseModuleStateView(ctx, ws, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(view), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.ReceiptError == "" || len(payload.Receipts) != 0 {
+		t.Fatalf("history read failure hidden: %+v", payload)
 	}
 }
 

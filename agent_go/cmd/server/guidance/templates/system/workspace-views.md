@@ -27,10 +27,21 @@ The right-hand pane of the workflow page shows one view at a time; the toolbar a
 ### Pulse cluster
 | View id | Shows | Open it when |
 |---------|-------|--------------|
-| `pulse` | Pulse status: work areas, open findings, who owns the next move, gate decisions | The user asks how the workflow is doing or what Pulse found |
+| `pulse` | Needs your decision cards, saved answers and application history, work areas, open findings, gate decisions | The user asks about a pending decision, their saved answer, or what Pulse found |
 | `backup` | Backup status and history | You set up or ran a backup |
 | `publish` | The published page and its status | You published or refreshed the public report |
 | `notify` | Notification settings and recent deliveries | You changed how the workflow notifies people |
+
+“Needs your decision” belongs to `pulse`; it is not a separate workspace view
+or part of the workflow-owned HTML report. “Ask in chat” supplies the exact
+workspace, decision ID, and option IDs. Read the current record with
+`get_human_input_request` before explaining or answering it. Discussion alone
+does not choose an option. Once the user gives a clear final answer, save it
+with `answer_human_input_request` in that turn; do not require a second “mark
+it” instruction. Saving means answered, not applied or consumed.
+The visible decision cards reload automatically after a successful decision
+tool receipt, with turn completion as a fallback. Do not ask the user to press
+Refresh or claim an answer was applied just because it disappeared from pending.
 
 ### Setup cluster
 | View id | Shows | Open it when |

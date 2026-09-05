@@ -33,7 +33,10 @@ Read `soul/soul.md`, compact schedules from `workflow.json`,
 `get_pulse_state(view="module")`, compact lifecycle/focus agendas, relevant
 human inputs, and the smallest retained run summaries needed to judge whether
 material evidence exists. Compare run timestamps with each module's
-`last_checked_at`; do not treat every retained folder as new.
+`last_ran_at` and `last_review_receipts` to measure evidence accumulated
+since an actual review. `last_checked_at` records a Gate check, not a completed
+review: repeated skips must not reset the evidence window. Do not treat every
+retained folder as new.
 
 Use returned open concerns, plan-change backlog, loop-closure state,
 `deterministic_intake`, module history, and focus history as selectors. Do not inject or mechanically parse
@@ -49,9 +52,13 @@ finding and not authority for Gate to rewrite the workflow. The later Technical
 Review must inspect the affected descriptions, schemas, and shared references
 before it decides whether prompt-contract consolidation is safe.
 
-Treat explicit `CONCERNS:` records as selectors, not automatic findings. A
-later reviewer decides whether they are a correctness issue, an efficiency or
-coaching opportunity, a non-issue, or insufficient evidence.
+Read fresh `CONCERNS:` markers from the relevant retained step summaries as
+selectors, not automatic findings. `open_concerns` contains accepted canonical
+issues, not raw step emissions; do not reactivate historical workflow-observation
+rows as a queue. A concern can explain an incomplete output, failed side effect,
+recovery, or goal/measurement gap. Gate uses it to judge review value; the later
+reviewer decides whether it warrants a durable issue. Absence of a concern is
+not proof of success: scripted steps and crashed agents may emit none.
 
 If retention no longer covers the period since the last check, record that
 coverage gap honestly. Do not treat a partial sample as complete.
@@ -66,8 +73,9 @@ Technical Review is due when evidence can support useful verification, repair,
 or a bounded new diagnosis. Examples include:
 
 - a failed or suspiciously successful production run;
-- a verified deterministic runtime signal (`run_not_completed`,
-  `runtime_status_disagreement`, or `tool_success_with_structured_failure`);
+- a verified runtime signal with unresolved step impact or recovery that cannot
+  be established (`run_not_completed`, `runtime_status_disagreement`, or
+  `tool_success_with_structured_failure` are evidence leads, not automatic triggers);
 - matured verification for a prior repair;
 - an answered technical decision that remains unapplied;
 - a material plan, artifact, report/evaluation, DB, knowledgebase, or learnings
@@ -102,16 +110,29 @@ whether the evidence supports review now or needs a named future boundary.
 Treat a verified deterministic signal as a focused evidence lead, never as an
 automatic finding. The collector proves only an objective fact — for example,
 that a completed outer run contains an errored child call or a success-labelled
-tool result with a non-zero exit code. The Technical reviewer must decide
-whether the failure was essential, safely recovered, already explained by a
-canonical issue, or needs a new durable finding. Do not keyword-scan ordinary
+tool result with a non-zero exit code. Gate first assesses whether that fact
+has unresolved step impact or useful new review value. If selected, the
+Technical reviewer determines whether it needs a new durable finding.
+Do not keyword-scan ordinary
 output for words such as "error" and do not launch a Fixer directly from the
 signal.
 
-A failed verified deterministic intake cannot be cooled down or skipped: set
-`technical_review.due=true` and route it to the smallest matching technical
-focus. For `plan_change_dependencies`, this means a current-contract change
-with a durable `change_id` lacks a complete receipt across downstream steps,
+Runtime intake does not force Technical Review. Before choosing a reviewer,
+inspect the smallest affected step summary, validation/output receipt, or tool
+trace needed to answer: did the error prevent the step from doing its job?
+An errored attempt followed by a verified successful retry or fallback can be
+skipped. A `completed` status by itself is not recovery proof: check required
+outputs and side effects, and look for missing, stale, partial, or contradictory
+results. Uncertain recovery merits a focused diagnosis, not an assumption of
+health. Repeated recovery can still justify review when its cost, latency, or
+reliability impact is material. A recurring, already-understood error without
+new impact, an available repair, or matured verification must not reserve the
+review slot or displace eligible Strategic Review. Record the evidence for this
+judgment in the worklist reason/evidence, not a new issue per failed tool call.
+
+The deterministic hard requirement remains for `plan_change_dependencies`:
+set `technical_review.due=true` unless Plan Drift takes this pass. This means a
+current-contract change with a durable `change_id` lacks a complete receipt across downstream steps,
 validation, evaluation, reporting, database, and learnings/knowledge. Select
 `plan_orchestration_integrity`. The failure proves missing coverage, not that
 all six surfaces need edits; the reviewer must inspect each surface and record
@@ -164,6 +185,46 @@ materially different approaches.
 
 ## Focus priority and rotation
 
+### Evidence accumulation between reviews
+
+For Technical and Strategic Review, first inspect `last_ran_at`, the latest
+`last_review_receipts` result/reason, module review history, and the recorded `next_check_at`,
+`next_check_after_run_id`, or `cooldown_runs`. Compare with the latest relevant
+focus/route review when available. A recent review with unchanged evidence is
+normally a reason to wait, not repeat it.
+
+Current-pass `last_result` can be empty after a skip; use the retained receipt,
+not that empty field, for the last review conclusion. A failed, blocked, or
+timed-out receipt is not a completed assessment: honor pending review recovery.
+If `last_review_receipts_error` is non-empty or history is missing, state that
+uncertainty instead of inventing a previous clean review.
+
+Count distinct completed, comparable workflow runs since that actual review:
+same relevant route/group and materially comparable configuration. Chat turns,
+tool calls, retries, unrelated routes, and repeated views of one run are not new
+data points. Use execution identity/provenance rather than iteration-folder
+names, which can rotate. If retention/provenance is incomplete, state the known
+sample and coverage gap; never invent a complete count. Read only compact run
+summaries needed to establish this sample, not every trace.
+
+Let the evidence question determine how many additional relevant runs or which
+outcome boundary is needed; do not impose a universal run-count threshold.
+Several ordinary successful runs may be needed for trend assessment, whereas
+one run can settle a specific verification. Explain the last review outcome,
+new relevant sample, what remains unknown, and why the sample is or is not
+sufficient in `reason`/`evidence`. For a skip, persist the concrete next boundary
+using the existing scheduling fields. Do not keep moving an unmet boundary
+forward merely because another Gate check occurred, or blindly restart a
+cooldown on every pass. A boundary becoming due prompts assessment, not an
+automatic full review without useful evidence.
+
+All three reviews may be skipped in `observe` mode when no mandatory plan check
+is due and neither perspective has useful new evidence. Waiting for more data
+is a valid result. Do not manufacture a technical or strategic review to fill
+the slot. New critical regressions, security/data-loss risks, and materially
+failed required outcomes override waiting for more samples; select a focused
+Technical Review promptly. Ordinary recovered errors do not override it.
+
 For each selected module, use the compact focus agenda and reason within the
 highest applicable lifecycle class:
 
@@ -205,7 +266,7 @@ Choose one mode and give a concrete `mode_reason`:
 
 An old backlog must not hide a new production failure. Conversely, unchanged
 backlog must not force another expensive discovery pass. A cooldown or focus
-rotation cannot suppress a measured miss or a new critical regression.
+rotation cannot suppress a new materially harmful miss or a critical regression.
 
 Select **at most one** due module per Pulse pass. `plan_drift_review` has
 priority: when `plan_drift_candidates` is non-empty, record only

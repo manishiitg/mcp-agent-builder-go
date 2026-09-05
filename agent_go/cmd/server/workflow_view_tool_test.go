@@ -38,6 +38,9 @@ func TestOpenWorkspaceViewToolOpensAKnownViewAndRefusesOthers(t *testing.T) {
 	if !ok || !strings.Contains(open.desc, "report — Report") || !strings.Contains(open.desc, "schedules — Schedules") || !strings.Contains(open.desc, "refresh_workspace_view") {
 		t.Fatalf("open tool = %+v", open)
 	}
+	if !strings.Contains(open.desc, "pulse — Pulse (Needs your decision cards") {
+		t.Fatal("workspace tool must tell chat where decision cards live")
+	}
 	out, err := open.exec(context.Background(), map[string]interface{}{"view": "Report"})
 	if err != nil || !strings.Contains(out, `"code":"browser_disconnected"`) {
 		t.Fatalf("out=%s err=%v", out, err)

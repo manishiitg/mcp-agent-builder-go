@@ -18,6 +18,7 @@ import type {
   PulseReviewFocus,
 } from '../../services/api-types'
 import { ReportHumanInputPanel } from './ReportHumanInputPanel'
+import { WORKFLOW_LOG_REFRESH_EVENT } from './workflowEvents'
 import { SoulViewer } from './SoulViewer'
 import { PulseFindingCard } from './PulseFindingCard'
 import { pulseFindingPresentation, type PulseFindingQueue } from './pulseFindingPresentation'
@@ -139,10 +140,10 @@ export function PulseWorkspace({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (showLoading = true) => {
     if (!workspacePath) return
-    setLoading(true)
-    setError(null)
+    if (showLoading) setLoading(true)
+    if (showLoading) setError(null)
     const [findingResult, reviewResult, impactResult, contextResult] = await Promise.allSettled([
       agentApi.getPulseFindings(workspacePath),
       agentApi.getPulseReviews(workspacePath),
@@ -204,6 +205,12 @@ export function PulseWorkspace({
     setImpact({ interventions: [], observations: [], assessments: [] })
     setContextRecords([])
     void load()
+  }, [load])
+
+  useEffect(() => {
+    const onRefresh = () => { void load(false) }
+    window.addEventListener(WORKFLOW_LOG_REFRESH_EVENT, onRefresh)
+    return () => window.removeEventListener(WORKFLOW_LOG_REFRESH_EVENT, onRefresh)
   }, [load])
 
   const areaFindings = useMemo(() => findings.filter((finding) => !moduleFilter

@@ -6,7 +6,40 @@
 |---|---|
 | Assigned agent | Claude Code |
 | Ticket state | `implemented; live verification pending` |
-| Last synchronized | `2026-09-03` |
+| Last synchronized | `2026-09-05` |
+
+## 2026-09-05 — Decision cards discussed and answered in chat
+
+The user asked whether workspace-view tools know about “Needs your decision”
+and why saving an answer through chat requires a manual refresh or another
+instruction to mark it.
+
+Inspection confirmed that `pulse` was already a supported view and “Ask in
+chat” already supplied exact decision/option IDs and named
+`answer_human_input_request`. The missing connections were discoverability and
+timing: the view description did not mention decision cards, cards refreshed
+at turn completion rather than at the saved tool receipt, and `PulseWorkspace`
+did not listen for the existing refresh event for its related projections.
+
+**Codex correction implemented and tested; deployment and live verification pending:**
+
+- Describe decision cards, answers, and application history under `pulse` in
+  the opening tool and workspace guidance. Chat reads the current typed record
+  and saves a clear final answer in that turn without a second “mark it” request.
+- A successful decision mutation receipt for the visible workflow triggers
+  the existing lightweight refresh event while chat continues. Discussion,
+  starts, failed saves, and another workflow's receipt do not trigger it.
+  Turn completion remains a fallback.
+- Pulse listens for that event and reloads its related projections without
+  resetting the selected filter. Decision cards retain the existing silent
+  background refresh behavior. No report iframe reload or polling was added.
+- Answered remains distinct from applied/consumed.
+
+Validation: receipt filtering tests, a rendered decision-panel test that moves
+an answer out of pending before chat completion, Pulse filter-preservation
+tests, existing chat-message/report-stability tests, TypeScript compilation,
+Go workspace-view/human-input tests, and guidance rendering pass. A live
+browser/server conversation after rebuild remains to be verified.
 
 - **Priority:** builder UX, severity medium — the workflow page has 21
   workspace views and the agent could not open any of them. It told the
