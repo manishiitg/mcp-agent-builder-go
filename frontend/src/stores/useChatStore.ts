@@ -34,6 +34,7 @@ const isTerminalSourceChunk = (meta?: StreamingChunkMeta): boolean =>
 import { createHydrationGate, HydrationBackstopError, type HydrationGateSnapshot } from '../utils/hydrationGate'
 import { createBufferedPersistStorage } from '../utils/bufferedPersistStorage'
 import { retainEventInSessionWorkingSet } from '../utils/sessionEventWorkingSet'
+import { autoNotificationDedupKey } from '../utils/internalChatEvents'
 
 // Active sessions cache TTL (30 seconds - shorter than polling interval to allow force refresh)
 const ACTIVE_SESSIONS_CACHE_TTL = 30000
@@ -167,6 +168,24 @@ const capCompletedStreamingText = (value: string): string => {
 // Persistent event ID index — avoids O(n) Set rebuild on every addTabEvents call.
 // Lives outside zustand state so mutating it doesn't trigger re-renders.
 const tabEventIdSets = new Map<string, Set<string>>()
+
+// Per-session set of auto-notification identities already in the timeline.
+// The live transport can surface one steered [AUTO-NOTIFICATION] completion as
+// several distinct-ID user_message events within the session window; the ID
+// index above cannot catch those, so they each drew their own duplicate
+// "Automation update" row. Keyed by content (autoNotificationDedupKey), which
+// is idempotent for a status card and distinct across real re-runs. Shares
+// tabEventIdSets' lifecycle: rebuilt on setTabEvents, deleted on clear/close.
+const tabAutoNotificationKeys = new Map<string, Set<string>>()
+
+function collectAutoNotificationKeys(events: PollingEvent[]): Set<string> {
+  const keys = new Set<string>()
+  for (const event of events) {
+    const key = autoNotificationDedupKey(event)
+    if (key) keys.add(key)
+  }
+  return keys
+}
 
 // --- Micro-batching for addTabEvents ---
 // Instead of updating zustand state on every SSE event (10-50/sec),
@@ -1036,9 +1055,22 @@ export const useChatStore = create<ChatState>()(
             idSet = new Set(currentEvents.map(e => e.id).filter(Boolean) as string[])
             tabEventIdSets.set(sessionId, idSet)
           }
+          let autoNotifKeys = tabAutoNotificationKeys.get(sessionId)
+          if (!autoNotifKeys) {
+            autoNotifKeys = collectAutoNotificationKeys(currentEvents)
+            tabAutoNotificationKeys.set(sessionId, autoNotifKeys)
+          }
 
           // Filter out events that already exist
           const uniqueNewEvents = events.filter(event => {
+            // An auto-notification is an idempotent status card: the same
+            // steered completion can arrive as several distinct-ID events, so
+            // collapse by content even when the ID index would let it through.
+            const autoNotifKey = autoNotificationDedupKey(event)
+            if (autoNotifKey) {
+              if (autoNotifKeys!.has(autoNotifKey)) return false
+              autoNotifKeys!.add(autoNotifKey)
+            }
             if (!event.id) {
               logger.warn('EventStore', 'Event without ID detected:', event)
               return true
@@ -1128,6 +1160,7 @@ export const useChatStore = create<ChatState>()(
             didCleanup = true
             // Rebuild ID index after cleanup discards events
             tabEventIdSets.set(sessionId, new Set(finalEvents.map(e => e.id).filter(Boolean) as string[]))
+            tabAutoNotificationKeys.set(sessionId, collectAutoNotificationKeys(finalEvents))
           }
           // Update lastViewedEventCounts for the ACTIVE tab if it owns this session.
           // Events arriving on the active tab are visible to the user in real-time,
@@ -1167,6 +1200,7 @@ export const useChatStore = create<ChatState>()(
         )
         // Rebuild the persistent ID index for this session
         tabEventIdSets.set(sessionId, new Set(retainedEvents.map(e => e.id).filter(Boolean) as string[]))
+        tabAutoNotificationKeys.set(sessionId, collectAutoNotificationKeys(retainedEvents))
 
         set((state) => {
           // Trigger cleanup if threshold exceeded
@@ -1202,6 +1236,7 @@ export const useChatStore = create<ChatState>()(
       clearTabEvents: (sessionId: string) => {
         clearPendingEventBatch(sessionId)
         tabEventIdSets.delete(sessionId)
+        tabAutoNotificationKeys.delete(sessionId)
         set((state) => {
           const newTabEvents = { ...state.tabEvents }
           delete newTabEvents[sessionId]
@@ -1301,6 +1336,7 @@ export const useChatStore = create<ChatState>()(
             delete newTabHasMore[sessionId]
             delete newTabHistoryPagination[sessionId]
             tabEventIdSets.delete(sessionId)
+            tabAutoNotificationKeys.delete(sessionId)
             orphanCount++
           }
         }
@@ -2028,6 +2064,7 @@ export const useChatStore = create<ChatState>()(
         Object.keys(_executionStreamingInactivityTimers).forEach((key) => delete _executionStreamingInactivityTimers[key])
         for (const sessionId of _eventBatchTimers.keys()) clearPendingEventBatch(sessionId)
         tabEventIdSets.clear()
+        tabAutoNotificationKeys.clear()
         if (state.activeSessionsPollingInterval !== null) clearInterval(state.activeSessionsPollingInterval)
 
         // `chat-store` used to be scoped only by workspace. Remove that
