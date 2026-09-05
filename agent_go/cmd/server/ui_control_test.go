@@ -1,12 +1,69 @@
 package server
 
 import (
+	"encoding/json"
 	"github.com/gorilla/mux"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestUIControlHTTPPlanReceiptRoundTrip(t *testing.T) {
+	ws := httptest.NewServer(&mockWorkspaceAPI{files: map[string]string{
+		"Workflow/test/workflow.json": `{"id":"wf-test","label":"Test","created_by":"user-a","access":{"owners":["user-a"]}}`,
+	}})
+	defer ws.Close()
+	t.Setenv("WORKSPACE_API_URL", ws.URL)
+	api := &StreamingAPI{activeSessions: map[string]*ActiveSessionInfo{"s": {SessionID: "s", UserID: "user-a"}}}
+	b := api.uiBroker()
+	b.setScope("s", "Workflow/test")
+	call := func(body map[string]interface{}) *httptest.ResponseRecorder {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := mux.SetURLVars(requestWithUserForSessionAccess("user-a"), map[string]string{"session_id": "s"})
+		r.Body = io.NopCloser(strings.NewReader(string(raw)))
+		w := httptest.NewRecorder()
+		api.handleUIControl(w, r)
+		return w
+	}
+	w := call(map[string]interface{}{"operation": "bind", "version": 1})
+	if w.Code != 200 {
+		t.Fatalf("bind: %d %s", w.Code, w.Body.String())
+	}
+	var binding map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &binding); err != nil {
+		t.Fatal(err)
+	}
+	request := func(op string, extra map[string]interface{}) *httptest.ResponseRecorder {
+		body := map[string]interface{}{"operation": op, "version": 1, "binding": binding["binding"], "token": binding["token"]}
+		for k, v := range extra {
+			body[k] = v
+		}
+		return call(body)
+	}
+	a, _, err := b.submit("s", "flow", "open", "livekit-quality", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = request("sync", map[string]interface{}{"state": uiSnapshot{View: "flow", Revision: 1, Visible: true}})
+	if w.Code != 200 || !strings.Contains(w.Body.String(), a.RequestID) {
+		t.Fatalf("sync: %d %s", w.Code, w.Body.String())
+	}
+	w = request("ack", map[string]interface{}{"request_id": a.RequestID, "status": "applied", "state": uiSnapshot{View: "flow", Revision: 2, Visible: true}})
+	if w.Code == 200 {
+		t.Fatal("view shell alone must not acknowledge selected step")
+	}
+	w = request("ack", map[string]interface{}{"request_id": a.RequestID, "status": "applied", "state": uiSnapshot{View: "flow", Target: "livekit-quality", Revision: 2, Visible: true}})
+	if w.Code != 200 {
+		t.Fatalf("ack: %d %s", w.Code, w.Body.String())
+	}
+	receipt, err := b.result("s", a.RequestID)
+	if err != nil || receipt.Status != "applied" || !receipt.Visible {
+		t.Fatalf("receipt: %+v %v", receipt, err)
+	}
+}
 
 func TestUIControlHTTPRejectsForeignAndOwnerlessSessions(t *testing.T) {
 	for _, owner := range []string{"other-user", ""} {
@@ -57,7 +114,7 @@ func TestUIControlOnlyAdvertisesActualActions(t *testing.T) {
 		if err := validateUIAction(v.ID, "refresh", ""); err == nil {
 			t.Fatal("unverified refresh advertised")
 		}
-		if err := validateUIAction(v.ID, "open", "arbitrary target"); err == nil {
+		if err := validateUIAction(v.ID, "open", "arbitrary target"); err == nil && v.ID != "flow" {
 			t.Fatal("ignored target")
 		}
 	}

@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useImperativeHandle, forwardRef, useEffect } from 'react'
+import React, { useCallback, useRef, useImperativeHandle, forwardRef, useEffect, useLayoutEffect } from 'react'
 import {
   ReactFlow,
   Background,
@@ -760,7 +760,7 @@ function ReadOnlyStepDetailPanel({
   const routingQuestion = typeof data.routing_question === 'string' ? data.routing_question : undefined
 
   return (
-    <aside className="flex h-full w-[380px] max-w-[42vw] shrink-0 flex-col border-l border-border bg-background shadow-xl">
+    <aside data-ui-plan-step={step?.id || node.id} aria-label={`Step details: ${title}`} className="flex h-full w-[380px] max-w-[42vw] shrink-0 flex-col border-l border-border bg-background shadow-xl">
       <div className="flex shrink-0 items-start gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex flex-wrap items-center gap-2">
@@ -975,7 +975,7 @@ function ReadOnlyStepDetailPanel({
 export interface WorkflowCanvasRef {
   refresh: (changedStepIDs?: string[], deletedStepIDs?: string[]) => Promise<PlanChanges | null>
   getStepCount: () => number
-  focusStep: (stepId: string) => void  // Alias for highlightStepNode
+  focusStep: (stepId: string) => void  // Selects the step and opens its details
 }
 
 // The React Flow plan canvas. WorkspaceViewHost owns the toolbar, the pane
@@ -1771,28 +1771,6 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
 
   const { nodes: initialNodes, edges: initialEdges } = augmentedFlow
 
-  // Helper function to highlight and position a specific step node
-  const highlightStepNode = useCallback((stepId: string) => {
-    // Find the node by its stable plan step ID.
-    const nodeToFocus = nodesRef.current.find(node => {
-      if (node.type === 'step') {
-        const nodeData = node.data as StepNodeData
-        const nodeStepId = nodeData?.step?.id
-        return nodeStepId === stepId || (nodeStepId === undefined && node.id === stepId)
-      }
-      return false
-    })
-
-    if (nodeToFocus) {
-      console.log('[WorkflowCanvas] highlightStepNode found node:', nodeToFocus.id)
-      // Focus viewport on the node but don't select it (don't open sidebar)
-      // User can manually open sidebar if needed
-      focusNode(nodeToFocus.id, { topPadding: 150, delay: 100 })
-    } else {
-      console.log('[WorkflowCanvas] highlightStepNode - no node found for stepId:', stepId)
-    }
-  }, [focusNode])
-
   const showStepNode = useCallback((stepId: string): boolean => {
     const nodeToShow = nodesRef.current.find(node => {
       const nodeData = node.data as { id?: string; step?: { id?: string } }
@@ -1812,7 +1790,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     return true
   }, [focusNode])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const handlePlanStepFocus = (event: Event) => {
       const detail = (event as CustomEvent<WorkflowPlanStepFocusDetail>).detail
       if (!detail?.stepId) return
@@ -1882,10 +1860,10 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
       return plan.steps.length
     },
     focusStep: (stepId: string) => {
-      // Use the existing highlightStepNode function
-      highlightStepNode(stepId)
+      pendingPlanStepFocusRef.current = stepId
+      if (!toolbarOnly && showStepNode(stepId)) pendingPlanStepFocusRef.current = null
     }
-  }), [loadPlanRefresh, refreshEvaluationPlan, plan, setChanges, highlightStepNode])
+  }), [loadPlanRefresh, refreshEvaluationPlan, plan, setChanges, showStepNode, toolbarOnly])
 
   // Store step ID to focus on when changes are detected (will focus after nodes update)
   React.useEffect(() => {

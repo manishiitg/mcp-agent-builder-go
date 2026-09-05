@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,10 +18,11 @@ import (
 var uiControlContractJSON []byte
 
 type uiViewCapability struct {
-	ID      string   `json:"id"`
-	Label   string   `json:"label"`
-	Actions []string `json:"actions"`
-	Targets []string `json:"targets"`
+	ID         string   `json:"id"`
+	Label      string   `json:"label"`
+	Actions    []string `json:"actions"`
+	Targets    []string `json:"targets"`
+	TargetKind string   `json:"target_kind,omitempty"`
 }
 type uiContract struct {
 	Version int                `json:"version"`
@@ -41,6 +43,7 @@ type uiSnapshot struct {
 	View       string    `json:"view"`
 	Revision   int64     `json:"revision"`
 	Visible    bool      `json:"visible"`
+	Target     string    `json:"target,omitempty"`
 }
 type uiAction struct {
 	RequestID                          string    `json:"request_id"`
@@ -189,6 +192,9 @@ func validateUIAction(view, action, target string) error {
 		if action == "open" && target == "" {
 			return nil
 		}
+		if action == "open" && v.TargetKind == "plan_step_id" && strings.TrimSpace(target) != "" && len(target) <= 256 {
+			return nil
+		}
 		if action == "expand" {
 			for _, t := range v.Targets {
 				if t == target {
@@ -323,7 +329,7 @@ func (b *uiControlBroker) ack(session, id, token, request, status, code string, 
 		return fmt.Errorf("stale_state")
 	}
 	if status == "applied" {
-		if !state.Visible || state.View != a.View || code != "" {
+		if !state.Visible || state.View != a.View || code != "" || (a.View == "flow" && a.Target != "" && state.Target != a.Target) {
 			return fmt.Errorf("invalid_receipt")
 		}
 	} else if status == "failed" || status == "rejected" || status == "cancelled" {

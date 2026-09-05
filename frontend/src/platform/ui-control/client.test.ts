@@ -9,7 +9,7 @@ describe('closed semantic UI control contract', () => {
     for (const { id } of UI_CONTROL_CONTRACT.views) {
       expect(supportedAction({ ...base, view: id, action: 'open' })).toBe(true)
       expect(supportedAction({ ...base, view: id, action: 'send' })).toBe(false)
-      expect(supportedAction({ ...base, view: id, action: 'open', target: 'guessed' })).toBe(false)
+      expect(supportedAction({ ...base, view: id, action: 'open', target: 'guessed' })).toBe(id === 'flow')
       expect(supportedAction({ ...base, view: id, action: 'refresh' })).toBe(false)
     }
   })

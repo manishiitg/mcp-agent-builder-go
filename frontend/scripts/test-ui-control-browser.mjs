@@ -18,6 +18,32 @@ server.middlewares.use('/__ui-control-test', async (_req, res) => {
     import { applyUIAction } from '/src/platform/ui-control/client.ts';
     const host = document.querySelector('main');
     const root = createRoot(document.getElementById('root'));
+    window.testPlan = async (nodeType = 'message_sequence', missing = false) => {
+      const controller = new AbortController();
+      const select = event => {
+        if (event.detail.workspacePath !== 'Workflow/test') return;
+        const panel = document.createElement('aside');
+        panel.dataset.uiPlanStep = event.detail.stepId;
+        panel.textContent = 'Selected step details';
+        host.append(panel);
+      };
+      window.addEventListener('workflow-plan-step-focus', select);
+      try {
+        return await applyUIAction({ request_id: 'plan', view: 'flow', action: 'open', target: 'livekit-quality', expires_at: new Date(Date.now()+1000).toISOString() }, 'Workflow/test', view => {
+          host.dataset.uiView = view;
+          host.style.display = 'block';
+          setTimeout(() => {
+            host.insertAdjacentHTML('beforeend', '<span hidden data-ui-view-mounted></span>');
+            if (!missing) {
+              const node = document.createElement('div');
+              node.className = 'react-flow__node react-flow__node-' + nodeType;
+              node.dataset.id = 'livekit-quality';
+              host.append(node);
+            }
+          }, 80);
+        }, () => ({ view: 'flow', revision: 1, visible: true }), controller.signal);
+      } finally { window.removeEventListener('workflow-plan-step-focus', select); }
+    };
     window.testUI = async (opts = {}) => {
       const controller = new AbortController();
       const action = { request_id: 'request', view: 'notify', action: 'expand', target: 'run_summary', expires_at: new Date(Date.now()+1000).toISOString(), ...opts.action };
@@ -58,7 +84,16 @@ try {
   await page.waitForTimeout(100)
   await page.keyboard.press('Escape')
   assert.equal((await interrupted).code, 'user_interrupted')
-  console.log('UI control Chromium checks: 6 passed (actual Notify disclosure, hidden/lazy mount, stale state, abort, expiry, missing target, interruption).')
+  for (const nodeType of ['message_sequence', 'step', 'routing']) {
+    await page.goto(url);
+    await page.waitForFunction(() => typeof window.testPlan === 'function');
+    assert.equal((await page.evaluate(type => window.testPlan(type), nodeType)).status, 'applied');
+    assert.equal(await page.locator('[data-ui-plan-step="livekit-quality"]').isVisible(), true);
+  }
+  await page.goto(url);
+  await page.waitForFunction(() => typeof window.testPlan === 'function');
+  assert.equal((await page.evaluate(() => window.testPlan('message_sequence', true))).code, 'target_not_found');
+  console.log('UI control Chromium checks: 10 passed (Notify and Plan adapter fixtures; not a deployed-app test).')
 } finally {
   await browser?.close()
   await server.close()

@@ -14,6 +14,7 @@ export const UI_CONTROL_CONTRACT = {
     {
       "id": "flow",
       "label": "Plan",
+      "target_kind": "plan_step_id",
       "actions": [
         "open"
       ],

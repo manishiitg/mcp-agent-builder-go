@@ -24,14 +24,19 @@ export function useWorkspaceUIControl(session: string | undefined): void {
     let lastView = ''
     let revision = 0
     let lastVisible = false
+    let lastTarget: string | undefined
     const controller = new AbortController()
     const state = (): UISnapshot => {
       const store = useWorkflowStore.getState()
       const view = store.workflowWorkspaceView ?? store.lastCanvasView
       const host = binding ? workspaceHost(binding.workspace) : undefined
       const visible = !!host && host.getClientRects().length > 0 && !!host.querySelector('[data-ui-view-mounted]') && document.visibilityState === 'visible'
-      if (lastView !== view || lastVisible !== visible) { revision++; lastView = view; lastVisible = visible }
-      return { view, revision, visible }
+      const panel = host?.querySelector<HTMLElement>('[data-ui-plan-step]')
+      const target = view === 'flow' && panel?.getClientRects().length ? panel.dataset.uiPlanStep : undefined
+      if (lastView !== view || lastVisible !== visible || lastTarget !== target) {
+        revision++; lastView = view; lastVisible = visible; lastTarget = target
+      }
+      return { view, revision, visible, target }
     }
     // Don't send the returned workspace back: identities are server-derived.
     const boundCall = (body: Record<string, unknown>) => workflowUIControl(session, {
@@ -49,13 +54,20 @@ export function useWorkspaceUIControl(session: string | undefined): void {
       try {
         if (!binding) {
           const next = await workflowUIControl(session, { version: UI_CONTROL_CONTRACT.version, operation: 'bind' }) as Binding
+          if (!next || typeof next.binding !== 'string' || typeof next.token !== 'string' || typeof next.workspace !== 'string') {
+            console.warn('[WorkspaceUIControl] bind invalid_binding_response')
+            return
+          }
           if (stopped) {
             await workflowUIControl(session, { version: UI_CONTROL_CONTRACT.version, operation: 'unbind', binding: next.binding, token: next.token })
             return
           }
           binding = next
         }
-        if (!workspaceHost(binding.workspace)) { await release(); return }
+        if (!workspaceHost(binding.workspace)) {
+          console.warn('[WorkspaceUIControl] bind workspace_host_missing')
+          await release(); return
+        }
         const commands = await boundCall({ operation: 'sync', state: state() }) as UIAction[]
         for (const command of commands) {
           if (stopped) break
@@ -66,7 +78,12 @@ export function useWorkspaceUIControl(session: string | undefined): void {
           if (result.status === 'applied') revision++
           await boundCall({ operation: 'ack', request_id: command.request_id, ...result, state: state() })
         }
-      } catch {
+      } catch (error) {
+        // Never log the request/config object: it includes the binding token.
+        const response = (error as { response?: { status?: number; data?: unknown } })?.response
+        const code = typeof response?.data === 'string' && /^[a-z_]+\s*$/.test(response.data)
+          ? response.data.trim() : 'connection_failed'
+        console.warn(`[WorkspaceUIControl] ${binding ? 'sync' : 'bind'} status=${response?.status ?? 'network_error'} code=${code}`)
         // An uncertain outcome is never replayed. A new lease cannot ACK or
         // claim the previous lease's commands; the server expires those.
         await release()

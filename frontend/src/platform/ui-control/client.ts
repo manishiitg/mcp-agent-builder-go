@@ -1,6 +1,7 @@
 import { UI_CONTROL_CONTRACT } from './contract.generated'
+import { requestWorkflowPlanStepFocus } from '../../utils/workflowPlanFocus'
 
-export interface UISnapshot { view: string; revision: number; visible: boolean }
+export interface UISnapshot { view: string; revision: number; visible: boolean; target?: string }
 export interface UIAction {
   request_id: string
   view: string
@@ -15,7 +16,7 @@ export interface UIAction {
 export function supportedAction(a: UIAction): boolean {
   const view = UI_CONTROL_CONTRACT.views.find(v => v.id === a.view)
   if (!view || !(view.actions as readonly string[]).includes(a.action)) return false
-  return a.action === 'open' ? !a.target : (view.targets as readonly string[]).includes(a.target ?? '')
+  return a.action === 'open' ? (!a.target || (a.view === 'flow' && !!a.target.trim() && a.target.length <= 256)) : (view.targets as readonly string[]).includes(a.target ?? '')
 }
 
 export function workspaceHost(workspace: string): HTMLElement | undefined {
@@ -42,6 +43,7 @@ export async function applyUIAction(
   return new Promise(resolve => {
     let done = false
     let touched = false
+    let requestedNode: Element | undefined
     const finish = (status: string, code = '') => {
       if (done) return
       done = true
@@ -64,6 +66,20 @@ export async function applyUIAction(
       if (host.getClientRects().length === 0) return
       // The marker lives INSIDE Suspense, not in its loading fallback.
       if (!host.querySelector('[data-ui-view-mounted]')) return
+      if (action.view === 'flow' && action.target) {
+        // Wait for the actual node, including lazy canvas/data loading. Never
+        // interpolate a caller's target into a selector or synthesize clicks.
+        const node = Array.from(host.querySelectorAll('.react-flow__node[data-id]'))
+          .find(el => el.getAttribute('data-id') === action.target)
+        if (!node) return
+        if (requestedNode !== node) {
+          requestedNode = node
+          requestWorkflowPlanStepFocus({ workspacePath: workspace, stepId: action.target })
+        }
+        const panel = Array.from(host.querySelectorAll<HTMLElement>('[data-ui-plan-step]'))
+          .find(el => el.dataset.uiPlanStep === action.target)
+        if (!panel || panel.getClientRects().length === 0) return
+      }
       if (action.action === 'expand') {
         const details = Array.from(host.querySelectorAll<HTMLDetailsElement>('details[data-ui-instructions]'))
           .find(el => el.dataset.uiInstructions === action.target)
@@ -75,8 +91,8 @@ export async function applyUIAction(
       finish('applied')
     }
     const observer = new MutationObserver(check)
-    const timer = setTimeout(() => finish('failed', action.action === 'expand' ? 'target_not_found' : 'render_failed'), Math.min(8000, expires - Date.now()))
-    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-ui-view', 'open', 'class'] })
+    const timer = setTimeout(() => finish('failed', action.target ? 'target_not_found' : 'render_failed'), Math.min(8000, expires - Date.now()))
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-ui-view', 'data-ui-plan-step', 'open', 'class'] })
     signal.addEventListener('abort', aborted, { once: true })
     document.addEventListener('pointerdown', interrupted, true)
     document.addEventListener('keydown', interrupted, true)

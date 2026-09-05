@@ -380,7 +380,7 @@ const api = axios.create({
 // Uses the same authenticated transport as chat; opaque binding tokens stay in
 // memory and are never placed in URLs, localStorage or presentation events.
 export async function workflowUIControl(session: string, body: Record<string, unknown>): Promise<unknown> {
-  const response = await api.post(`/sessions/${encodeURIComponent(session)}/ui-control`, body)
+  const response = await api.post(`/api/sessions/${encodeURIComponent(session)}/ui-control`, body)
   return response.data
 }
 

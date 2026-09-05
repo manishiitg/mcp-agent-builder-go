@@ -350,3 +350,52 @@ Baseline deployed to RTS on 2026-09-05 as release
 were active, `/api/health` reported healthy/idle, and the public site returned
 HTTP 200. This records service health, not full UI acceptance coverage.
 No external sends or ticket-completion claim.
+
+### Follow-up: live Plan-opening failure (2026-09-05, local changes)
+
+Live browser reproduction: legacy open switched Costs to Plan, but the console
+reported no node for `livekit-quality`. The node was present as
+`message_sequence`; the old focus helper searched only `step` and intentionally
+did not open details. New acknowledged tools separately returned
+`browser_disconnected` despite a visible workspace. The exact live registration
+failure is still unconfirmed; do not mark that issue resolved.
+
+Local follow-up routes `open_workspace_view` through the acknowledged broker,
+adds Plan step targets, selects across node types, waits for node mount and the
+matching details panel, and requires that selected target in the browser ACK.
+Legacy refresh remains explicitly unverified. Registration failures now have
+safe frontend/server diagnostics rather than a silent catch. No permissions
+were weakened and no deployment was performed for this follow-up.
+
+Verification: HTTP handler bind/sync/ACK round-trip, matching-target rejection,
+legacy-wrapper wait-for-receipt test, focused Go race tests, TypeScript checks,
+and 10 Chromium adapter-fixture cases. These are not the deployed-app acceptance
+test. Deployment and a live retry are required to capture/fix the remaining
+registration failure and validate the complete user interaction.
+
+Live diagnostic deployment identified the registration cause: the API wrapper
+posted to `/sessions/{id}/ui-control`, missing `/api`. On RTS that path returns
+the SPA HTML with HTTP 200, never reaching the UI handler. The corrected wrapper
+uses `/api/sessions/{id}/ui-control`, consistent with the other session APIs.
+A regression test checks the actual wrapper's route, rather than a mocked URL.
+Diagnostics also validate binding-response shape and print safe codes as text.
+The corrected frontend was deployed as RTS release
+`f28500831-20260905144739` (main plus local follow-up changes). Live acceptance
+on the authenticated in-app browser passed:
+
+- Costs → legacy-named `open_workspace_view` → LiveKit details: applied,
+  visible=true, target=livekit-quality, matching screenshot and DOM.
+- Collapsed workspace → `perform_ui_action` → LiveKit: applied.
+- Repeated open with a fresh request: applied.
+- Nonexistent target: failed/target_not_found (twice, because the testing
+  agent repeated the failed call to obtain the full error); no false success.
+- Restore LiveKit after failure: applied.
+- Browser reload → Costs → message_sequence node
+  `step-ingest-notion-feedback`: applied, matching selected-target state and
+  visible details panel. No workflow steps executed or notifications sent.
+
+The original connection and Plan-selection failures are resolved in these live
+tests. This does not close the wider PLAT-292 scope (remaining view/product
+adapters, legacy refresh, full permissions matrix, etc.). The generic activity
+card still uses the misleading "Production update" fallback for UI-action
+wake-up events; the actual tool receipt and selected state are correct.

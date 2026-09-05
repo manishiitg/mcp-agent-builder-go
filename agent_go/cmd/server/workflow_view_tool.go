@@ -38,18 +38,6 @@ func workspaceViewPresentation(view, workspacePath string) (*orchestratorevents.
 	return workspaceViewAction(view, workspacePath, "open", "")
 }
 
-// workspaceViewTargets documents what `target` means for the views that honor
-// one. A view missing here ignores a target rather than failing, so the agent
-// can always pass one.
-var workspaceViewTargets = map[string]string{
-	"report":         "the report's top-level tab name, as the report HTML labels it",
-	"flow":           "a step id, focused on the canvas",
-	"files":          "a workspace-relative file path, opened in the pane",
-	"database":       "a table name",
-	"execution-logs": "a step id",
-	"schedules":      "a schedule id or name",
-}
-
 // workspaceViewAction builds the open or refresh event for a view; the page
 // reads payload.action to tell them apart, and payload.target for what to
 // focus inside the view.
@@ -93,36 +81,24 @@ func (api *StreamingAPI) registerOpenWorkspaceViewTool(registrar definitionToolR
 	for _, v := range workflowWorkspaceViews {
 		lines = append(lines, fmt.Sprintf("%s — %s (%s)", v.ID, v.Label, v.About))
 	}
-	description := "Legacy, unverified presentation request. Prefer perform_ui_action for browser-acknowledged actions. This tool returns requested, NOT proof of visible rendering. Open one of the workspace views on the right side of the user's screen, the same views as the toolbar above the chat. " +
+	description := "Browser-acknowledged workspace opening, using the same protocol as perform_ui_action. Only status=applied confirms success. For Plan, pass an exact step ID as target to select it and open its details. Other deep targets are unsupported and rejected. Open one of the workspace views on the right side of the user's screen, the same views as the toolbar above the chat. " +
 		"Use it when what you are talking about is on one of them: after you build or update the report, open `report`; when the user asks about spend, open `costs`; " +
-		"after adding a schedule, open `schedules`. Opening a view that is already on screen does nothing; to reload one you changed, use refresh_workspace_view. Pass `target` to focus something inside the view — a report tab, a plan step, a file, a table. What each view contains, in detail: builder-reference/references/workspace-views.md. Views:\n" + strings.Join(lines, "\n")
-	var targetHelp []string
-	for _, v := range workflowWorkspaceViews {
-		if meaning, ok := workspaceViewTargets[v.ID]; ok {
-			targetHelp = append(targetHelp, fmt.Sprintf("%s: %s", v.ID, meaning))
-		}
-	}
+		"after adding a schedule, open `schedules`. To request a reload use refresh_workspace_view (legacy, unverified). No sends, saves, or workflow execution. Views:\n" + strings.Join(lines, "\n")
 	params := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"view":   map[string]interface{}{"type": "string", "enum": workflowWorkspaceViewIDs(), "description": "which view to open"},
-			"target": map[string]interface{}{"type": "string", "description": "optional — what to focus inside the view. " + strings.Join(targetHelp, "; ") + ". Ignored by views that have nothing to focus."},
+			"target": map[string]interface{}{"type": "string", "maxLength": 256, "description": "For open: exact Plan step ID with view=flow; omit for other views. For legacy refresh: optional view-specific target; rendering is unverified."},
 		},
 		"required": []string{"view"},
 	}
-	if err := registrar.RegisterCustomTool("open_workspace_view", description, params, func(_ context.Context, args map[string]interface{}) (string, error) {
+	if err := registrar.RegisterCustomTool("open_workspace_view", description, params, func(ctx context.Context, args map[string]interface{}) (string, error) {
 		if api.uiBroker().scope(sessionID) != workspacePath {
 			return uiError(fmt.Errorf("inactive_scope")), nil
 		}
 		view, _ := args["view"].(string)
 		target, _ := args["target"].(string)
-		event, err := workspaceViewAction(view, workspacePath, "open", target)
-		if err != nil {
-			return "", err
-		}
-		api.emitAgentProfileEvent(sessionID, event)
-		out, _ := json.Marshal(map[string]interface{}{"status": "requested", "visible": false, "receipt": "unverified_legacy_presentation", "opened": event.Payload["view"], "label": event.Title})
-		return string(out), nil
+		return api.performUIAction(ctx, sessionID, workspacePath, map[string]interface{}{"view": strings.ToLower(strings.TrimSpace(view)), "action": "open", "target": target})
 	}, "workflow_ui"); err != nil {
 		return err
 	}

@@ -39,11 +39,11 @@ func TestOpenWorkspaceViewToolOpensAKnownViewAndRefusesOthers(t *testing.T) {
 		t.Fatalf("open tool = %+v", open)
 	}
 	out, err := open.exec(context.Background(), map[string]interface{}{"view": "Report"})
-	if err != nil || !strings.Contains(out, `"opened":"report"`) || !strings.Contains(out, `"label":"Report"`) {
+	if err != nil || !strings.Contains(out, `"code":"browser_disconnected"`) {
 		t.Fatalf("out=%s err=%v", out, err)
 	}
-	if _, err := open.exec(context.Background(), map[string]interface{}{"view": "dashboard"}); err == nil || !strings.Contains(err.Error(), "one of:") {
-		t.Fatalf("unknown view must list the real ones: %v", err)
+	if out, err := open.exec(context.Background(), map[string]interface{}{"view": "dashboard"}); err != nil || !strings.Contains(out, "unsupported_view") {
+		t.Fatalf("unknown view must reject: %s %v", out, err)
 	}
 	refresh, ok := reg.tools["refresh_workspace_view"]
 	if !ok {
@@ -54,7 +54,7 @@ func TestOpenWorkspaceViewToolOpensAKnownViewAndRefusesOthers(t *testing.T) {
 		t.Fatalf("refresh out=%s err=%v", out, err)
 	}
 	targeted, err := open.exec(context.Background(), map[string]interface{}{"view": "flow", "target": "step-fetch"})
-	if err != nil || !strings.Contains(targeted, `"opened":"flow"`) {
+	if err != nil || !strings.Contains(targeted, `"code":"browser_disconnected"`) {
 		t.Fatalf("targeted open = %s err=%v", targeted, err)
 	}
 	tv, err := workspaceViewAction("flow", "Workflow/x", "open", " step-fetch ")
@@ -71,5 +71,54 @@ func TestOpenWorkspaceViewToolOpensAKnownViewAndRefusesOthers(t *testing.T) {
 	rv, err := workspaceViewAction("report", "Workflow/x", "refresh", "")
 	if err != nil || rv.Payload["action"] != "refresh" || rv.Activity.Label != "Refresh requested" || rv.PresentationID == ev.PresentationID {
 		t.Fatalf("refresh event = %+v err=%v", rv, err)
+	}
+}
+
+func TestOpenWorkspaceViewWaitsForSelectedStepReceipt(t *testing.T) {
+	api := &StreamingAPI{}
+	reg := &recordingRegistrar{}
+	if err := api.registerOpenWorkspaceViewTool(reg, "s1", "Workflow/x"); err != nil {
+		t.Fatal(err)
+	}
+	b := api.uiBroker()
+	c, err := b.bind("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result := make(chan string, 1)
+	go func() {
+		out, _ := reg.tools["open_workspace_view"].exec(ctx, map[string]interface{}{"view": "flow", "target": "livekit-quality"})
+		result <- out
+	}()
+	var commands []uiAction
+	for len(commands) == 0 && ctx.Err() == nil {
+		commands, err = b.syncClient("s1", c.id, c.token, uiSnapshot{View: "costs", Revision: 1, Visible: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(commands) == 0 {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if len(commands) != 1 {
+		t.Fatal("no browser action queued")
+	}
+	select {
+	case out := <-result:
+		t.Fatalf("returned before receipt: %s", out)
+	default:
+	}
+	if err := b.ack("s1", c.id, c.token, commands[0].RequestID, "applied", "", uiSnapshot{View: "flow", Target: "livekit-quality", Revision: 2, Visible: true}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case out := <-result:
+		if !strings.Contains(out, `"status":"applied"`) || !strings.Contains(out, `"visible":true`) {
+			t.Fatal(out)
+		}
+	case <-ctx.Done():
+		t.Fatal("receipt did not reach legacy caller")
 	}
 }

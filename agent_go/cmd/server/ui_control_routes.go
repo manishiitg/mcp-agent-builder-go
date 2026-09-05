@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -13,21 +14,34 @@ import (
 // Shared read access to somebody else's workflow is NOT chat ownership.
 func (api *StreamingAPI) handleUIControl(w http.ResponseWriter, r *http.Request) {
 	session := mux.Vars(r)["session_id"]
+	fail := func(code string, status int) {
+		// Codes only: never log authentication headers, binding tokens or bodies.
+		log.Printf("[UI-CONTROL] session=%s http_status=%d code=%s", session, status, code)
+		http.Error(w, code, status)
+	}
 	user := GetUserIDFromContext(r.Context())
 	active, exists := api.getActiveSession(session)
-	if !exists || user == "" || active.UserID != user {
-		http.Error(w, "inactive_scope", http.StatusForbidden)
+	if !exists {
+		fail("session_not_active", http.StatusConflict)
+		return
+	}
+	if user == "" || active.UserID != user {
+		fail("session_owner_mismatch", http.StatusForbidden)
 		return
 	}
 	b := api.uiBroker()
 	workspace := b.scope(session)
 	if !strings.HasPrefix(workspace, "Workflow/") {
-		http.Error(w, "unsupported_surface", http.StatusConflict)
+		fail("unsupported_surface", http.StatusConflict)
 		return
 	}
 	level, manifest := workflowAccessForWorkspacePath(r.Context(), GetUserFromContext(r.Context()), workspace)
-	if manifest == nil || level == WorkflowAccessNone || !userAllowedWorkflowID(GetUserFromContext(r.Context()), manifest.ID) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if manifest == nil {
+		fail("workspace_unavailable", http.StatusConflict)
+		return
+	}
+	if level == WorkflowAccessNone || !userAllowedWorkflowID(GetUserFromContext(r.Context()), manifest.ID) {
+		fail("forbidden", http.StatusForbidden)
 		return
 	}
 	var req struct {
@@ -43,11 +57,11 @@ func (api *StreamingAPI) handleUIControl(w http.ResponseWriter, r *http.Request)
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&req) != nil {
-		http.Error(w, "invalid_request", http.StatusBadRequest)
+		fail("invalid_request", http.StatusBadRequest)
 		return
 	}
 	if req.Version != uiControlContract.Version {
-		http.Error(w, "version_mismatch", http.StatusConflict)
+		fail("version_mismatch", http.StatusConflict)
 		return
 	}
 	var out interface{} = map[string]bool{"ok": true}
@@ -66,11 +80,11 @@ func (api *StreamingAPI) handleUIControl(w http.ResponseWriter, r *http.Request)
 	case "unbind":
 		err = b.unbind(session, req.Binding, req.Token)
 	default:
-		http.Error(w, "unsupported_operation", http.StatusBadRequest)
+		fail("unsupported_operation", http.StatusBadRequest)
 		return
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
+		fail(err.Error(), http.StatusConflict)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
