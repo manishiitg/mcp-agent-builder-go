@@ -100,6 +100,7 @@ import { findOrCreateWorkflowTab, isChatCompatiblePhase } from '../../utils/chat
 import { useWorkflowViewPresentations } from './useWorkflowViewPresentations'
 import { hasWorkflowChatContent } from './workflowChatTabConversion'
 import { hydrateTabEvents } from '../../utils/sessionRestore'
+import { isReadOnlyWorkflowRunTab, workflowTabsNeedingHydration } from '../../utils/workflowTabHydration'
 import { isPreviewView, isWorkspacePaneView } from './workspaceViews'
 // Inactive workflow tabs hydrate lazily and fall back to workflow-scoped chat history.
 
@@ -852,6 +853,31 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
       const restoreStore = useChatStore.getState()
       restoreStore.beginWorkflowSessionRestore(tab.sessionId)
       try {
+        if (isReadOnlyWorkflowRunTab(tab)) {
+          // A scheduled/bot run tab is a read-only view of one finished (or
+          // running) run. It used to be skipped here entirely, so after the
+          // backend's in-memory event store was gone (server restart, or the
+          // run simply aged out) the tab could never show its run again --
+          // "Restoring previous session..." until the give-up message, even
+          // though the durable transcript was on disk and served fine. Hydrate
+          // the transcript only: no conversation-config restore (that is for
+          // interactive chats) and no canvas step-status restore (a finished
+          // run's steps must not repaint the live canvas).
+          const runtime = await withWorkflowRestoreTimeout(
+            hydrateTabEvents(tab.sessionId, {
+              workspacePath: currentWorkspacePath || undefined,
+              fallbackToChatHistory: true,
+            }),
+            `Restoring scheduled run transcript for ${tab.sessionId}`
+          )
+          if (activeWorkflowSessionIds.has(tab.sessionId) || runtime.status === 'running') {
+            setTabStreaming(tab.tabId, true)
+          } else {
+            setTabStreaming(tab.tabId, false)
+            useChatStore.getState().setTabCompleted(tab.tabId, runtime.status === 'completed' || runtime.status === 'stopped')
+          }
+          continue
+        }
         await withWorkflowRestoreTimeout(
           restoreWorkflowStateFromEvents(tab.sessionId, currentWorkspacePath, true),
           `Restoring workflow events for ${tab.sessionId}`
@@ -1523,13 +1549,16 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
         // Only restore sessions that don't have tabs yet
         const sessionsToActuallyRestore = newSessions
 
-        const needsTabHydration = shouldHydrateWorkflowEvents && interactiveExistingWorkflowTabs.some(tab =>
-          tab.sessionId && getTabEvents(tab.sessionId).length === 0
-        )
-
-        // 3a. Rehydrate events for persisted tabs whose event buffer was lost on refresh.
-        if (needsTabHydration) {
-          await rehydrateWorkflowTabs(interactiveExistingWorkflowTabs, workspacePath)
+        // 3a. Rehydrate events for persisted tabs whose event buffer was lost
+        //     on refresh -- read-only scheduled/bot run tabs included (see
+        //     rehydrateWorkflowTabs); they were excluded here once, which is
+        //     how a finished run's tab got stuck on "Restoring previous
+        //     session..." after every backend restart.
+        const tabsNeedingHydration = shouldHydrateWorkflowEvents
+          ? workflowTabsNeedingHydration(existingWorkflowTabs, getTabEvents)
+          : []
+        if (tabsNeedingHydration.length > 0) {
+          await rehydrateWorkflowTabs(existingWorkflowTabs, workspacePath)
         }
 
         // 4. Create tabs and load events for new sessions only
@@ -1892,11 +1921,11 @@ export const WorkflowLayout: React.FC<WorkflowLayoutProps> = ({
 
         const selectedTarget = useChatStore.getState().chatTabs[targetTab.tabId]
         const targetViewMode = normalizeEventViewMode(selectedTarget?.viewMode || chatStore.eventViewModePreference)
-        const needsHydration = targetViewMode === 'formatted' && interactiveTabs.some(tab =>
-          tab.sessionId && chatStore.getTabEvents(tab.sessionId).length === 0
-        )
-        if (needsHydration) {
-          void rehydrateWorkflowTabs(interactiveTabs, workspacePath)
+        const tabsNeedingHydration = targetViewMode === 'formatted'
+          ? workflowTabsNeedingHydration(newPresetTabs, tab => chatStore.getTabEvents(tab))
+          : []
+        if (tabsNeedingHydration.length > 0) {
+          void rehydrateWorkflowTabs(newPresetTabs, workspacePath)
         }
       } else {
         console.log(`[WorkflowLayout] No tabs for new preset, clearing activeTabId`)

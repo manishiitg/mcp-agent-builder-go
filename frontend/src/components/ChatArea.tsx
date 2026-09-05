@@ -1000,9 +1000,13 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     const timer = window.setTimeout(() => setReadOnlyRunViewGaveUp(true), RESUME_SETTLE_MS)
     return () => window.clearTimeout(timer)
   }, [isReadOnlyRunView, displayEvents.length, activeTabStreaming, activeSessionId])
-  // Manual retry for the give-up message above: re-fetch this session's
-  // events the same way openScheduledRunInChat does on first open. If the
-  // session really is gone, this comes back empty and the give-up timer
+  // Manual retry for the give-up message above. This used to read only the
+  // backend's volatile in-memory event store, which is exactly the thing a
+  // server restart empties -- so for a finished scheduled run it could never
+  // succeed. Use the same durable-history-first hydration a page load uses;
+  // it needs the workflow's workspace path, which is what scopes the
+  // conversation file lookup (without it the history endpoint is a 404). If
+  // the run really is gone, this comes back empty and the give-up timer
   // above simply re-arms and fires again — an honest "still not there".
   const retryReadOnlyRunView = useCallback(async () => {
     const sessionId = activeSessionId
@@ -1010,25 +1014,19 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     if (!sessionId || !tabId) return
     setReadOnlyRunViewGaveUp(false)
     try {
-      const response = await agentApi.getRecentSessionEvents(sessionId)
+      const runtime = await hydrateTabEvents(sessionId, {
+        workspacePath: activeWorkflowPreset?.selectedFolder?.filepath || activeTab?.metadata?.agentProfileWorkspace,
+        fallbackToChatHistory: true,
+      })
       const chatStore = useChatStore.getState()
-      if (response.events.length > 0) {
-        chatStore.setTabEvents(sessionId, response.events)
-      }
-      if (response.last_processed_index !== undefined) {
-        chatStore.setTabLastEventIndex(sessionId, response.last_processed_index)
-      }
-      if (response.has_more !== undefined) {
-        chatStore.setTabHasMoreOlderEvents(sessionId, response.has_more)
-      }
-      const isDone = response.session_status === 'completed' || response.session_status === 'stopped'
-      const isError = response.session_status === 'error'
+      const isDone = runtime.status === 'completed' || runtime.status === 'stopped'
+      const isError = runtime.status === 'error'
       chatStore.setTabCompleted(tabId, isDone)
-      chatStore.setTabStreaming(tabId, !isDone && !isError && response.session_status === 'running')
+      chatStore.setTabStreaming(tabId, !isDone && !isError && runtime.status === 'running')
     } catch {
       // Leave it to the give-up timer to re-fire; nothing else to do here.
     }
-  }, [activeSessionId, activeTab?.tabId])
+  }, [activeSessionId, activeTab?.tabId, activeTab?.metadata?.agentProfileWorkspace, activeWorkflowPreset])
   // resumePending — SYNCHRONOUS (derived in render, NOT an effect-set state). This
   // is the regression fix: on a Resume click restoredConversationPath is set
   // synchronously (setTabConfig), so this is already true on the FIRST render →
