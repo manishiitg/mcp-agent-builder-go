@@ -5852,12 +5852,26 @@ func registerPlanModificationTools(
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"update_scripted_step",
-		"Update an existing deterministic scripted step. The internal plan type remains regular, but this tool only edits a checked-in script boundary implemented by learnings/<step-id>/main.py. Provide existing_step_id and only the contract fields to change. Use next_step_id to chain scripted steps inside a selected route and make the final script converge on a shared downstream step. Do not use it for conversational or judgment-heavy work; those steps must be message_sequence. Also accepts a message_sequence step whose declared_execution_mode is already scripted -- its saved type is atomically downgraded to regular while the edit is applied, so the real scripted executor (reliable $DB_PATH/STEP_OUTPUT_DIR injection) runs it instead of the message_sequence runtime, which does not guarantee that. A genuine (non-scripted) message_sequence step is rejected; use update_message_sequence_step for that. The plan is updated immediately. After a substantive change, update and test main.py and review whether validation, learnings, and downstream consumers still match the contract; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
+		"Update an existing deterministic scripted step. The internal plan type remains regular, but this tool only edits a checked-in script boundary implemented by learnings/<step-id>/main.py. Provide existing_step_id and only the contract fields to change. Use next_step_id to chain scripted steps inside a selected route and make the final script converge on a shared downstream step. Do not use it for conversational or judgment-heavy work; those steps must be message_sequence. Also accepts a message_sequence step whose declared_execution_mode is already scripted -- its saved type is atomically downgraded to regular while the edit is applied, so the real scripted executor (reliable $DB_PATH/STEP_OUTPUT_DIR injection) runs it instead of the message_sequence runtime, which does not guarantee that. A genuine (non-scripted) message_sequence step is rejected: convert it first with change_step_type(target_type=\"scripted\"), or edit it as a sequence with update_message_sequence_step. The plan is updated immediately. After a substantive change, update and test main.py and review whether validation, learnings, and downstream consumers still match the contract; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
 		regularUpdateParams,
 		createUpdateRegularStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
 	); err != nil {
 		return fmt.Errorf("failed to register update_scripted_step tool: %w", err)
+	}
+
+	changeStepTypeParams, err := parseSchemaForToolParameters(getChangeStepTypeSchema())
+	if err != nil {
+		return fmt.Errorf("failed to parse change_step_type schema: %w", err)
+	}
+	if err := mcpAgent.RegisterCustomTool(
+		"change_step_type",
+		"Convert a step between the two execution models in place, keeping its id, description, dependencies, validation_schema, next_step_id and position (nested and orphan steps included). target_type=\"scripted\" turns a message_sequence into a deterministic scripted step (internal plan type regular) and declares scripted mode in step_config in the same atomic change -- its conversational items are dropped, since a scripted step's work lives in learnings/<step-id>/main.py, which you then write with update_scripted_step(code=...). target_type=\"message_sequence\" turns a scripted step into a sequence with one execute-and-verify item and clears the declared mode; refine the turns with update_message_sequence_step. Use it instead of add_scripted_step + delete_plan_steps + rewiring. Records a revertable before/after entry in planning/changelog. Only scripted <-> message_sequence; other step types have their own tools.",
+		changeStepTypeParams,
+		createChangeStepTypeExecutor(workspacePath, logger, readFile, writeFile),
+		"workflow",
+	); err != nil {
+		return fmt.Errorf("failed to register change_step_type tool: %w", err)
 	}
 
 	// NOTE: update_conditional_step tool removed (deprecated in favor of decision/routing).
