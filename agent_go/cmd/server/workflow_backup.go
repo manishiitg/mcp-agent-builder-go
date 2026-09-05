@@ -240,6 +240,11 @@ func shouldSkipBackupHashFile(relPath string) bool {
 	if strings.Contains(lower, "/runs/") || strings.HasPrefix(lower, "runs/") {
 		return true
 	}
+	// Installed packages (PLAT-284): hundreds of MB of numpy/pandas that any
+	// run can recreate; never part of what a backup is for.
+	if strings.Contains(lower, "/.sandbox-cache/") || strings.HasPrefix(lower, ".sandbox-cache/") {
+		return true
+	}
 	return false
 }
 

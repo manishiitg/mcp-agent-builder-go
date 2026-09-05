@@ -304,9 +304,15 @@ Two consequences to keep in mind:
   are additive; a deployment cannot carve one back out of the `/etc` grant.
   `/srv/dominion/.env` is where secrets live, and DAC still applies (verified: no
   file under `/etc` is readable by `dominion` without being world-readable).
-- Installs land in the step's folder (its `.local`, `.cache`, or a venv), per step —
-  not system-wide. That is by design; a tool every step needs still goes in
-  `/srv/dominion/tools` per the PLAT-281 section above.
+- Installs land in the workflow's own `Workflow/<id>/.sandbox-cache/` (PLAT-284):
+  `pip install --user`, `npm install -g`, a venv or a downloaded binary put in
+  `$SANDBOX_PERSISTENT_DIR` all persist across that workflow's runs — run 1
+  installs, every later run finds it already satisfied with no network. Per
+  workflow, never system-wide: that is the sandbox doing its job. A tool every
+  workflow on the box needs still goes in `/srv/dominion/tools` per the
+  PLAT-281 section above. The folder can be deleted for a clean slate; the
+  next run rebuilds it. It is a few hundred MB per workflow that installs
+  numpy/pandas-class packages, and backups skip it.
 
 Verifying a sandbox change by hand (what caught the `resolv.conf` gap): run the real
 command through the shipped launcher with a policy granting only a scratch dir, e.g.

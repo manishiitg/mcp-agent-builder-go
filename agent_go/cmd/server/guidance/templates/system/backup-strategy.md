@@ -142,6 +142,8 @@ aggregate:
 
 - Conversation dumps (`builder/conversation/*.json`, often 10-30 MB each)
 - Per-iteration run artifacts (`runs/iteration-*/`, can be GB)
+- Installed packages (`.sandbox-cache/`, hundreds of MB, recreated by any run's
+  `pip install --user` — never back this up at all; put it in `.gitignore`)
 - Generated images (`db/posts/visuals/*.png`, `*.jpg`)
 - Generated audio/video (`*.mp3`, `*.mp4`)
 - Model checkpoints, trained weights, vector stores

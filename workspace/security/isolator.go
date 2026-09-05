@@ -187,8 +187,9 @@ func (iso *Isolator) executeIsolatedMountNamespace(ctx context.Context, command 
 	// Set working directory for proper error messages
 	cmd.Dir = iso.WorkDir
 
-	// CRITICAL: Set safe environment (no secrets)
-	cmd.Env = BuildSafeEnvironment()
+	// CRITICAL: Set safe environment (no secrets), with package-manager state
+	// routed to the workflow's persistent sandbox folder (PLAT-284).
+	cmd.Env = iso.toolEnv(BuildSafeEnvironment())
 
 	return cmd, cleanup, nil
 }
@@ -223,8 +224,11 @@ func (iso *Isolator) executeIsolatedMacOS(ctx context.Context, command string, a
 	// Set working directory
 	cmd.Dir = iso.WorkDir
 
-	// CRITICAL: Set safe environment (no secrets)
-	cmd.Env = BuildSafeEnvironment()
+	// CRITICAL: Set safe environment (no secrets). The default macOS profile
+	// leaves $HOME writable, so installs never failed here the way they did
+	// under Landlock -- but route them identically so a workflow behaves the
+	// same on a Mac as on a Linux deployment (PLAT-284).
+	cmd.Env = iso.toolEnv(BuildSafeEnvironment())
 
 	return cmd, cleanup, nil
 }

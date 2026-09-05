@@ -111,74 +111,9 @@ func TestLandlockEnforcesExternalFolderAccess(t *testing.T) {
 	}
 }
 
-// TestPackageManagerCacheEnvPointsIntoTheGrantedWritePath is a pure unit
-// test of the PLAT-283 fix: pip/npm/venv default to caching under $HOME,
-// which lives outside every step's Landlock write grant, so
-// packageManagerCacheEnv must redirect them into a subtree of a path the
-// step can actually write to.
-func TestPackageManagerCacheEnvPointsIntoTheGrantedWritePath(t *testing.T) {
-	writableDir := t.TempDir()
-	policy := LandlockPolicy{WritePaths: []string{writableDir}, WorkDir: writableDir}
-
-	env := packageManagerCacheEnv(policy)
-	want := map[string]string{
-		"PIP_CACHE_DIR=":    filepath.Join(writableDir, ".cache", "pip"),
-		"XDG_CACHE_HOME=":   filepath.Join(writableDir, ".cache"),
-		"PYTHONUSERBASE=":   filepath.Join(writableDir, ".local"),
-		"npm_config_cache=": filepath.Join(writableDir, ".cache", "npm"),
-		"TMPDIR=":           filepath.Join(writableDir, ".tmp"),
-	}
-	for prefix, wantValue := range want {
-		found := false
-		for _, entry := range env {
-			if strings.HasPrefix(entry, prefix) {
-				found = true
-				if got := strings.TrimPrefix(entry, prefix); got != wantValue {
-					t.Errorf("%s = %q, want %q", prefix, got, wantValue)
-				}
-				if info, err := os.Stat(strings.TrimPrefix(entry, prefix)); err != nil || !info.IsDir() {
-					t.Errorf("%s target %q was not pre-created as a directory: %v", prefix, wantValue, err)
-				}
-			}
-		}
-		if !found {
-			t.Errorf("missing env entry with prefix %q", prefix)
-		}
-	}
-}
-
-// TestPackageManagerCacheEnvFallsBackWhenWorkDirIsNotWritable covers a step
-// whose WorkDir sits outside its own write grant (e.g. a read-only scripted
-// step): redirection must still land somewhere the sandbox will actually
-// allow, not silently point at an unwritable WorkDir.
-func TestPackageManagerCacheEnvFallsBackWhenWorkDirIsNotWritable(t *testing.T) {
-	readOnlyWorkDir := t.TempDir()
-	writableDir := t.TempDir()
-	policy := LandlockPolicy{WritePaths: []string{writableDir}, WorkDir: readOnlyWorkDir}
-
-	env := packageManagerCacheEnv(policy)
-	for _, entry := range env {
-		if strings.HasPrefix(entry, "PIP_CACHE_DIR=") {
-			got := strings.TrimPrefix(entry, "PIP_CACHE_DIR=")
-			want := filepath.Join(writableDir, ".cache", "pip")
-			if got != want {
-				t.Errorf("PIP_CACHE_DIR = %q, want %q (the granted write path, not the unwritable WorkDir)", got, want)
-			}
-			return
-		}
-	}
-	t.Fatal("missing PIP_CACHE_DIR entry")
-}
-
-// TestPackageManagerCacheEnvNoOpsWithoutAnyWritePath must not fabricate a
-// path when the policy grants no writes at all -- pointing pip at a
-// non-existent, non-granted directory would just trade one failure mode for
-// a more confusing one.
-func TestPackageManagerCacheEnvNoOpsWithoutAnyWritePath(t *testing.T) {
-	if env := packageManagerCacheEnv(LandlockPolicy{WorkDir: t.TempDir()}); env != nil {
-		t.Fatalf("expected no redirection without a write grant, got %v", env)
-	}
-}
+// The pure routing tests live in sandbox_tool_env_test.go (no build tag, so
+// they run on every platform); this file keeps only what needs a real
+// Landlock kernel.
 
 // TestLandlockCommandCanInstallIntoItsOwnCache is the live reproduction of
 // the PLAT-283 incident on the Dominion Hetzner deployment (2026-08-31 /

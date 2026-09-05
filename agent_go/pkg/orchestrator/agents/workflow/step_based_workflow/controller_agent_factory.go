@@ -15,6 +15,7 @@ import (
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
 	orchestrator_events "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
+	"github.com/manishiitg/coding-agent-loop/workspace/security"
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	"github.com/manishiitg/mcpagent/agent/codeexec"
 	mcpllm "github.com/manishiitg/mcpagent/llm"
@@ -521,6 +522,16 @@ func (hcpo *StepBasedWorkflowOrchestrator) setupExecutionFolderGuard(stepPath st
 	readPaths = appendAdditionalWorkflowReadPaths(readPaths, baseWorkspacePath, stepConfig)
 	readPaths, writePaths, _, _ = appendWorkflowFolderAccess(baseWorkspacePath, readPaths, writePaths)
 	readPaths, writePaths = hcpo.appendCDPHostDownloadsPaths(readPaths, writePaths)
+	// PLAT-284: one persistent, workflow-scoped folder for anything a step
+	// installs (pip --user site, npm globals, downloaded binaries). Steps run
+	// in runs/iteration-N/, which rotates, so without this every run
+	// reinstalled the same packages from PyPI. The sandbox recognises the
+	// folder by its name and points package managers at it
+	// (workspace/security/sandbox_tool_env.go); this grant is what makes it
+	// writable for every step of the workflow, root-wide write or not.
+	sandboxCachePath := fmt.Sprintf("%s/%s", baseWorkspacePath, security.SandboxPersistentDirName)
+	readPaths = append(readPaths, sandboxCachePath)
+	writePaths = append(writePaths, sandboxCachePath)
 	return common.DeduplicateStrings(readPaths), common.DeduplicateStrings(writePaths)
 }
 
