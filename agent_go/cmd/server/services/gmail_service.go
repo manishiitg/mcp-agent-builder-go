@@ -287,10 +287,13 @@ type GmailAuthStatus struct {
 	Scopes        []string `json:"scopes,omitempty"`
 	Detail        string   `json:"detail,omitempty"`
 
-	// Email is the authenticated sending address. `gws auth status` does not
-	// report an identity — it only describes credential storage — so this comes
-	// from a separate `gmail users getProfile` call. Empty when unauthenticated
-	// or when the profile lookup failed, which is not itself an auth failure.
+	// Email is the authenticated sending address. Current gws (0.22+) reports
+	// it as `user` in `gws auth status`, which is preferred: it is local and
+	// works with a send-only scope. Older gws carried no identity there, so
+	// `gmail users getProfile` remains the fallback — but that is a Gmail API
+	// call needing a read scope, so a gmail.send-only login gets nothing from
+	// it (the exact reason Dominion showed "Address not known yet"). Empty when
+	// unauthenticated or when both lookups fail, which is not an auth failure.
 	Email string `json:"email,omitempty"`
 
 	// Checking reports that no fresh result is known yet and a refresh is
@@ -390,6 +393,9 @@ func (g *GmailService) computeAuthStatus(ctx context.Context, gwsPath string, cf
 		HasRefreshToken          bool     `json:"has_refresh_token"`
 		EncryptedCredentialsHave bool     `json:"encrypted_credentials_exists"`
 		Scopes                   []string `json:"scopes"`
+		// The authenticated identity, present in gws 0.22+ (from the openid /
+		// userinfo.email scopes every login carries). Absent in older gws.
+		User string `json:"user"`
 	}
 	if jsonErr := json.Unmarshal(out, &raw); jsonErr != nil {
 		st.Detail = "could not parse `gws auth status` output"
@@ -410,18 +416,25 @@ func (g *GmailService) computeAuthStatus(ctx context.Context, gwsPath string, cf
 	// actually present. A failure here leaves Email empty but must not flip the
 	// connection to unauthenticated: it can still send.
 	if st.Authenticated && st.HasGmailScope {
-		st.Email = fetchGmailAccountEmail(ctx, gwsPath, cfg)
+		// Prefer the identity `gws auth status` already reported: local, and
+		// the only source that works for a gmail.send-only login (getProfile
+		// needs a read scope). Fall back to getProfile for older gws.
+		st.Email = strings.TrimSpace(raw.User)
+		if st.Email == "" {
+			st.Email = fetchGmailAccountEmail(ctx, gwsPath, cfg)
+		}
 	}
 	return st
 }
 
-// fetchGmailAccountEmail resolves which identity gws is authenticated as.
+// fetchGmailAccountEmail resolves which identity gws is authenticated as via
+// the Gmail API.
 //
 // The send path addresses the mailbox as `userId: "me"`, which Gmail resolves
-// server-side, so nothing in a send ever reveals the sender. `gws auth status`
-// describes credential storage and carries no identity either. getProfile is
-// the only way to learn the address, which is why "which account is this?" was
-// unanswerable before.
+// server-side, so nothing in a send ever reveals the sender. This is the
+// fallback for a gws too old to report `user` in `gws auth status`; it needs a
+// Gmail read scope (readonly/modify/metadata), so with a send-only login it
+// returns "" — which is why callers try the auth-status identity first.
 func fetchGmailAccountEmail(ctx context.Context, gwsPath string, cfg *GmailConfig) string {
 	cmd := exec.CommandContext(ctx, gwsPath, "gmail", "users", "getProfile",
 		"--params", `{"userId":"me"}`, "--format", "json")
