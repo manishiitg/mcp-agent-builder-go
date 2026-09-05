@@ -2075,11 +2075,17 @@ func TestPostRunMonitorFinalStepsIncludesSplitNotificationRouting(t *testing.T) 
 	}
 }
 
-func TestApplyPulseLLMToReqMapUsesPulseOverrideWhenConfigured(t *testing.T) {
-	reqMap := map[string]interface{}{}
-	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-opus-4-6"}
+// A Pulse lifecycle turn is tagged for the workshop and otherwise carries the
+// same Builder llm_config as the run turn: the scheduler's conversation keeps
+// one retained coding CLI across upgrade -> run -> Pulse, so a per-turn model
+// override there could never take effect. pulse_llm is applied by the workshop
+// to the background review agents the tagged turn launches.
+func TestPulseLifecycleTurnKeepsBuilderLLMAndTagsTheTurn(t *testing.T) {
+	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-sonnet-5", Options: map[string]interface{}{"reasoning_effort": "high"}}
 	sctx := &ScheduleContext{
-		Schedule: WorkflowSchedule{WorkshopMode: "run"},
+		WorkflowID:    "wf_test",
+		WorkspacePath: "Workflow/test",
+		Schedule:      WorkflowSchedule{ID: "daily", Name: "Daily", WorkshopMode: "run"},
 		Capabilities: WorkflowCapabilities{
 			LLMConfig: &workflowtypes.PresetLLMConfig{
 				SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
@@ -2096,9 +2102,15 @@ func TestApplyPulseLLMToReqMapUsesPulseOverrideWhenConfigured(t *testing.T) {
 	}
 
 	svc := &SchedulerService{}
-	svc.applyLLMAndSecretsToReqMap(context.Background(), reqMap, sctx)
-	svc.applyPulseLLMToReqMap(reqMap, sctx, "test-session")
+	reqMap := svc.buildWorkshopRequest(context.Background(), sctx)
+	markPulseLifecycleTurn(reqMap)
 
+	if got := reqMap["pulse_lifecycle_turn"]; got != true {
+		t.Fatalf("pulse_lifecycle_turn = %#v, want true", got)
+	}
+	if _, set := reqMap["llm_config_source"]; set {
+		t.Fatalf("a Pulse turn must not override the manifest LLM, got llm_config_source=%#v", reqMap["llm_config_source"])
+	}
 	llmConfig, ok := reqMap["llm_config"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("llm_config missing or wrong type: %#v", reqMap["llm_config"])
@@ -2107,25 +2119,10 @@ func TestApplyPulseLLMToReqMapUsesPulseOverrideWhenConfigured(t *testing.T) {
 	if !ok {
 		t.Fatalf("llm_config.primary missing or wrong type: %#v", llmConfig["primary"])
 	}
-	if got := primary["provider"]; got != "codex-cli" {
-		t.Fatalf("provider = %#v, want codex-cli", got)
+	if primary["provider"] != "claude-code" || primary["model_id"] != "claude-sonnet-5" {
+		t.Fatalf("Pulse turn llm_config = %#v, want the workflow Builder model, never pulse_llm", primary)
 	}
-	if got := primary["model_id"]; got != "gpt-5.5" {
-		t.Fatalf("model_id = %#v, want gpt-5.5", got)
-	}
-	if got := reqMap["llm_config_source"]; got != llmConfigSourceScheduledPulse {
-		t.Fatalf("llm_config_source = %#v, want %q", got, llmConfigSourceScheduledPulse)
-	}
-	options, ok := primary["options"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("options missing or wrong type: %#v", primary["options"])
-	}
-	if got := options["reasoning_effort"]; got != "high" {
-		t.Fatalf("reasoning_effort = %#v, want high", got)
-	}
-	if got := reqMap["llm_config_source"]; got != llmConfigSourceScheduledPulse {
-		t.Fatalf("llm_config_source = %#v, want %q", got, llmConfigSourceScheduledPulse)
-	}
+	markPulseLifecycleTurn(nil) // nil-safe
 }
 
 func TestBuildWorkshopRequestDisablesLiveInputDeliveryForSchedulerTurns(t *testing.T) {
@@ -2434,82 +2431,6 @@ func TestRunningScheduleInSetLockedIgnoresCurrentSchedule(t *testing.T) {
 	id, sessionID := runningScheduleInSetLocked(states, []string{"current"}, "current")
 	if id != "" || sessionID != "" {
 		t.Fatalf("running schedule = (%q, %q), want empty", id, sessionID)
-	}
-}
-
-func TestApplyPulseLLMToReqMapUsesCodingAgentPulseDefaultWhenUnset(t *testing.T) {
-	reqMap := map[string]interface{}{}
-	sctx := &ScheduleContext{
-		Schedule: WorkflowSchedule{WorkshopMode: "run"},
-		Capabilities: WorkflowCapabilities{
-			LLMConfig: &workflowtypes.PresetLLMConfig{
-				SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
-				Mode:          workflowtypes.LLMConfigModeProviderProfile,
-				Provider:      "claude-code",
-			},
-		},
-	}
-
-	svc := &SchedulerService{}
-	svc.applyLLMAndSecretsToReqMap(context.Background(), reqMap, sctx)
-	svc.applyPulseLLMToReqMap(reqMap, sctx, "test-session")
-
-	llmConfig, ok := reqMap["llm_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("llm_config missing or wrong type: %#v", reqMap["llm_config"])
-	}
-	primary, ok := llmConfig["primary"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("llm_config.primary missing or wrong type: %#v", llmConfig["primary"])
-	}
-	if got := primary["provider"]; got != "claude-code" {
-		t.Fatalf("provider = %#v, want claude-code", got)
-	}
-	if got := primary["model_id"]; got != "claude-opus-5" {
-		t.Fatalf("model_id = %#v, want claude-opus-5", got)
-	}
-	options, ok := primary["options"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("options missing or wrong type: %#v", primary["options"])
-	}
-	if got := options["reasoning_effort"]; got != "high" {
-		t.Fatalf("reasoning_effort = %#v, want high", got)
-	}
-}
-
-func TestApplyPulseLLMToReqMapKeepsWorkflowModelWhenNoProviderDefault(t *testing.T) {
-	reqMap := map[string]interface{}{}
-	builder := &workflowtypes.AgentLLMConfig{Provider: "openai", ModelID: "gpt-5.4"}
-	sctx := &ScheduleContext{
-		Schedule: WorkflowSchedule{WorkshopMode: "run"},
-		Capabilities: WorkflowCapabilities{
-			LLMConfig: &workflowtypes.PresetLLMConfig{
-				SchemaVersion: workflowtypes.LLMConfigSchemaVersion,
-				Mode:          workflowtypes.LLMConfigModeExplicit,
-				BuilderLLM:    builder,
-				PulseLLM:      builder,
-				TieredConfig:  &workflowtypes.TieredLLMConfig{Tier1: builder, Tier2: builder, Tier3: builder},
-			},
-		},
-	}
-
-	svc := &SchedulerService{}
-	svc.applyLLMAndSecretsToReqMap(context.Background(), reqMap, sctx)
-	svc.applyPulseLLMToReqMap(reqMap, sctx, "test-session")
-
-	llmConfig, ok := reqMap["llm_config"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("llm_config missing or wrong type: %#v", reqMap["llm_config"])
-	}
-	primary, ok := llmConfig["primary"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("llm_config.primary missing or wrong type: %#v", llmConfig["primary"])
-	}
-	if got := primary["provider"]; got != "openai" {
-		t.Fatalf("provider = %#v, want openai", got)
-	}
-	if got := primary["model_id"]; got != "gpt-5.4" {
-		t.Fatalf("model_id = %#v, want gpt-5.4", got)
 	}
 }
 

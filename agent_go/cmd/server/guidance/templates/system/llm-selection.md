@@ -6,12 +6,18 @@ This doc is about choosing which LLM executes workflow work. There are **two lev
 
 A workflow always resolves these roles:
 
-- **Builder**: planning, eval design, debugging, and normal workflow-builder chat.
+- **Builder**: planning, eval design, debugging, normal workflow-builder chat,
+  scheduled runs, and every turn of the post-run Pulse conversation (Gate,
+  review dispatch, Finalize). One scheduled run is one conversation on one
+  retained coding CLI, so it runs on one model throughout.
 - **High execution**: first-time, ambiguous, or difficult step work.
 - **Medium execution**: established work with useful context and learnings.
 - **Low execution**: deterministic validation and mature routine work.
-- **Pulse**: reviews, audits, knowledgebase maintenance, Gate, worklist,
-  report updates, and notification turns.
+- **Pulse**: the background review agents a Pulse turn launches with
+  `run_in_background` (plan drift review, technical review, strategic review)
+  and knowledgebase maintenance -- work that starts its own process, which is
+  where a different model can actually take effect. Not the Gate, worklist,
+  report or notification turns themselves: those are Builder.
 
 The config has two modes:
 

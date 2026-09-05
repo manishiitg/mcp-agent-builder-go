@@ -1165,7 +1165,7 @@ func TestTryDeliverQueryAsLiveInputSkipsNonCodingAgent(t *testing.T) {
 	}
 }
 
-func TestRequestLLMConfigOverridesManifestOnlyForScheduledSources(t *testing.T) {
+func TestRequestLLMConfigOverridesManifestOnlyForAgentProfileSource(t *testing.T) {
 	req := QueryRequest{
 		LLMConfig: &orchestrator.LLMConfig{
 			Primary: orchestrator.LLMModel{Provider: "claude-code", ModelID: "claude-sonnet-5"},
@@ -1175,9 +1175,17 @@ func TestRequestLLMConfigOverridesManifestOnlyForScheduledSources(t *testing.T) 
 		t.Fatal("untagged request LLM config should not override workflow manifest phase LLM")
 	}
 
-	req.LLMConfigSource = llmConfigSourceScheduledPulse
+	req.LLMConfigSource = llmConfigSourceAgentProfile
 	if !requestLLMConfigOverridesManifest(req) {
-		t.Fatal("scheduled Pulse LLM config should override workflow manifest phase LLM")
+		t.Fatal("agent-profile LLM config should override workflow manifest phase LLM")
+	}
+
+	// A scheduler Pulse turn no longer overrides the manifest: the whole
+	// scheduled conversation stays on the Builder model, and pulse_llm is
+	// applied by the workshop to the background review agents instead.
+	req.LLMConfigSource = "scheduled_pulse"
+	if requestLLMConfigOverridesManifest(req) {
+		t.Fatal("the retired scheduled_pulse source must not override the workflow manifest")
 	}
 
 	req.LLMConfigSource = "manual"

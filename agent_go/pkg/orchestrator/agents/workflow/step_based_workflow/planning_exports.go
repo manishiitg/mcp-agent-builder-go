@@ -608,15 +608,21 @@ type WorkshopConfig struct {
 	ToolCategories       map[string]string
 	// BrowserRuntime stores configured intent (auto/cdp/headless + candidate
 	// ports). The executor resolves live CDP reachability at tool-call time.
-	BrowserRuntime    *browser.BrowserRuntimeConfig
-	LLMConfig         *orchestrator.LLMConfig
-	PresetPhaseLLM    *AgentLLMConfig
-	PresetPulseLLM    *AgentLLMConfig
-	UseKnowledgebase  bool
-	LLMAllocationMode string
-	TieredConfig      *TieredLLMConfig
-	Logger            loggerv2.Logger
-	EventBridge       mcpagent.AgentEventListener
+	BrowserRuntime *browser.BrowserRuntimeConfig
+	LLMConfig      *orchestrator.LLMConfig
+	PresetPhaseLLM *AgentLLMConfig
+	PresetPulseLLM *AgentLLMConfig
+	// PulseLifecycleTurn is per-turn: true while the scheduler is sending a
+	// Pulse lifecycle turn (Gate, review dispatch, Finalize). The main
+	// conversation stays on PresetPhaseLLM (the Builder model); the flag routes
+	// the background review agents that turn launches to PresetPulseLLM.
+	// Refreshed on every turn through WorkshopChatSession.SetPulseLifecycleTurn.
+	PulseLifecycleTurn bool
+	UseKnowledgebase   bool
+	LLMAllocationMode  string
+	TieredConfig       *TieredLLMConfig
+	Logger             loggerv2.Logger
+	EventBridge        mcpagent.AgentEventListener
 	// Session tracking — needed for MCP connection sharing and session cleanup
 	SessionID string
 	// Secrets for step execution (merged global + user secrets)
@@ -843,6 +849,18 @@ func (s *WorkshopChatSession) UpdatePresetLLMConfigs(phaseLLM *AgentLLMConfig, p
 		s.config.PresetPhaseLLM = phaseLLM
 		s.config.PresetPulseLLM = pulseLLM
 	}
+}
+
+// SetPulseLifecycleTurn records whether the turn about to run is a scheduler
+// Pulse lifecycle turn. The workshop manager shares this config pointer, so
+// run_in_background reads the current value at spawn time. Must be set on
+// every reused turn: a user's later interactive turn in the same session must
+// not keep routing background agents to pulse_llm.
+func (s *WorkshopChatSession) SetPulseLifecycleTurn(on bool) {
+	if s == nil || s.config == nil {
+		return
+	}
+	s.config.PulseLifecycleTurn = on
 }
 
 // UpdateTieredConfig refreshes the controller's tiered LLM allocation config.

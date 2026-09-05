@@ -1094,6 +1094,12 @@ type InteractiveWorkshopManager struct {
 	workshopModeOverride   string                    // frontend-selected workshop mode (takes priority over auto-detection)
 }
 
+// inPulseLifecycleTurn reports whether the turn currently being served is a
+// scheduler Pulse lifecycle turn (see WorkshopConfig.PulseLifecycleTurn).
+func (iwm *InteractiveWorkshopManager) inPulseLifecycleTurn() bool {
+	return iwm != nil && iwm.workshopConfig != nil && iwm.workshopConfig.PulseLifecycleTurn
+}
+
 // isRunModeRestricted reports whether this session's current WorkshopMode is
 // "run" — the single gate (PLAT-262) for mutating tools, the system prompt,
 // and skills. A read-only-access identity is always pinned to "run" by the
@@ -9777,11 +9783,18 @@ func (iwm *InteractiveWorkshopManager) runBackgroundTaskAgentSequence(ctx contex
 	}
 	iwm.controller.SetWorkspacePathForFolderGuard(readPaths, writePaths)
 
-	// --- LLM: generic run_in_background follows the normal workshop/phase model.
-	// Background agents use the same normal workshop phase selection. Pulse technical
-	// maintenance is ordinary run_in_background work. It has no hidden
-	// maintenance runner, phase unlock, or model-selection path.
-	llmConfigToUse := iwm.controller.selectPhaseLLM("background task agent")
+	// --- LLM: a background child started by a scheduler Pulse turn is a Pulse
+	// review agent and runs on pulse_llm; every other run_in_background child
+	// follows the workshop's Builder (phase) model. The parent conversation
+	// itself never switches model (its coding CLI is retained across turns);
+	// the child is a fresh process, which is exactly where a different model
+	// can take effect.
+	pulseTurn := iwm.inPulseLifecycleTurn()
+	purpose := "background task agent"
+	if pulseTurn {
+		purpose = "Pulse review agent"
+	}
+	llmConfigToUse := iwm.controller.selectBackgroundTaskLLM(pulseTurn, purpose)
 	if llmConfigToUse == nil && iwm.presetLLM != nil && iwm.presetLLM.Provider != "" && iwm.presetLLM.ModelID != "" {
 		llmConfigToUse = workflowAgentLLMConfig(iwm.presetLLM, iwm.controller.GetFallbacks(), iwm.controller.GetAPIKeys())
 	}

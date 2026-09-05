@@ -1382,3 +1382,25 @@ func TestExecutionFolderGuardGrantsToolOutputFolderRead(t *testing.T) {
 		t.Fatalf("granting tool_output_folder read must not widen to the bare workflow root, got %v", readPaths)
 	}
 }
+
+// A run_in_background child launched by a scheduler Pulse turn gets the Pulse
+// model; any other background task follows the Builder (phase) model. With no
+// pulse_llm configured, a Pulse turn's child falls back to the phase model
+// rather than failing.
+func TestSelectBackgroundTaskLLMRoutesPulseTurnChildrenToPulseModel(t *testing.T) {
+	hcpo := newAgentFactoryTestOrchestrator(t)
+	hcpo.presetPhaseLLM = &AgentLLMConfig{Provider: "claude-code", ModelID: "claude-sonnet-5"}
+	hcpo.presetPulseLLM = &AgentLLMConfig{Provider: "codex-cli", ModelID: "gpt-5.5"}
+
+	if got := hcpo.selectBackgroundTaskLLM(false, "background task agent"); got == nil || got.Primary.ModelID != "claude-sonnet-5" {
+		t.Fatalf("ordinary background task = %+v, want the Builder/phase model", got)
+	}
+	if got := hcpo.selectBackgroundTaskLLM(true, "Pulse review agent"); got == nil || got.Primary.Provider != "codex-cli" || got.Primary.ModelID != "gpt-5.5" {
+		t.Fatalf("Pulse-turn background task = %+v, want pulse_llm", got)
+	}
+
+	hcpo.presetPulseLLM = nil
+	if got := hcpo.selectBackgroundTaskLLM(true, "Pulse review agent"); got == nil || got.Primary.ModelID != "claude-sonnet-5" {
+		t.Fatalf("Pulse-turn background task without pulse_llm = %+v, want the phase model fallback", got)
+	}
+}

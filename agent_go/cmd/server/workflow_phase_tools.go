@@ -122,6 +122,9 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			// Always refresh API keys on session reuse (workspace keys may have changed)
 			// Use mergedAPIKeys loaded before goroutine (r.Context() is canceled inside goroutine)
 			workshopSession.UpdateAPIKeys(mergedAPIKeys)
+			// Per-turn: only a scheduler Pulse turn routes its background
+			// reviewers to pulse_llm; a later interactive turn must not inherit it.
+			workshopSession.SetPulseLifecycleTurn(syntheticReq.PulseLifecycleTurn)
 
 			// Refresh enabled group IDs from current request (toolbar selection may have changed)
 			if syntheticReq.ExecutionOptions != nil && len(syntheticReq.ExecutionOptions.EnabledGroupNames) > 0 {
@@ -206,6 +209,7 @@ func (api *StreamingAPI) installWorkflowPhaseTools(
 			if cfgErr != nil {
 				log.Printf("[WORKFLOW_PHASE] Error: Failed to build workshop config for %s: %v — workshop execution tools unavailable", workflowPhaseID, cfgErr)
 			} else {
+				workshopCfg.PulseLifecycleTurn = syntheticReq.PulseLifecycleTurn
 				newSession, sessionErr := todo_creation_human.NewWorkshopChatSession(ctx, workshopCfg)
 				if sessionErr != nil {
 					log.Printf("[WORKFLOW_PHASE] Warning: Failed to create workshop session for %s: %v — workshop execution tools unavailable", workflowPhaseID, sessionErr)

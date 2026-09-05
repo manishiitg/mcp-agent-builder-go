@@ -121,6 +121,7 @@ Notes:
 - `llm_config.schema_version` is `2`
 - `mode="provider_profile"` stores only a coding-agent `provider`; Builder, Maintenance, Pulse, Chief of Staff, and execution tiers resolve from current provider defaults
 - `mode="explicit"` stores `builder_llm`, `maintenance_llm`, `pulse_llm`, and all three entries in `tiered_config`
+- `builder_llm` runs the workflow-builder chat, scheduled runs, and every turn of the post-run Pulse conversation; `pulse_llm` runs only the background review agents a Pulse turn launches (plan drift / technical / strategic review) and KB maintenance. A scheduled run is one conversation on one retained coding CLI, so its model cannot change between the run and its Pulse turns; a background agent starts its own process, which is where `pulse_llm` takes effect.
 - old `phase_llm`, `auto_improve_llm`, and `llm_allocation_mode` fields are migrated once when the manifest is read and are not written again
 - tool search fields are not part of current workflow manifest capabilities
 

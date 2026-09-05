@@ -31,8 +31,8 @@ const ROLE_ROWS: RoleRow[] = [
   { key: 'tier_1', label: 'High reasoning', description: 'First runs and complex execution.', group: 'Execution' },
   { key: 'tier_2', label: 'Medium reasoning', description: 'Execution after useful learnings exist.', group: 'Execution' },
   { key: 'tier_3', label: 'Low reasoning', description: 'Validation and mature learned tasks.', group: 'Execution' },
-  { key: 'builder_llm', label: 'Builder', description: 'Chat, planning, evaluation design, and coordination.', group: 'Workflow agents' },
-  { key: 'pulse_llm', label: 'Pulse', description: 'Scheduled post-run QA and routine coordination.', group: 'Workflow agents' },
+  { key: 'builder_llm', label: 'Builder', description: 'Chat, planning, evaluation design, scheduled runs, and the post-run Pulse conversation.', group: 'Workflow agents' },
+  { key: 'pulse_llm', label: 'Pulse', description: 'Background review agents Pulse launches (plan drift, technical, strategic) and KB maintenance.', group: 'Workflow agents' },
 ]
 
 // Providers that use API keys (excludes local CLIs and hidden legacy chat providers)

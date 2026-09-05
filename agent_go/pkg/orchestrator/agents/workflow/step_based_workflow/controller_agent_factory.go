@@ -1091,6 +1091,20 @@ func (hcpo *StepBasedWorkflowOrchestrator) selectPulseLLM(agentPurpose string) *
 	}
 }
 
+// selectBackgroundTaskLLM picks the model for a run_in_background child. A
+// child launched by a scheduler Pulse turn is a Pulse review agent (plan drift,
+// technical or strategic review) and gets the Pulse model; any other
+// background task follows the Builder (phase) model like the chat that spawned
+// it. This is the seam that makes pulse_llm real: the parent conversation keeps
+// its retained coding CLI and cannot change model mid-turn, but a background
+// child always starts its own process.
+func (hcpo *StepBasedWorkflowOrchestrator) selectBackgroundTaskLLM(pulseLifecycleTurn bool, agentPurpose string) *orchestrator.LLMConfig {
+	if pulseLifecycleTurn {
+		return hcpo.selectPulseLLM(agentPurpose)
+	}
+	return hcpo.selectPhaseLLM(agentPurpose)
+}
+
 // createKBConsolidateAgent builds the one-shot KB consolidate agent. Same folder-guard
 // shape as KB update/reorganize: read execution folder + KB, write KB only. The read
 // path on executionWorkspacePath is what gives it access to ALL step output folders

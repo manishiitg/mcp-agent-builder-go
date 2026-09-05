@@ -115,8 +115,8 @@ type StepBasedWorkflowOrchestrator struct {
 	executionOptions *ExecutionOptions
 
 	// Preset-level agent defaults (used when step config doesn't specify)
-	presetPhaseLLM *AgentLLMConfig // Default for lightweight phase agents (planning, evaluation setup, builder chat helpers).
-	presetPulseLLM *AgentLLMConfig // Default for reviews, audits, KB upkeep, and Pulse agents.
+	presetPhaseLLM *AgentLLMConfig // The Builder model: workshop chat, planning, evaluation setup, scheduled runs and every turn of the Pulse conversation (Gate, dispatch, Finalize).
+	presetPulseLLM *AgentLLMConfig // The Pulse model: background review agents launched by Pulse turns (plan drift / technical / strategic review) and KB upkeep -- work that starts its own process.
 
 	// Preset-level feature toggles
 	useKnowledgebase bool   // Whether to create and reference knowledgebase folder (default: true)

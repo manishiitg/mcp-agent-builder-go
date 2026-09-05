@@ -2350,7 +2350,7 @@ func (s *SchedulerService) runPulseLifecycle(ctx context.Context, sctx *Schedule
 	recoveryNotes := []string{}
 	runStep := func(st pulseLifecycleStep) pulseLifecycleStepRunResult {
 		reqMap := cloneStringInterfaceMap(baseReqMap)
-		s.applyPulseLLMToReqMap(reqMap, sctx, sessionID)
+		markPulseLifecycleTurn(reqMap)
 		query := st.query
 		if st.label == "finalize" {
 			query += pulseReviewFixCostContext(s.api.costLedger, sctx.WorkspacePath, reviewFixStartedAt, reviewFixCompletedAt)
@@ -3594,7 +3594,6 @@ func (s *SchedulerService) executeWorkshopJob(ctx context.Context, sctx *Schedul
 		}
 		reqMap["query"] = turn.query
 		if turn.upgradeTarget != "" || turn.decisionDrain {
-			s.applyPulseLLMToReqMap(reqMap, sctx, sessionID)
 			// The stamp is authorized for the life of this turn and no longer.
 			// Revoking at adjudication below is what stops a later turn in the
 			// same session from stamping a version this turn declined — the
@@ -4113,29 +4112,6 @@ func (s *SchedulerService) applyLLMAndSecretsToReqMap(ctx context.Context, reqMa
 	}
 }
 
-func applyPrimaryLLMConfigToReqMap(reqMap map[string]interface{}, cfg *workflowtypes.AgentLLMConfig) bool {
-	if reqMap == nil || cfg == nil {
-		return false
-	}
-	provider := strings.TrimSpace(cfg.Provider)
-	modelID := strings.TrimSpace(cfg.ModelID)
-	if provider == "" || modelID == "" {
-		return false
-	}
-
-	primary := map[string]interface{}{
-		"provider": provider,
-		"model_id": modelID,
-	}
-	if len(cfg.Options) > 0 {
-		primary["options"] = cfg.Options
-	}
-	reqMap["llm_config"] = map[string]interface{}{
-		"primary": primary,
-	}
-	return true
-}
-
 func cloneStringInterfaceMap(in map[string]interface{}) map[string]interface{} {
 	out := make(map[string]interface{}, len(in))
 	for k, v := range in {
@@ -4144,21 +4120,19 @@ func cloneStringInterfaceMap(in map[string]interface{}) map[string]interface{} {
 	return out
 }
 
-func (s *SchedulerService) applyPulseLLMToReqMap(reqMap map[string]interface{}, sctx *ScheduleContext, sessionID string) {
-	if sctx == nil || sctx.Capabilities.LLMConfig == nil {
+// markPulseLifecycleTurn tags a Pulse lifecycle turn (Gate, review dispatch,
+// Finalize) for the workshop. The turn itself runs on the workflow's Builder
+// model like every other turn of the scheduler's one continuing conversation:
+// the native coding CLI is kept alive across upgrade -> run -> Pulse, and a
+// retained process cannot change model mid-conversation, so a per-turn model
+// override there was silently ignored. pulse_llm applies where a fresh process
+// is started anyway -- the background review agents this turn launches (plan
+// drift, technical and strategic review) and KB maintenance.
+func markPulseLifecycleTurn(reqMap map[string]interface{}) {
+	if reqMap == nil {
 		return
 	}
-	pulseLLM := sctx.Capabilities.LLMConfig.PulseLLM
-	if pulseLLM == nil {
-		if resolved, ok := workflowtypes.ResolveProviderProfilePulseConfig(sctx.Capabilities.LLMConfig); ok {
-			pulseLLM = resolved
-		}
-	}
-	if !applyPrimaryLLMConfigToReqMap(reqMap, pulseLLM) {
-		return
-	}
-	reqMap["llm_config_source"] = llmConfigSourceScheduledPulse
-	s.sessionLogf(sctx, sessionID, "[PULSE] using configured pulse LLM %s/%s", strings.TrimSpace(pulseLLM.Provider), strings.TrimSpace(pulseLLM.ModelID))
+	reqMap["pulse_lifecycle_turn"] = true
 }
 
 // buildWorkshopRequest creates the base request map for workshop mode execution.

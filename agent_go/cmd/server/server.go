@@ -778,6 +778,11 @@ type QueryRequest struct {
 	// KeepNativeSessionAlive keeps one native coding-CLI process alive while a
 	// scheduler sends its known consecutive turns (upgrade → run → Pulse).
 	KeepNativeSessionAlive bool `json:"keep_native_session_alive,omitempty"`
+	// PulseLifecycleTurn marks a scheduler-sent Pulse turn (Gate, review
+	// dispatch, Finalize). The main conversation keeps the Builder model on
+	// every turn; this flag only routes the background review agents that
+	// turn launches (plan drift / technical / strategic review) to pulse_llm.
+	PulseLifecycleTurn bool `json:"pulse_lifecycle_turn,omitempty"`
 	// UserInteractiveContinuation promotes an observed schedule/bot conversation
 	// into an interactive chat without changing its session or native resume ID.
 	UserInteractiveContinuation bool `json:"user_interactive_continuation,omitempty"`
@@ -1283,8 +1288,7 @@ const (
 )
 
 const (
-	llmConfigSourceAgentProfile   = "agent_profile"
-	llmConfigSourceScheduledPulse = "scheduled_pulse"
+	llmConfigSourceAgentProfile = "agent_profile"
 )
 
 func requestLLMConfigOverridesManifest(req QueryRequest) bool {
@@ -1292,7 +1296,7 @@ func requestLLMConfigOverridesManifest(req QueryRequest) bool {
 		return false
 	}
 	switch strings.TrimSpace(req.LLMConfigSource) {
-	case llmConfigSourceAgentProfile, llmConfigSourceScheduledPulse:
+	case llmConfigSourceAgentProfile:
 		return true
 	default:
 		return false
@@ -5993,6 +5997,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					AgentProfileID:              req.AgentProfileID,
 					IsAutoNotification:          req.IsAutoNotification,
 					UserInteractiveContinuation: req.UserInteractiveContinuation,
+					PulseLifecycleTurn:          req.PulseLifecycleTurn,
 					LLMConfig:                   req.LLMConfig,
 					ExecutionOptions:            req.ExecutionOptions,
 					SelectedGlobalSecrets:       req.SelectedGlobalSecrets,
