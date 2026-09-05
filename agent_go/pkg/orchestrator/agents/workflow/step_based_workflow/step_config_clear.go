@@ -77,10 +77,6 @@ func clearStepConfigField(sc *StepConfig, name string) bool {
 		ac.KnowledgebaseContribution = ""
 	case "review_notes":
 		ac.ReviewNotes = ""
-	case "declared_execution_mode":
-		ac.DeclaredExecutionMode = ""
-	case "declared_execution_mode_reason":
-		ac.DeclaredExecutionModeReason = ""
 	case "coding_agent_tmux_lifecycle":
 		ac.CodingAgentTmuxLifecycle = ""
 	default:
@@ -103,7 +99,7 @@ func isKnownAgentConfigClearField(name string) bool {
 		"disable_parallel_tool_execution",
 		"description_reviewed", "drift_review",
 		"knowledgebase_access", "knowledgebase_contribution",
-		"review_notes", "declared_execution_mode", "declared_execution_mode_reason",
+		"review_notes",
 		"coding_agent_tmux_lifecycle":
 		return true
 	}

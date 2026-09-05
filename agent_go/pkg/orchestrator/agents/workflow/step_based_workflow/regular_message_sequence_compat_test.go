@@ -70,10 +70,10 @@ func TestPrepareScriptedStepUpdateTarget(t *testing.T) {
 		&RegularPlanStep{CommonStepFields: CommonStepFields{ID: "legacy-agentic"}},
 		&MessageSequencePlanStep{CommonStepFields: CommonStepFields{ID: "sequence"}},
 	}}
-	configs := []StepConfig{{
-		ID:           "scripted",
-		AgentConfigs: &AgentConfigs{DeclaredExecutionMode: StepModeScripted},
-	}}
+	configs := []StepConfig{
+		{ID: "scripted", AgentConfigs: &AgentConfigs{}},
+		{ID: "legacy-agentic", AgentConfigs: &AgentConfigs{LegacyDeclaredExecutionMode: StepModeAgentic}},
+	}
 
 	if downgraded, err := prepareScriptedStepUpdateTarget(plan, configs, "scripted"); err != nil {
 		t.Fatalf("declared scripted step was rejected: %v", err)
@@ -103,7 +103,7 @@ func TestPrepareMessageSequenceUpdateTargetUpgradesLegacyAgenticRegular(t *testi
 	plan := &PlanningResponse{Steps: []PlanStepInterface{legacy}}
 	configs := []StepConfig{{
 		ID:           legacy.ID,
-		AgentConfigs: &AgentConfigs{DeclaredExecutionMode: StepModeAgentic},
+		AgentConfigs: &AgentConfigs{LegacyDeclaredExecutionMode: StepModeAgentic},
 	}}
 
 	upgraded, err := prepareMessageSequenceUpdateTarget(plan, configs, legacy.ID)
@@ -125,7 +125,11 @@ func TestPrepareMessageSequenceUpdateTargetUpgradesLegacyAgenticRegular(t *testi
 	}
 }
 
-func TestPrepareScriptedStepUpdateTargetDowngradesDeclaredScriptedSequence(t *testing.T) {
+func TestPrepareScriptedStepUpdateTargetNeverConvertsASequence(t *testing.T) {
+	// Before PLAT-287 a message_sequence whose step_config declared scripted
+	// was silently downgraded to regular here. The plan type is now the only
+	// source of truth, so the conversion is change_step_type's job and this
+	// path refuses instead.
 	sequence := &MessageSequencePlanStep{
 		Type: StepTypeMessageSeq,
 		CommonStepFields: CommonStepFields{
@@ -143,22 +147,18 @@ func TestPrepareScriptedStepUpdateTargetDowngradesDeclaredScriptedSequence(t *te
 	plan := &PlanningResponse{Steps: []PlanStepInterface{sequence}}
 	configs := []StepConfig{{
 		ID:           sequence.ID,
-		AgentConfigs: &AgentConfigs{DeclaredExecutionMode: StepModeScripted},
+		AgentConfigs: &AgentConfigs{LegacyDeclaredExecutionMode: StepModeScripted},
 	}}
 
 	downgraded, err := prepareScriptedStepUpdateTarget(plan, configs, sequence.ID)
-	if err != nil {
-		t.Fatalf("declared-scripted message_sequence downgrade failed: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "change_step_type") {
+		t.Fatalf("a message_sequence must be refused with change_step_type guidance, got err=%v", err)
 	}
-	if !downgraded {
-		t.Fatal("expected declared-scripted message_sequence step to be downgraded")
+	if downgraded {
+		t.Fatal("a message_sequence must never be converted by update_scripted_step")
 	}
-	regular, ok := plan.Steps[0].(*RegularPlanStep)
-	if !ok {
-		t.Fatalf("downgraded step type = %T, want *RegularPlanStep", plan.Steps[0])
-	}
-	if regular.ID != sequence.ID || regular.Description != sequence.Description || regular.NextStepID != "end" {
-		t.Fatalf("downgrade lost existing fields: %#v", regular)
+	if _, ok := plan.Steps[0].(*MessageSequencePlanStep); !ok {
+		t.Fatalf("refused step was mutated to %T", plan.Steps[0])
 	}
 }
 
@@ -186,10 +186,8 @@ func TestPrepareMessageSequenceUpdateTargetRejectsScriptedRegular(t *testing.T) 
 			CommonStepFields: CommonStepFields{ID: "scripted"},
 		},
 	}}
-	configs := []StepConfig{{
-		ID:           "scripted",
-		AgentConfigs: &AgentConfigs{DeclaredExecutionMode: StepModeScripted},
-	}}
+	// No retired key at all: a regular step is scripted by type (PLAT-287).
+	configs := []StepConfig{{ID: "scripted", AgentConfigs: &AgentConfigs{}}}
 
 	upgraded, err := prepareMessageSequenceUpdateTarget(plan, configs, "scripted")
 	if err == nil || !strings.Contains(err.Error(), "update_scripted_step") {
@@ -284,7 +282,7 @@ func TestUpdateMessageSequenceExecutorAtomicallyPersistsLegacyUpgrade(t *testing
 
 func TestNonScriptedRegularStepNormalizesToMessageSequence(t *testing.T) {
 	validation := &ValidationSchema{}
-	config := &AgentConfigs{DeclaredExecutionMode: StepModeAgentic}
+	config := &AgentConfigs{LegacyDeclaredExecutionMode: StepModeAgentic}
 	regular := &RegularPlanStep{
 		Type: StepTypeRegular,
 		CommonStepFields: CommonStepFields{
@@ -326,7 +324,7 @@ func TestNonScriptedRegularStepNormalizesToMessageSequence(t *testing.T) {
 func TestScriptedRegularStepDoesNotNormalizeToMessageSequence(t *testing.T) {
 	regular := &RegularPlanStep{
 		CommonStepFields: CommonStepFields{ID: "fetch-data"},
-		AgentConfigs:     &AgentConfigs{DeclaredExecutionMode: StepModeScripted},
+		AgentConfigs:     &AgentConfigs{},
 	}
 	if shouldNormalizeRegularStepToMessageSequence(regular) {
 		t.Fatal("scripted regular step must retain the saved-script execution path")
@@ -346,8 +344,8 @@ func TestUpsertNewScriptedRegularStepConfig(t *testing.T) {
 	if cfg.Title != "Fetch data" || cfg.AgentConfigs == nil {
 		t.Fatalf("missing updated scripted config: %#v", cfg)
 	}
-	if cfg.AgentConfigs.DeclaredExecutionMode != StepModeScripted {
-		t.Fatalf("expected scripted mode, got %q", cfg.AgentConfigs.DeclaredExecutionMode)
+	if cfg.AgentConfigs.LegacyDeclaredExecutionMode != "" {
+		t.Fatalf("a new scripted step must not write the retired declared_execution_mode, got %q", cfg.AgentConfigs.LegacyDeclaredExecutionMode)
 	}
 	if cfg.AgentConfigs.UseCodeExecutionMode == nil || !*cfg.AgentConfigs.UseCodeExecutionMode {
 		t.Fatal("scripted mode did not enable code execution")

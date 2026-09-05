@@ -1767,6 +1767,11 @@ export interface EvaluationStep {
   description: string
   pre_validation?: ValidationSchema
   success_criteria: string
+  // How the eval runs (PLAT-287): "scripted" replays learnings/<id>/main.py,
+  // "agentic" (the default when absent) lets the agent judge each run. Lives
+  // on the eval step itself; the old agent_configs.declared_execution_mode is
+  // legacy and stripped by the v1.0.39 migration.
+  execution_mode?: 'scripted' | 'agentic'
   agent_configs?: AgentConfigs
   applies_to_routes?: Array<{
     routing_step_id: string

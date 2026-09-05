@@ -123,19 +123,6 @@ func validateExecutionLLMChange(pinned bool, reason string) error {
 		reasonEscapeHatch)
 }
 
-// validateDeclaredExecutionModeChange rejects a scripted/agentic flip that
-// states no reason. The field already existed as an optional audit trail — "not
-// consumed by Go runtime, but preserved so future Pulse and plan-change
-// reviewers reading step_config.json see the original rationale" — which is
-// exactly the contract; it was simply never enforced.
-func validateDeclaredExecutionModeChange(mode string, reason string) error {
-	if strings.TrimSpace(mode) == "" || strings.TrimSpace(reason) != "" {
-		return nil
-	}
-	return fmt.Errorf("declared_execution_mode=%q requires declared_execution_mode_reason: moving a step between scripted and agentic changes how it executes for every future run — scripted freezes the behavior into main.py, agentic pays for judgment on every run. State what makes this step deterministic (or not), citing the owning finding and the evidence.%s",
-		strings.TrimSpace(mode), reasonEscapeHatch)
-}
-
 // findStepInPlan recursively finds a step by ID in the plan structure
 // LoadGlobalLearningHistory loads and formats the global workflow-level learning history.
 // Returns empty string if no global learnings found or on error.

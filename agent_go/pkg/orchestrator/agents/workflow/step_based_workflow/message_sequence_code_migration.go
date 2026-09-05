@@ -455,8 +455,8 @@ func cloneMigrationStepConfig(parent *StepConfig, item legacyMessageSequenceCode
 		data, _ := json.Marshal(parent.AgentConfigs)
 		_ = json.Unmarshal(data, &agent)
 	}
-	agent.DeclaredExecutionMode = "scripted"
-	agent.DeclaredExecutionModeReason = "Migrated from a deterministic message-sequence code item under workflow contract v1.0.10."
+	// The new standalone step's plan type (regular) is what makes it scripted
+	// (PLAT-287); only the code-execution flag is carried on the config.
 	useCode := true
 	agent.UseCodeExecutionMode = &useCode
 	if agent.LockCode == nil {

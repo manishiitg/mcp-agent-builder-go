@@ -214,7 +214,7 @@ Each workflow lives in ` + "`" + absWorkflow + `/<name>/` + "`" + ` with:
 - ` + "`planning/plan.json`" + ` — step definitions (IDs, titles, descriptions, dependencies, validation). It no longer owns root objective/success fields; use ` + "`soul/soul.md`" + ` for that.
 - ` + "`planning/step_config.json`" + ` — per-step settings. Each step's ` + "`agent_configs`" + ` object controls execution mode:
   - ` + "`use_code_execution_mode`" + ` (bool) — ` + "`false`" + ` = direct tool calls, ` + "`true`" + ` = scripted Python (main.py)
-  - ` + "`declared_execution_mode`" + ` (string) — ` + "`\"scripted\"`" + ` (persistent main.py reused across runs) or ` + "`\"agentic\"`" + ` (ephemeral per-run scripts). Ignored when ` + "`use_code_execution_mode`" + ` is false.
+  - the execution model itself is the plan step type, not a config field: a ` + "`regular`" + ` step runs its persistent learnings/<step-id>/main.py, a ` + "`message_sequence`" + ` step is conversational (ephemeral per-run scripts when ` + "`use_code_execution_mode`" + ` is on).
 
 **Variables:**
 - ` + "`variables/variables.json`" + ` — **the only** source of runtime variable values. Shape: ` + "`{variables:[{name,value,group}], groups:[{id,name,enabled}]}`" + `. Groups enable batch execution with different value sets. ` + "`workflow.json`" + ` does NOT carry variable definitions.
@@ -259,7 +259,7 @@ Each workflow lives in ` + "`" + absWorkflow + `/<name>/` + "`" + ` with:
 - **List workflows:** ` + "`execute_shell_command(command: \"ls " + absWorkflow + "/\")`" + `
 - **Objective + success criteria:** ` + "`execute_shell_command(command: \"sed -n '1,160p' '" + absWorkflow + "/<name>/soul/soul.md'\")`" + `
 - **Step list (IDs + titles):** ` + "`execute_shell_command(command: \"python3 -c \\\"import json; steps=json.load(open('" + absWorkflow + "/<name>/planning/plan.json')).get('steps',[]); [print(f'{s[\\\\\\\"id\\\\\\\"]}: {s.get(\\\\\\\"label\\\\\\\",s.get(\\\\\\\"title\\\\\\\",\\\\\\\"\\\\\\\"))}') for s in steps]\\\"\")`" + `
-- **Step execution modes:** ` + "`execute_shell_command(command: \"cat " + absWorkflow + "/<name>/planning/step_config.json\")`" + ` — look at each step's ` + "`agent_configs.use_code_execution_mode`" + ` + ` + "`agent_configs.declared_execution_mode`" + `
+- **Step execution modes:** ` + "`execute_shell_command(command: \"cat " + absWorkflow + "/<name>/planning/step_config.json\")`" + ` — look at each step's ` + "`agent_configs.use_code_execution_mode`" + ` and the step's plan type (regular = scripted main.py, message_sequence = conversational)
 - **Schedules:** ` + "`execute_shell_command(command: \"python3 -c \\\"import json; scheds=json.load(open('" + absWorkflow + "/<name>/workflow.json')).get('schedules',[]); [print(f'{s[\\\\\\\"id\\\\\\\"]}: {s[\\\\\\\"cron_expression\\\\\\\"]} enabled={s.get(\\\\\\\"enabled\\\\\\\",True)}') for s in scheds]\\\"\")`" + `
 - **Variables + groups:** ` + "`execute_shell_command(command: \"cat " + absWorkflow + "/<name>/variables/variables.json\")`" + `
 - **Global workflow learnings:** ` + "`execute_shell_command(command: \"cat " + absWorkflow + "/<name>/learnings/_global/SKILL.md\")`" + `
@@ -839,7 +839,7 @@ func buildSingleWorkflowContext(client *skills.WorkspaceAPIClient, wsPath string
 - Workflow manifest: `+"`%s/workflow.json`"+` — workflow-level config (servers, tools, skills, LLM, schedules, assignment, optional `+"`run_retention_count`"+`). Holds optional `+"`objective`"+`/`+"`success_criteria`"+` fallback values.
 - Soul file: `+"`%s/soul/soul.md`"+` — canonical objective and success criteria
 - Plan file: `+"`%s/planning/plan.json`"+` — step definitions, dependencies, descriptions, and validation
-- Step config: `+"`%s/planning/step_config.json`"+` — per-step LLM, tools, and execution mode (`+"`agent_configs.use_code_execution_mode`"+` + `+"`agent_configs.declared_execution_mode`"+`: `+"`scripted`"+` | `+"`agentic`"+` | direct)
+- Step config: `+"`%s/planning/step_config.json`"+` — per-step LLM, tools, and execution mode (`+"`agent_configs.use_code_execution_mode`"+`; the plan step type decides scripted vs conversational)
 - Variables: `+"`%s/variables/variables.json`"+` — sole source of variable values + groups (workflow.json does NOT carry variable definitions)
 - Global workflow learnings: `+"`%s/learnings/_global/SKILL.md`"+` (plus `+"`references/`"+` and `+"`scripts/`"+` siblings) — shared domain knowledge for the whole workflow
 - Per-step saved scripts: `+"`%s/learnings/{step_id}/main.py`"+` — persistent script for `+"`scripted`"+` steps (source of truth, reused across runs)

@@ -119,7 +119,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) ExecuteStepForWorkshop(
 	}
 	if opts != nil && opts.SavedScriptOnly {
 		agentCfgs := getAgentConfigs(stepInfo.Step)
-		if !isScriptedExecutionModeConfig(agentCfgs) {
+		if !isScriptedStep(stepInfo.Step, agentCfgs) {
 			return "", fmt.Errorf("step %q is not in scripted code mode, so there is no saved main.py fast path to run", stepID)
 		}
 	}

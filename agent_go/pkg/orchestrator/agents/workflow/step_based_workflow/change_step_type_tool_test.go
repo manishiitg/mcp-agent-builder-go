@@ -109,8 +109,8 @@ func TestChangeStepTypeConvertsASequenceToScriptedInPlace(t *testing.T) {
 		t.Fatalf("conversion must keep id/title/description/next_step_id, got %+v", regular)
 	}
 	cfg := MatchStepConfigByID("place-paper-trades", configs)
-	if cfg == nil || cfg.DeclaredExecutionMode != StepModeScripted || cfg.DeclaredExecutionModeReason == "" {
-		t.Fatalf("step_config must now declare scripted mode with the reason, got %+v", cfg)
+	if cfg == nil || cfg.LegacyDeclaredExecutionMode != "" {
+		t.Fatalf("step_config entry must exist and never carry the retired declared_execution_mode, got %+v", cfg)
 	}
 	if cfg.ExecutionTier != "high" {
 		t.Fatalf("existing step_config fields must survive, got %+v", cfg)
@@ -146,7 +146,7 @@ func TestChangeStepTypeConvertsScriptedToASequenceAndClearsTheMode(t *testing.T)
 		testSequenceStep("judge", "Judge"),
 	}}
 	lock := true
-	files, readFile, writeFile := changeStepTypeHarness(t, plan, []StepConfig{{ID: "collect-price", AgentConfigs: &AgentConfigs{DeclaredExecutionMode: StepModeScripted, DeclaredExecutionModeReason: "deterministic", LockCode: &lock}}})
+	files, readFile, writeFile := changeStepTypeHarness(t, plan, []StepConfig{{ID: "collect-price", AgentConfigs: &AgentConfigs{LockCode: &lock}}})
 	files[normalizePathForWorkspaceAPI("learnings/collect-price/main.py", changeStepTypeTestWorkspace)] = "print('hi')"
 
 	out, err := runChangeStepType(t, readFile, writeFile, "collect-price", "message_sequence")
@@ -167,26 +167,50 @@ func TestChangeStepTypeConvertsScriptedToASequenceAndClearsTheMode(t *testing.T)
 		t.Fatalf("expected one execute-and-verify item and the chain kept, got %+v", seq)
 	}
 	cfg := MatchStepConfigByID("collect-price", configs)
-	if cfg == nil || cfg.DeclaredExecutionMode != "" || cfg.DeclaredExecutionModeReason != "" || cfg.LockCode != nil {
-		t.Fatalf("declared scripted mode and the code lock must be cleared, got %+v", cfg)
+	if cfg == nil || cfg.LockCode != nil {
+		t.Fatalf("the code lock must be cleared on a sequence, got %+v", cfg)
 	}
 }
 
-func TestChangeStepTypeDeclaresScriptedOnALegacyAgenticRegularStep(t *testing.T) {
+func TestChangeStepTypeClearsTheLegacyAgenticKeyOnARegularStep(t *testing.T) {
+	// A regular step still carrying the retired declared_execution_mode=
+	// "agentic" runs as a message_sequence through the transitional shim;
+	// converting it to scripted means clearing that key (the plan type
+	// already says scripted).
 	plan := &PlanningResponse{Steps: []PlanStepInterface{
 		&RegularPlanStep{Type: StepTypeRegular, CommonStepFields: CommonStepFields{ID: "legacy"}},
 	}}
-	_, readFile, writeFile := changeStepTypeHarness(t, plan, nil)
+	_, readFile, writeFile := changeStepTypeHarness(t, plan, []StepConfig{{ID: "legacy", AgentConfigs: &AgentConfigs{LegacyDeclaredExecutionMode: StepModeAgentic, LegacyDeclaredExecutionModeReason: "needs judgment"}}})
 
 	if _, err := runChangeStepType(t, readFile, writeFile, "legacy", "scripted"); err != nil {
 		t.Fatalf("change_step_type failed: %v", err)
 	}
 	updated, configs := readTestPlanAndConfigs(t, readFile)
-	if step, _, _ := findStepByID(updated.Steps, "legacy"); step.StepType() != StepTypeRegular {
+	step, _, _ := findStepByID(updated.Steps, "legacy")
+	if step.StepType() != StepTypeRegular {
 		t.Fatalf("plan type must stay regular, got %s", step.StepType())
 	}
-	if cfg := MatchStepConfigByID("legacy", configs); cfg == nil || cfg.DeclaredExecutionMode != StepModeScripted {
-		t.Fatalf("a step_config entry declaring scripted must be created, got %+v", cfg)
+	cfg := MatchStepConfigByID("legacy", configs)
+	if cfg == nil || cfg.LegacyDeclaredExecutionMode != "" || cfg.LegacyDeclaredExecutionModeReason != "" {
+		t.Fatalf("the retired key must be cleared, got %+v", cfg)
+	}
+	if !isScriptedStep(step, cfg) || cfg.UseCodeExecutionMode == nil || !*cfg.UseCodeExecutionMode {
+		t.Fatalf("the step must now run scripted with code execution on, got %+v", cfg)
+	}
+}
+
+func TestChangeStepTypeToScriptedIsANoOpOnAPlainRegularStep(t *testing.T) {
+	plan := &PlanningResponse{Steps: []PlanStepInterface{
+		&RegularPlanStep{Type: StepTypeRegular, CommonStepFields: CommonStepFields{ID: "already"}},
+	}}
+	files, readFile, writeFile := changeStepTypeHarness(t, plan, nil)
+	before := len(files)
+	out, err := runChangeStepType(t, readFile, writeFile, "already", "scripted")
+	if err != nil {
+		t.Fatalf("no-op conversion errored: %v", err)
+	}
+	if !strings.Contains(out, "already") || len(files) != before {
+		t.Fatalf("a regular step is scripted by type; nothing to do, got %q with %d files", out, len(files))
 	}
 }
 
@@ -212,10 +236,10 @@ func TestChangeStepTypeRejectsOtherTypesAndUnknownSteps(t *testing.T) {
 	plan := &PlanningResponse{Steps: []PlanStepInterface{
 		&RoutingPlanStep{Type: StepTypeRouting, CommonStepFields: CommonStepFields{ID: "route", Title: "Route"}},
 	}}
-	if _, err := changeStepTypeInPlan(plan, nil, "route", "scripted", "r"); err == nil || !strings.Contains(err.Error(), "routing") {
+	if _, err := changeStepTypeInPlan(plan, nil, "route", "scripted"); err == nil || !strings.Contains(err.Error(), "routing") {
 		t.Fatalf("a routing step must be rejected by type, got err=%v", err)
 	}
-	if _, err := changeStepTypeInPlan(plan, nil, "missing", "scripted", "r"); err == nil || !strings.Contains(err.Error(), "not found") {
+	if _, err := changeStepTypeInPlan(plan, nil, "missing", "scripted"); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("an unknown step must be reported, got err=%v", err)
 	}
 }

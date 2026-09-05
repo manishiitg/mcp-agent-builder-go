@@ -31,25 +31,24 @@ Only pass `lock_code` when explicitly changing it. Learning write eligibility is
 
 ### Execution mode + which model runs the step
 
-- **`declared_execution_mode`**: `agentic` vs `scripted`. Two different paths, don't conflate them:
-  - **Scripts are the default for DETERMINISTIC execution** — fixed API/SDK calls, CLI commands, known pagination, data fetching, stable parsing/normalization, math, data transforms, mechanical persistence, and fixed SQL. Declare these steps scripted from initial design and author/test `main.py`; no prior run count is required. If behavior **varies run-to-run or needs adaptive judgment** (most browser/UI flows, LLM reasoning, fuzzy extraction, live discovery), keep it `agentic`.
+- **Execution mode is the step's plan type, not a config field**: `regular` = scripted (a checked-in `learnings/<step-id>/main.py`, created with `add_scripted_step`), `message_sequence` = agentic (the LLM acts each turn). Move an existing step between them with `change_step_type(step_id, target_type="scripted"|"message_sequence", reason)`. Two different paths, don't conflate them:
+  - **Scripts are the default for DETERMINISTIC execution** — fixed API/SDK calls, CLI commands, known pagination, data fetching, stable parsing/normalization, math, data transforms, mechanical persistence, and fixed SQL. Create these as `regular` steps from initial design and author/test `main.py`; no prior run count is required. If behavior **varies run-to-run or needs adaptive judgment** (most browser/UI flows, LLM reasoning, fuzzy extraction, live discovery), keep it a `message_sequence`.
   - **Use coherent scripted fetchers, not micro-scripts** — batch related calls and transforms when they share one source/auth/retry/output contract. Do not create one scripted step per endpoint, command, or tiny transformation, and do not put an entire branching business workflow into one script. The usual architecture is scripted fetcher(s) → durable DB/file output → one large agentic message sequence.
-  - **User explicitly asks for a scripted step** (e.g. "make this scripted so I can test it") → set `scripted` right away — the user owns that call; **no run-count gate**. But if the work isn't deterministic, say so plainly first ("this flow reads live UI state, so a frozen script will break often — agentic is more reliable; want me to script it anyway?") and honor their decision.
-  - **Workshop mode selection** → move or create obviously deterministic API/CLI/data work as scripted immediately. The 10+ representative-run threshold applies only before freezing it with `lock_code`, not before choosing scripted mode.
-  - Set `declared_execution_mode_reason` either way.
+  - **User explicitly asks for a scripted step** (e.g. "make this scripted so I can test it") → `change_step_type(step_id, target_type="scripted", reason=...)` right away — the user owns that call; **no run-count gate**. But if the work isn't deterministic, say so plainly first ("this flow reads live UI state, so a frozen script will break often — agentic is more reliable; want me to script it anyway?") and honor their decision.
+  - **Workshop mode selection** → create obviously deterministic API/CLI/data work as `regular` steps, or move it there with `change_step_type`, immediately. The 10+ representative-run threshold applies only before freezing it with `lock_code`, not before choosing scripted.
+  - The `reason` passed to `change_step_type` is the audit trail; it is recorded in the plan changelog.
 - **`use_code_execution_mode`**: per-step override of the preset's code-execution toggle (nil = inherit).
 - **Model selection**: `execution_tier` (`high`/`medium`/`low`) maps to the workflow's tiered allocation; `execution_llm` / `validation_llm` pin a specific published model for that role. Prefer tiers over hard pins, and prefer leaving the tier unset over pinning it. Full framework: `read_skill(skills=[{"name":"builder-reference","path":"references/llm-selection.md"}])`.
 
 ### Ops-owned decisions need a stated reason (PLAT-060)
 
-Three fields are cost decisions owned by the `technical_review` model-tier or cost focus, and each **requires a
+Two fields are cost decisions owned by the `technical_review` model-tier or cost focus, and each **requires a
 paired reason — `update_step_config` rejects the change without it**:
 
 | Field | Required reason | The consequence the reason must acknowledge |
 |---|---|---|
 | `execution_tier` | `execution_tier_reason` | Pinning the tier **disables adaptive tiering** for the step — it stops promoting high→medium automatically after 3 stable runs |
 | `execution_llm` | `execution_llm_reason` | A pin **outranks `execution_tier` entirely** and will not follow provider-profile updates |
-| `declared_execution_mode` | `declared_execution_mode_reason` | Scripted freezes behaviour into `main.py`; agentic pays for judgment every run |
 
 Cite the owning `technical_review` finding id, the current state, and the evidence
 — and the `human_input_id` when the change was user-approved. Clearing a field

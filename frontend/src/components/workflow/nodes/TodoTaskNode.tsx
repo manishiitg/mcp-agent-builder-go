@@ -4,6 +4,7 @@ import { CheckCircle, XCircle, Loader2, Plus, RefreshCw, ListTodo, Bot, Route, L
 import type { TodoTaskNodeData } from '../hooks/usePlanToFlow'
 import type { ChangeType } from '../hooks/usePlanData'
 import { getExecutionModeVisuals } from './executionModeVisuals'
+import { effectiveExecutionMode, effectiveExecutionModeReason } from '../../../utils/stepConfigMatching'
 
 interface TodoTaskNodeProps {
   data: TodoTaskNodeData
@@ -60,9 +61,7 @@ export const TodoTaskNode = memo(({ data, selected }: TodoTaskNodeProps) => {
 
   const isNestedTodoSubAgent = useMemo(() => id.includes('-sub-agent-') && !!parentOrchestratorTitle, [id, parentOrchestratorTitle])
   const cardWidth = isNestedTodoSubAgent ? 264 : 300
-  const executionMode = step?.agent_configs?.declared_execution_mode
-  const executionModeReason = step?.agent_configs?.declared_execution_mode_reason
-  const executionModeVisuals = getExecutionModeVisuals(executionMode, executionModeReason)
+  const executionModeVisuals = getExecutionModeVisuals(effectiveExecutionMode(step), effectiveExecutionModeReason(step))
   const ModeIcon = executionModeVisuals.Icon
   const TodoIcon = ModeIcon || ListTodo
   // Orchestrators have their own visual identity. Do not inherit the neutral

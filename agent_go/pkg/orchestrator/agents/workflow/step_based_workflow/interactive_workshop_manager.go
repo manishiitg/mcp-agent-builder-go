@@ -413,35 +413,67 @@ func canonicalDeclaredExecutionMode(mode string) string {
 	}
 }
 
-// isScriptedExecutionModeConfig returns true when the step is in scripted mode
-// (persistent scripted code path where main.py is saved and reused across runs).
-// agentic steps also use code execution but do NOT write persistent scripts;
-// any leftover learnings/{step-id}/main.py for a agentic step is stale artifact
-// debt and should be deleted.
-func isScriptedExecutionModeConfig(cfg *AgentConfigs) bool {
-	if cfg == nil {
+// isScriptedStep reports whether a step runs through the scripted executor
+// (a persistent learnings/{step-id}/main.py, replayed across runs). The plan
+// decides (PLAT-287): a regular step IS scripted, a message_sequence is
+// conversational, and an evaluation step says so itself in execution_mode.
+// The one exception is transitional: a regular step whose step_config.json
+// still carries the retired declared_execution_mode="agentic" key (not yet
+// stripped by v1.0.39) is a legacy agentic step the runtime keeps running as
+// a message_sequence; an evaluation step whose config still declares
+// scripted is honored until v1.0.39 moves that onto the eval plan.
+// cfg may be nil.
+func isScriptedStep(step PlanStepInterface, cfg *AgentConfigs) bool {
+	switch s := step.(type) {
+	case *RegularPlanStep:
+		return cfg.legacyDeclared() != StepModeAgentic
+	case *EvaluationStep:
+		if canonicalDeclaredExecutionMode(s.ExecutionMode) == StepModeScripted {
+			return true
+		}
+		return cfg.legacyDeclared() == StepModeScripted
+	default:
 		return false
 	}
-	return canonicalDeclaredExecutionMode(cfg.DeclaredExecutionMode) == StepModeScripted
 }
 
-func syncDeclaredExecutionModeConfig(cfg *AgentConfigs) {
-	if cfg == nil {
-		return
+// workshopPlanStepIndex maps every step id in the current workflow plan
+// (nested and orphan) to its step, for callers that hold step_config entries
+// and need the plan type to know how each runs.
+func workshopPlanStepIndex(ctx context.Context, controller *StepBasedWorkflowOrchestrator) map[string]PlanStepInterface {
+	index := map[string]PlanStepInterface{}
+	if controller == nil {
+		return index
 	}
+	plan, err := controller.ReadCurrentPlan(ctx, false)
+	if err != nil || plan == nil {
+		return index
+	}
+	for _, info := range append(collectAllSteps(plan.Steps), collectAllSteps(plan.OrphanSteps)...) {
+		if info.Step != nil {
+			index[info.Step.GetID()] = info.Step
+		}
+	}
+	return index
+}
 
-	switch canonicalDeclaredExecutionMode(cfg.DeclaredExecutionMode) {
-	case "agentic":
-		trueVal := true
-		cfg.DeclaredExecutionMode = "agentic"
-		cfg.UseCodeExecutionMode = &trueVal
-		falseVal := false
-		cfg.LockCode = &falseVal
-	case "scripted":
-		trueVal := true
-		cfg.DeclaredExecutionMode = "scripted"
-		cfg.UseCodeExecutionMode = &trueVal
+// executionModeLabel renders the derived mode for event/context tagging.
+func executionModeLabel(scripted bool) string {
+	if scripted {
+		return StepModeScripted
 	}
+	return StepModeAgentic
+}
+
+// isLegacyAgenticRegularStep is the transitional shim's predicate: a regular
+// step whose unstripped step_config.json still declares agentic. Such a step
+// executed as a message_sequence before PLAT-287 and must keep doing so until
+// the v1.0.38 migration rewrites its plan type -- which the scheduler's
+// preflight runs before a scheduled workflow, but a manual run does not wait
+// for.
+func isLegacyAgenticRegularStep(step PlanStepInterface, cfg *AgentConfigs) bool {
+	_, regular := step.(*RegularPlanStep)
+	return regular && cfg.legacyDeclared() == StepModeAgentic
 }
 
 // findWorkshopStepByID searches all steps (including inner) for a matching ID.
@@ -1361,7 +1393,7 @@ func GetToolsForWorkshopMode(mode string) []string {
 	planMod := []string{
 		"create_plan",
 		"validate_plan_change",
-		"migrate_message_sequence_code_items", "migrate_orchestrator_step_type", "migrate_declared_execution_mode",
+		"migrate_message_sequence_code_items", "migrate_orchestrator_step_type", "migrate_declared_execution_mode", "strip_declared_execution_mode",
 		"add_scripted_step", "add_message_sequence_step", "add_routing_step", "add_branch_step",
 		"add_human_input_step", "add_todo_task_step", "add_todo_task_route",
 		"add_orchestrator_step", "add_orchestrator_route", "update_orchestrator_step", "update_orchestrator_route", "delete_orchestrator_route",
@@ -2033,7 +2065,7 @@ Workshop owns the eval plan: write it, validate it, run it against `+"`iteration
 
 Files: plan at `+"`evaluation/evaluation_plan.json`"+`, per-step config at `+"`evaluation/step_config.json`"+`, eval runs/reports at `+"`evaluation/runs/iteration-0[/group]/`"+`.
 
-**For the full contract (route gating with `+"`applies_to_routes`"+`, `+"`pre_validation`"+` rules, `+"`"+`{{"{{TARGET_RUN_PATH}}"}}`+"`"+` placeholder, declared_execution_mode + execution_tier rules, when-to-update triggers, full workflow), call:**
+**For the full contract (route gating with `+"`applies_to_routes`"+`, `+"`pre_validation`"+` rules, `+"`"+`{{"{{TARGET_RUN_PATH}}"}}`+"`"+` placeholder, execution_mode (on the plan entry) + execution_tier rules, when-to-update triggers, full workflow), call:**
 `+"`builder-reference/references/evaluation-plan.md`"+` — load before editing `+"`evaluation/evaluation_plan.json`"+` or `+"`evaluation/step_config.json`"+`.
 {{end}}
 
@@ -2229,19 +2261,6 @@ func resolveWorkshopStepConfigTarget(ctx context.Context, controller *StepBasedW
 		return id, "evaluation", true, nil
 	}
 	return "", "", false, fmt.Errorf("step %q not found in planning/plan.json or evaluation/evaluation_plan.json", inputID)
-}
-
-// workshopPlanStepType reads the current workflow plan without changing controller scope.
-func workshopPlanStepType(ctx context.Context, controller *StepBasedWorkflowOrchestrator, stepID string) StepType {
-	plan, err := controller.ReadCurrentPlan(ctx, false)
-	if err != nil {
-		return ""
-	}
-	info := findWorkshopStepByID(plan.Steps, stepID)
-	if info == nil || info.Step == nil {
-		return ""
-	}
-	return info.Step.StepType()
 }
 
 // registerInteractiveWorkshopTools registers the custom workshop tools on the agent.
@@ -2569,22 +2588,20 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				return fmt.Sprintf("Step %q is ALREADY RUNNING (execution_id: %q) — not starting a duplicate. You'll be notified when it completes. End the current agent turn instead of polling; use query_step(step_id=%q) only if the user explicitly requests a live status check, or stop that execution first if the user wants a fresh run. (Concurrent runs of the same step race on shared state and can double-act.)", stepID, existing.ID, stepID), nil
 			}
 
-			isScriptedStep := false
+			// The plan type decides (PLAT-287); step_config.json is consulted
+			// only for the transitional legacy-agentic shim.
+			scriptedStep := false
 			if plan != nil {
 				if stepInfo := findWorkshopStepByID(plan.Steps, stepID); stepInfo != nil {
-					if cfg := getAgentConfigs(stepInfo.Step); isScriptedExecutionModeConfig(cfg) {
-						isScriptedStep = true
-					}
-				}
-			}
-			if !isScriptedStep {
-				if configs, err := iwm.controller.ReadStepConfigs(ctx); err == nil {
-					for _, sc := range configs {
-						if sc.ID == stepID && isScriptedExecutionModeConfig(sc.AgentConfigs) {
-							isScriptedStep = true
-							break
+					cfg := getAgentConfigs(stepInfo.Step)
+					if cfg.legacyDeclared() == "" {
+						if configs, err := iwm.controller.ReadStepConfigs(ctx); err == nil {
+							if sc := MatchStepConfigByID(stepID, configs); sc.legacyDeclared() != "" {
+								cfg = sc
+							}
 						}
 					}
+					scriptedStep = isScriptedStep(stepInfo.Step, cfg)
 				}
 			}
 
@@ -2729,7 +2746,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 							inputData["run_folder"] = execOpts.RunFolder
 						}
 					}
-					if isScriptedStep {
+					if scriptedStep {
 						inputData["workshop_mode"] = "scripted"
 						inputData["IsScriptedMode"] = "true"
 					}
@@ -2740,7 +2757,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 						InputData:            inputData,
 						Iteration:            parseWorkshopIterationNumber(execOpts.Iteration),
 						UseCodeExecutionMode: true,
-						UseScriptedMode:      isScriptedStep,
+						UseScriptedMode:      scriptedStep,
 					}
 					eventBridge.HandleEvent(execCtx, &baseevents.AgentEvent{
 						Type:          orchestrator_events.OrchestratorAgentStart,
@@ -3570,8 +3587,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 	// === Builder tools: config, optimization, learning ===
 
 	// Tool 4: update_step_config — update step_config.json for a specific step
-	declaredExecutionModeEnum := []interface{}{"agentic", "scripted"}
-	declaredExecutionModeDescription := "Required mode declaration for this step. Always set this intentionally so the improve pass records the final decision explicitly. Set scripted from initial design for deterministic API/SDK calls, CLI commands, data fetching, stable parsing/normalization/transforms, and mechanical persistence; no run-history threshold is required to choose scripted. Keep judgment, adaptive discovery, and browser/UI work agentic. Freezing a saved script afterwards with lock_code still requires 10+ successful representative scenario-covering runs."
 	lockCodeDescription := "If true, lock the saved main.py script — prevents LLM-rewritten scripts from being saved back to learnings, and skips the fix loop (falls back directly to agentic mode). Only applies to scripted steps. Use only when the user explicitly wanted scripted, the script is deterministic, and script_metadata/eval evidence shows 10+ successful scenario-covering runs."
 	if iwm.isRunModeRestricted() {
 		// PLAT-262: skip update_step_config registration for read-only access
@@ -3588,7 +3603,7 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"clear_fields": map[string]interface{}{
 					"type":        "array",
 					"items":       map[string]interface{}{"type": "string"},
-					"description": "Field names to CLEAR (remove from step_config.json) so the step uses preset/default behavior again. Clearing enabled_skills removes explicit step skills; step execution does not inherit workflow-selected skills, so set enabled_skills explicitly when the step needs installed skills. Only fields with a corresponding setter in this tool are clearable. Valid names: execution_llm, execution_llm_reason, execution_tier, execution_tier_reason, servers, tools, enabled_custom_tools, enabled_skills, additional_read_paths, learning_objective, lock_code, use_code_execution_mode, disable_parallel_tool_execution, coding_agent_tmux_lifecycle, description_reviewed, knowledgebase_access, knowledgebase_contribution, learnings_access, review_notes, declared_execution_mode, declared_execution_mode_reason, validation_schema. Unknown names are reported as errors; nothing else in the same call is applied.",
+					"description": "Field names to CLEAR (remove from step_config.json) so the step uses preset/default behavior again. Clearing enabled_skills removes explicit step skills; step execution does not inherit workflow-selected skills, so set enabled_skills explicitly when the step needs installed skills. Only fields with a corresponding setter in this tool are clearable. Valid names: execution_llm, execution_llm_reason, execution_tier, execution_tier_reason, servers, tools, enabled_custom_tools, enabled_skills, additional_read_paths, learning_objective, lock_code, use_code_execution_mode, disable_parallel_tool_execution, coding_agent_tmux_lifecycle, description_reviewed, knowledgebase_access, knowledgebase_contribution, learnings_access, review_notes, validation_schema. Unknown names are reported as errors; nothing else in the same call is applied.",
 				},
 				"servers": map[string]interface{}{
 					"type":        "array",
@@ -3649,15 +3664,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				"use_code_execution_mode": map[string]interface{}{
 					"type":        "boolean",
 					"description": "If true, enable code execution mode — the agent writes and executes Python/shell code via mcpbridge to interact with MCP tools, rather than calling them directly. Useful for complex data processing or programmatic control over MCP tools. If false, explicitly disables code execution. Omit to inherit the preset default.",
-				},
-				"declared_execution_mode": map[string]interface{}{
-					"type":        "string",
-					"enum":        declaredExecutionModeEnum,
-					"description": declaredExecutionModeDescription,
-				},
-				"declared_execution_mode_reason": map[string]interface{}{
-					"type":        "string",
-					"description": "Why the chosen execution mode fits this step. REQUIRED whenever declared_execution_mode is set. Not consumed by the Go runtime — it exists so future Pulse and plan-change reviewers reading step_config.json see the original rationale. State what makes the step deterministic (or not), citing the owning finding and evidence.",
 				},
 				"description_reviewed": map[string]interface{}{
 					"type":        "boolean",
@@ -3891,36 +3897,16 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					targetConfig.AgentConfigs.UseCodeExecutionMode = &b
 				}
 			}
-			// PLAT-060: reasons are read before their fields so a reason supplied in
-			// the same call satisfies its own validator.
-			if val, ok := args["declared_execution_mode_reason"]; ok && val != nil {
-				if s, ok := val.(string); ok {
-					targetConfig.AgentConfigs.DeclaredExecutionModeReason = strings.TrimSpace(s)
-				}
-			}
-			if val, ok := args["declared_execution_mode"]; ok && val != nil {
-				if s, ok := val.(string); ok && s != "" {
-					if err := validateDeclaredExecutionModeChange(s, targetConfig.AgentConfigs.DeclaredExecutionModeReason); err != nil {
-						return "", err
+			// PLAT-287: declared_execution_mode is retired. A step's plan type
+			// decides how it runs; an evaluation step's execution_mode lives on
+			// its evaluation_plan.json entry. Point at the real tools rather than
+			// silently dropping the argument.
+			for _, retired := range []string{"declared_execution_mode", "declared_execution_mode_reason"} {
+				if val, ok := args[retired]; ok && val != nil {
+					if isEvalStep {
+						return "", fmt.Errorf("%s is retired (PLAT-287): an evaluation step's execution model is the execution_mode field of its evaluation/evaluation_plan.json entry -- use update_evaluation_plan(step_id=%q, updates={\"execution_mode\": \"scripted\"|\"agentic\"}, reason=...)", retired, stepID)
 					}
-					if canonicalDeclaredExecutionMode(s) == StepModeScripted && !isEvalStep &&
-						workshopPlanStepType(ctx, iwm.controller, stepID) == StepTypeOrchestrator {
-						return "", fmt.Errorf("declared_execution_mode=\"scripted\" is not supported on orchestrator (todo_task) step %q: an orchestrator exists to make runtime delegation decisions, and delegation that is deterministic enough to script belongs in a regular scripted step whose main.py calls the routes", stepID)
-					}
-					// PLAT-280: declared_execution_mode="scripted" on a message_sequence
-					// step is not a supported combination either. The real scripted
-					// executor only runs true `regular`-type steps and reliably injects
-					// $DB_PATH/STEP_OUTPUT_DIR there; a message_sequence step never gets
-					// that guarantee even when its config claims to be scripted, which is
-					// exactly how upwork's search-save-jobs silently lost DB access.
-					// update_scripted_step now performs the real fix atomically: it
-					// converts the step's plan type to regular while applying an edit, so
-					// this field and the plan type can never disagree afterward.
-					if canonicalDeclaredExecutionMode(s) == StepModeScripted && !isEvalStep &&
-						workshopPlanStepType(ctx, iwm.controller, stepID) == StepTypeMessageSeq {
-						return "", fmt.Errorf("declared_execution_mode=\"scripted\" cannot be set on message_sequence step %q here: the plan type and the declared mode would disagree, and the real scripted executor never actually runs it. Call change_step_type(step_id=%q, target_type=\"scripted\", reason=...) instead -- it converts the plan type and declares scripted mode in one atomic change, after which this field is redundant (regular steps are scripted by definition)", stepID, stepID)
-					}
-					targetConfig.AgentConfigs.DeclaredExecutionMode = s
+					return "", fmt.Errorf("%s is retired (PLAT-287): a step's plan type decides how it runs (regular = scripted main.py, message_sequence = conversational) -- use change_step_type(step_id=%q, target_type=\"scripted\"|\"message_sequence\", reason=...)", retired, stepID)
 				}
 			}
 			if val, ok := args["description_reviewed"]; ok && val != nil {
@@ -3952,9 +3938,6 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 					targetConfig.AgentConfigs.ExecutionTier = tier
 				}
 			}
-
-			// If the caller declared a mode, sync the low-level mode flags to match it.
-			syncDeclaredExecutionModeConfig(targetConfig.AgentConfigs)
 
 			// Parse LLM override fields
 			parseLLMFallbacks := func(raw interface{}) []AgentLLMFallback {
@@ -4263,8 +4246,10 @@ func registerInteractiveWorkshopTools(iwm *InteractiveWorkshopManager, mcpAgent 
 				return result, nil
 			}
 
-			cleanupStaleMainPy := targetConfig.AgentConfigs != nil &&
-				canonicalDeclaredExecutionMode(targetConfig.AgentConfigs.DeclaredExecutionMode) == "agentic"
+			// PLAT-287: update_step_config can no longer move a step off the
+			// scripted path (that is change_step_type's job, which reports an
+			// orphaned main.py itself), so it never cleans one up.
+			cleanupStaleMainPy := false
 
 			// Write updated configs back to the matching durable config file.
 			if err := iwm.controller.WriteStepConfigsToSubdir(ctx, configSubdir, configs); err != nil {
@@ -9081,17 +9066,13 @@ func (iwm *InteractiveWorkshopManager) runReviewWorkflowTimingAgent(ctx context.
 	stepConfigSummary := ""
 	if stepConfigs, err := iwm.controller.ReadStepConfigs(ctx); err == nil && len(stepConfigs) > 0 {
 		var sb strings.Builder
+		planSteps := workshopPlanStepIndex(ctx, iwm.controller)
 		for _, sc := range stepConfigs {
-			mode := "agentic"
-			declaredMode := ""
+			mode := executionModeLabel(isScriptedStep(planSteps[sc.ID], sc.AgentConfigs))
 			successfulRuns := 0
 			learningsAccess := LearningsAccessRead
 			lockCode := false
 			if sc.AgentConfigs != nil {
-				if isScriptedExecutionModeConfig(sc.AgentConfigs) {
-					mode = "scripted"
-				}
-				declaredMode = sc.AgentConfigs.DeclaredExecutionMode
 				if sc.AgentConfigs.SuccessfulRuns != nil {
 					successfulRuns = *sc.AgentConfigs.SuccessfulRuns
 				}
@@ -9100,7 +9081,7 @@ func (iwm *InteractiveWorkshopManager) runReviewWorkflowTimingAgent(ctx context.
 					lockCode = *sc.AgentConfigs.LockCode
 				}
 			}
-			sb.WriteString(fmt.Sprintf("- %s: mode=%s, declared_mode=%s, successful_runs=%d, learnings_access=%s, lock_code=%v\n", sc.ID, mode, declaredMode, successfulRuns, learningsAccess, lockCode))
+			sb.WriteString(fmt.Sprintf("- %s: mode=%s, successful_runs=%d, learnings_access=%s, lock_code=%v\n", sc.ID, mode, successfulRuns, learningsAccess, lockCode))
 		}
 		stepConfigSummary = sb.String()
 	}
@@ -9175,17 +9156,13 @@ func (iwm *InteractiveWorkshopManager) runReviewWorkflowCostsAgent(ctx context.C
 	stepConfigSummary := ""
 	if stepConfigs, err := iwm.controller.ReadStepConfigs(ctx); err == nil && len(stepConfigs) > 0 {
 		var sb strings.Builder
+		planSteps := workshopPlanStepIndex(ctx, iwm.controller)
 		for _, sc := range stepConfigs {
-			mode := "agentic"
-			declaredMode := ""
+			mode := executionModeLabel(isScriptedStep(planSteps[sc.ID], sc.AgentConfigs))
 			successfulRuns := 0
 			learningsAccess := LearningsAccessRead
 			lockCode := false
 			if sc.AgentConfigs != nil {
-				if isScriptedExecutionModeConfig(sc.AgentConfigs) {
-					mode = "scripted"
-				}
-				declaredMode = sc.AgentConfigs.DeclaredExecutionMode
 				if sc.AgentConfigs.SuccessfulRuns != nil {
 					successfulRuns = *sc.AgentConfigs.SuccessfulRuns
 				}
@@ -9194,7 +9171,7 @@ func (iwm *InteractiveWorkshopManager) runReviewWorkflowCostsAgent(ctx context.C
 					lockCode = *sc.AgentConfigs.LockCode
 				}
 			}
-			sb.WriteString(fmt.Sprintf("- %s: mode=%s, declared_mode=%s, successful_runs=%d, learnings_access=%s, lock_code=%v\n", sc.ID, mode, declaredMode, successfulRuns, learningsAccess, lockCode))
+			sb.WriteString(fmt.Sprintf("- %s: mode=%s, successful_runs=%d, learnings_access=%s, lock_code=%v\n", sc.ID, mode, successfulRuns, learningsAccess, lockCode))
 		}
 		stepConfigSummary = sb.String()
 	}
@@ -9293,6 +9270,22 @@ func (iwm *InteractiveWorkshopManager) runReviewStepCodeAgent(ctx context.Contex
 		logger.Warn(fmt.Sprintf("⚠️ Failed to read evaluation/evaluation_plan.json for review_step_code: %v", evalPlanErr))
 	}
 
+	// The plan type decides whether a target is scripted (PLAT-287).
+	planStepsByID := map[string]PlanStepInterface{}
+	for _, info := range append(allSteps, collectAllSteps(plan.OrphanSteps)...) {
+		if info.Step != nil {
+			planStepsByID[info.Step.GetID()] = info.Step
+		}
+	}
+	evalStepsByID := map[string]PlanStepInterface{}
+	if evalPlanExists && evalPlan != nil {
+		for _, evalStep := range evalPlan.Steps {
+			if evalStep != nil {
+				evalStepsByID[evalStep.ID] = evalStep
+			}
+		}
+	}
+
 	var stepsToReview strings.Builder
 	reviewCount := 0
 
@@ -9303,7 +9296,14 @@ func (iwm *InteractiveWorkshopManager) runReviewStepCodeAgent(ctx context.Contex
 		scriptRelPath := fmt.Sprintf("learnings/%s/main.py", sid)
 		scriptContent, scriptErr := iwm.controller.ReadWorkspaceFile(ctx, scriptRelPath)
 		hasSavedScript := scriptErr == nil && strings.TrimSpace(scriptContent) != ""
-		isScriptedConfig := sc != nil && sc.AgentConfigs != nil && isScriptedExecutionModeConfig(sc.AgentConfigs)
+		isScriptedConfig := false
+		if sc != nil {
+			if scope == "evaluation" {
+				isScriptedConfig = isScriptedStep(evalStepsByID[sid], sc.AgentConfigs)
+			} else {
+				isScriptedConfig = isScriptedStep(planStepsByID[sid], sc.AgentConfigs)
+			}
+		}
 
 		if !hasSavedScript && !isScriptedConfig {
 			if stepID != "" {

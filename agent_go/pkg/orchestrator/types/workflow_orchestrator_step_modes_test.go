@@ -259,7 +259,8 @@ func TestWorkflowMessageSequenceItemTypeInvalidRejected(t *testing.T) {
 //
 //	(1) pre-seed learnings/<step-id>/main.py with a known Python script
 //	    that prints a deterministic token to stdout.
-//	(2) configure the step with declared_execution_mode="scripted".
+//	(2) leave the step a regular plan step -- since PLAT-287 a regular
+//	    step IS a scripted step; nothing in step_config declares it.
 //	(3) run the workflow.
 //	(4) assert the engine ran the script — proof is the script's token
 //	    in the step's execution_result AND the engine's "Executing
@@ -329,9 +330,7 @@ with open(os.path.join(out_dir, "computed.txt"), "w") as f:
 				"id":    stepID,
 				"title": "Learn-code fast path",
 				"agent_configs": map[string]interface{}{
-					"declared_execution_mode":        "learn_code",
-					"declared_execution_mode_reason": "test fixture pinning scripted mode",
-					"learning_objective":             "Compute the constant 42 via 6*7.",
+					"learning_objective": "Compute the constant 42 via 6*7.",
 				},
 			},
 		},
@@ -401,14 +400,16 @@ with open(os.path.join(out_dir, "computed.txt"), "w") as f:
 }
 
 // TestWorkflowScriptedControlNoModeWritesNoScript is the control
-// counterpart of the test above: run the same step with the SAME
-// plan.json but NO step_config.json (so declared_execution_mode is
-// absent). The engine must NOT enter the learn_code path and must
-// NOT create learnings/<step-id>/main.py.
+// counterpart of the test above: run the same regular step, but with a
+// step_config.json that still carries the RETIRED
+// declared_execution_mode="agentic" key (a workflow the v1.0.38/1.0.39
+// migrations have not reached). The transitional shim keeps such a step
+// running as a message_sequence, so the engine must NOT enter the
+// scripted path and must NOT create learnings/<step-id>/main.py.
 //
-// Together with the positive test, this pair proves the learn_code
-// behavior is gated on declared_execution_mode rather than the
-// engine writing main.py for every regular step.
+// Together with the positive test, this pair proves the scripted path is
+// decided by the plan type plus the legacy shim, and that the shim still
+// holds a legacy agentic step off it.
 func TestWorkflowScriptedControlNoModeWritesNoScript(t *testing.T) {
 	wo, cleanup, ok := buildEdgeCaseOrchestrator(t)
 	if !ok {
@@ -429,7 +430,14 @@ func TestWorkflowScriptedControlNoModeWritesNoScript(t *testing.T) {
 			},
 		},
 	})
-	// Intentionally: NO step_config.json.
+	// The retired key, exactly as an unmigrated workflow still has it.
+	if err := writeJSON(filepath.Join(wo.workspaceDisk, "planning", "step_config.json"), map[string]interface{}{
+		"steps": []map[string]interface{}{
+			{"id": stepID, "agent_configs": map[string]interface{}{"declared_execution_mode": "agentic"}},
+		},
+	}); err != nil {
+		t.Fatalf("write step_config.json: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -442,16 +450,18 @@ func TestWorkflowScriptedControlNoModeWritesNoScript(t *testing.T) {
 	mainPyPath := filepath.Join(wo.workspaceDisk, "learnings", stepID, "main.py")
 	if _, err := os.Stat(mainPyPath); err == nil {
 		body, _ := os.ReadFile(mainPyPath)
-		t.Fatalf("control: learnings/%s/main.py exists when scripted mode is NOT declared — engine is writing main.py for plain agentic steps. main.py:\n%s", stepID, string(body))
+		t.Fatalf("control: learnings/%s/main.py exists for a legacy agentic regular step — the transitional shim is not holding it off the scripted path. main.py:\n%s", stepID, string(body))
 	}
-	t.Logf("✅ control: no scripted mode → no main.py written")
+	t.Logf("✅ control: legacy agentic regular step → no main.py written")
 }
 
 // TestWorkflowScriptedStepConfigIDMismatchNotApplied proves that a
 // step_config.json entry whose `id` doesn't match any plan.json step
-// is harmlessly ignored — declared_execution_mode is NOT silently
-// applied to a step it wasn't intended for, and no spurious learn_code
-// artifacts get written.
+// is harmlessly ignored. The mismatched entry carries the retired
+// declared_execution_mode="agentic" key; were it applied to the real
+// step, the legacy shim would run that step as a message_sequence and
+// write no script. The real step is a regular one and so scripted by
+// type: its main.py must appear, and none for the phantom id.
 func TestWorkflowScriptedStepConfigIDMismatchNotApplied(t *testing.T) {
 	wo, cleanup, ok := buildEdgeCaseOrchestrator(t)
 	if !ok {
@@ -480,7 +490,7 @@ func TestWorkflowScriptedStepConfigIDMismatchNotApplied(t *testing.T) {
 			{
 				"id": "step-y", // mismatched
 				"agent_configs": map[string]interface{}{
-					"declared_execution_mode": "learn_code",
+					"declared_execution_mode": "agentic",
 				},
 			},
 		},
@@ -497,13 +507,13 @@ func TestWorkflowScriptedStepConfigIDMismatchNotApplied(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(wo.workspaceDisk, "learnings", planStepID, "main.py")); err == nil {
-		t.Fatalf("learnings/%s/main.py exists — engine applied scripted mode to the wrong step (step_config.id was \"step-y\")", planStepID)
+	if _, err := os.Stat(filepath.Join(wo.workspaceDisk, "learnings", planStepID, "main.py")); err != nil {
+		t.Fatalf("learnings/%s/main.py missing — the mismatched step_config entry (id \"step-y\", legacy agentic) was applied to the regular step and kept it off the scripted path: %v", planStepID, err)
 	}
 	if _, err := os.Stat(filepath.Join(wo.workspaceDisk, "learnings", "step-y", "main.py")); err == nil {
 		t.Fatalf("learnings/step-y/main.py exists — engine wrote artifacts for a step that doesn't appear in plan.json")
 	}
-	t.Logf("✅ step_config.json with mismatched id: no learn_code artifacts written")
+	t.Logf("✅ step_config.json with mismatched id: regular step ran scripted, no artifacts for the phantom id")
 }
 
 // ──────────────────────────────────────────────────────────────────────

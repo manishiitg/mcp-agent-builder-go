@@ -58,6 +58,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractActivityTabFromRunSummaryVersion,
 		workflowContractScriptedTypeStaysRegularVersion,
 		workflowContractDeclaredExecutionModeRetiredVersion,
+		workflowContractDeclaredExecutionModeStrippedVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -327,6 +328,12 @@ Do only this migration. A "regular" plan step is a scripted step (its work is th
 
 Do not hand-edit plan.json or step_config.json and do not run the workflow. The tool refuses, without changing anything, when a step is declared scripted but has no learnings/<step-id>/main.py: that step is already broken, and this migration will not guess whether it should become a sequence or get a script. If it refuses, report exactly which step and why and do not stamp. Otherwise call set_workflow_contract_version(version="1.0.38") and stop.`
 
+const upgradeDeclaredExecutionModeStripped = `WORKFLOW CONTRACT UPGRADE: THE RETIRED declared_execution_mode KEY IS REMOVED (PLAT-287, HALF 2).
+
+Do only this migration. Since contract v1.0.38 every step's plan type states its execution model, and the runtime now reads only that: a "regular" step is scripted (it runs the checked-in learnings/<step-id>/main.py), a "message_sequence" step is conversational, and an evaluation step is scripted exactly when its evaluation/evaluation_plan.json entry has execution_mode="scripted". The declared_execution_mode and declared_execution_mode_reason keys in step_config.json are therefore dead and are removed. Call strip_declared_execution_mode() once. It removes both keys from planning/step_config.json and evaluation/step_config.json, first marking every evaluation step that was declared scripted with execution_mode="scripted" in evaluation/evaluation_plan.json so nothing changes how it runs, and records every removed reason in planning/changelog. It is idempotent and a no-op when nothing is left to strip.
+
+Do not hand-edit plan.json, evaluation_plan.json or either step_config.json, and do not run the workflow. The tool refuses, without changing anything, while a regular step still carries declared_execution_mode="agentic": that means the v1.0.38 migration (migrate_declared_execution_mode) did not complete -- run it, then retry; if it still refuses, do not stamp and report what blocked it. Otherwise call set_workflow_contract_version(version="1.0.39") and stop.`
+
 const workflowUpgradeWorkspacePathPlaceholder = "{{WORKSPACE_PATH}}"
 
 func bindWorkflowUpgradeWorkspacePath(query, workspacePath string) string {
@@ -414,6 +421,10 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	// workflowContractDeclaredExecutionModeRetiredVersion ("1.0.38") sits at rank 37.
 	if rank < 37 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractDeclaredExecutionModeRetiredVersion, label: "upgrade-declared-execution-mode-retired", query: upgradeDeclaredExecutionModeRetired})
+	}
+	// workflowContractDeclaredExecutionModeStrippedVersion ("1.0.39") sits at rank 38.
+	if rank < 38 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractDeclaredExecutionModeStrippedVersion, label: "upgrade-declared-execution-mode-stripped", query: upgradeDeclaredExecutionModeStripped})
 	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse

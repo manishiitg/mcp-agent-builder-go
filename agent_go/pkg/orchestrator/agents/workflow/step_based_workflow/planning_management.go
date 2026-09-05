@@ -676,7 +676,7 @@ func IsPlanModificationTool(name string) bool {
 		name == "update_validation_schema" ||
 		name == "add_todo_task_route" || name == "update_todo_task_route" || name == "delete_todo_task_route" ||
 		name == "add_orchestrator_route" || name == "update_orchestrator_route" || name == "delete_orchestrator_route" || name == "migrate_orchestrator_step_type" ||
-		name == "change_step_type" || name == "migrate_declared_execution_mode"
+		name == "change_step_type" || name == "migrate_declared_execution_mode" || name == "strip_declared_execution_mode"
 }
 
 // IsStepConfigModificationTool checks if a tool name is a step_config modification tool

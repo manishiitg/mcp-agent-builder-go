@@ -1393,21 +1393,21 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeSingleStep(
 	// config may not have the flag.
 	isScriptedMode := false
 	{
+		// The plan type decides (PLAT-287). The config only matters for the
+		// transitional legacy-agentic shim, and the embedded plan config may
+		// not carry that raw key for a sub-agent step, so consult
+		// step_config.json by id when the embedded one says nothing.
 		agentCfgs := getAgentConfigs(step)
-		if (agentCfgs == nil || !isScriptedExecutionModeConfig(agentCfgs)) && step.GetID() != "" {
+		if agentCfgs.legacyDeclared() == "" && step.GetID() != "" {
 			if stepConfigs, err := hcpo.ReadStepConfigs(ctx); err == nil {
-				for _, sc := range stepConfigs {
-					if sc.ID == step.GetID() && isScriptedExecutionModeConfig(sc.AgentConfigs) {
-						agentCfgs = sc.AgentConfigs
-						break
-					}
+				if sc := MatchStepConfigByID(step.GetID(), stepConfigs); sc.legacyDeclared() != "" {
+					agentCfgs = sc
 				}
 			}
 		}
-		hcpo.GetLogger().Info(fmt.Sprintf("🐍 [scripted_code] step=%s agentCfgs_nil=%v scripted=%v",
-			step.GetID(), agentCfgs == nil,
-			isScriptedExecutionModeConfig(agentCfgs)))
-		isScriptedMode = isScriptedExecutionModeConfig(agentCfgs)
+		isScriptedMode = isScriptedStep(step, agentCfgs)
+		hcpo.GetLogger().Info(fmt.Sprintf("🐍 [scripted_code] step=%s type=%s scripted=%v",
+			step.GetID(), step.StepType(), isScriptedMode))
 	}
 	if execCtx != nil && execCtx.SavedScriptOnly && !isScriptedMode {
 		return "", updatedContextFiles, fmt.Errorf("step %q is not in scripted code mode", step.GetID())

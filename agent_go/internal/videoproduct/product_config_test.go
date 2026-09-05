@@ -162,8 +162,8 @@ func TestVideoStudioIsPinnedToClaudeCodeWithoutProviderChoices(t *testing.T) {
 // message_sequence "for every conversational, judgment-heavy, browser-driven, or
 // adaptive step, even when it needs only one message. Non-scripted regular steps
 // are unsupported." Every production stage here is exactly that — writing a
-// brief, a storyboard, a design, a critique — and each declares
-// declared_execution_mode: agentic, so none qualifies for `regular`.
+// brief, a storyboard, a design, a critique — none is a deterministic script,
+// so none qualifies for `regular` (which since PLAT-287 means scripted).
 //
 // They previously authored as `regular` and ran only because the runtime
 // rewrites non-scripted regular steps into this same shape

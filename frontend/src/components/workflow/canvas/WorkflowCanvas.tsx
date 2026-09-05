@@ -40,6 +40,7 @@ import { useWorkspaceStore } from '../../../stores/useWorkspaceStore'
 import { useChatStore } from '../../../stores/useChatStore'
 import { agentApi } from '../../../services/api'
 import type { PlanStep, MessageSequenceItem } from '../../../utils/stepConfigMatching'
+import { effectiveExecutionMode, effectiveExecutionModeReason } from '../../../utils/stepConfigMatching'
 import {
   WORKFLOW_PLAN_STEP_FOCUS_EVENT,
   type WorkflowPlanStepFocusDetail,
@@ -749,8 +750,8 @@ function ReadOnlyStepDetailPanel({
   const sequenceItems = (step ? (step as { items?: MessageSequenceItem[] }).items : undefined) || undefined
   const validationSchema = step?.validation_schema || ('validation_schema' in data ? data.validation_schema : undefined)
   const agentConfigs = step?.agent_configs
-  const declaredExecutionMode = agentConfigs?.declared_execution_mode
-  const declaredExecutionModeReason = agentConfigs?.declared_execution_mode_reason
+  const declaredExecutionMode = effectiveExecutionMode(step)
+  const declaredExecutionModeReason = effectiveExecutionModeReason(step)
   const declaredExecutionModeVisuals = getExecutionModeVisuals(declaredExecutionMode, declaredExecutionModeReason)
   const DeclaredExecutionModeIcon = declaredExecutionModeVisuals.Icon
   const contextInputs = step?.context_dependencies || []

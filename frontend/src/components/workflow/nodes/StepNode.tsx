@@ -4,6 +4,7 @@ import { CheckCircle, XCircle, Loader2, Plus, RefreshCw, Bot } from 'lucide-reac
 import type { StepNodeData } from '../hooks/usePlanToFlow'
 import type { ChangeType } from '../hooks/usePlanData'
 import { getExecutionModeVisuals } from './executionModeVisuals'
+import { effectiveExecutionMode, effectiveExecutionModeReason } from '../../../utils/stepConfigMatching'
 
 interface StepNodeProps {
   data: StepNodeData
@@ -42,9 +43,12 @@ export const StepNode = memo(({ data, selected }: StepNodeProps) => {
 
   // Check if this is a sub-agent (part of a routing step)
   const isSubAgent = useMemo(() => id.includes('-sub-agent-'), [id])
-  const agentConfig = step?.agent_configs
-  const executionMode = agentConfig?.declared_execution_mode
-  const executionModeReason = agentConfig?.declared_execution_mode_reason
+  // Evaluation steps reuse this node (useEvaluationPlanToFlow) and carry no
+  // plan `type`; the flag tells effectiveExecutionMode to read their own
+  // execution_mode instead of treating a typeless step as `regular`.
+  const isEvaluationStep = Boolean((data as { isEvaluationStep?: boolean }).isEvaluationStep)
+  const executionMode = effectiveExecutionMode(step, { evaluation: isEvaluationStep })
+  const executionModeReason = effectiveExecutionModeReason(step)
   const executionModeVisuals = getExecutionModeVisuals(executionMode, executionModeReason)
   const ModeIcon = executionModeVisuals.Icon
   const statusIcon = statusIcons[status]

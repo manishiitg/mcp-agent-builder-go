@@ -24,6 +24,7 @@ var evaluationPlanEditableFields = []string{
 	"validation_schema",
 	"pre_validation",
 	"db_write",
+	"execution_mode",
 }
 
 // UpdateEvaluationPlanStep edits one step in evaluation/evaluation_plan.json and
@@ -93,6 +94,21 @@ func UpdateEvaluationPlanStep(
 		if err := validateSchemaLikeUpdateField(field, raw); err != nil {
 			return "", err
 		}
+	}
+
+	// execution_mode is the one place an evaluation step's execution model
+	// lives (PLAT-287): "scripted" runs learnings/<step-id>/main.py through
+	// the scripted executor, "agentic" (or unset) runs the step conversationally.
+	if raw, ok := updates["execution_mode"]; ok {
+		mode, isString := raw.(string)
+		if !isString {
+			return "", fmt.Errorf("execution_mode must be a string (\"scripted\" or \"agentic\"), got %T", raw)
+		}
+		canonical := canonicalDeclaredExecutionMode(mode)
+		if canonical != StepModeScripted && canonical != StepModeAgentic && canonical != "" {
+			return "", fmt.Errorf("execution_mode must be \"scripted\" or \"agentic\" (empty clears it), got %q", mode)
+		}
+		updates["execution_mode"] = canonical
 	}
 
 	path, document, stepsKey, rawSteps, err := loadEvaluationPlanDocument(ctx, workspacePath, readFile)

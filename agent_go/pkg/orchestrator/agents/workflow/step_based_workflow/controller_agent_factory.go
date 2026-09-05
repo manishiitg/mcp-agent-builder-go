@@ -86,14 +86,19 @@ func (hcpo *StepBasedWorkflowOrchestrator) applyWorkflowTransportToAgentConfig(c
 	return "structured"
 }
 
-func (hcpo *StepBasedWorkflowOrchestrator) publishWorkflowTransportContext(effectiveTransport string, stepConfig *AgentConfigs) {
+// publishWorkflowTransportContext tags the live event stream with the
+// transport and, when the caller knows the plan step, its execution mode
+// (PLAT-287: derived from the step type — "scripted" for regular /
+// scripted evaluation steps, "agentic" for message sequences; "" when no
+// step is in scope, e.g. KB maintenance agents).
+func (hcpo *StepBasedWorkflowOrchestrator) publishWorkflowTransportContext(effectiveTransport string, executionMode string) {
 	cab, ok := hcpo.GetContextAwareBridge().(*orchestrator.ContextAwareEventBridge)
 	if !ok {
 		return
 	}
-	rich := orchestrator.RichStepContext{Transport: strings.TrimSpace(effectiveTransport)}
-	if stepConfig != nil {
-		rich.ExecutionMode = strings.TrimSpace(stepConfig.DeclaredExecutionMode)
+	rich := orchestrator.RichStepContext{
+		Transport:     strings.TrimSpace(effectiveTransport),
+		ExecutionMode: strings.TrimSpace(executionMode),
 	}
 	if rich.ExecutionMode != "" || rich.Transport != "" {
 		cab.MergeRichStepContext(rich)
@@ -724,7 +729,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) selectExecutionLLM(
 }
 
 // applyStepConfigToAgentConfig applies step-specific configuration overrides to agent config
-func (hcpo *StepBasedWorkflowOrchestrator) applyStepConfigToAgentConfig(config *agents.OrchestratorAgentConfig, stepConfig *AgentConfigs, isCodeExecutionMode bool) {
+func (hcpo *StepBasedWorkflowOrchestrator) applyStepConfigToAgentConfig(config *agents.OrchestratorAgentConfig, stepConfig *AgentConfigs, isCodeExecutionMode bool, isScripted bool) {
 	workflowServers := hcpo.GetSelectedServers()
 	// Use step-specific servers if provided, filtered against workflow-level servers.
 	// Workflow is the hard cap: if a server was removed from the workflow no step can use it.
@@ -758,8 +763,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) applyStepConfigToAgentConfig(config *
 	// Determine execution mode: CLI providers and scripted steps always use code execution mode.
 	// scripted steps need code execution mode so the agent gets the tool index and get_api_spec
 	// virtual tool — without these, the LLM has to guess MCP server/tool names when writing main.py.
+	// isScripted comes from the caller, which knows the plan step (PLAT-287:
+	// the plan type decides; the config no longer carries a mode).
 	actualProvider := config.LLMConfig.Primary.Provider
-	isScripted := isScriptedExecutionModeConfig(stepConfig)
 	if common.IsCLIProvider(actualProvider) {
 		config.UseCodeExecutionMode = true
 		hcpo.GetLogger().Info(fmt.Sprintf("🔧 Code execution mode forced for CLI provider '%s' - MCP tools accessed via HTTP bridge", actualProvider))
@@ -803,7 +809,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) applyStepConfigToAgentConfig(config *
 	config.IsolateCodingAgentWorkspace = true
 
 	effectiveTransport := hcpo.applyWorkflowTransportToAgentConfig(config, stepConfig, "workflow step")
-	hcpo.publishWorkflowTransportContext(effectiveTransport, stepConfig)
+	hcpo.publishWorkflowTransportContext(effectiveTransport, executionModeLabel(isScripted))
 
 }
 
@@ -1113,7 +1119,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBConsolidateAgent(ctx context.
 	maxTurns := 60
 	config := hcpo.CreateStandardAgentConfigWithLLM(agentName, maxTurns, agents.OutputFormatStructured, llmConfig)
 	effectiveTransport := hcpo.applyWorkflowTransportToAgentConfig(config, stepConfig, "KB consolidate agent")
-	hcpo.publishWorkflowTransportContext(effectiveTransport, stepConfig)
+	hcpo.publishWorkflowTransportContext(effectiveTransport, "")
 	config.ServerNames = []string{mcpclient.NoServers}
 	config.MCPSessionID = subAgentSessionID
 	config.UseCodeExecutionMode = requiresCodeExecutionForProvider(&AgentLLMConfig{
@@ -1175,7 +1181,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createKBReorganizeAgent(ctx context.C
 	maxTurns := 60
 	config := hcpo.CreateStandardAgentConfigWithLLM(agentName, maxTurns, agents.OutputFormatStructured, llmConfig)
 	effectiveTransport := hcpo.applyWorkflowTransportToAgentConfig(config, stepConfig, "KB reorganize agent")
-	hcpo.publishWorkflowTransportContext(effectiveTransport, stepConfig)
+	hcpo.publishWorkflowTransportContext(effectiveTransport, "")
 	config.ServerNames = []string{mcpclient.NoServers}
 	config.MCPSessionID = subAgentSessionID
 	config.UseCodeExecutionMode = requiresCodeExecutionForProvider(&AgentLLMConfig{
@@ -1276,8 +1282,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 
 	// Scripted code mode: add code/ subdir to the enforced write paths so the LLM can write main.py there.
 	// writePaths[0] is the step execution folder (e.g. execution/step-1); appending /code gives execution/step-1/code.
-	hcpo.GetLogger().Info(fmt.Sprintf("🐍 [scripted_code] stepConfig nil=%v scripted=%v", stepConfig == nil, isScriptedExecutionModeConfig(stepConfig)))
-	if isScriptedExecutionModeConfig(stepConfig) {
+	hcpo.GetLogger().Info(fmt.Sprintf("🐍 [scripted_code] stepConfig nil=%v scripted=%v", stepConfig == nil, isScriptedStep(planStep, stepConfig)))
+	if isScriptedStep(planStep, stepConfig) {
 		if len(writePaths) > 0 {
 			codePath := writePaths[0] + "/code"
 			writePaths = append(writePaths, codePath)
@@ -1321,7 +1327,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	// previously never consulted the resolver at all — harmless while everything
 	// was tmux, but it would silently diverge now that structured is the default.
 	execTransport := hcpo.applyWorkflowTransportToAgentConfig(config, stepConfig, "execution-only agent")
-	hcpo.publishWorkflowTransportContext(execTransport, stepConfig)
+	hcpo.publishWorkflowTransportContext(execTransport, executionModeLabel(isScriptedStep(planStep, stepConfig)))
 	hcpo.disableParentAgentTimeout(config, "execution-only agent")
 
 	// Execution-only steps can run in parallel inside a group. If they all reuse the
@@ -1338,7 +1344,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 		execSessionID = hcpo.setupSubAgentSessionGuard("exec", stepID, readPaths, writePaths)
 	}
 	config.MCPSessionID = execSessionID
-	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
+	directDBAccess := isScriptedStep(planStep, stepConfig)
 	configureWorkflowDBSession(execSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
 	// Bind the per-step tool session to the workflow's browser session. Tool-session
 	// isolation protects folder and DB permissions without creating a second browser.
@@ -1356,7 +1362,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	hcpo.setupBrowserDownloadsPathOverride(ctx, config, stepConfig)
 
 	// Apply step-specific overrides
-	hcpo.applyStepConfigToAgentConfig(config, stepConfig, isCodeExecutionMode)
+	hcpo.applyStepConfigToAgentConfig(config, stepConfig, isCodeExecutionMode, isScriptedStep(planStep, stepConfig))
 	if override, ok := ctx.Value(messageSequenceRuntimeSessionOverrideKey{}).(*messageSequenceRuntimeSessionOverride); ok && override != nil && override.KeepAlive && common.IsCLIProvider(config.LLMConfig.Primary.Provider) && !config.ForceStructuredCodingAgent {
 		config.CodingAgentKeepAlive = true
 		hcpo.GetLogger().Info(fmt.Sprintf("🔁 message_sequence runtime will keep coding-agent session alive: %s", config.MCPSessionID))
@@ -1437,7 +1443,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createExecutionOnlyAgent(ctx context.
 	}
 	// Inject supplementary prompts (skills, secrets, browser instructions)
 	attachGlobalLearnings := !hcpo.isEvaluationMode && learningsAccess != LearningsAccessNone
-	hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, attachGlobalLearnings, registeredToolNames(toolsToRegister), isScriptedExecutionModeConfig(stepConfig))
+	hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, attachGlobalLearnings, registeredToolNames(toolsToRegister), isScriptedStep(planStep, stepConfig))
 
 	// Apply post-setup configuration (folder guard paths and optional registry update)
 	if err := hcpo.applyPostSetupToAgent(agent, agentName); err != nil {
@@ -1653,7 +1659,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) createOrchestratorAgent(ctx context.C
 	// Create agent config with custom LLM if needed
 	config := hcpo.CreateStandardAgentConfigWithLLM(agentName, maxTurns, agents.OutputFormatStructured, llmConfig)
 	effectiveTransport := hcpo.applyWorkflowTransportToAgentConfig(config, stepConfig, "todo task orchestrator agent")
-	hcpo.publishWorkflowTransportContext(effectiveTransport, stepConfig)
+	hcpo.publishWorkflowTransportContext(effectiveTransport, StepModeAgentic)
 	hcpo.disableParentAgentTimeout(config, "todo task orchestrator agent")
 
 	// Run the coding-CLI session in a fresh os.MkdirTemp dir instead of
@@ -1676,7 +1682,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) createOrchestratorAgent(ctx context.C
 	todoSessionID := hcpo.setupSubAgentSessionGuard("todo", stepID, todoReadPaths, todoWritePaths)
 	config.MCPSessionID = todoSessionID
 	dbAccess := resolveEffectiveDBAccess(stepConfig, hcpo.isEvaluationMode, false)
-	directDBAccess := isScriptedExecutionModeConfig(stepConfig)
+	// An orchestrator step is never scripted (its job is runtime delegation),
+	// so it never gets the scripted executor's direct DB path.
+	directDBAccess := false
 	configureWorkflowDBSession(todoSessionID, hcpo.GetWorkspacePath(), dbAccess, directDBAccess)
 	if subAgentExecCtx != nil {
 		subAgentExecCtx.ToolSessionID = todoSessionID
@@ -1899,7 +1907,8 @@ func (hcpo *StepBasedWorkflowOrchestrator) createOrchestratorAgent(ctx context.C
 	if baseAgent := agent.GetBaseAgent(); baseAgent != nil {
 		if baseAgent.Agent() != nil {
 			attachGlobalLearnings := !hcpo.isEvaluationMode && resolveLearningsAccess(stepConfig) != LearningsAccessNone
-			hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, attachGlobalLearnings, registeredToolNames(toolsToRegister), isScriptedExecutionModeConfig(stepConfig))
+			// An orchestrator step is never scripted (PLAT-287).
+			hcpo.appendSupplementaryPrompts(ctx, baseAgent, config, effectiveSkills, attachGlobalLearnings, registeredToolNames(toolsToRegister), false)
 			if inherited := backgroundAgentSkillsFromContext(ctx); len(inherited) > 0 {
 				if err := applyInheritedBackgroundSkills(ctx, baseAgent, inherited); err != nil {
 					return nil, fmt.Errorf("apply inherited background orchestrator skills: %w", err)

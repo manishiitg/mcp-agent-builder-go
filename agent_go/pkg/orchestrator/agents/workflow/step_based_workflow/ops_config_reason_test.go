@@ -68,24 +68,6 @@ func TestExecutionLLMPinRequiresAReason(t *testing.T) {
 	}
 }
 
-func TestDeclaredExecutionModeChangeRequiresAReason(t *testing.T) {
-	err := validateDeclaredExecutionModeChange("scripted", "")
-	if err == nil {
-		t.Fatal("a step was moved between scripted and agentic with no stated reason")
-	}
-	for _, want := range []string{"declared_execution_mode_reason", "main.py", "create_human_input_request"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("mode rejection missing %q: %v", want, err)
-		}
-	}
-	if err := validateDeclaredExecutionModeChange("scripted", "fixed API shape, no live UI state"); err != nil {
-		t.Errorf("a real reason was rejected: %v", err)
-	}
-	if err := validateDeclaredExecutionModeChange("", ""); err != nil {
-		t.Errorf("leaving the mode unset demanded a reason: %v", err)
-	}
-}
-
 func TestClearingAnOpsDecisionClearsItsReason(t *testing.T) {
 	// A reason that outlives its decision reads as pre-approval for a future
 	// re-pin nobody reviewed.

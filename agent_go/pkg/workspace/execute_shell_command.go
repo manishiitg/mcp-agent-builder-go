@@ -322,8 +322,8 @@ func (c *Client) ExecuteShellCommand(ctx context.Context, params ExecuteShellCom
 	sessionID := c.sessionIDFromContext(ctx)
 	sessionCfg := GetSessionShellConfig(sessionID)
 	sessionEnv := common.GetSessionShellEnv(sessionID)
-	// PLAT-280 diagnostic: a scripted-mode step (declared_execution_mode=
-	// "scripted") that was granted DB access should always have DB_PATH in its
+	// PLAT-280 diagnostic: a scripted step (plan type regular) that was
+	// granted DB access should always have DB_PATH in its
 	// session env by the time its shell command runs. Its absence here, for a
 	// session the workflow believes it granted DB access to, is exactly the
 	// "database path access must be granted" failure reported against the

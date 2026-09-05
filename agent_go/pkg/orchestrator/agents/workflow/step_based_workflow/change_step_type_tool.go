@@ -13,14 +13,17 @@ import (
 // change_step_type converts a step between the two execution models in place
 // (PLAT-286). Until now the only way from a conversational message_sequence
 // to a deterministic scripted step was to rebuild it -- add_scripted_step +
-// delete_plan_steps + rewiring every dependency and route -- because
-// "scripted" is a step_config mode that exists only for the internal regular
-// type, and update_step_config rightly refuses to declare it on a
-// message_sequence (the plan type and the mode would disagree; PLAT-280).
-// The converters already existed for the runtime's own compatibility paths
+// delete_plan_steps + rewiring every dependency and route. The converters
+// already existed for the runtime's own compatibility paths
 // (normalizeRegularStepToMessageSequence, normalizeMessageSequenceStepToRegular);
-// this tool exposes them as one atomic plan+config change with a revertable
+// this tool exposes them as one atomic plan change with a revertable
 // changelog entry.
+//
+// Since PLAT-287 the plan type alone decides how a step runs: a regular step
+// IS a scripted step (its work is the checked-in learnings/<step-id>/main.py)
+// and a message_sequence step is conversational. There is no separate mode
+// to keep in step; this tool only rewrites the plan and, for the scripted
+// direction, makes sure the step's config has code execution on.
 const (
 	changeStepTypeTargetScripted        = "scripted"
 	changeStepTypeTargetMessageSequence = "message_sequence"
@@ -31,8 +34,8 @@ func getChangeStepTypeSchema() string {
 		"type": "object",
 		"properties": {
 			"step_id": {"type": "string", "minLength": 1, "description": "REQUIRED: id of the step to convert (its id field in the plan). Nested and orphan steps are accepted."},
-			"target_type": {"type": "string", "enum": ["scripted", "message_sequence"], "description": "REQUIRED: scripted = deterministic work in a checked-in learnings/<step-id>/main.py (the internal regular plan type, declared scripted in step_config); message_sequence = conversational turns."},
-			"reason": {"type": "string", "minLength": 1, "description": "REQUIRED: why this step's execution model changes. Recorded in planning/changelog and, for scripted, as declared_execution_mode_reason in step_config."}
+			"target_type": {"type": "string", "enum": ["scripted", "message_sequence"], "description": "REQUIRED: scripted = deterministic work in a checked-in learnings/<step-id>/main.py (the internal regular plan type); message_sequence = conversational turns."},
+			"reason": {"type": "string", "minLength": 1, "description": "REQUIRED: why this step's execution model changes. Recorded in planning/changelog."}
 		},
 		"required": ["step_id", "target_type", "reason"]
 	}`
@@ -43,9 +46,6 @@ type changeStepTypeResult struct {
 	noOp         bool
 	oldType      string
 	newType      string
-	oldMode      string
-	newMode      string
-	modeChanged  bool
 	droppedItems int
 	// before/after are the step as found and as written, recorded in the
 	// changelog as DeletedSteps/AddedSteps -- the persisted revert data
@@ -72,10 +72,7 @@ func ensureStepConfig(configs []StepConfig, stepID string) ([]StepConfig, *Agent
 
 // changeStepTypeInPlan is the pure mutation: it rewrites the step in plan
 // (in place, wherever it sits) and returns the step_config slice to persist.
-// The two halves are decided together so the plan type and the declared mode
-// can never disagree after a successful run -- the exact drift PLAT-280 had
-// to repair.
-func changeStepTypeInPlan(plan *PlanningResponse, configs []StepConfig, stepID, target, reason string) (*changeStepTypeResult, error) {
+func changeStepTypeInPlan(plan *PlanningResponse, configs []StepConfig, stepID, target string) (*changeStepTypeResult, error) {
 	if plan == nil {
 		return nil, fmt.Errorf("cannot change the type of step %q: plan is unavailable", stepID)
 	}
@@ -88,30 +85,27 @@ func changeStepTypeInPlan(plan *PlanningResponse, configs []StepConfig, stepID, 
 	}
 
 	cfg := MatchStepConfigByID(stepID, configs)
-	currentMode := ""
-	if cfg != nil {
-		currentMode = canonicalDeclaredExecutionMode(cfg.DeclaredExecutionMode)
-	}
-	res := &changeStepTypeResult{configs: configs, oldMode: currentMode, newMode: currentMode, before: existing, after: existing}
+	res := &changeStepTypeResult{configs: configs, before: existing, after: existing}
 
-	declareScripted := func() {
+	configureScripted := func() {
 		res.configs, cfg = ensureStepConfig(res.configs, stepID)
-		cfg.DeclaredExecutionMode = StepModeScripted
-		cfg.DeclaredExecutionModeReason = reason
-		syncDeclaredExecutionModeConfig(cfg)
-		res.newMode = StepModeScripted
-		res.modeChanged = currentMode != StepModeScripted
+		// A scripted step runs through the code executor; that is the one
+		// config flag the type implies. Any retired declared_execution_mode
+		// still on the entry is cleared so the transitional shim cannot read
+		// the step as legacy agentic again.
+		useCode := true
+		cfg.UseCodeExecutionMode = &useCode
+		cfg.LegacyDeclaredExecutionMode = ""
+		cfg.LegacyDeclaredExecutionModeReason = ""
 	}
-	clearDeclaredMode := func() {
-		if cfg == nil || cfg.DeclaredExecutionMode == "" {
+	configureSequence := func() {
+		if cfg == nil {
 			return
 		}
-		cfg.DeclaredExecutionMode = ""
-		cfg.DeclaredExecutionModeReason = ""
 		// A scripted step locks its checked-in script; a sequence has none.
 		cfg.LockCode = nil
-		res.newMode = ""
-		res.modeChanged = true
+		cfg.LegacyDeclaredExecutionMode = ""
+		cfg.LegacyDeclaredExecutionModeReason = ""
 	}
 	replace := func(replacement PlanStepInterface) error {
 		replaced, _ := replaceStepRecursively(plan.Steps, stepID, replacement)
@@ -130,12 +124,6 @@ func changeStepTypeInPlan(plan *PlanningResponse, configs []StepConfig, stepID, 
 		res.oldType = string(StepTypeMessageSeq)
 		if target == changeStepTypeTargetMessageSequence {
 			res.newType = res.oldType
-			if currentMode == StepModeScripted {
-				// Type already matches, but a declared scripted mode on a
-				// sequence is the PLAT-280 drift; finish the job by clearing it.
-				clearDeclaredMode()
-				return res, nil
-			}
 			res.noOp = true
 			return res, nil
 		}
@@ -144,28 +132,29 @@ func changeStepTypeInPlan(plan *PlanningResponse, configs []StepConfig, stepID, 
 			return nil, err
 		}
 		res.newType = string(StepTypeRegular)
-		declareScripted()
+		configureScripted()
 		return res, nil
 
 	case *RegularPlanStep:
 		res.oldType = string(StepTypeRegular)
 		if target == changeStepTypeTargetScripted {
 			res.newType = res.oldType
-			if isScriptedExecutionModeConfig(cfg) {
+			if isScriptedStep(step, cfg) {
 				res.noOp = true
 				return res, nil
 			}
-			// A regular step without a declared scripted mode is the legacy
-			// agentic shape that actually runs as a message_sequence; declaring
-			// the mode is the whole conversion.
-			declareScripted()
+			// A regular step still carrying the retired
+			// declared_execution_mode="agentic" runs as a message_sequence
+			// through the transitional shim; clearing that key is the whole
+			// conversion (the plan type already says scripted).
+			configureScripted()
 			return res, nil
 		}
 		if err := replace(normalizeRegularStepToMessageSequence(step)); err != nil {
 			return nil, err
 		}
 		res.newType = string(StepTypeMessageSeq)
-		clearDeclaredMode()
+		configureSequence()
 		return res, nil
 
 	default:
@@ -211,7 +200,7 @@ func createChangeStepTypeExecutor(
 			return "", fmt.Errorf("failed to snapshot plan: %w", err)
 		}
 
-		result, err := changeStepTypeInPlan(plan, stepConfigs, stepID, target, reason)
+		result, err := changeStepTypeInPlan(plan, stepConfigs, stepID, target)
 		if err != nil {
 			return "", err
 		}
@@ -232,24 +221,20 @@ func createChangeStepTypeExecutor(
 			return "", fmt.Errorf("plan validation failed after conversion: %w", err)
 		}
 
-		// Plan first, then config. If the second write fails the plan already
-		// carries the new type; the tool is idempotent on re-run (the type
-		// half is then a match and only the mode half is applied), which is
-		// the only way to leave step_config in agreement with plan.json.
+		// Plan first, then config. The plan type is the decision; the config
+		// write only carries the code-execution flag / lock cleanup, and the
+		// tool is idempotent on re-run if that second write fails.
 		if err := writePlanToFile(ctx, workspacePath, plan, readFile, writeFile, logger); err != nil {
 			return "", fmt.Errorf("failed to write plan: %w", err)
 		}
 		if err := writeStepConfigViaFileCallback(ctx, workspacePath, result.configs, writeFile); err != nil {
-			return "", fmt.Errorf("plan type of %q is now %s but writing planning/step_config.json failed: %w -- re-run change_step_type with the same arguments to finish the declared-mode half", stepID, result.newType, err)
+			return "", fmt.Errorf("plan type of %q is now %s but writing planning/step_config.json failed: %w -- re-run change_step_type with the same arguments to finish the config half", stepID, result.newType, err)
 		}
 		after, _ := json.Marshal(plan)
 
 		fieldChanges := []PlanFieldChange{}
 		if result.oldType != result.newType {
 			fieldChanges = append(fieldChanges, PlanFieldChange{StepID: stepID, Field: "type", OldValue: result.oldType, NewValue: result.newType})
-		}
-		if result.modeChanged {
-			fieldChanges = append(fieldChanges, PlanFieldChange{StepID: stepID, Field: "declared_execution_mode", OldValue: result.oldMode, NewValue: result.newMode})
 		}
 		entry := PlanChangelogEntry{
 			Tool:           "change_step_type",
@@ -279,7 +264,7 @@ func createChangeStepTypeExecutor(
 		var b strings.Builder
 		switch target {
 		case changeStepTypeTargetScripted:
-			fmt.Fprintf(&b, "Converted step %q to a scripted step (plan type %s, declared_execution_mode=scripted in planning/step_config.json).", stepID, result.newType)
+			fmt.Fprintf(&b, "Converted step %q to a scripted step (plan type %s; a regular step runs its checked-in script).", stepID, result.newType)
 			if result.droppedItems > 0 {
 				fmt.Fprintf(&b, " Dropped %d conversational item(s): a scripted step's work lives entirely in learnings/%s/main.py.", result.droppedItems, stepID)
 			}
@@ -290,7 +275,7 @@ func createChangeStepTypeExecutor(
 			}
 			b.WriteString(" Keep validation_schema strict, and move any judgment or verification that lived in the old turns into a message_sequence that consumes this step's output rather than into the script.")
 		default:
-			fmt.Fprintf(&b, "Converted step %q to a message_sequence with one execute-and-verify item and cleared its declared scripted mode.", stepID)
+			fmt.Fprintf(&b, "Converted step %q to a message_sequence with one execute-and-verify item.", stepID)
 			b.WriteString(" Refine the turns with update_message_sequence_step.")
 			if scriptExists {
 				fmt.Fprintf(&b, " learnings/%s/main.py still exists; a script nothing runs is artifact debt -- delete it, or keep it only if the sequence is meant to invoke it.", stepID)

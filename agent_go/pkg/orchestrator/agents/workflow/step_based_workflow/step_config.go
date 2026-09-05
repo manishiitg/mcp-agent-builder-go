@@ -42,6 +42,16 @@ func ParseStepConfigContent(content string) ([]StepConfig, error) {
 	return configFile.Steps, nil
 }
 
+// legacyDeclared reports the canonical value of the retired
+// declared_execution_mode key ("scripted", "agentic" or ""), nil-safe. Read
+// only by the transitional shim (isScriptedStep) and the PLAT-287 migrations.
+func (ac *AgentConfigs) legacyDeclared() string {
+	if ac == nil {
+		return ""
+	}
+	return canonicalDeclaredExecutionMode(ac.LegacyDeclaredExecutionMode)
+}
+
 func validateStepConfigs(configs []StepConfig) error {
 	seen := make(map[string]int, len(configs))
 	for i, config := range configs {
@@ -452,11 +462,11 @@ func MergeAgentConfigFields(target *AgentConfigs, source *AgentConfigs, stepID s
 		target.CodingAgentTmuxLifecycle = source.CodingAgentTmuxLifecycle
 		logger.Info(fmt.Sprintf("🔧 Using step config (ID: %s) - coding_agent_tmux_lifecycle: %s", stepID, source.CodingAgentTmuxLifecycle))
 	}
-	if source.DeclaredExecutionMode != "" {
-		target.DeclaredExecutionMode = source.DeclaredExecutionMode
+	if source.LegacyDeclaredExecutionMode != "" {
+		target.LegacyDeclaredExecutionMode = source.LegacyDeclaredExecutionMode
 	}
-	if source.DeclaredExecutionModeReason != "" {
-		target.DeclaredExecutionModeReason = source.DeclaredExecutionModeReason
+	if source.LegacyDeclaredExecutionModeReason != "" {
+		target.LegacyDeclaredExecutionModeReason = source.LegacyDeclaredExecutionModeReason
 	}
 	if source.DescriptionReviewed != nil {
 		target.DescriptionReviewed = source.DescriptionReviewed
@@ -568,11 +578,6 @@ func ApplyStepConfigFromFile(
 			MergeAgentConfigFields(agentConfigs, matchedConfig, step.GetID(), orchestrator.GetLogger())
 		}
 
-		// Sync declared_execution_mode to boolean flags (use_code_execution_mode, etc.)
-		// This ensures configs written manually or by older tools still set the right flags.
-		if finalConfigs := getAgentConfigs(step); finalConfigs != nil {
-			syncDeclaredExecutionModeConfig(finalConfigs)
-		}
 	}
 
 	// Apply global overrides from workflow.json execution_defaults (highest priority)

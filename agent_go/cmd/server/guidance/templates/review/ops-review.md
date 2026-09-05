@@ -362,11 +362,12 @@ recommendation in severity order. Identify which exact changes require user
 approval before `/engineering-review` can apply them. Do not truncate the result to a
 Top 3.
 
-Write every `execution_tier`, `execution_llm`, and `declared_execution_mode`
-recommendation so that it can be **stored verbatim as the change's reason**. The
-Fixer that applies it must supply `execution_tier_reason` /
-`execution_llm_reason` / `declared_execution_mode_reason`, and the tool rejects
-the change without one. Your recommendation text is that reason — state current
+Write every `execution_tier` and `execution_llm` recommendation so that it can
+be **stored verbatim as the change's reason**. The Fixer that applies it must
+supply `execution_tier_reason` / `execution_llm_reason`, and the tool rejects
+the change without one. A scripted↔agentic recommendation is a step-type
+change (`change_step_type(step_id, target_type, reason)`, reasoned in the plan
+changelog), not a config field — write it to the same standard. Your recommendation text is that reason — state current
 state, the exact suggestion, the measured evidence, and the risk in a form that
 survives the handoff into `planning/step_config.json`, which is what the next
 reviewer reads. A recommendation too vague to store is too vague to apply.

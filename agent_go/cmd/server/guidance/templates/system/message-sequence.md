@@ -12,7 +12,7 @@ Supported item types:
 - `foreach`: one templated follow-up per row from a read-only query against `db/db.sqlite`.
 - `prevalidation`: a deterministic backend validation gate with corrective feedback sent to the same conversation.
 
-`type: "code"` was removed in workflow contract v1.0.10. Deterministic code must be a standalone `regular` step configured with `declared_execution_mode: "scripted"`, with its script at `learnings/<step-id>/main.py`. Connect conversational and scripted steps through explicit `context_dependencies`, `context_output`, database contracts, and validation.
+`type: "code"` was removed in workflow contract v1.0.10. Deterministic code must be a standalone `regular` step — the type alone makes it scripted; create it with `add_scripted_step`, or move existing conversational work there with `change_step_type` — with its script at `learnings/<step-id>/main.py`. Connect conversational and scripted steps through explicit `context_dependencies`, `context_output`, database contracts, and validation.
 
 Preferred split when deterministic data is needed:
 

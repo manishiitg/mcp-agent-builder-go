@@ -322,7 +322,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) queueRecoveredDirectLearning(state *W
 	if stepCfg != nil {
 		learnObjective = stepCfg.LearningObjective
 	}
-	learnMsg := hcpo.buildLearningsContributionTurn(runtime.Step.GetID(), runtime.Step.GetDescription(), learnObjective, isScriptedExecutionModeConfig(stepCfg))
+	learnMsg := hcpo.buildLearningsContributionTurn(runtime.Step.GetID(), runtime.Step.GetDescription(), learnObjective, isScriptedStep(runtime.Step, stepCfg))
 	if strings.TrimSpace(learnMsg) == "" {
 		hcpo.recordWorkflowContinuationPhaseForRunFolder(context.Background(), state.RunFolder, state.StepID, state.StepPath, workflowContinuationOwnerStepExecution, workflowContinuationPhaseDirectLearning, workflowContinuationStatusSkipped, "no direct learning message", nil)
 		return

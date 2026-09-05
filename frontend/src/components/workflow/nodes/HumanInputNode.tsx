@@ -4,6 +4,7 @@ import { CheckCircle, XCircle, Loader2, Plus, RefreshCw, User } from 'lucide-rea
 import type { HumanInputNodeData } from '../hooks/usePlanToFlow'
 import type { ChangeType } from '../hooks/usePlanData'
 import { getExecutionModeVisuals } from './executionModeVisuals'
+import { effectiveExecutionMode, effectiveExecutionModeReason } from '../../../utils/stepConfigMatching'
 
 interface HumanInputNodeProps {
   data: HumanInputNodeData
@@ -36,9 +37,7 @@ const statusIcons: Record<string, ReactElement | null> = {
 
 export const HumanInputNode = memo(({ data, selected }: HumanInputNodeProps) => {
   const { title, question, response_type, options, status, stepIndex, changeType, isOrphan, step } = data
-  const executionMode = step?.agent_configs?.declared_execution_mode
-  const executionModeReason = step?.agent_configs?.declared_execution_mode_reason
-  const executionModeVisuals = getExecutionModeVisuals(executionMode, executionModeReason)
+  const executionModeVisuals = getExecutionModeVisuals(effectiveExecutionMode(step), effectiveExecutionModeReason(step))
   const ModeIcon = executionModeVisuals.Icon
 
   const borderColor = statusBorderColors[status] || statusBorderColors.pending

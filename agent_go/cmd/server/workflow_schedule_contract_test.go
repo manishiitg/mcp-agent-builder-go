@@ -69,7 +69,7 @@ func TestValidateScheduleMessagesRequiresReasonForSequentialConversation(t *test
 
 func TestWorkflowVersionUpgradePlanAddsScheduledRoutesAfterDirectReports(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractDirectHTMLReportsVersion})
-	if len(plan) != 13 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
+	if len(plan) != 14 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
 		t.Fatalf("unexpected upgrade plan: %+v", plan)
 	}
 	if plan[1].label != "upgrade-dedicated-pulse-schedule" || plan[1].to != workflowContractDedicatedPulseScheduleVersion {
@@ -87,14 +87,14 @@ func TestWorkflowVersionUpgradePlanAddsScheduledRoutesAfterDirectReports(t *test
 	if plan[5].label != "upgrade-report-activity-tab" || plan[5].to != workflowContractReportActivityTabVersion {
 		t.Fatalf("unexpected report tab upgrade step: %+v", plan[5])
 	}
-	if plan[6].label != "upgrade-pulse-lifecycle-reconciliation" || plan[6].to != workflowContractPulseLifecycleReconciliationVersion || plan[7].label != "upgrade-pulse-backlog-triage" || plan[7].to != workflowContractPulseBacklogTriageVersion || plan[8].label != "upgrade-pulse-actionable-backlog" || plan[8].to != workflowContractPulseActionableBacklogVersion || plan[9].label != "upgrade-orchestrator-step-type" || plan[9].to != workflowContractOrchestratorStepTypeVersion || plan[10].label != "upgrade-activity-tab-from-run-summary" || plan[10].to != workflowContractActivityTabFromRunSummaryVersion || plan[11].label != "upgrade-scripted-type-stays-regular" || plan[11].to != workflowContractScriptedTypeStaysRegularVersion || plan[12].label != "upgrade-declared-execution-mode-retired" || plan[12].to != WorkflowContractCurrentVersion {
+	if plan[6].label != "upgrade-pulse-lifecycle-reconciliation" || plan[6].to != workflowContractPulseLifecycleReconciliationVersion || plan[7].label != "upgrade-pulse-backlog-triage" || plan[7].to != workflowContractPulseBacklogTriageVersion || plan[8].label != "upgrade-pulse-actionable-backlog" || plan[8].to != workflowContractPulseActionableBacklogVersion || plan[9].label != "upgrade-orchestrator-step-type" || plan[9].to != workflowContractOrchestratorStepTypeVersion || plan[10].label != "upgrade-activity-tab-from-run-summary" || plan[10].to != workflowContractActivityTabFromRunSummaryVersion || plan[11].label != "upgrade-scripted-type-stays-regular" || plan[11].to != workflowContractScriptedTypeStaysRegularVersion || plan[12].label != "upgrade-declared-execution-mode-retired" || plan[12].to != workflowContractDeclaredExecutionModeRetiredVersion || plan[13].label != "upgrade-declared-execution-mode-stripped" || plan[13].to != WorkflowContractCurrentVersion {
 		t.Fatalf("unexpected final upgrade step: %+v", plan[6])
 	}
 }
 
 func TestWorkflowVersionUpgradePlanReauditsEarlierRouteOnlyContract(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractScheduledRouteVersion})
-	if len(plan) != 13 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
+	if len(plan) != 14 || plan[0].label != "upgrade-schedule-execution-model" || plan[0].to != workflowContractScheduleExecutionModelVersion {
 		t.Fatalf("1.0.24 workflow did not receive choice-aware schedule audit: %+v", plan)
 	}
 	for _, want := range []string{"EQUIVALENT ROUTE EXISTS", "DURABLE WORKFLOW BEHAVIOR", "GENUINELY SCHEDULE-SPECIFIC CONVERSATION", "direct_messages_reason"} {
@@ -117,7 +117,7 @@ func TestWorkflowVersionUpgradePlanReauditsEarlierRouteOnlyContract(t *testing.T
 	if plan[5].label != "upgrade-report-activity-tab" || plan[5].to != workflowContractReportActivityTabVersion {
 		t.Fatalf("unexpected report tab upgrade step: %+v", plan[5])
 	}
-	if plan[6].label != "upgrade-pulse-lifecycle-reconciliation" || plan[6].to != workflowContractPulseLifecycleReconciliationVersion || plan[7].label != "upgrade-pulse-backlog-triage" || plan[7].to != workflowContractPulseBacklogTriageVersion || plan[8].label != "upgrade-pulse-actionable-backlog" || plan[8].to != workflowContractPulseActionableBacklogVersion || plan[9].label != "upgrade-orchestrator-step-type" || plan[9].to != workflowContractOrchestratorStepTypeVersion || plan[10].label != "upgrade-activity-tab-from-run-summary" || plan[10].to != workflowContractActivityTabFromRunSummaryVersion || plan[11].label != "upgrade-scripted-type-stays-regular" || plan[11].to != workflowContractScriptedTypeStaysRegularVersion || plan[12].label != "upgrade-declared-execution-mode-retired" || plan[12].to != WorkflowContractCurrentVersion {
+	if plan[6].label != "upgrade-pulse-lifecycle-reconciliation" || plan[6].to != workflowContractPulseLifecycleReconciliationVersion || plan[7].label != "upgrade-pulse-backlog-triage" || plan[7].to != workflowContractPulseBacklogTriageVersion || plan[8].label != "upgrade-pulse-actionable-backlog" || plan[8].to != workflowContractPulseActionableBacklogVersion || plan[9].label != "upgrade-orchestrator-step-type" || plan[9].to != workflowContractOrchestratorStepTypeVersion || plan[10].label != "upgrade-activity-tab-from-run-summary" || plan[10].to != workflowContractActivityTabFromRunSummaryVersion || plan[11].label != "upgrade-scripted-type-stays-regular" || plan[11].to != workflowContractScriptedTypeStaysRegularVersion || plan[12].label != "upgrade-declared-execution-mode-retired" || plan[12].to != workflowContractDeclaredExecutionModeRetiredVersion || plan[13].label != "upgrade-declared-execution-mode-stripped" || plan[13].to != WorkflowContractCurrentVersion {
 		t.Fatalf("unexpected final upgrade step: %+v", plan[6])
 	}
 }
@@ -149,7 +149,7 @@ func TestUpgradePostRunPulseEnablementPromptShape(t *testing.T) {
 
 func TestVersion126ReceivesDedicatedPulseScheduleMigration(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractPeriodicPulseReviewVersion})
-	if len(plan) != 12 {
+	if len(plan) != 13 {
 		t.Fatalf("1.0.26 upgrade plan = %+v, want dedicated Pulse, schedule prompt, finalizer ownership, report-activity-section, then report-activity-tab migrations", plan)
 	}
 	if plan[0].label != "upgrade-dedicated-pulse-schedule" || plan[0].to != workflowContractDedicatedPulseScheduleVersion {
@@ -167,14 +167,14 @@ func TestVersion126ReceivesDedicatedPulseScheduleMigration(t *testing.T) {
 	if plan[4].label != "upgrade-report-activity-tab" || plan[4].to != workflowContractReportActivityTabVersion {
 		t.Fatalf("1.0.26 report tab upgrade = %+v", plan[4])
 	}
-	if plan[5].label != "upgrade-pulse-lifecycle-reconciliation" || plan[5].to != workflowContractPulseLifecycleReconciliationVersion || plan[6].label != "upgrade-pulse-backlog-triage" || plan[6].to != workflowContractPulseBacklogTriageVersion || plan[7].label != "upgrade-pulse-actionable-backlog" || plan[7].to != workflowContractPulseActionableBacklogVersion || plan[8].label != "upgrade-orchestrator-step-type" || plan[8].to != workflowContractOrchestratorStepTypeVersion || plan[9].label != "upgrade-activity-tab-from-run-summary" || plan[9].to != workflowContractActivityTabFromRunSummaryVersion || plan[10].label != "upgrade-scripted-type-stays-regular" || plan[10].to != workflowContractScriptedTypeStaysRegularVersion || plan[11].label != "upgrade-declared-execution-mode-retired" || plan[11].to != WorkflowContractCurrentVersion {
+	if plan[5].label != "upgrade-pulse-lifecycle-reconciliation" || plan[5].to != workflowContractPulseLifecycleReconciliationVersion || plan[6].label != "upgrade-pulse-backlog-triage" || plan[6].to != workflowContractPulseBacklogTriageVersion || plan[7].label != "upgrade-pulse-actionable-backlog" || plan[7].to != workflowContractPulseActionableBacklogVersion || plan[8].label != "upgrade-orchestrator-step-type" || plan[8].to != workflowContractOrchestratorStepTypeVersion || plan[9].label != "upgrade-activity-tab-from-run-summary" || plan[9].to != workflowContractActivityTabFromRunSummaryVersion || plan[10].label != "upgrade-scripted-type-stays-regular" || plan[10].to != workflowContractScriptedTypeStaysRegularVersion || plan[11].label != "upgrade-declared-execution-mode-retired" || plan[11].to != workflowContractDeclaredExecutionModeRetiredVersion || plan[12].label != "upgrade-declared-execution-mode-stripped" || plan[12].to != WorkflowContractCurrentVersion {
 		t.Fatalf("1.0.26 final upgrade = %+v, want Pulse lifecycle migration", plan[5])
 	}
 }
 
 func TestVersion127ReceivesSchedulePromptContractMigration(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractDedicatedPulseScheduleVersion})
-	if len(plan) != 11 || plan[0].label != "upgrade-schedule-prompt-contract" || plan[0].to != workflowContractSchedulePromptContractVersion {
+	if len(plan) != 12 || plan[0].label != "upgrade-schedule-prompt-contract" || plan[0].to != workflowContractSchedulePromptContractVersion {
 		t.Fatalf("1.0.27 upgrade plan = %+v, want schedule prompt, finalizer ownership, report-activity-section, then report-activity-tab migration", plan)
 	}
 	for _, want := range []string{
@@ -196,14 +196,14 @@ func TestVersion127ReceivesSchedulePromptContractMigration(t *testing.T) {
 	if plan[3].label != "upgrade-report-activity-tab" || plan[3].to != workflowContractReportActivityTabVersion {
 		t.Fatalf("1.0.27 report tab upgrade = %+v", plan[3])
 	}
-	if plan[4].label != "upgrade-pulse-lifecycle-reconciliation" || plan[4].to != workflowContractPulseLifecycleReconciliationVersion || plan[5].label != "upgrade-pulse-backlog-triage" || plan[5].to != workflowContractPulseBacklogTriageVersion || plan[6].label != "upgrade-pulse-actionable-backlog" || plan[6].to != workflowContractPulseActionableBacklogVersion || plan[7].label != "upgrade-orchestrator-step-type" || plan[7].to != workflowContractOrchestratorStepTypeVersion || plan[8].label != "upgrade-activity-tab-from-run-summary" || plan[8].to != workflowContractActivityTabFromRunSummaryVersion || plan[9].label != "upgrade-scripted-type-stays-regular" || plan[9].to != workflowContractScriptedTypeStaysRegularVersion || plan[10].label != "upgrade-declared-execution-mode-retired" || plan[10].to != WorkflowContractCurrentVersion {
+	if plan[4].label != "upgrade-pulse-lifecycle-reconciliation" || plan[4].to != workflowContractPulseLifecycleReconciliationVersion || plan[5].label != "upgrade-pulse-backlog-triage" || plan[5].to != workflowContractPulseBacklogTriageVersion || plan[6].label != "upgrade-pulse-actionable-backlog" || plan[6].to != workflowContractPulseActionableBacklogVersion || plan[7].label != "upgrade-orchestrator-step-type" || plan[7].to != workflowContractOrchestratorStepTypeVersion || plan[8].label != "upgrade-activity-tab-from-run-summary" || plan[8].to != workflowContractActivityTabFromRunSummaryVersion || plan[9].label != "upgrade-scripted-type-stays-regular" || plan[9].to != workflowContractScriptedTypeStaysRegularVersion || plan[10].label != "upgrade-declared-execution-mode-retired" || plan[10].to != workflowContractDeclaredExecutionModeRetiredVersion || plan[11].label != "upgrade-declared-execution-mode-stripped" || plan[11].to != WorkflowContractCurrentVersion {
 		t.Fatalf("1.0.27 final upgrade = %+v, want Pulse lifecycle migration", plan[4])
 	}
 }
 
 func TestVersion128ReceivesFinalizerOwnershipMigration(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractSchedulePromptContractVersion})
-	if len(plan) != 10 || plan[0].label != "upgrade-schedule-finalizer-ownership" || plan[0].to != workflowContractFinalizerOwnedScheduleVersion {
+	if len(plan) != 11 || plan[0].label != "upgrade-schedule-finalizer-ownership" || plan[0].to != workflowContractFinalizerOwnedScheduleVersion {
 		t.Fatalf("1.0.28 upgrade plan = %+v, want finalizer ownership, report-activity-section, then report-activity-tab migration", plan)
 	}
 	normalized := strings.Join(strings.Fields(plan[0].query), " ")
@@ -218,14 +218,14 @@ func TestVersion128ReceivesFinalizerOwnershipMigration(t *testing.T) {
 	if plan[2].label != "upgrade-report-activity-tab" || plan[2].to != workflowContractReportActivityTabVersion {
 		t.Fatalf("1.0.28 report tab upgrade = %+v", plan[2])
 	}
-	if plan[3].label != "upgrade-pulse-lifecycle-reconciliation" || plan[3].to != workflowContractPulseLifecycleReconciliationVersion || plan[4].label != "upgrade-pulse-backlog-triage" || plan[4].to != workflowContractPulseBacklogTriageVersion || plan[5].label != "upgrade-pulse-actionable-backlog" || plan[5].to != workflowContractPulseActionableBacklogVersion || plan[6].label != "upgrade-orchestrator-step-type" || plan[6].to != workflowContractOrchestratorStepTypeVersion || plan[7].label != "upgrade-activity-tab-from-run-summary" || plan[7].to != workflowContractActivityTabFromRunSummaryVersion || plan[8].label != "upgrade-scripted-type-stays-regular" || plan[8].to != workflowContractScriptedTypeStaysRegularVersion || plan[9].label != "upgrade-declared-execution-mode-retired" || plan[9].to != WorkflowContractCurrentVersion {
+	if plan[3].label != "upgrade-pulse-lifecycle-reconciliation" || plan[3].to != workflowContractPulseLifecycleReconciliationVersion || plan[4].label != "upgrade-pulse-backlog-triage" || plan[4].to != workflowContractPulseBacklogTriageVersion || plan[5].label != "upgrade-pulse-actionable-backlog" || plan[5].to != workflowContractPulseActionableBacklogVersion || plan[6].label != "upgrade-orchestrator-step-type" || plan[6].to != workflowContractOrchestratorStepTypeVersion || plan[7].label != "upgrade-activity-tab-from-run-summary" || plan[7].to != workflowContractActivityTabFromRunSummaryVersion || plan[8].label != "upgrade-scripted-type-stays-regular" || plan[8].to != workflowContractScriptedTypeStaysRegularVersion || plan[9].label != "upgrade-declared-execution-mode-retired" || plan[9].to != workflowContractDeclaredExecutionModeRetiredVersion || plan[10].label != "upgrade-declared-execution-mode-stripped" || plan[10].to != WorkflowContractCurrentVersion {
 		t.Fatalf("1.0.28 final upgrade = %+v, want Pulse lifecycle migration", plan[3])
 	}
 }
 
 func TestVersion129ReceivesReportActivitySectionMigration(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractFinalizerOwnedScheduleVersion})
-	if len(plan) != 9 || plan[0].label != "upgrade-report-activity-section" || plan[0].to != workflowContractReportActivitySectionVersion {
+	if len(plan) != 10 || plan[0].label != "upgrade-report-activity-section" || plan[0].to != workflowContractReportActivitySectionVersion {
 		t.Fatalf("1.0.29 upgrade plan = %+v, want report-activity-section then report-activity-tab migration", plan)
 	}
 	normalized := strings.Join(strings.Fields(plan[0].query), " ")
@@ -243,14 +243,14 @@ func TestVersion129ReceivesReportActivitySectionMigration(t *testing.T) {
 	if plan[1].label != "upgrade-report-activity-tab" || plan[1].to != workflowContractReportActivityTabVersion {
 		t.Fatalf("1.0.29 report tab upgrade = %+v", plan[1])
 	}
-	if plan[2].label != "upgrade-pulse-lifecycle-reconciliation" || plan[2].to != workflowContractPulseLifecycleReconciliationVersion || plan[3].label != "upgrade-pulse-backlog-triage" || plan[3].to != workflowContractPulseBacklogTriageVersion || plan[4].label != "upgrade-pulse-actionable-backlog" || plan[4].to != workflowContractPulseActionableBacklogVersion || plan[5].label != "upgrade-orchestrator-step-type" || plan[5].to != workflowContractOrchestratorStepTypeVersion || plan[6].label != "upgrade-activity-tab-from-run-summary" || plan[6].to != workflowContractActivityTabFromRunSummaryVersion || plan[7].label != "upgrade-scripted-type-stays-regular" || plan[7].to != workflowContractScriptedTypeStaysRegularVersion || plan[8].label != "upgrade-declared-execution-mode-retired" || plan[8].to != WorkflowContractCurrentVersion {
+	if plan[2].label != "upgrade-pulse-lifecycle-reconciliation" || plan[2].to != workflowContractPulseLifecycleReconciliationVersion || plan[3].label != "upgrade-pulse-backlog-triage" || plan[3].to != workflowContractPulseBacklogTriageVersion || plan[4].label != "upgrade-pulse-actionable-backlog" || plan[4].to != workflowContractPulseActionableBacklogVersion || plan[5].label != "upgrade-orchestrator-step-type" || plan[5].to != workflowContractOrchestratorStepTypeVersion || plan[6].label != "upgrade-activity-tab-from-run-summary" || plan[6].to != workflowContractActivityTabFromRunSummaryVersion || plan[7].label != "upgrade-scripted-type-stays-regular" || plan[7].to != workflowContractScriptedTypeStaysRegularVersion || plan[8].label != "upgrade-declared-execution-mode-retired" || plan[8].to != workflowContractDeclaredExecutionModeRetiredVersion || plan[9].label != "upgrade-declared-execution-mode-stripped" || plan[9].to != WorkflowContractCurrentVersion {
 		t.Fatalf("1.0.29 final upgrade = %+v, want Pulse lifecycle migration", plan[2])
 	}
 }
 
 func TestVersion130ReceivesReportActivityTabMigration(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractReportActivitySectionVersion})
-	if len(plan) != 8 || plan[0].label != "upgrade-report-activity-tab" || plan[0].to != workflowContractReportActivityTabVersion {
+	if len(plan) != 9 || plan[0].label != "upgrade-report-activity-tab" || plan[0].to != workflowContractReportActivityTabVersion {
 		t.Fatalf("1.0.30 upgrade plan = %+v, want report-activity-tab then Pulse lifecycle migration", plan)
 	}
 	normalized := strings.Join(strings.Fields(plan[0].query), " ")
@@ -265,14 +265,14 @@ func TestVersion130ReceivesReportActivityTabMigration(t *testing.T) {
 			t.Errorf("report-activity-tab migration prompt missing %q", want)
 		}
 	}
-	if plan[1].label != "upgrade-pulse-lifecycle-reconciliation" || plan[1].to != workflowContractPulseLifecycleReconciliationVersion || plan[2].label != "upgrade-pulse-backlog-triage" || plan[2].to != workflowContractPulseBacklogTriageVersion || plan[3].label != "upgrade-pulse-actionable-backlog" || plan[3].to != workflowContractPulseActionableBacklogVersion || len(plan) != 8 || plan[4].label != "upgrade-orchestrator-step-type" || plan[4].to != workflowContractOrchestratorStepTypeVersion || plan[5].label != "upgrade-activity-tab-from-run-summary" || plan[5].to != workflowContractActivityTabFromRunSummaryVersion || plan[6].label != "upgrade-scripted-type-stays-regular" || plan[6].to != workflowContractScriptedTypeStaysRegularVersion || plan[7].label != "upgrade-declared-execution-mode-retired" || plan[7].to != WorkflowContractCurrentVersion {
+	if plan[1].label != "upgrade-pulse-lifecycle-reconciliation" || plan[1].to != workflowContractPulseLifecycleReconciliationVersion || plan[2].label != "upgrade-pulse-backlog-triage" || plan[2].to != workflowContractPulseBacklogTriageVersion || plan[3].label != "upgrade-pulse-actionable-backlog" || plan[3].to != workflowContractPulseActionableBacklogVersion || len(plan) != 9 || plan[4].label != "upgrade-orchestrator-step-type" || plan[4].to != workflowContractOrchestratorStepTypeVersion || plan[5].label != "upgrade-activity-tab-from-run-summary" || plan[5].to != workflowContractActivityTabFromRunSummaryVersion || plan[6].label != "upgrade-scripted-type-stays-regular" || plan[6].to != workflowContractScriptedTypeStaysRegularVersion || plan[7].label != "upgrade-declared-execution-mode-retired" || plan[7].to != workflowContractDeclaredExecutionModeRetiredVersion || plan[8].label != "upgrade-declared-execution-mode-stripped" || plan[8].to != WorkflowContractCurrentVersion {
 		t.Fatalf("1.0.30 final upgrade = %+v, want Pulse lifecycle migration", plan[1])
 	}
 }
 
 func TestVersion133ReceivesActionablePulseBacklogMigration(t *testing.T) {
 	plan := workflowVersionUpgradePlan(&WorkflowManifest{Version: workflowContractPulseBacklogTriageVersion})
-	if len(plan) != 5 || plan[0].label != "upgrade-pulse-actionable-backlog" || plan[0].to != workflowContractPulseActionableBacklogVersion || plan[1].label != "upgrade-orchestrator-step-type" || plan[1].to != workflowContractOrchestratorStepTypeVersion || plan[2].label != "upgrade-activity-tab-from-run-summary" || plan[2].to != workflowContractActivityTabFromRunSummaryVersion || plan[3].label != "upgrade-scripted-type-stays-regular" || plan[3].to != workflowContractScriptedTypeStaysRegularVersion || plan[4].label != "upgrade-declared-execution-mode-retired" || plan[4].to != WorkflowContractCurrentVersion {
+	if len(plan) != 6 || plan[0].label != "upgrade-pulse-actionable-backlog" || plan[0].to != workflowContractPulseActionableBacklogVersion || plan[1].label != "upgrade-orchestrator-step-type" || plan[1].to != workflowContractOrchestratorStepTypeVersion || plan[2].label != "upgrade-activity-tab-from-run-summary" || plan[2].to != workflowContractActivityTabFromRunSummaryVersion || plan[3].label != "upgrade-scripted-type-stays-regular" || plan[3].to != workflowContractScriptedTypeStaysRegularVersion || plan[4].label != "upgrade-declared-execution-mode-retired" || plan[4].to != workflowContractDeclaredExecutionModeRetiredVersion || plan[5].label != "upgrade-declared-execution-mode-stripped" || plan[5].to != WorkflowContractCurrentVersion {
 		t.Fatalf("1.0.33 upgrade plan = %+v, want actionable Pulse backlog migration then orchestrator step-type migration", plan)
 	}
 	for _, want := range []string{

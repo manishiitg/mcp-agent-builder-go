@@ -4,6 +4,7 @@ import { CheckCircle, XCircle, Loader2, Plus, RefreshCw, ListOrdered, MessageSqu
 import type { MessageSequenceNodeData } from '../hooks/usePlanToFlow'
 import type { ChangeType } from '../hooks/usePlanData'
 import type { MessageSequenceItem } from '../../../utils/stepConfigMatching'
+import { effectiveExecutionMode, effectiveExecutionModeReason } from '../../../utils/stepConfigMatching'
 import { getExecutionModeVisuals } from './executionModeVisuals'
 
 interface MessageSequenceNodeProps {
@@ -87,9 +88,7 @@ export const MessageSequenceNode = memo(({ data, selected }: MessageSequenceNode
 
   const seqItems = items || []
   const displayTitle = title || `Message Sequence ${stepIndex + 1}`
-  const executionMode = step?.agent_configs?.declared_execution_mode
-  const executionModeReason = step?.agent_configs?.declared_execution_mode_reason
-  const executionModeVisuals = getExecutionModeVisuals(executionMode, executionModeReason)
+  const executionModeVisuals = getExecutionModeVisuals(effectiveExecutionMode(step), effectiveExecutionModeReason(step))
   const ModeIcon = executionModeVisuals.Icon
   const nodeBorderColor = status === 'pending' && executionModeVisuals.borderClassName
     ? executionModeVisuals.borderClassName

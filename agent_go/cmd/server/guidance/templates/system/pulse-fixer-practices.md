@@ -207,16 +207,19 @@ consumer contract.
 
 ## Applying an Ops config recommendation
 
-Use this whenever a finding asks you to change `execution_tier`,
-`execution_llm`, or `declared_execution_mode`. These are cost decisions
-the selected `technical_review` focus owns; it is read-only, so you are the writer.
+Use this whenever a finding asks you to change `execution_tier` or
+`execution_llm`. These are cost decisions the selected `technical_review`
+focus owns; it is read-only, so you are the writer. (Moving a step between
+scripted and agentic is a step-type change — `change_step_type(step_id,
+target_type, reason)` — not a config field; the same evidence bar applies and
+the `reason` lands in the plan changelog.)
 
 1. **Never apply one without an owning Ops finding.** These fields are not
    yours to tune opportunistically. If no finding recommends the change, the
    change is not justified — file the finding first, or leave it alone.
 2. **Carry the evidence into the config, not just the fix.** Each field requires
-   a paired reason (`execution_tier_reason`, `execution_llm_reason`,
-   `declared_execution_mode_reason`) and the tool rejects the change without it.
+   a paired reason (`execution_tier_reason`, `execution_llm_reason`) and the
+   tool rejects the change without it.
    Write it so a reviewer six weeks from now can judge the decision without
    re-deriving it: cite the finding id, the current state, and the measured
    evidence. `planning/step_config.json` is what the next reviewer actually

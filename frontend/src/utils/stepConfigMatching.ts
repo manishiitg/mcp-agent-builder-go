@@ -55,7 +55,14 @@ export interface AgentConfigs {
   db_access?: 'read' | 'write' | 'read-write' | 'none';
   description_reviewed?: boolean;
   review_notes?: string;
-  declared_execution_mode?: string;           // "scripted" | "agentic" | "tool_calling" — authoring hint; resolution in backend
+  // LEGACY, read-only (PLAT-287). A step's execution model is decided by its
+  // plan `type` now — `regular` is scripted, `message_sequence` is agentic —
+  // and an evaluation step carries `execution_mode` on the step itself. These
+  // two keys may still be present in a workflow's step_config.json until its
+  // v1.0.39 contract migration strips them; a `regular` step still carrying
+  // "agentic" is a legacy agentic step the runtime runs as a sequence. Nothing
+  // writes them any more. Use effectiveExecutionMode() instead of reading them.
+  declared_execution_mode?: string;
   declared_execution_mode_reason?: string;
 }
 
@@ -322,19 +329,82 @@ export function isMessageSequenceStep(step: PlanStep): step is MessageSequencePl
   return step.type === 'message_sequence';
 }
 
-// A stored `regular` step is a legacy on-disk type: the runtime normalizes every
-// non-scripted one into a message_sequence before executing it, and the direct
-// regular-step execution path no longer exists. Rendering plan.json's raw `type`
-// therefore describes something that never runs — a plain step card with no
-// items, for work that actually executes as a sequence and reports completions
-// naming items ("execute-and-verify") found nowhere in the plan.
+export type EffectiveExecutionMode = 'scripted' | 'agentic';
+
+// Anything the canvas can hand us: a plan step, or an evaluation step (which
+// has no plan `type` and carries `execution_mode` on the step itself).
+export interface ExecutionModeStepLike {
+  type?: string;
+  agent_configs?: AgentConfigs;
+  execution_mode?: string;
+}
+
+export interface EffectiveExecutionModeOptions {
+  // The caller knows the step came from evaluation_plan.json. Evaluation steps
+  // have no plan `type`, and a plan step without a `type` is treated as
+  // `regular` (the legacy default), so the two cannot be told apart otherwise.
+  evaluation?: boolean;
+}
+
+// The legacy declared mode, canonicalised the way the backend did
+// (learn_code -> scripted, code_exec -> agentic), or undefined when absent.
+function legacyDeclaredMode(step: ExecutionModeStepLike): string | undefined {
+  const raw = step.agent_configs?.declared_execution_mode?.trim().toLowerCase();
+  if (!raw) return undefined;
+  if (raw === 'learn_code') return 'scripted';
+  if (raw === 'code_exec') return 'agentic';
+  return raw;
+}
+
+// The execution model a step actually runs with (PLAT-287): decided by the plan
+// type, not by a config field. `regular` is scripted — its work is the
+// checked-in learnings/<id>/main.py — and `message_sequence` is agentic. The
+// one transitional exception: a `regular` step whose config still carries the
+// legacy key with "agentic" (not yet stripped by the v1.0.39 migration) is a
+// legacy agentic step the runtime still normalises into a sequence. An
+// evaluation step uses its own `execution_mode`, defaulting to agentic (a not
+// yet migrated eval step may still declare "scripted" through the legacy key).
+// Routing/branch/orchestrator/human-input steps have no execution mode.
+export function effectiveExecutionMode(
+  step: ExecutionModeStepLike | null | undefined,
+  options?: EffectiveExecutionModeOptions
+): EffectiveExecutionMode | undefined {
+  if (!step) return undefined;
+  if (options?.evaluation) {
+    const own = step.execution_mode?.trim().toLowerCase();
+    if (own === 'scripted') return 'scripted';
+    if (own === 'agentic') return 'agentic';
+    return legacyDeclaredMode(step) === 'scripted' ? 'scripted' : 'agentic';
+  }
+  const type = step.type || 'regular';
+  if (type === 'regular') {
+    return legacyDeclaredMode(step) === 'agentic' ? 'agentic' : 'scripted';
+  }
+  if (type === 'message_sequence') return 'agentic';
+  return undefined;
+}
+
+// Display-only: the rationale a legacy config recorded next to its declared
+// mode. Gone once the migration strips the key; nothing writes it any more.
+export function effectiveExecutionModeReason(step: ExecutionModeStepLike | null | undefined): string | undefined {
+  const reason = step?.agent_configs?.declared_execution_mode_reason?.trim();
+  return reason || undefined;
+}
+
+// Which steps the message-sequence runtime executes. A `regular` step is a
+// scripted step and runs through the scripted executor — except a legacy
+// agentic one (config still carries declared_execution_mode "agentic", not yet
+// stripped by v1.0.39), which the runtime normalises into a single-turn
+// sequence exactly as it did before PLAT-287. Rendering such a step as a
+// sequence keeps the canvas honest about the items it will report completing
+// ("execute-and-verify"), which exist nowhere in plan.json.
 //
 // Mirrors shouldNormalizeRegularStepToMessageSequence / effectiveRuntimeStepType
-// in controller_message_sequence.go. `declared_execution_mode` reaches us from
+// in controller_message_sequence.go. The legacy key reaches us from
 // step_config.json, merged onto the step by usePlanData.
 export function runsAsMessageSequence(step: PlanStep): boolean {
   if (isMessageSequenceStep(step)) return true;
-  return isRegularStep(step) && step.agent_configs?.declared_execution_mode !== 'scripted';
+  return isRegularStep(step) && legacyDeclaredMode(step) === 'agentic';
 }
 
 // The item list the runtime actually executes. An authored message_sequence

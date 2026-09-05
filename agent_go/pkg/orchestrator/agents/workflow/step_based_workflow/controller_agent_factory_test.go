@@ -443,7 +443,7 @@ func TestApplyStepConfigToAgentConfigDefaultsCodingAgentTmuxCloseOnCompletion(t 
 	config := agents.NewOrchestratorAgentConfig("step-agent")
 	config.LLMConfig.Primary.Provider = string(mcpllm.ProviderCodexCLI)
 
-	hcpo.applyStepConfigToAgentConfig(config, &AgentConfigs{}, true)
+	hcpo.applyStepConfigToAgentConfig(config, &AgentConfigs{}, true, false)
 
 	if config.CodingAgentKeepAlive {
 		t.Fatal("expected workflow step coding-agent tmux lifecycle to close on completion by default")
@@ -457,7 +457,7 @@ func TestApplyStepConfigToAgentConfigSupportsCodingAgentTmuxKeepAlive(t *testing
 
 	hcpo.applyStepConfigToAgentConfig(config, &AgentConfigs{
 		CodingAgentTmuxLifecycle: CodingAgentTmuxLifecycleKeepAlive,
-	}, true)
+	}, true, false)
 
 	if !config.CodingAgentKeepAlive {
 		t.Fatal("expected explicit keep_alive lifecycle to keep coding-agent tmux session alive")
@@ -468,7 +468,7 @@ func TestApplyStepConfigToAgentConfigDoesNotExposeRunConcernTool(t *testing.T) {
 	t.Run("default branch (no step-specific SelectedTools)", func(t *testing.T) {
 		hcpo := newAgentFactoryTestOrchestrator(t)
 		config := agents.NewOrchestratorAgentConfig("step-agent")
-		hcpo.applyStepConfigToAgentConfig(config, &AgentConfigs{}, true)
+		hcpo.applyStepConfigToAgentConfig(config, &AgentConfigs{}, true, false)
 		if slices.Contains(config.SelectedTools, "workflow_db:record_run_concern") {
 			t.Fatalf("default SelectedTools must not expose retired record_run_concern, got %v", config.SelectedTools)
 		}
@@ -479,7 +479,7 @@ func TestApplyStepConfigToAgentConfigDoesNotExposeRunConcernTool(t *testing.T) {
 		config := agents.NewOrchestratorAgentConfig("step-agent")
 		hcpo.applyStepConfigToAgentConfig(config, &AgentConfigs{
 			SelectedTools: []string{"api-bridge:execute_shell_command", "workflow_db:record_run_concern"},
-		}, true)
+		}, true, false)
 		if slices.Contains(config.SelectedTools, "workflow_db:record_run_concern") {
 			t.Fatalf("step-specific SelectedTools must not expose retired record_run_concern, got %v", config.SelectedTools)
 		}
@@ -548,7 +548,7 @@ func TestApplyStepConfigToAgentConfigEnablesWorkspaceIsolation(t *testing.T) {
 		t.Fatal("OrchestratorAgentConfig must default IsolateCodingAgentWorkspace=false; chat code paths depend on the zero value being safe")
 	}
 
-	hcpo.applyStepConfigToAgentConfig(config, &AgentConfigs{}, true)
+	hcpo.applyStepConfigToAgentConfig(config, &AgentConfigs{}, true, false)
 
 	if !config.IsolateCodingAgentWorkspace {
 		t.Fatal("expected workflow step to enable IsolateCodingAgentWorkspace; without it, concurrent steps collide on CodingAgentWorkingDir and the model's built-in tools can mutate operator files")
@@ -1024,7 +1024,7 @@ func TestApplyStepConfigToAgentConfigForcesCodeExecForCLIProviders(t *testing.T)
 	config := agents.NewOrchestratorAgentConfig("test-agent")
 	config.LLMConfig.Primary.Provider = "claude-code"
 
-	hcpo.applyStepConfigToAgentConfig(config, nil, false)
+	hcpo.applyStepConfigToAgentConfig(config, nil, false, false)
 
 	if !config.UseCodeExecutionMode {
 		t.Fatalf("expected CLI providers to have code execution mode enabled")

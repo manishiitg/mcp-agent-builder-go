@@ -157,7 +157,7 @@ func TestConvertLegacyCodeSequenceCreatesStandaloneScriptedSteps(t *testing.T) {
 		t.Fatal("prevalidation was not attached to the preceding scripted step")
 	}
 	for _, cfg := range migratedConfigs {
-		if cfg.AgentConfigs == nil || cfg.AgentConfigs.DeclaredExecutionMode != "scripted" || cfg.AgentConfigs.UseCodeExecutionMode == nil || !*cfg.AgentConfigs.UseCodeExecutionMode {
+		if cfg.AgentConfigs == nil || cfg.AgentConfigs.UseCodeExecutionMode == nil || !*cfg.AgentConfigs.UseCodeExecutionMode {
 			t.Fatalf("step %s is not configured as scripted: %+v", cfg.ID, cfg.AgentConfigs)
 		}
 	}

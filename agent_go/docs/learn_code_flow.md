@@ -1,38 +1,26 @@
-# Learn Code and Code Execution Modes
+# Scripted and Agentic Step Execution
 
 This is the current source of truth for scripted workflow execution.
 
-`learn_code` and `code_exec` are not separate systems. They are two execution modes built on the same code-execution foundation:
+A workflow step's execution model is decided by its plan `type` alone:
 
-- `code_exec`: the agent writes and runs code for the current run only.
-- `learn_code`: the agent writes and maintains a reusable `main.py` that is retried on future runs before the LLM is called.
+- `regular` — a **scripted** step. Its work is a reusable `learnings/{step-id}/main.py` that is tried on every run before any LLM turn, and repaired by the LLM when it fails.
+- `message_sequence` — an **agentic** (conversational) step. The LLM acts each turn; no persistent script is saved. It may still use code execution for the current run.
+
+There is no separate mode field. The former `agent_configs.declared_execution_mode` (`"scripted"` / `"agentic"`, earlier `learn_code` / `code_exec`) was retired by workflow contract v1.0.38–1.0.39 (PLAT-287): it was implied on one type and forbidden on the other, so it could only ever drift from the plan (PLAT-280 was exactly such a stray declaration). Workflows migrated before v1.0.39 may still carry the key in `step_config.json`; it is ignored once the plan type is explicit and is stripped by the v1.0.39 upgrade.
 
 ## Overview
 
-At the workflow step level, scripted execution is controlled by two fields in `agent_configs`:
+| Plan `type` | Execution | Script persistence |
+|---|---|---|
+| `regular` | Scripted: saved-script fast path, then LLM generation/repair | `learnings/{step-id}/main.py` is saved back after each successful repair |
+| `message_sequence` | Agentic: LLM turns; code execution for the run if `use_code_execution_mode` is on | none — a leftover `learnings/{step-id}/main.py` is stale debt and should be deleted |
 
-- `use_code_execution_mode`
-- `declared_execution_mode`
+`use_code_execution_mode` (`agent_configs`) is independent of the type: it decides whether the agent writes and runs code through the bridge at all. A `regular` step always has it forced on — the agent needs the tool index and `get_api_spec` to write `main.py`. A `message_sequence` can turn it on for ad-hoc scripting without becoming scripted.
 
-The current behavior is:
+## Choosing and changing the model
 
-| Setting | Effect |
-|---|---|
-| `use_code_execution_mode: false` | Step uses normal direct-tool execution, not scripted code execution |
-| `use_code_execution_mode: true` + `declared_execution_mode: "code_exec"` | Step uses ephemeral code execution only |
-| `use_code_execution_mode: true` + `declared_execution_mode: "learn_code"` | Step uses persistent scripted execution with saved `main.py` fast path |
-
-Important implementation detail:
-
-- `learn_code` is detected only when `declared_execution_mode == "learn_code"`.
-- `code_exec` is the fallback mode whenever scripted execution is enabled but the step is not explicitly marked as `learn_code`.
-- `syncDeclaredExecutionModeConfig()` forces `use_code_execution_mode=true` when `declared_execution_mode` is `learn_code` or `code_exec`.
-
-That means the recommended workflow config is to set both fields explicitly for every optimized scripted step.
-
-## Recommended Usage
-
-Prefer `learn_code` for most stable workflow steps:
+Prefer a `regular` (scripted) step for stable, deterministic work:
 
 - structured data transforms
 - report building
@@ -41,53 +29,53 @@ Prefer `learn_code` for most stable workflow steps:
 - repeatable file processing
 - browser flows with stable selectors and predictable navigation
 
-Use `code_exec` when the step still benefits from scripting, but the exact logic changes from run to run:
+Prefer a `message_sequence` when the logic changes from run to run:
 
 - exploratory browser work
 - adaptive investigations
 - tasks where the agent must improvise heavily based on page state or live results
 - one-off data collection patterns that are unlikely to stabilize into a reusable script
 
+Tools:
+
+- `add_scripted_step` creates a `regular` step; `add_message_sequence_step` creates a sequence.
+- `change_step_type(step_id, target_type="scripted"|"message_sequence", reason)` moves an existing step between the two in place — same id, description, dependencies, validation and position — and records the change (with the reason) in the plan changelog. To scripted, its conversational items are dropped and `learnings/{step-id}/main.py` must then be written with `update_scripted_step(code=...)`; to a sequence, one execute-and-verify item is synthesized and `lock_code` is cleared.
+- `update_step_config(...)` no longer accepts an execution-mode field; it still owns `use_code_execution_mode`, `lock_code`, tiers, models and access flags.
+- `run_saved_main_py(step_id, group_id?)` is valid only for `regular` steps, because only those have a persistent saved-script fast path.
+
+Evaluation steps (`evaluation/evaluation_plan.json`) have no `regular`/`message_sequence` split; their choice is the explicit `execution_mode: "scripted"|"agentic"` field on the eval step itself (empty = agentic), set with `update_evaluation_plan(step_id, execution_mode=...)`.
+
 ## Configuration
 
-### Preferred `learn_code` config
+### Scripted step
 
 ```json
 {
   "id": "step-id",
-  "agent_configs": {
-    "use_code_execution_mode": true,
-    "declared_execution_mode": "learn_code",
-    "declared_execution_mode_reason": "Stable scripted flow with reusable Python"
-  }
+  "type": "regular",
+  "title": "Fetch and normalize prices",
+  "description": "..."
 }
 ```
 
-### Ephemeral `code_exec` config
+with its script at `learnings/step-id/main.py`. The matching `step_config.json` entry carries only tier/model/tool/access settings.
+
+### Agentic step
 
 ```json
 {
   "id": "step-id",
-  "agent_configs": {
-    "use_code_execution_mode": true,
-    "declared_execution_mode": "code_exec",
-    "declared_execution_mode_reason": "Adaptive step that changes between runs"
-  }
+  "type": "message_sequence",
+  "title": "Judge the day's setups",
+  "items": [ ... ]
 }
 ```
 
-### Workshop defaults
-
-Workshop guidance treats `learn_code` as the preferred default for optimized scripted steps. The workshop tools also expose:
-
-- `update_step_config(...)`
-- `run_saved_main_py(step_id, group_id?)`
-
-`run_saved_main_py` is valid only for `learn_code` steps, because only those steps have a persistent saved-script fast path.
+Add `"use_code_execution_mode": true` to its `agent_configs` when the turns should script against the bridge for the current run.
 
 ## Shared Architecture
 
-Both modes use the same bridge-based execution model.
+Both models use the same bridge-based execution model.
 
 The execution agent does not call most MCP tools directly. Instead it:
 
@@ -109,24 +97,24 @@ This is the same bridge used by CLI-style providers that require HTTP tool routi
 
 ## Mode Resolution and Precedence
 
-The execution loop resolves mode in two layers:
+The execution loop resolves the model in two layers:
 
-1. Determine whether the step is in persistent scripted mode:
-   - `isScriptedExecutionModeConfig(cfg)` returns true only for `declared_execution_mode == "learn_code"`.
-2. Determine whether code execution is enabled at all:
+1. Is the step scripted? — yes iff its plan type is `regular` (an eval step: iff its `execution_mode` is `"scripted"`).
+2. Is code execution enabled at all?
    - step config `use_code_execution_mode`
    - otherwise workflow/preset default
-   - then `learn_code` forces code execution on
+   - a scripted step forces it on
 
 Additional behavior:
 
 - Step config overrides workflow default.
 - Workflow default no longer auto-enables code execution globally.
 - Provider-specific auto-enable is handled per agent for CLI providers such as `claude-code`, `pi-cli`, and `codex-cli`.
+- Transitional: a `regular` step whose not-yet-stripped `step_config.json` entry still says `declared_execution_mode: "agentic"` (a legacy agentic regular step on a workflow below contract v1.0.38) is run as a `message_sequence` until the v1.0.38 upgrade makes its type explicit. After v1.0.39 no such entry exists.
 
-## `learn_code` Flow
+## Scripted (`regular`) Flow
 
-`learn_code` adds persistence and a saved-script fast path on top of normal code execution.
+A scripted step adds persistence and a saved-script fast path on top of normal code execution.
 
 ### Persistent paths
 
@@ -170,7 +158,7 @@ If fast path fails or no saved script exists:
 
 1. The execution agent writes or repairs `execution/{step-path}/code/main.py`.
 2. The controller reruns pre-validation.
-3. On failure, it starts a learn-code repair loop.
+3. On failure, it starts a repair loop.
 
 Repair loop behavior:
 
@@ -182,9 +170,9 @@ Repair loop behavior:
 
 ### Save-back behavior
 
-After learn-code execution, the controller saves the latest script back into `learnings/{step-id}/` unless the script has syntax errors or `lock_code` freezes the saved script.
+After execution, the controller saves the latest script back into `learnings/{step-id}/` unless the script has syntax errors or `lock_code` freezes the saved script.
 
-This means `learn_code` is not only a fast path. It is also the persistent script-maintenance path.
+This means a scripted step is not only a fast path. It is also the persistent script-maintenance path.
 
 ### Learning access vs code lock
 
@@ -193,14 +181,14 @@ Learning writes use an access level; saved code has a separate lock:
 | Setting | Controls | Effect |
 |---|---|---|
 | `learnings_access` (`"read"\|"read-write"\|"none"`) | SKILL.md read/write at a coarse level | Default `"read"` — step sees `_global/SKILL.md` but doesn't contribute. `"read-write"` (+ non-empty `learning_objective`) opts into contribution. `"none"` opts out of both. Mirrors `knowledgebase_access`. |
-| `lock_code: true` | main.py | Prevents LLM-rewritten scripts from being saved back to learnings. Skips the fix loop entirely (falls back directly to code_exec mode). |
+| `lock_code: true` | main.py | Prevents LLM-rewritten scripts from being saved back to learnings. Skips the fix loop entirely (falls back directly to per-run code execution). |
 
 When `lock_code: true` is set on a step:
 
 - **Fast path**: Saved script is still copied from learnings to execution and run normally
 - **Fix loop**: Skipped entirely (`maxFixIter = -1`) — no repair agents are created, no tokens spent on fixes that would be discarded
 - **Save-back**: Blocked — the LLM's rewritten script is NOT copied back to learnings
-- **Fallback**: Falls through directly to code_exec mode (tools directly, no main.py)
+- **Fallback**: Falls through directly to per-run code execution (tools directly, no main.py)
 - **Metadata**: `script_metadata.json` is still updated (run history, failure patterns) for observability
 
 This means a locked script that keeps failing will repeat the same failure every run. The user must manually fix `learnings/{step-id}/main.py` or set `lock_code: false` to let the system fix it.
@@ -209,16 +197,16 @@ To force a complete rewrite: delete `learnings/{step-id}/main.py` (not the execu
 
 ### Fallback after repair exhaustion
 
-If the learn-code repair loop is exhausted (or skipped due to locked learnings), the controller disables persistent scripted mode for the remaining outer retries and continues in plain `code_exec` mode.
+If the repair loop is exhausted (or skipped due to locked learnings), the controller disables persistent scripted mode for the remaining outer retries and continues in plain per-run code execution.
 
 That fallback is important:
 
-- `learn_code` is the preferred stable path
-- `code_exec` is the recovery path when the saved script is not currently salvageable within the repair budget
+- the saved script is the preferred stable path
+- per-run code execution is the recovery path when the saved script is not currently salvageable within the repair budget
 
-## `code_exec` Flow
+## Agentic (`message_sequence`) Flow with Code Execution
 
-`code_exec` uses the same bridge and env model, but it does not rely on a persistent saved script.
+A sequence with `use_code_execution_mode` on uses the same bridge and env model, but it does not rely on a persistent saved script.
 
 Behavior:
 
@@ -227,7 +215,7 @@ Behavior:
 - no `run_saved_main_py` support
 - the step still benefits from script-based batching, loops, parsing, and multi-tool orchestration
 
-This is the correct mode when scripting is useful but persistence would create more churn than value.
+This is the right model when scripting is useful but persistence would create more churn than value.
 
 ## Prompting Expectations for Scripted Steps
 
@@ -238,7 +226,7 @@ The controller prompt for scripted execution expects:
 - variables to be passed through env vars or runtime args, not hardcoded
 - diagnostic output to go to stdout/stderr so repair loops can reason over failures
 
-For `learn_code`, the prompt also emphasizes:
+For a scripted (`regular`) step, the prompt also emphasizes:
 
 - maintaining a reusable `main.py` and repairing it incrementally
 - **no fabricated data**: every output value must trace to a real data source (MCP tool call, API response, or input file)
@@ -246,16 +234,16 @@ For `learn_code`, the prompt also emphasizes:
 - **tool discovery**: call `get_api_spec` before writing browser/MCP code to learn exact parameter schemas instead of guessing
 - `script_metadata.json` is referenced by path (not inlined) so the LLM reads it on demand
 
-## When to Use Which Mode
+## When to Use Which
 
-Choose `learn_code` when:
+Choose a `regular` (scripted) step when:
 
 - the task shape is stable
 - the script should improve over time
 - you want future runs to be cheap and fast
 - you want a reviewable `main.py` artifact in learnings
 
-Choose `code_exec` when:
+Choose a `message_sequence` when:
 
 - the task shape changes too much between runs
 - persistence would encode brittle assumptions
@@ -264,7 +252,7 @@ Choose `code_exec` when:
 ## Operational Notes
 
 - CLI providers may force code execution behavior because they route tools through the HTTP bridge.
-- `learn_code` steps force `UseCodeExecutionMode = true` regardless of provider — this ensures the agent gets the tool index and `get_api_spec` virtual tool for proper tool discovery when writing `main.py`.
+- A `regular` step forces `UseCodeExecutionMode = true` regardless of provider — this ensures the agent gets the tool index and `get_api_spec` virtual tool for proper tool discovery when writing `main.py`.
 - Learning agents are still separate from execution agents; code execution mode mainly affects execution-time tool access and scripting behavior.
 - `learn_code_script_execution` events exist specifically for saved-script runs and repair visibility in the UI.
 - `error_summary` in `script_metadata.json` run records is stored in full (not truncated). `error_snippet` in `last_failure` is capped at 2000 chars for prompt inclusion.
@@ -275,8 +263,10 @@ Choose `code_exec` when:
 |---|---|
 | `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/controller_execution.go` | Main execution loop, fast-path invocation, repair loop, fallback handling |
 | `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/controller_learn_code.go` | Saved-script execution, static review, save-back, diff capture |
-| `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/interactive_workshop_manager.go` | Mode semantics, workshop guidance, `run_saved_main_py`, config sync helpers |
-| `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/step_config.go` | Applies step config and syncs declared mode to boolean flags |
+| `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/controller_message_sequence.go` | Sequence runtime; the type-based scripted/agentic decision and the transitional legacy-agentic shim |
+| `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/change_step_type_tool.go` | `change_step_type`: in-place conversion between the two models |
+| `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/interactive_workshop_manager.go` | Workshop guidance, `run_saved_main_py`, `update_step_config` |
+| `agent_go/pkg/orchestrator/agents/workflow/step_based_workflow/step_config.go` | Applies step config (tiers, models, tools, access, `use_code_execution_mode`, `lock_code`) |
 | `agent_go/cmd/server/server.go` | Per-tool HTTP endpoints and bridge env setup |
 | `agent_go/pkg/workspace/execute_shell_command.go` | Shell execution guardrails and tool-routing constraints |
 

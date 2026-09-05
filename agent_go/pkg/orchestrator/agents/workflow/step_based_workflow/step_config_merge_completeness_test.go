@@ -85,7 +85,6 @@ func populatedAgentConfigs() *AgentConfigs {
 	}
 	// A tier value has to be one the merge will accept as meaningful.
 	cfg.ExecutionTier = "medium"
-	cfg.DeclaredExecutionMode = StepModeAgentic
 	return cfg
 }
 

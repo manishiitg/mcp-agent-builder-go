@@ -59,8 +59,11 @@ func migrateDeclaredExecutionModeInPlan(plan *PlanningResponse, configs []StepCo
 	}
 	infos := append(collectAllSteps(plan.Steps), collectAllSteps(plan.OrphanSteps)...)
 
+	// Pre-1.0.38 semantics on purpose: a regular step counted as scripted
+	// only when its step_config declared it, so a regular step with no
+	// declaration is a legacy agentic one that ran as a message_sequence.
 	declaredScripted := func(stepID string) bool {
-		return isScriptedExecutionModeConfig(MatchStepConfigByID(stepID, configs))
+		return MatchStepConfigByID(stepID, configs).legacyDeclared() == StepModeScripted
 	}
 
 	// Pass 1: refuse before touching anything.

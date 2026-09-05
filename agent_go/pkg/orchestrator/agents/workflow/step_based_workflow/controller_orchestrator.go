@@ -468,7 +468,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) buildOrchestratorTemplateVars(
 		"KnowledgebasePath":     filepath.Join(docsRoot, fgKnowledgebasePath),
 		"DBPath":                filepath.Join(docsRoot, fgDBPath),
 		"DBAccess":              dbAccessForGuard,
-		"DBDirectAccess":        fmt.Sprintf("%v", isScriptedExecutionModeConfig(stepConfig)),
+		"DBDirectAccess":        "false", // orchestrator steps are never scripted (PLAT-287)
 		"WorkflowRoot":          filepath.Join(docsRoot, baseWorkspacePath),
 		"LearningsPath":         filepath.Join(docsRoot, fgGlobalLearningsPath),
 	}

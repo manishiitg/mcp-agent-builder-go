@@ -177,9 +177,12 @@ func normalizeRegularStepToMessageSequence(step *RegularPlanStep) *MessageSequen
 	}
 }
 
+// shouldNormalizeRegularStepToMessageSequence is the transitional shim: only a
+// regular step whose unstripped step_config.json still declares the retired
+// agentic mode runs as a message_sequence. Every other regular step is
+// scripted (PLAT-287). Retire together with AgentConfigs.legacyDeclaredMode.
 func shouldNormalizeRegularStepToMessageSequence(step PlanStepInterface) bool {
-	regular, ok := step.(*RegularPlanStep)
-	return ok && !isScriptedExecutionModeConfig(regular.AgentConfigs)
+	return isLegacyAgenticRegularStep(step, getAgentConfigs(step))
 }
 
 // normalizeMessageSequenceStepToRegular is normalizeRegularStepToMessageSequence's

@@ -14,12 +14,18 @@ const defaultEvaluationContextOutput = "context_output.json"
 // fully encode what passing/failing looks like (deterministic checks via
 // scripted, or LLM judgment grounded in the description).
 type EvaluationStep struct {
-	ID              string                         `json:"id"`
-	Title           string                         `json:"title"`
-	Description     string                         `json:"description"`
-	PreValidation   *ValidationSchema              `json:"validation_schema,omitempty"`
-	AgentConfigs    *AgentConfigs                  `json:"-"`                        // runtime config
-	ContextOutput   string                         `json:"context_output,omitempty"` // Filename of output produced by the step
+	ID            string            `json:"id"`
+	Title         string            `json:"title"`
+	Description   string            `json:"description"`
+	PreValidation *ValidationSchema `json:"validation_schema,omitempty"`
+	AgentConfigs  *AgentConfigs     `json:"-"`                        // runtime config
+	ContextOutput string            `json:"context_output,omitempty"` // Filename of output produced by the step
+	// ExecutionMode is "scripted" (a persistent learnings/<id>/main.py replayed
+	// each run) or "agentic" (the LLM judges each run); empty means agentic.
+	// It lives on the eval step itself because an evaluation step has no
+	// regular/message_sequence type to decide it (PLAT-287); set it with
+	// update_evaluation_plan(execution_mode=...).
+	ExecutionMode   string                         `json:"execution_mode,omitempty"`
 	AppliesToRoutes []EvaluationRouteApplicability `json:"applies_to_routes,omitempty"`
 	// DBWrite grants this evaluation step write access to db/. Read is always allowed.
 	// Off by default: evaluation typically reads db/ to score against real state, and its

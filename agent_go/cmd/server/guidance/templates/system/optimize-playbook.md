@@ -213,9 +213,9 @@ When the user runs a step, briefly note the highest-priority improvement needed.
 
 ### 7. Execution Modes: Agentic vs Scripted
 
-Steps have two execution modes — set via **update_step_config(step_id, use_code_execution_mode=true, declared_execution_mode="scripted"|"agentic")**:
+A step's execution mode is its plan type — `regular` is scripted, `message_sequence` is agentic. Create with `add_scripted_step` / `add_message_sequence_step`; move an existing step between the two with **change_step_type(step_id, target_type="scripted"|"message_sequence", reason)** — never via `update_step_config`:
 
-- **Scripted mode** (declared_execution_mode="scripted"): Agent writes a reusable `main.py` that is saved and tried first on future runs (0 LLM tokens when stable). If the saved script fails, the LLM repairs it. This is the default execution mode for deterministic API/SDK calls, CLI commands, known pagination, data fetching, stable parsing/normalization/transforms, and mechanical persistence. Create or move that work to scripted immediately; no run-count gate applies to mode selection. The 10+-scenario-covering-runs evidence gates only *trusting and freezing* the script with `lock_code`.
+- **Scripted** (`regular` type): Agent writes a reusable `main.py` that is saved and tried first on future runs (0 LLM tokens when stable). If the saved script fails, the LLM repairs it. This is the default execution mode for deterministic API/SDK calls, CLI commands, known pagination, data fetching, stable parsing/normalization/transforms, and mechanical persistence. Create or move that work to scripted immediately; no run-count gate applies to mode selection. The 10+-scenario-covering-runs evidence gates only *trusting and freezing* the script with `lock_code`.
 
   **Keep scripted steps coherent, not microscopic.** A good scripted fetcher owns one source/auth/retry/output contract and may batch several related endpoints, CLI commands, pagination passes, and transforms before writing its authoritative rows/artifact. Do not create one script per endpoint or tiny transform. Do not cram adaptive judgment or a branching business workflow into `main.py`; feed the validated deterministic output to one large agentic `message_sequence` instead.
 
@@ -223,16 +223,11 @@ Steps have two execution modes — set via **update_step_config(step_id, use_cod
   - One coherent source fetched and written to its canonical tables (e.g. related API endpoints + pagination → parse/normalize → idempotent `db` upserts)
   - Deterministic data processing: iterating rows, matching columns, extracting/transforming — a tight Python loop in one shot, no per-row "thinking"
   - A focused transform that benefits from Python libraries (parsing, calculations, formatting)
-- **Agentic mode** (declared_execution_mode="agentic"): the LLM acts each turn and no persistent script is saved. Use it for judgment, synthesis, fuzzy extraction, adaptive discovery, or action selection that genuinely varies with live evidence. A fixed API/CLI call is scripted even when it is only one call; simplicity is a reason to make the script small, not a reason to spend an LLM turn on it. Browser/UI steps should generally stay agentic unless the user explicitly wants scripted browser automation and representative evidence proves the flow stable enough. If an agentic step has leftover `learnings/{step-id}/main.py`, delete it; that file is stale mode debt and should not be patched.
+- **Agentic** (`message_sequence` type): the LLM acts each turn and no persistent script is saved. Use it for judgment, synthesis, fuzzy extraction, adaptive discovery, or action selection that genuinely varies with live evidence. A fixed API/CLI call is scripted even when it is only one call; simplicity is a reason to make the script small, not a reason to spend an LLM turn on it. Browser/UI steps should generally stay agentic unless the user explicitly wants scripted browser automation and representative evidence proves the flow stable enough. If an agentic step has leftover `learnings/{step-id}/main.py`, delete it; that file is stale mode debt and should not be patched.
 
 **Mode-selection rule:** Create or convert deterministic API/CLI/SDK/data-fetch/parse/transform/persist work as `scripted` on Workshop's own initiative; this is architecture selection, not freezing. Treat 10+ scenario-covering successful runs (with eval/run evidence at target) as the bar only for **freezing the saved script with `lock_code`**. Keep `lock_code=false` until that evidence exists so the repair loop can fix drift. Keep judgment, adaptive discovery, and browser/UI work agentic.
 
-**Mode declaration is required**: Every executable step should store:
-- `declared_execution_mode`
-
-Do not treat a step config as reviewed until this field is filled in.
-
-When the user asks to enable scripted execution for a step, use: update_step_config(step_id, use_code_execution_mode=true)
+**There is no mode field to fill in**: the plan type is the declaration. When the user asks to make a step scripted, use `change_step_type(step_id, target_type="scripted", reason=...)`, then author and test `learnings/<step-id>/main.py`. `use_code_execution_mode` is a separate, independent toggle — a `message_sequence` can use code execution without being scripted.
 
 **Workshop agent behavior for code-exec steps**: When you (the workshop agent) are asked to explore, investigate, or do manual work related to a step marked with code execution mode, you should also adopt the code-exec approach — use **execute_shell_command** to write and run Python/shell scripts that combine multiple MCP tool calls together, rather than making individual tool calls one by one. This mirrors how the step's execution agent works and helps you build reusable scripts and patterns that can inform the step's learnings.
 

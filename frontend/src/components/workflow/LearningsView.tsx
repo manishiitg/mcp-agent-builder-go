@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { X, BookOpen, Loader2, AlertCircle, ChevronDown, ChevronRight, Code, FileText, Trash2, Search, Globe, Check, Copy, ArrowLeft } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { PlanningResponse, PlanStep } from '../../utils/stepConfigMatching'
-import { isRouteSwitchStep, isTodoTaskStep } from '../../utils/stepConfigMatching'
+import { effectiveExecutionMode, isRouteSwitchStep, isTodoTaskStep } from '../../utils/stepConfigMatching'
 import { MarkdownRenderer } from '../ui/MarkdownRenderer'
 import type { PlannerFile } from '../../services/api-types'
 import ConfirmationDialog from '../ui/ConfirmationDialog'
@@ -666,7 +666,7 @@ export default function LearningsView({ workspacePath, plan }: LearningsViewProp
     if (!plan || !plan.steps) return []
 
     const stepsWithMetadata: Array<{ stepId: string; stepType: string }> = []
-    const isScripted = (step: PlanStep): boolean => step.agent_configs?.declared_execution_mode === 'scripted'
+    const isScripted = (step: PlanStep): boolean => effectiveExecutionMode(step) === 'scripted'
 
     const collectSteps = (steps: PlanStep[]) => {
       steps.forEach((step) => {
