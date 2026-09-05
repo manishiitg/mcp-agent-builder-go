@@ -134,6 +134,13 @@ func buildNativeEnvironment() []string {
 	// Ensure Python output buffering is disabled
 	env = append(env, "PYTHONUNBUFFERED=1")
 
+	// Allow pip install when Python is externally managed (PEP 668); avoids
+	// "externally-managed-environment" errors in LLM-run shells. Native mode
+	// runs inside a per-step sandbox (Landlock/mount-namespace/Seatbelt), not
+	// the operator's real system Python, so bypassing this guard here is safe
+	// the same way it already is in buildDockerEnvironment above.
+	env = append(env, "PIP_BREAK_SYSTEM_PACKAGES=1")
+
 	return env
 }
 
