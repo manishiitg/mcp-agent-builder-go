@@ -11,6 +11,34 @@ import (
 
 var builderReferenceReadPattern = regexp.MustCompile(`"name":"builder-reference","path":"(references/[^"]+\.md)"`)
 
+func TestHumanInTheLoopReferenceIsAttachedForWorkflowModes(t *testing.T) {
+	const path = "references/human-in-the-loop.md"
+	for _, mode := range []string{"workshop", "run"} {
+		t.Run(mode, func(t *testing.T) {
+			var reference *llmtypes.Skill
+			if err := AttachReferenceSurface(mode, func(skill *llmtypes.Skill) error {
+				if skill.Name == "builder-reference" {
+					reference = skill
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if reference == nil || !strings.Contains(reference.Content, path) {
+				t.Fatal("human-in-the-loop reference is not discoverable in the attached skill")
+			}
+			content := materializedFileContent(t, reference, path)
+			canonical, err := renderReferenceKind("human-in-the-loop", tmplData{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.TrimSpace(content) == "" || content != canonical {
+				t.Fatal("attached human-in-the-loop reference differs from canonical rendered guidance")
+			}
+		})
+	}
+}
+
 func materializedFileContent(t *testing.T, skill *llmtypes.Skill, relPath string) string {
 	t.Helper()
 	if skill == nil {

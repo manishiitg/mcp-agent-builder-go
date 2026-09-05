@@ -76,7 +76,6 @@ import (
 	"strconv"
 
 	mcpagent "github.com/manishiitg/mcpagent/agent"
-	"github.com/manishiitg/mcpagent/agent/prompt"
 	"github.com/manishiitg/mcpagent/agent/retainedturn"
 	llmproviders "github.com/manishiitg/multi-llm-provider-go"
 )
@@ -5844,43 +5843,12 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					log.Printf("[WORKFLOW_PHASE] Loaded variable names")
 				}
 
-				// Generate phase-specific system prompt (dispatches by phaseId)
-				phaseSystemPrompt := todo_creation_human.PhaseChatSystemPrompt(workflowPhaseID, phaseTemplateVars)
-
-				// Append code execution / tool search instructions from mcpagent.
-				// These tell the LLM HOW to call tools (via HTTP API, get_api_spec, etc.)
-				// Without these, the LLM guesses parameter names instead of discovering them.
-				if phaseIsCodeExec {
-					codeExecInstructions := prompt.GetCodeExecutionInstructions(phaseWorkspacePath)
-					phaseSystemPrompt += "\n\n" + codeExecInstructions
-				}
-
-				// Config schemas and workflow structure belong to this prompt: they
-				// describe the phase agent's own job and no other mode ever gets
-				// them. They used to be appended as a shared section BEFORE the
-				// reset below, which silently discarded them — they never reached
-				// an agent. Building them into the base is what keeps them.
-				phaseSystemPrompt += "\n\n" + GetWorkspaceReference(shellRoot, perUserChatsFolder)
-
-				// Override the agent's system prompt — use SetSystemPrompt to properly set tracking flags
-				// so that rebuildSystemPromptWithUpdatedToolStructure preserves this prompt
-				_ = llmAgent.ResetInstructions(phaseSystemPrompt)
-				log.Printf("[WORKFLOW_PHASE] Overrode system prompt (%d chars) for phase=%s", len(phaseSystemPrompt), workflowPhaseID)
-
-				// ResetInstructions replaces the whole instruction string, so every
-				// shared section assembled earlier is gone. Re-run the SAME
-				// assembler rather than hand-restoring a subset: the previous
-				// hand-written list rebuilt browser/secrets/capability and silently
-				// dropped the workspace map, grants, and channel formatting.
-				phaseIncluded, phaseSkipped, phaseSectionErr := assemblePromptSections(llmAgent, promptCtx)
-				if phaseSectionErr != nil {
-					sendError(fmt.Sprintf("Failed to reassemble the system prompt for phase %s: %v", workflowPhaseID, phaseSectionErr), true)
-					return
-				}
-				logPromptAssembly(promptCtx, phaseIncluded, phaseSkipped)
+				// Collect optional runtime sections before composing the complete prompt.
+				// The phase composer is shared with the assembled-prompt regression tests.
+				var phaseAdditions []string
 				if workflowPhaseID == workflowtypes.WorkflowStatusWorkflowBuilder {
 					if notificationPrompt := buildWorkflowNotificationInstructionsPrompt(req.NotificationRunSummaryInstructions, req.NotificationPulseSummaryInstructions); notificationPrompt != "" {
-						_ = llmAgent.AddInstructions(notificationPrompt)
+						phaseAdditions = append(phaseAdditions, notificationPrompt)
 						log.Printf("[WORKFLOW_PHASE] Appended workflow notification preferences to %s system prompt", workflowPhaseID)
 					}
 				}
@@ -5895,7 +5863,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 						}
 						secretPrompt := todo_creation_human.BuildWorkflowSecretPrompt(entries)
 						if secretPrompt != "" {
-							_ = llmAgent.AddInstructions(secretPrompt)
+							phaseAdditions = append(phaseAdditions, secretPrompt)
 							log.Printf("[WORKFLOW_PHASE] Appended %d secrets to %s system prompt", len(entries), workflowPhaseID)
 						}
 					}
@@ -5930,7 +5898,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 									_, endpointGuidance := cdpPromptEndpoints(phaseConfiguredCDPPorts, phaseBrowserCfg.CdpPort)
 									browserPrompt += endpointGuidance + " These are configured candidates only; `agent_browser status` is authoritative for current reachability.\n"
 								}
-								_ = llmAgent.AddInstructions(browserPrompt)
+								phaseAdditions = append(phaseAdditions, browserPrompt)
 								log.Printf("[WORKFLOW_PHASE] Appended dynamic browser pointer to %s (configured_mode=%s, candidate_cdp_ports=%v)",
 									workflowPhaseID, configuredBrowserMode, phaseConfiguredCDPPorts)
 							}
@@ -5974,15 +5942,25 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 
-				// Re-append workflow context prompt for #workflow references
-				// (was wiped by ClearAppendedSystemPrompts above)
-				if len(req.WorkflowContextPaths) > 0 {
-					workflowPrompt := buildWorkflowContextPrompt(req.WorkflowContextPaths, getWorkspaceAPIURL())
-					if workflowPrompt != "" {
-						_ = llmAgent.AddInstructions(workflowPrompt)
-						log.Printf("[WORKFLOW_PHASE] Re-appended workflow context prompt (%d workflows) after system prompt override", len(req.WorkflowContextPaths))
-					}
+				// Workflow references are already included exactly once by the shared
+				// assembler. UI guidance follows the same caller policy as registration.
+				activeForPrompt, _ := api.getActiveSession(sessionID)
+				promptCtx.WorkflowMode = phaseTemplateVars["WorkshopMode"]
+				promptCtx.WorkflowUIAvailable = workflowUICallerAllowed(workflowPhaseID, sessionID, req, activeForPrompt)
+				// Workflow browser configuration is authoritative; do not add the
+				// generic chat browser pointer as well.
+				promptCtx.BrowserPointer = ""
+				phaseSystemPrompt, phaseIncluded, phaseSkipped, phasePromptErr := buildWorkflowPhaseSystemPrompt(workflowPhaseID, phaseTemplateVars, promptCtx, phaseAdditions...)
+				if phasePromptErr != nil {
+					sendError(fmt.Sprintf("Failed to assemble the system prompt for phase %s: %v", workflowPhaseID, phasePromptErr), true)
+					return
 				}
+				if err := llmAgent.ResetInstructions(phaseSystemPrompt); err != nil {
+					sendError(fmt.Sprintf("Failed to set the system prompt for phase %s: %v", workflowPhaseID, err), true)
+					return
+				}
+				logPromptAssembly(promptCtx, phaseIncluded, phaseSkipped)
+				log.Printf("[WORKFLOW_PHASE] Set assembled system prompt (%d bytes) for phase=%s", len(phaseSystemPrompt), workflowPhaseID)
 
 				// Register phase-appropriate tools via the shared helper. The
 				// chat-history auto-restore path calls the same helper with a

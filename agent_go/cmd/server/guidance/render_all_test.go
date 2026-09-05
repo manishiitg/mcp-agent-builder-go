@@ -126,7 +126,7 @@ func TestFocusedScheduledPulseReferencesStayComplete(t *testing.T) {
 		"pulse-gate": {
 			wants: []string{
 				"progressive evidence scan", "CONCERNS:", "record_pulse_worklist", "one decision for every",
-				"cannot suppress a measured miss", "Gate must not launch reviewers",
+				"cannot suppress a new materially harmful miss", "Gate must not launch reviewers",
 			},
 		},
 		"pulse-review-fixer": {
@@ -1349,7 +1349,7 @@ func TestDeterministicFetchersFeedLargeAgenticProcessors(t *testing.T) {
 		"planning-steps":    {registry: referenceKinds, text: "one atomic action with no"},
 		"optimize-playbook": {registry: referenceKinds, text: "add a separate step after it that reads the output"},
 		"workflow-patterns": {registry: referenceKinds, text: "`regular`(action) → `regular`(verify"},
-		"orchestrator":         {registry: referenceKinds, text: "manages multiple discrete tasks"},
+		"orchestrator":      {registry: referenceKinds, text: "manages multiple discrete tasks"},
 	}
 	for kind, check := range stale {
 		rendered, err := renderFromRegistry(kind, tmplData{}, check.registry)

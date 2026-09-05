@@ -2129,6 +2129,7 @@ export const agentApi = {
       run_summary?: OrgDashboardNotification
       pulse_summary?: OrgDashboardNotification
       recent?: OrgDashboardNotification[]
+      by_route?: import('./api-types').OrgDashboardRouteNotifications[]
       error?: string
     }>
   }> => {

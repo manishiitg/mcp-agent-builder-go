@@ -60,8 +60,7 @@ func TestInteractiveWorkshopPromptDoesNotBanAuthorizedSourceReview(t *testing.T)
 
 // After the message-sequence migration, the full pattern catalog lives in
 // templates/system/message-sequence.md (loaded via read_skill). The
-// inline workshop prompt now carries only a brief mention of the seven
-// pattern names plus the pointer; the detailed pattern descriptions are
+// inline workshop prompt now carries only the reference pointer; the detailed pattern descriptions are
 // asserted against the rendered .md content.
 
 func TestInteractiveWorkshopPromptDocumentsMessageSequenceRouteReuse(t *testing.T) {
@@ -72,13 +71,7 @@ func TestInteractiveWorkshopPromptDocumentsMessageSequenceRouteReuse(t *testing.
 	// message-sequence as one of several per-step-type deep-dive skills.
 	// The agent reaches the full pattern catalog by loading the skill.
 	inlineMustContain := []string{
-		"## Planning steps",
 		"message-sequence",
-		"Stateful Specialist",
-		"Test/Fix Loop",
-		"Maker+Reviewer",
-		"Clean-Room Retry",
-		"HITL Re-entry",
 		`builder-reference/references/plan-design.md`,
 	}
 	for _, snippet := range inlineMustContain {
@@ -112,14 +105,8 @@ func TestOptimizerPromptDocumentsMessageSequenceRoutePatterns(t *testing.T) {
 	// "Planning steps" section that names message-sequence (and the
 	// other per-step-type skills) as deep-dive entry points.
 	inlineMustContain := []string{
-		"## Planning steps",
 		"message-sequence",
-		"Stateful Specialist",
-		"Test/Fix Loop",
-		"Maker+Reviewer",
-		"Clean-Room Retry",
-		"HITL Re-entry",
-		"Scripted Conversation",
+		`builder-reference/references/plan-design.md`,
 	}
 	for _, snippet := range inlineMustContain {
 		if !strings.Contains(prompt, snippet) {

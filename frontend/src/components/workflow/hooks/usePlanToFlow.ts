@@ -71,6 +71,8 @@ export interface HumanInputNodeData extends Record<string, unknown> {
 
 export interface RoutingStepNodeData extends Record<string, unknown> {
   route_source?: 'human' // branch only: asks the person when nothing was preseeded
+  tracedRouteId?: string
+  onTraceRoute?: (routeId: string) => void
   id: string
   title: string
   routing_question?: string
@@ -675,12 +677,34 @@ function buildPlanSuccessorMap(plan: PlanningResponse): Map<string, string[]> {
   return successorsByID
 }
 
+// Stable topological order; retain deterministic order for the cyclic remainder.
+function orderRouteSteps(ids: string[], successors: Map<string, string[]>): string[] {
+  const members = new Set(ids)
+  const incoming = new Map(ids.map(id => [id, 0]))
+  ids.forEach(id => successors.get(id)?.forEach(next => {
+    if (members.has(next)) incoming.set(next, incoming.get(next)! + 1)
+  }))
+  const ready = ids.filter(id => incoming.get(id) === 0)
+  const ordered: string[] = []
+  for (let index = 0; index < ready.length; index++) {
+    const id = ready[index]
+    ordered.push(id)
+    successors.get(id)?.forEach(next => {
+      if (!members.has(next)) return
+      incoming.set(next, incoming.get(next)! - 1)
+      if (incoming.get(next) === 0) ready.push(next)
+    })
+  }
+  const placed = new Set(ordered)
+  return [...ordered, ...ids.filter(id => !placed.has(id))]
+}
+
 // A major routing step describes several independently runnable pipelines.
 // Dagre must honour every handoff between those pipelines, which can turn a
 // small set of routes into a very tall, sparse tree. Keep the workflow header
-// where the canvas put it, then arrange route bodies in a compact grid below it.
-// Handoff edges are intentionally retained between cells.
-function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningResponse): WorkflowNode[] {
+// where the canvas put it, then give each route body a separate column.
+// Handoff edges are intentionally retained between columns.
+export function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningResponse): WorkflowNode[] {
   if (nodes.some(node => node.id.includes('-sub-agent-'))) return nodes
 
   const router = plan.steps.find(isRoutingStep)
@@ -769,9 +793,7 @@ function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningRespon
 
     const segment = {
       entryID,
-      stepIDs: stepIDs.sort((left, right) =>
-        (planIndexByID.get(left) || 0) - (planIndexByID.get(right) || 0)
-      ),
+      stepIDs: orderRouteSteps(stepIDs, successorsByID),
       nextEntries,
     }
     segmentsByEntryID.set(entryID, segment)
@@ -812,7 +834,7 @@ function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningRespon
         return depthDelta || ((planIndexByID.get(left) || 0) - (planIndexByID.get(right) || 0))
       }),
       depthByEntryID,
-      width: Math.min(3, Math.max(1, ...Array.from(depthByEntryID.values()).map(depth => depth + 1))),
+      width: entries.length,
     }]
   })
 
@@ -840,13 +862,13 @@ function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningRespon
   // the header-aware layout above so routes can never collide with Variables.
   const bodyLeft = Math.min(...workflowNodes.map(node => node.position.x))
   const bodyTop = Math.min(...workflowNodes.map(node => node.position.y))
-  const columns = Math.min(3, routes.length)
+  const columns = Math.max(1, routeForests.reduce((total, forest) => total + forest.width, 0))
   // Route cards need enough white space for labels and their connecting lines.
   // Keep these deliberately larger than the normal Dagre sibling gap: this is
   // the readable overview of a multi-pipeline workflow, not a dense DAG dump.
-  const laneGap = 144
+  const laneGap = 240
   const stepGap = 72
-  const routeRowGap = 160
+  const routeRowGap = 220
   const maxRouteWidth = Math.max(
     280,
     ...Array.from(laneStepIDs).map(id => nodeByID.get(id))
@@ -877,10 +899,8 @@ function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningRespon
   const routerNode = nodeByID.get(router.id)
   nextY += (routerNode ? getNodeLayoutDimensions(routerNode).height : 0) + routeRowGap
 
-  // Pack route forests into rows. A route that branches through X and then a
-  // digest needs all three columns; a standalone route and a two-stage route
-  // can share the next row. This keeps related work adjacent without wasting a
-  // full row for every selectable router option.
+  // Every selectable route gets a distinct column, including sibling handoffs
+  // at the same depth. Keep related routes adjacent in a single wide row.
   const forestRows: Array<Array<typeof routeForests[number] & { startColumn: number }>> = []
   let currentRow: Array<typeof routeForests[number] & { startColumn: number }> = []
   let usedColumns = 0
@@ -904,10 +924,9 @@ function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningRespon
     row.forEach(forest => {
       const sourcePositionByID = new Map<string, { x: number; y: number; height: number }>()
 
-      forest.entries.forEach(entryID => {
+      forest.entries.forEach((entryID, entryIndex) => {
         const segment = collectRouteSegment(entryID)
-        const depth = forest.depthByEntryID.get(entryID) || 0
-        const x = bodyLeft + ((forest.startColumn + depth) * laneWidth)
+        const x = bodyLeft + ((forest.startColumn + entryIndex) * laneWidth)
 
         const precedingSourcePositions = forest.entries
           .flatMap(candidateEntryID => collectRouteSegment(candidateEntryID).nextEntries)
@@ -947,30 +966,25 @@ function distributePrimaryRouteLanes(nodes: WorkflowNode[], plan: PlanningRespon
   // arbitrary corners of the route map.
   const independentTop = laneBottom
   let independentBottom = independentTop
-  independentIDs.forEach((id, index) => {
-    const node = nodeByID.get(id)
-    if (!node) return
-    const column = index % columns
-    const row = Math.floor(index / columns)
-    const dims = getNodeLayoutDimensions(node)
-    positionByID.set(id, {
-      x: bodyLeft + (column * laneWidth),
-      y: independentTop + (row * (dims.height + stepGap)),
+  for (let index = 0; index < independentIDs.length; index += columns) {
+    const row = independentIDs.slice(index, index + columns)
+    const rowTop = independentBottom
+    row.forEach((id, column) => {
+      const node = nodeByID.get(id)
+      if (!node) return
+      const dims = getNodeLayoutDimensions(node)
+      positionByID.set(id, { x: bodyLeft + column * laneWidth, y: rowTop })
+      independentBottom = Math.max(independentBottom, rowTop + dims.height + stepGap)
     })
-    independentBottom = Math.max(
-      independentBottom,
-      independentTop + (row * (dims.height + stepGap)) + dims.height
-    )
-  })
+  }
 
-  convergenceStepIDs.forEach(id => {
+  let convergenceY = independentBottom + routeRowGap
+  orderRouteSteps([...convergenceStepIDs], successorsByID).forEach(id => {
     const node = nodeByID.get(id)
     if (!node) return
     const dims = getNodeLayoutDimensions(node)
-    positionByID.set(id, {
-      x: centerX - (dims.width / 2),
-      y: independentBottom + routeRowGap,
-    })
+    positionByID.set(id, { x: centerX - dims.width / 2, y: convergenceY })
+    convergenceY += dims.height + stepGap
   })
 
   return nodes.map(node => {

@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/guidance"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -459,17 +459,13 @@ func TestParseStepFromJSONHandlesBranchType(t *testing.T) {
 // TestRunInBackgroundPassesBuilderSkillSnapshotToBothAgentKinds
 // (background_skill_inheritance_test.go).
 func TestCanonicalWorkshopPromptOffersBranchForFixedChoices(t *testing.T) {
-	source, err := os.ReadFile("interactive_workshop_manager.go")
-	if err != nil {
-		t.Fatalf("read interactive_workshop_manager.go: %v", err)
+	prompt := executeInteractiveWorkshopPromptForMode(t, "workshop")
+	if !strings.Contains(prompt, "references/plan-design.md") || !strings.Contains(prompt, "`branch`") {
+		t.Fatal("workshop must route step design to the canonical skill and expose branch")
 	}
-	text := string(source)
-
-	if !strings.Contains(text, "`+\"`branch`\"+`") {
-		t.Error("canonical workshop prompt never mentions `branch` as a step type")
-	}
-	if !strings.Contains(text, "when the choice forks into a major") {
-		t.Error("canonical workshop prompt's fixed-choice guidance no longer distinguishes branch (small in-flow decision) from routing (major sub-workflow fork)")
+	doc := guidance.RenderSystemDoc("plan-design")
+	if !strings.Contains(doc, "small in-flow decision") || !strings.Contains(doc, "major sub-workflow fork") {
+		t.Fatal("design skill must distinguish small branches from major workflow routes")
 	}
 }
 

@@ -153,6 +153,11 @@ func TestReportPreviewScriptHandlerServesTheBuiltBundle(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 before the bundle is built, got %d", rec.Code)
 	}
+	page := httptest.NewRecorder()
+	api.reportPreviewPageHandler(page, httptest.NewRequest(http.MethodGet, "/report-preview/", nil))
+	if page.Code != http.StatusServiceUnavailable || !strings.Contains(page.Body.String(), `data-preview-state="failed"`) || !strings.Contains(page.Body.String(), "window.__reportPreview") {
+		t.Fatalf("missing runtime must fail explicitly before polling, got %d: %s", page.Code, page.Body.String())
+	}
 
 	if err := os.WriteFile(filepath.Join(dir, "static", "report-preview.js"), []byte("console.log('preview')"), 0o644); err != nil {
 		t.Fatal(err)

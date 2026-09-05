@@ -4,7 +4,7 @@ The Report tab renders one workflow-owned document: `db/reports/index.html`.
 That HTML owns the entire reporting experience and decides whether to use tabs,
 a sidebar, anchored sections, expandable panels, or one scrolling briefing.
 The platform does not manufacture navigation from filenames. There is no report
-plan, widget registry, JSON layout, report-native decision control, or report
+plan, widget registry, JSON layout, platform-generated decision control, or report
 generation step.
 
 ### Page contract
@@ -19,6 +19,10 @@ generation step.
   field on an already-existing row with `window.report.updateField`/
   `updateFields` (see below). Do not bake changing run results into the
   document or add a step that regenerates it each run.
+- A user action button can offer a contextual workflow-agent request through
+  `window.report.sendChatMessage`. The app reviews/sends it to an existing or
+  new chat. For report-owned approvals, save first and then offer the request;
+  see "Sending a report request to the workflow agent" below.
 - A markdown file under `db/` renders inline with
   `el.innerHTML = await window.report.getHtml('db/notes/brief.md')`; a
   markdown string from a query row with `window.report.renderMarkdown(text)`.
@@ -62,6 +66,19 @@ generation step.
   activity view than the run summaries already give them — never invent a
   step or table whose sole purpose is feeding this tab. See the
   `design-reporting-ui` skill for the full authoring requirement.
+
+  **Routes are sub-workflows.** When route data is present, the Daily Action /
+  Recent Activity tab groups or filters runs by `(routing_step_id, route_id)`
+  from `route_summaries_json` in the same notification row. Parse that JSON
+  array and render each entry's label, title, status, message, fields, and
+  sections; do not display raw JSON or merge same-named routes. Keep a shared
+  workflow section for top-level facts. `branch` choices are not separate
+  sub-workflows. Use the same grouping for any Pulse-summary history.
+  Check the real schema first: absent table/column or older rows use the old
+  message and explicit legacy Route field, with scope shown as not recorded
+  when absent. Never backfill route identity from prose, show an unreviewed
+  route as clean, or copy a workflow total into each route. No extra plan step
+  or workflow-owned activity table is needed.
 
 ### Responding to `report:focus` (tabbed reports)
 
@@ -131,14 +148,73 @@ either function, and no declaration step is needed first:
 - every value must be a plain string, number, boolean, or null — no
   objects/arrays.
 
-This is deliberately NOT a decision UI. A full human-decision flow — a
-question with options, free text, an approve/dismiss/consume lifecycle,
-and its own audit trail — still belongs in the Pulse panel and chat via
-`create_human_input_request`/the report's own `report_human_inputs`
-panel, not inside the report page. `updateField`/`updateFields` cover the
-narrower case of a report editing a plain field on its own already-
-existing data (an email's `status`, a lead's `contacted` flag), not
-building a new decision surface.
+Report-owned approval buttons are supported: update an existing business row
+(an email's `status`, an audit finding's approval), then optionally offer a
+scoped agent request using `sendChatMessage` below. This does not replace the
+platform's human-decision lifecycle. Platform decisions created through
+`create_human_input_request` retain their options, answers, consumption, and
+audit trail in the Pulse panel/chat; do not edit `report_human_inputs` through
+the business-field write API or invent a duplicate platform decision store.
+
+### Sending a report request to the workflow agent
+
+When choosing between a business approval, a Pulse decision, a blocking
+checkpoint, and an agent request, read
+`read_skill(skills=[{"name":"builder-reference","path":"references/human-in-the-loop.md"}])`.
+The API details below implement the report-to-chat pattern.
+
+`await window.report.sendChatMessage(message, { requestId })` opens the app's
+**Send to agent** panel. The user reviews/edits the message and chooses whether
+to **Start a new chat**. On Send, the app uses the same workflow-scoped chat
+queue as the human-decision panel's **Ask in chat**: reuse an interactive chat,
+queue behind its running foreground turn, or create a chat if none exists.
+Scheduled/view-only/bot tabs are excluded. This sends a conversational request;
+it does not directly execute a route or trigger the scheduler.
+
+Call this only from a user action handler. Never call it from `ready`, render,
+polling, or refresh handlers. It is unavailable in `preview_report`. Before the
+host initializes, it rejects instead of queuing a request to replay on load.
+The host supplies the workspace; reports cannot choose another workspace.
+Messages must be non-empty and at most 12,000 characters.
+
+For an existing report-owned approval, await the DB commit before offering the
+action request. Include the exact row/proposal version and the intended route
+or consumer step. Ask the agent to re-read the current approval, skip work
+already applied, and act only on that item. Do not use a generic “run workflow”
+message when it would repeat collection/audit or another approval gate.
+
+```js
+// In a user click handler, with the button disabled until finally.
+await window.report.updateField('audit_findings', row.id, 'status', 'approved');
+showStatus('Approval saved. Review the action request to send it.');
+const result = await window.report.sendChatMessage(
+  `Apply only approved audit_findings row ${row.id}, proposal version ${row.proposal_version}. ` +
+  `Re-read its current approval and proposed fix from the database; skip it if already applied. ` +
+  `Use the existing remediation route for this item, then verify and refresh the report.`,
+  { requestId: `finding:${row.id}:${row.proposal_version}:apply` }
+);
+showStatus(result.status === 'cancelled'
+  ? 'Approval saved; no action request sent.'
+  : result.queuedBehindRunningTurn
+    ? 'Request queued behind the current chat turn.'
+    : 'Request queued in chat.');
+```
+
+Use real schema fields/versions and actual route or step IDs, never copy
+placeholder names into a workflow that lacks them. The result is either
+`{ status: 'cancelled' }` or `{ status: 'queued', tabId, reused,
+queuedBehindRunningTurn }`. Queued is not proof that work started or completed;
+show applied/verified outcomes only from fresh execution evidence.
+
+The approval write and chat enqueue are separate operations. Cancelling the
+send panel does not undo the saved approval (a later scheduled consumer can
+still read it). On failure, keep that approval visible and offer **Send action
+request** again without rewriting it. Catch errors locally and re-enable the
+button in `finally`. Repeated clicks while reviewing/sending share one request;
+an optional stable `requestId` (max 200 characters) reuses a successful receipt
+for the same message in the current report view (up to 100 receipts). Reloads,
+different views, and later sessions still require the consumer's durable
+already-applied check. This API does not provide atomic approval-and-execution.
 
 ### Referenced files must live under `db/`
 
@@ -167,7 +243,11 @@ Keep report-only changes presentational unless the user also asked to change
 workflow behavior or evaluation. Run mode never authors report pages; it only
 produces the durable data those pages read.
 
-Full human-decision flows (a question, options, approve/dismiss/consume,
-audit trail) belong in the Pulse panel and chat, not inside reports. A
-report may still write a plain business field via `window.report.
-updateField`/`updateFields` — see "Writing back" above.
+Platform human-decision lifecycles stay in the Pulse panel and chat. A report
+can expose its own business approval buttons using `updateField`/`updateFields`
+and hand a specific request to the workflow agent using `sendChatMessage`.
+See "Writing back" and "Sending a report request" above.
+
+For typed route rows, `summary_text` contains only the shared lead; `message`
+remains the complete rendered digest for older reports. Render the lead plus
+route entries once, or the complete message as a fallback, never both.

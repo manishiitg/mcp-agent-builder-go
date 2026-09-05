@@ -1,4 +1,19 @@
-## Workshop & Workflow Tools — Full Reference
+## Workflow Tools — Mode-Scoped Reference
+
+This reference covers both Workshop and Run. The current mode and granted
+catalog are authoritative: Run may execute/inspect and capture confirmed
+runtime context, but cannot mutate plan/config, schedules, skills, secrets,
+or design artifacts. Mutation sections below apply only in Workshop; do not
+call unavailable tools or use shell to bypass a mode boundary.
+
+For a slash command or matching review/improvement request, call
+`get_workflow_command_guidance(kind, focus)` with the user's scope and recent
+conversation context. Follow the returned permitted flow; do not expand user
+authorization. Missing modes or tools require the appropriate Workshop handoff.
+Use `runtime-context` for grounding and durable rule capture. Use
+`pulse-review-fixer` for review/fix lifecycle and real verification; maintain
+existing findings through typed Pulse tools rather than a parallel review log.
+
 
 The workshop chat agent has access to a broad set of workflow-management
 tools. The inline system prompt now carries only a one-line-per-category
@@ -39,6 +54,7 @@ HTTP URL.
 - **`run_in_background(name, instruction, message_sequence?)`** — Spawn an independent background agent with the same tools. `message_sequence` is optional. Use it only when one executor needs ordered follow-up turns in the same conversation; each item needs a non-empty `message`, e.g. `[ {"message":"Review the evidence."}, {"message":"Apply and verify safe fixes."} ]`. Optional labels are generated automatically.
 - **`run_full_workflow(group_name, human_inputs?, route_selections?, disable_eval?)`** — Execute the complete workflow (all steps) for a single variable group in background. Always uses `iteration-0` and starts from the beginning. If the selected path has `human_input` steps, provide `human_inputs` (object mapping step_id to response string). For deterministic routers, pass `route_selections` keyed by routing or branch step ID, with each value as a `route_id` or unique `next_step_id`. Pass `disable_eval=true` only when the user explicitly wants to skip the automatic evaluation pass. Returns `execution_id`. In scheduled/run-mode flows, call it once for the intended group, then stop instead of polling substeps; auto-notifications report progress/completion.
 
+{{if ne .WorkshopMode "run"}}
 ## Step Config & Analysis (Workshop mode)
 
 - **`update_step_config(step_id, ...)`** — Update servers, tools, skills, learning settings, execution mode, LLMs, locks, review notes, description review state, and read-only `additional_read_paths` grants for declared workflow-relative inputs outside the standard run/db/KB/learnings surfaces. For eval steps this writes to `evaluation/step_config.json`.
@@ -50,6 +66,8 @@ HTTP URL.
 - **`review_workflow_costs(iteration?, group_name?, focus?)`** — Read-only cost review: finds the biggest cost drivers and recommends cheaper models, fewer retries/handoffs, better descriptions, or plan changes without sacrificing success criteria.
 - **`get_cost_summary(run_folder?)`** — Token usage and cost breakdown.
 
+{{end}}
+
 ## Read-Only Info
 
 - **`get_step_prompts(step_id, attempt?, iteration?)`** — System prompt and user message for a step.
@@ -57,6 +75,7 @@ HTTP URL.
 - **`get_llm_config`** — Per-step LLM overrides.
 - **`get_workflow_command_guidance(kind="review-artifact-drift", focus?)`** *(Workshop only)* — Canonical read-only artifact drift audit after material plan/config changes. In Pulse it is separate from Bug Review; the parent Pulse Fixer applies verified repairs and marks reviewed changelog entries.
 
+{{if ne .WorkshopMode "run"}}
 ## Plan Modification (Workshop mode)
 
 - **Create steps**: `create_plan`, `add_scripted_step`, `add_message_sequence_step`, `add_human_input_step`, `add_orchestrator_step`, `add_routing_step`, `add_branch_step`, `delete_plan_steps`, `cleanup_orphan_step_configs`.
@@ -166,6 +185,8 @@ Confirm with the user before skipping backup on a recurring schedule.
 
 Pulse module cadence is not encoded in schedule JSON. Pulse Gate stores module state in `db/db.sqlite` and decides which modules are due after each normal run.
 
+{{end}}
+
 ## Shell & Discovery
 
 - **`execute_shell_command`** — Run shell commands. Quick lookups:
@@ -174,12 +195,16 @@ Pulse module cadence is not encoded in schedule JSON. Pulse Gate stores module s
   - `cat planning/step_config.json`
   - `ls runs/`
   - `cat variables/variables.json`
-- **`human_feedback`** — Open a blocking AgentWorks response card and immediately alert enabled notification channels. Use only for an explicit channel test or urgent, short-lived human-only input such as CAPTCHA, OTP, or immediate approval. In Builder chat, ask ordinary questions in the normal response instead. In bridge-only coding-CLI sessions, invoke its `$MCP_CUSTOM/human_feedback` endpoint with a **foreground curl** and wait for that same call to return the answer. Never use `nohup`, append `&`, delegate/background the call, save its result to a temporary file, poll for completion, or ask the user to send another message after responding. The foreground response resumes the agent automatically; do not set the shell timeout shorter than `human_feedback.timeout_seconds`. Cursor CLI has an approximately 60-second silent MCP-call ceiling, so Cursor agents must use `timeout_seconds <= 45`; after a real expiry, retry only if the input is still required.
+For choosing between the human interaction mechanisms below, read
+`read_skill(skills=[{"name":"builder-reference","path":"references/human-in-the-loop.md"}])`.
+
+- **`human_feedback`** — Open a blocking, in-app AgentWorks response card. It does not send through external notification channels. Use only for an explicit channel test or urgent, short-lived human-only input such as CAPTCHA, OTP, or immediate approval. In Builder chat, ask ordinary questions in the normal response instead. In bridge-only coding-CLI sessions, invoke its `$MCP_CUSTOM/human_feedback` endpoint with a **foreground curl** and wait for that same call to return the answer. Never use `nohup`, append `&`, delegate/background the call, save its result to a temporary file, poll for completion, or ask the user to send another message after responding. The foreground response resumes the agent automatically; do not set the shell timeout shorter than `human_feedback.timeout_seconds`. Cursor CLI has an approximately 60-second silent MCP-call ceiling, so Cursor agents must use `timeout_seconds <= 45`; after a real expiry, retry only if the input is still required.
 - **`create_human_input_request`** — Non-blocking Pulse/goal-advisor question stored in the workflow's `db/db.sqlite`. The user answers in the AgentWorks Pulse/report panel.
 - **`get_human_input_request`** — Read one existing decision by exact `workspace_path` and `input_id`, including its context, selected answer, evidence, and lifecycle status. Use this before applying an answered decision; do not query the backing SQLite table directly.
 - **`answer_human_input_request`** — Record the user's explicit final answer to an existing pending question using the exact decision and option IDs supplied by the UI chat context. Never infer an answer from discussion. This sets the question to `answered`; it does not apply the decision or mark it consumed.
 - **`mark_human_input_consumed`** — Mark an answered report question consumed after using it and recording the outcome through typed Pulse tools. Pending questions are rendered directly from SQLite, not duplicated in a separate presentation artifact.
 
+{{if ne .WorkshopMode "run"}}
 ## Skills
 
 Skills are reusable instruction sets injected into step agents at runtime. They live at the **workspace root** `{{"{{"}}.AbsDocsRoot{{"}}"}}/skills/{folder}/SKILL.md` — shared across all workflows. Do NOT create or reference skills inside the workflow folder (e.g. `Workflow/trading/skills/` does not exist).
@@ -217,3 +242,5 @@ Do **not** give boilerplate advice like `"rotate this secret"` after a normal us
 - **Detach only (keep value)**: `update_workflow_config(remove_secrets=["NAME"])`.
 
 Secret VALUES are never rendered into prompts, logs, or tool outputs. Builder and step agents consume them only through `$SECRET_<NAME>` in `execute_shell_command`. Never echo, print, or hardcode a secret value in descriptions, learnings, or `main.py`.
+
+{{end}}

@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Loader2, RefreshCw, X,
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
-import type { OrgDashboardNotification, ReportHumanInput } from '../../services/api-types'
+import type { OrgDashboardNotification, OrgDashboardRouteNotifications, ReportHumanInput } from '../../services/api-types'
 import ModalPortal from '../ui/ModalPortal'
 
 type SummaryStatus = OrgDashboardNotification['status']
@@ -15,6 +15,7 @@ interface WorkflowDashEntry {
 	runSummary: OrgDashboardNotification | null
 	pulseSummary: OrgDashboardNotification | null
 	recent: OrgDashboardNotification[]
+	byRoute: OrgDashboardRouteNotifications[]
 	pendingInputs: ReportHumanInput[]
   failed: boolean
 }
@@ -61,7 +62,17 @@ function summaryNeedsAttention(summary: OrgDashboardNotification | null): boolea
 	return !!summary && ['failed', 'blocked', 'waiting_for_user', 'waiting_for_platform', 'no_run'].includes(summary.status)
 }
 
-function latestOpenSummary(entry: WorkflowDashEntry): { kind: 'run' | 'pulse'; summary: OrgDashboardNotification } | null {
+function summaryScopes(entry: WorkflowDashEntry) {
+	return [
+		{ key: 'workflow', label: 'Workflow overview', runSummary: entry.runSummary, pulseSummary: entry.pulseSummary },
+		...entry.byRoute.map(route => ({
+			key: JSON.stringify([route.legacy ? 'legacy' : 'route', route.routing_step_id, route.route_id]),
+			label: route.label, runSummary: route.run_summary || null, pulseSummary: route.pulse_summary || null,
+		})),
+	]
+}
+
+function latestOpenSummary(entry: Pick<WorkflowDashEntry, 'runSummary' | 'pulseSummary'>): { kind: 'run' | 'pulse'; summary: OrgDashboardNotification } | null {
 	const candidates = (['run', 'pulse'] as const)
 		.map(kind => ({ kind, summary: kind === 'run' ? entry.runSummary : entry.pulseSummary }))
 		.filter((candidate): candidate is { kind: 'run' | 'pulse'; summary: OrgDashboardNotification } => summaryNeedsAttention(candidate.summary))
@@ -80,6 +91,11 @@ const SummaryDetail: React.FC<{ title: string; summary: OrgDashboardNotification
       <p className="text-sm leading-6 text-foreground/90">{summary.message}</p>
       {!!summary.fields?.length && <div className="grid gap-2 sm:grid-cols-2">{summary.fields.map((field, index) => <div key={`${field.label}:${index}`} className="rounded-md border border-border bg-background/70 px-3 py-2"><div className="font-runloop-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{field.label}</div><div className="mt-1 text-sm text-foreground">{field.value}</div></div>)}</div>}
       {!!summary.sections?.length && <div className="space-y-3">{summary.sections.map((section, index) => <div key={`${section.heading}:${index}`}><div className="font-runloop-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{section.heading}</div><p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground/90">{section.body}</p></div>)}</div>}
+      {!!summary.routes?.length && <div className="space-y-3">{summary.routes.map(route => <SummaryDetail
+        key={JSON.stringify([route.routing_step_id, route.route_id])}
+        title={route.label || route.route_id}
+        summary={{ ...summary, ...route, route: undefined, routes: undefined }}
+      />)}</div>}
     </div> : <p className="text-sm text-muted-foreground">No {title.toLowerCase()} notification has been recorded yet.</p>}
   </section>
 )
@@ -149,6 +165,7 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenWor
 		  runSummary: notification?.run_summary || null,
 		  pulseSummary: notification?.pulse_summary || null,
 		  recent: notification?.recent || [],
+		  byRoute: notification?.by_route || [],
           pendingInputs: humanInputs.success ? humanInputs.inputs.filter(input => input.workspace_path === workflow.workspacePath) : [],
           failed: !notifications.success || !humanInputs.success || !!notification?.error,
         }
@@ -167,9 +184,9 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenWor
   }, [selectedNotification])
 
   const triage = useMemo(() => ({
-    attention: entries.filter(entry => summaryNeedsAttention(entry.runSummary) || summaryNeedsAttention(entry.pulseSummary) || entry.pendingInputs.length > 0).length,
-    critical: entries.filter(entry => [entry.runSummary, entry.pulseSummary].some(summary => summary?.status === 'failed')).length,
-    healthy: entries.filter(entry => !summaryNeedsAttention(entry.runSummary) && !summaryNeedsAttention(entry.pulseSummary) && [entry.runSummary, entry.pulseSummary].some(summary => summary?.status === 'completed')).length,
+    attention: entries.filter(entry => summaryScopes(entry).some(scope => latestOpenSummary(scope)) || entry.pendingInputs.length > 0).length,
+    critical: entries.filter(entry => summaryScopes(entry).some(scope => [scope.runSummary, scope.pulseSummary].some(summary => summary?.status === 'failed'))).length,
+    healthy: entries.filter(entry => !summaryScopes(entry).some(scope => latestOpenSummary(scope)) && summaryScopes(entry).some(scope => [scope.runSummary, scope.pulseSummary].some(summary => summary?.status === 'completed'))).length,
     awaiting: entries.filter(entry => !entry.runSummary && !entry.pulseSummary).length,
     decisions: entries.reduce((count, entry) => count + entry.pendingInputs.length, 0),
   }), [entries])
@@ -182,8 +199,10 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenWor
     }))
     .sort((a, b) => new Date(b.pendingInputs[0].updated_at).getTime() - new Date(a.pendingInputs[0].updated_at).getTime()), [entries])
   const attentionItems = useMemo(() => entries
-    .map(entry => ({ entry, active: latestOpenSummary(entry) }))
-    .filter((item): item is { entry: WorkflowDashEntry; active: { kind: 'run' | 'pulse'; summary: OrgDashboardNotification } } => !!item.active)
+    .flatMap(entry => summaryScopes(entry).flatMap(scope => {
+      const active = latestOpenSummary(scope)
+      return active ? [{ entry, scope, active }] : []
+    }))
     .sort((a, b) => b.active.summary.created_at.localeCompare(a.active.summary.created_at)), [entries])
   const activityHistory = useMemo(() => entries
     .flatMap(entry => entry.recent.map(summary => ({ entry, summary })))
@@ -216,8 +235,8 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenWor
       </section>}
 
       {!!attentionItems.length && <section className="space-y-2">
-        <div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-500" /><h3 className="text-sm font-semibold text-foreground">Needs attention</h3><span className="font-runloop-mono text-[11px] text-muted-foreground">{attentionItems.length} workflow{attentionItems.length !== 1 ? 's' : ''}</span></div>
-		<div className="grid gap-3 lg:grid-cols-2">{attentionItems.map(({ entry, active }) => <button key={entry.workspacePath} type="button" onClick={() => setSelectedNotification({ entry, summary: active.summary })} className="rounded-lg border border-amber-500/25 bg-card/95 p-3 text-left shadow-sm hover:border-amber-500/50"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h4 className="truncate text-sm font-semibold text-foreground">{entry.label}</h4><div className="mt-2 flex flex-wrap gap-1.5"><Pill status={active.summary.status} label={active.kind === 'run' ? 'Run' : 'Pulse'} /></div></div><span className="font-runloop-mono shrink-0 text-[10px] text-muted-foreground">{relativeTime(active.summary.created_at)}</span></div><p className="mt-3 line-clamp-1 text-sm font-semibold text-foreground/90">{active.summary.title || 'Action needed'}</p><p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{active.summary.message}</p></button>)}</div>
+        <div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-500" /><h3 className="text-sm font-semibold text-foreground">Needs attention</h3><span className="font-runloop-mono text-[11px] text-muted-foreground">{attentionItems.length} update{attentionItems.length !== 1 ? 's' : ''}</span></div>
+		<div className="grid gap-3 lg:grid-cols-2">{attentionItems.map(({ entry, scope, active }) => <button key={`${entry.workspacePath}:${scope.key}`} type="button" onClick={() => setSelectedNotification({ entry, summary: active.summary })} className="rounded-lg border border-amber-500/25 bg-card/95 p-3 text-left shadow-sm hover:border-amber-500/50"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h4 className="truncate text-sm font-semibold text-foreground">{entry.label} · {scope.label}</h4><div className="mt-2 flex flex-wrap gap-1.5"><Pill status={active.summary.status} label={active.kind === 'run' ? 'Run' : 'Pulse'} /></div></div><span className="font-runloop-mono shrink-0 text-[10px] text-muted-foreground">{relativeTime(active.summary.created_at)}</span></div><p className="mt-3 line-clamp-1 text-sm font-semibold text-foreground/90">{active.summary.title || 'Action needed'}</p><p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{active.summary.message}</p></button>)}</div>
       </section>}
 
       <section className="space-y-3">
@@ -229,9 +248,12 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenWor
                 <h4 className="truncate text-sm font-semibold text-foreground">{entry.label}</h4>
                 {latest && <span className="font-runloop-mono shrink-0 text-[10px] text-muted-foreground">{relativeTime(latest.created_at)}</span>}
               </div>
-              <div className="mt-3 space-y-2">
-                <WorkflowSummaryRow label="Run" summary={entry.runSummary} onSelect={() => setSelectedNotification({ entry, summary: entry.runSummary! })} />
-                <WorkflowSummaryRow label="Pulse" summary={entry.pulseSummary} onSelect={() => setSelectedNotification({ entry, summary: entry.pulseSummary! })} />
+              <div className="mt-3 space-y-4">
+                {summaryScopes(entry).map(scope => <section key={scope.key} aria-label={`${entry.label} · ${scope.label}`} className="space-y-2">
+                  <h5 className="text-xs font-semibold text-muted-foreground">{scope.label}</h5>
+                  <WorkflowSummaryRow label="Run" summary={scope.runSummary} onSelect={() => setSelectedNotification({ entry, summary: scope.runSummary! })} />
+                  <WorkflowSummaryRow label="Pulse" summary={scope.pulseSummary} onSelect={() => setSelectedNotification({ entry, summary: scope.pulseSummary! })} />
+                </section>)}
               </div>
             </article>
           ))}

@@ -68,12 +68,14 @@ type promptContext struct {
 
 	// Prebuilt text for sections whose construction needs a request context or
 	// other state the registry deliberately does not carry.
-	CapabilitySection  string
-	WorkflowContext    string
-	ChannelFormatting  string
-	BrowserPointer     string
-	GrantSections      []string
-	CLIToolEnvironment string
+	CapabilitySection   string
+	WorkflowMode        string
+	WorkflowUIAvailable bool
+	WorkflowContext     string
+	ChannelFormatting   string
+	BrowserPointer      string
+	GrantSections       []string
+	CLIToolEnvironment  string
 }
 
 // promptSections is the assembly order. Order is the slice order — previously
@@ -87,7 +89,7 @@ var promptSections = []promptSection{
 		Build: func(c promptContext) string {
 			switch {
 			case c.IsWorkflowPhase:
-				return GetWorkflowPhaseWorkspaceMap(c.ShellRoot, c.WorkflowPhaseFolder)
+				return getWorkflowPhaseWorkspaceMapForMode(c.ShellRoot, c.WorkflowPhaseFolder, c.WorkflowMode)
 			case c.HasProfile:
 				return GetWorkspaceMap(c.ShellRoot, c.ProfileWorkspace)
 			default:

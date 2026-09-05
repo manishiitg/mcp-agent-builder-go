@@ -141,14 +141,26 @@ export const RoutingStepNode = memo(({ data, selected }: RoutingStepNodeProps) =
           <div className="px-3 py-2 space-y-1.5">
             <div className="text-[10px] font-semibold uppercase tracking-wide text-teal-700 dark:text-teal-300">
               {routes.length} route{routes.length === 1 ? '' : 's'}
+              {data.onTraceRoute && <span className="ml-2 font-normal normal-case tracking-normal text-muted-foreground">Click to trace</span>}
             </div>
             {routes.map((route, index) => {
               const isSelectedRoute = selectedRouteId === route.route_id
               const routeColor = routeColorForIndex(index)
               return (
-                <div
+                <button
+                  type="button"
                   key={route.route_id}
-                  className={`flex items-start gap-2 rounded-md border px-2 py-1.5 ${
+                  disabled={!data.onTraceRoute}
+                  aria-label={`Trace route: ${route.route_name || route.route_id}`}
+                  aria-pressed={data.tracedRouteId === route.route_id}
+                  title={route.route_name || route.route_id}
+                  onPointerDown={event => event.stopPropagation()}
+                  onClick={event => {
+                    event.stopPropagation()
+                    data.onTraceRoute?.(route.route_id)
+                  }}
+                  style={data.tracedRouteId === route.route_id ? { boxShadow: `0 0 0 2px ${routeColor}` } : undefined}
+                  className={`nodrag nopan w-full text-left flex items-start gap-2 rounded-md border px-2 py-1.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-400 enabled:hover:brightness-125 ${
                     isSelectedRoute
                       ? 'border-teal-300 bg-teal-50 dark:border-teal-500/70 dark:bg-teal-500/15'
                       : 'border-slate-200 bg-slate-50 dark:border-slate-700/80 dark:bg-slate-800/70'
@@ -169,7 +181,7 @@ export const RoutingStepNode = memo(({ data, selected }: RoutingStepNodeProps) =
                       {route.route_name || route.route_id}
                     </div>
                   </div>
-                </div>
+                </button>
               )
             })}
           </div>

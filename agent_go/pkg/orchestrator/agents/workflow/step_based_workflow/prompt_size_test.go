@@ -9,16 +9,9 @@ import (
 	agentprompt "github.com/manishiitg/mcpagent/agent/prompt"
 )
 
-// executeRealisticWorkshopPromptForMode renders the workshop system prompt
-// as a coding CLI sees its static portion in production: code-execution mode
-// enabled, compact projected-reference pointers selected, and the shared MCP
-// bridge contract appended. The live tool-name index, capability snapshot,
-// browser state, secrets, and attached-skill listing are dynamic additions;
-// the ceiling below deliberately reserves room for them.
-//
-// Use this helper for size tests so the ceiling reflects what the agent
-// actually sees at runtime. Use the minimal helper when asserting content
-// of the inline template only.
+// executeRealisticWorkshopPromptForMode covers the template plus bridge only.
+// The complete server assembly budget is tested by TestAssembledWorkflowPrompt
+// in cmd/server, including workspace, capability, channel, and runtime additions.
 func executeRealisticWorkshopPromptForMode(t *testing.T, mode string) string {
 	t.Helper()
 	rendered, err := ExecuteTemplate("interactiveWorkshopSystem", map[string]string{
@@ -62,34 +55,14 @@ func executeRealisticWorkshopPromptForMode(t *testing.T, mode string) string {
 	return rendered + "\n\n" + agentprompt.GetCodeExecutionInstructions("Workflow/example")
 }
 
-// These tests lock in the system-prompt size target for the workshop
-// (builder / optimizer / merged-workshop) modes. The intent is to migrate
-// reference content out of the inline system prompt and into
-// templates/system/*.md, loaded on demand via read_skill.
-//
-// BEFORE migration (snapshot taken from a real chat agent prompt log):
-//   - rendered prompt ~ 154,000 chars / ~38,500 tokens
-//
-// TARGET after migration:
-//   - rendered prompt ~ 24,000 chars / ~6,000 tokens
-//
-// MaxWorkshopPromptBytes is the ceiling these tests enforce. While the
-// migration is in flight, TestWorkshopPromptSize will fail with a clear
-// message naming the target. That failure is intentional — it is the gate
-// that proves the migration achieved its size goal.
+// Template + bridge budget only. The server's production composer has its
+// own stricter regression against the fully assembled fixture, including all
+// optional sections. Keep this local check for template regressions.
+const MaxWorkshopPromptBytes = 18_000
 
-// MaxWorkshopPromptBytes is the hard ceiling for the coding-CLI workshop
-// prompt before the small attached-skill listing and dynamic tool index are
-// added. Keep meaningful headroom below Claude Code's 40k CLAUDE.md warning
-// threshold for those runtime additions.
-const MaxWorkshopPromptBytes = 27_000
-
-// MinWorkshopPromptBytes catches accidental gutting (e.g. a template-var
-// rename that silently drops a section). Lowered 2026-05-28 after two
-// trim batches: first the workshop-mode-flow + debugging-flow pointer
-// (~5KB), then the execution-policy + deployed-channel + reporting-policy
-// + running-steps + planning-steps batch (~9KB additional).
-const MinWorkshopPromptBytes = 14_000
+// Structural/content checks cover critical rules separately; this lower floor
+// catches accidental empty rendering without requiring verbose instructions.
+const MinWorkshopPromptBytes = 8_000
 
 // shellVerbs are command names that, when they open an inline code span in the
 // workshop prompt, mark that span as a shell command the agent may paste.
@@ -229,6 +202,7 @@ func TestWorkshopCLIPromptUsesProjectedWorkspaceToolReference(t *testing.T) {
 	for _, reference := range []string{
 		"references/workspace-media-tools.md",
 		"references/workflow-tools.md",
+		"references/human-in-the-loop.md",
 	} {
 		if !strings.Contains(prompt, reference) {
 			t.Fatalf("coding-CLI workshop prompt must point to projected reference %q", reference)
@@ -249,9 +223,6 @@ func TestWorkshopCLIPromptUsesProjectedWorkspaceToolReference(t *testing.T) {
 		"never guess a bridge name or URL",
 		`get_api_spec(tool_name="<name>")`,
 		"$MCP_MCP",
-		"foreground curl",
-		"Never use `nohup`",
-		"foreground response resumes the agent automatically",
 	} {
 		if !strings.Contains(prompt, routingContract) {
 			t.Fatalf("coding-CLI workshop prompt is missing bridge routing contract %q", routingContract)
@@ -311,6 +282,45 @@ func TestPhaseChatWorkshopSelectsWorkspaceToolGuidanceByTransport(t *testing.T) 
 	}
 }
 
+func TestHumanInteractionGuidanceReachesBothWorkflowPromptTransports(t *testing.T) {
+	for _, mode := range []string{"workshop", "run"} {
+		for _, projected := range []string{"true", "false"} {
+			t.Run(mode+"/projected="+projected, func(t *testing.T) {
+				prompt := PhaseChatSystemPrompt("workflow-builder", map[string]string{
+					"WorkspacePath": "Workflow/example", "WorkshopMode": mode,
+					"IsCodeExecutionMode": "true", "UseProjectedReferenceSkills": projected,
+				})
+				for _, required := range []string{
+					`read_skill(skills=[{"name":"builder-reference","path":"references/human-in-the-loop.md"}])`,
+				} {
+					if !strings.Contains(prompt, required) {
+						t.Errorf("rendered prompt lost human-interaction contract %q", required)
+					}
+				}
+				if strings.Contains(prompt, "scheduled Pulse renders them in `builder/improve.html`") {
+					t.Error("rendered prompt still points decisions to the retired HTML page")
+				}
+				// Verify that the reference named by this mode's system prompt is
+				// actually available, rather than a pointer to an absent skill file.
+				body, err := guidance.RenderReferenceKindForTest("human-in-the-loop", mode)
+				if err != nil {
+					t.Fatalf("human-in-the-loop reference unavailable in %s: %v", mode, err)
+				}
+				// Mechanism details belong to the loaded skill, not every system
+				// prompt. Guard both discoverability and the lean prompt boundary.
+				for _, detail := range []string{"window.report.sendChatMessage", "timeout_seconds <= 45"} {
+					if !strings.Contains(body, detail) {
+						t.Errorf("human interaction detail missing from skill: %s", detail)
+					}
+					if strings.Contains(prompt, detail) {
+						t.Errorf("human interaction detail duplicated in system prompt: %s", detail)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestCanonicalWorkshopMode(t *testing.T) {
 	for input, want := range map[string]string{
 		"":          "",
@@ -355,7 +365,7 @@ func TestWorkshopModeIsMergedSuperset(t *testing.T) {
 	// workflow-tool catalog is projected as a reference skill for coding CLIs,
 	// so do not duplicate individual catalog entries in the system prompt.
 	mustContain := []string{
-		"create_human_input_request",
+		"references/human-in-the-loop.md",
 		`builder-reference/references/optimize-playbook.md`, // shorthand for read_skill(skills=[{name:builder-reference,path:references/optimize-playbook.md}])
 	}
 	for _, s := range mustContain {

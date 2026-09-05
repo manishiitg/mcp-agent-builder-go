@@ -10,7 +10,7 @@ package services
 // renders that instead; a channel without one falls back to the plain message.
 // Add Slack/WhatsApp slices the same way when those channels grow rich content.
 type NotificationContent struct {
-	Text    string               // common fallback (mirrors the `message` arg)
+	Text    string               // top-level summary text; delivery may append the typed route entries
 	Summary *NotificationSummary // channel-neutral structured summary for durable/internal surfaces
 	Gmail   *GmailContent        // Gmail-specific rendering (nil = derive from message)
 }
@@ -30,6 +30,21 @@ type NotificationSummary struct {
 	Route    string                       `json:"route,omitempty"`
 	Fields   []NotificationSummaryField   `json:"fields,omitempty"`
 	Sections []NotificationSummarySection `json:"sections,omitempty"`
+	Routes   []NotificationRouteSummary   `json:"routes,omitempty"`
+}
+
+// NotificationRouteSummary describes only the evidence for one major route.
+// The pair is the identity: route IDs alone need not be unique across routers.
+// Branch choices are not sub-workflows and do not get separate route summaries.
+type NotificationRouteSummary struct {
+	RoutingStepID string                       `json:"routing_step_id"`
+	RouteID       string                       `json:"route_id"`
+	Label         string                       `json:"label,omitempty"`
+	Title         string                       `json:"title"`
+	Status        string                       `json:"status"`
+	Message       string                       `json:"message"`
+	Fields        []NotificationSummaryField   `json:"fields,omitempty"`
+	Sections      []NotificationSummarySection `json:"sections,omitempty"`
 }
 
 type NotificationSummaryField struct {

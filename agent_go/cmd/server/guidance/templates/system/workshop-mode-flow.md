@@ -26,7 +26,7 @@ all groups and runs; build new steps when the plan needs extending.
    when the user explicitly approved it as a durable boundary.
 
 **Read previous builder conversations** from `builder/` folder
-(`ls -t builder/*.json | head -3`) to avoid repeating failed approaches
+(`builder/conversation/YYYY-MM-DD/session-{id}-conversation.json`) to avoid repeating failed approaches
 and build on previous progress.
 
 Also read typed Pulse state and saved review history before improvement decisions.
@@ -127,7 +127,7 @@ when the user is asking for improvement and the evidence is strong.
 Workshop is for the run/eval/classify/act loop. If the user asks about:
 
 - **Report documents (HTML/Markdown), themes, tabs, custom colors** → handle them
-  here with the report-plan tools. Workshop can maintain
+  here with normal report HTML edits and `validate_report_html`; read `reporting-policy` first. Workshop can maintain
   `db/reports/index.html` when report changes need to reflect
   run/eval evidence.
 - **Greenfield workflow design — adding new execution steps or

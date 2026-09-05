@@ -29,6 +29,18 @@ Apply the parent-provided assumption-audit report lens. The dashboard must show 
 
 Focus on: {{.Focus}}.{{end}}
 
+REPORT TO AGENT ACTIONS
+When reviewing an approval or feedback flow, read
+`read_skill(skills=[{"name":"builder-reference","path":"references/human-in-the-loop.md"}])`
+and check which interaction the workflow actually needs.
+Reports can offer `window.report.sendChatMessage(message, { requestId })` from
+user click handlers. It opens a host message review panel with an existing/new
+chat choice, using the same queue as Ask in chat. For an existing report-owned
+approval, save it before requesting the action and include its exact item,
+version, and intended route/consumer. Follow `reporting-policy.md` for cancelled
+and queued receipts, retries, and deduplication limits. Do not label queued work
+as applied or send messages from render/poll callbacks.
+
 INTENT
 The report dashboard should help the user measure and track whether the workflow is achieving its goal, what changed in the current plan/strategy or plan draft/proposal, and which issues need attention. It is not only a data dump. A strong dashboard answers, above the fold:
 - Are we on track against `soul.md` success criteria?
@@ -122,6 +134,10 @@ Recommend safe, local report-only changes such as:
 Mark a recommendation as requiring user judgment when it needs new workflow data, a new plan step, evaluation redesign, business meaning, or a broad visual rewrite.
 
 When you finish, return to the Pulse Fixer:
+- flag activity views that discard `route_summaries_json`, merge same-named
+  routes across routing steps, imply clean Pulse coverage for unreviewed
+  routes, or omit legacy/shared-work fallback; route identity is the
+  `(routing_step_id, route_id)` pair, not a branch choice
 - what report evidence you reviewed
 - the main report weaknesses you found
 - what you recommended

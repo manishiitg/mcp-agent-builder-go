@@ -158,11 +158,14 @@ async function findWorkflowPreset(workspacePath: string) {
 export async function sendWorkflowMessageToChat({
   workspacePath,
   message,
+  newChat = false,
 }: {
   workspacePath: string
   message: string
+  /** Explicit user choice; otherwise reuse the usual Ask in chat lane. */
+  newChat?: boolean
 }): Promise<ReportHumanInputChatResult> {
-  const chatStore = useChatStore.getState()
+  if (!message.trim()) throw new Error('Write a message before opening chat.')
   let targetTab: ChatTab | undefined
   let tabId: string
   let reused = false
@@ -173,7 +176,7 @@ export async function sendWorkflowMessageToChat({
   if (!selectWorkflowPreset(preset)) throw new Error('Failed to open the automation.')
 
   const latestChatStore = useChatStore.getState()
-  targetTab = selectReportDiscussionTab(
+  targetTab = newChat ? undefined : selectReportDiscussionTab(
     latestChatStore.chatTabs,
     { mode: 'workflow', presetId: preset.id },
     latestChatStore.activeTabId,
@@ -199,7 +202,7 @@ export async function sendWorkflowMessageToChat({
   const finalChatStore = useChatStore.getState()
   const existingQueue = finalChatStore.getTabConfig(tabId)?.queuedMessages || []
   finalChatStore.setTabConfig(tabId, {
-    inputText: '',
+    // An external report request must not erase an unsent draft in this chat.
     queuedMessages: [...existingQueue, message],
   })
   finalChatStore.setTabViewMode(tabId, 'terminal')

@@ -77,6 +77,18 @@ func TestStepExecutionSurfaceFollowsTheToolsHeld(t *testing.T) {
 		without StepExecutionSignals
 	}{
 		{
+			name:    "human-in-the-loop follows urgent feedback capability",
+			doc:     "human-in-the-loop",
+			with:    StepExecutionSignals{ToolNames: []string{"human_feedback"}},
+			without: StepExecutionSignals{ToolNames: []string{"notify_user"}},
+		},
+		{
+			name:    "human-in-the-loop follows durable decision capability",
+			doc:     "human-in-the-loop",
+			with:    StepExecutionSignals{ToolNames: []string{"create_human_input_request"}},
+			without: StepExecutionSignals{ToolNames: []string{"query_workflow_db"}},
+		},
+		{
 			name:    "browser-usage follows agent_browser",
 			doc:     "browser-usage",
 			with:    StepExecutionSignals{ToolNames: []string{"agent_browser"}},

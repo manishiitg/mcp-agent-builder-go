@@ -8,6 +8,23 @@
 
 [PLAT-294](pulse_platform/plat-294.md) — the review's objection to a positional "routing before any work" check is accepted and that proposal is dropped. A census of every workflow showed exactly one `routing` step per plan is the mode selector schedules pick via `route_selections`, and every second one (hetznerssh, linkedin, social-media, sheet-analysis) is a `branch` by `branch.md`'s own definition; the agentic `routing_best_practices` check passed two of them and never ran on the others. Implemented as two deterministic rules on the two mutations that can introduce a routing step (`add_routing_step`, `convert_routing_branch_step_type` to routing): at most one routing step per plan, and no routing route straight to `end` (routing = a sub-workflow of many steps; a mode that does nothing is a simple if-condition → branch). **No load-time check and no migration by owner decision**: existing plans keep their routing steps as they are. Seven new tests pass locally with the full package; not committed, not deployed.
 
+## Report action capability and isolation — PLAT-293
+
+[PLAT-293](pulse_platform/plat-293.md) now has a local `window.report.sendChatMessage` implementation: a host message review panel, the existing Ask in chat queue, an explicit new-chat choice, queued/cancelled receipts, and per-view duplicate protection. Report authors can save an existing approval before offering the scoped action message. This is a chat capability, not an atomic approval-consumer dispatcher. The iframe's existing same-origin access remains separate isolation work. Tests/build and simulated browser interaction passed; not pushed/deployed.
+
+2026-09-05 local PLAT-259 follow-up: the plan canvas gives major routes separate wider columns and adds click-to-trace with faded unrelated nodes/edges, keyboard clearing, and Fit plan to view. Verified against Build in Public locally; see [PLAT-259](pulse_platform/plat-259.md). Not deployed; live ticket counts unchanged.
+
+
+## Route-specific Daily Actions and Pulse summaries — PLAT-259
+
+[PLAT-259](pulse_platform/plat-259.md) now extends routes-as-sub-workflows to
+Notify, Activity, and the existing Daily Action report source from
+[PLAT-279](pulse_platform/plat-279.md). One digest carries independent route
+outcomes; history preserves quiet routes, and Pulse scope comes from actual
+review evidence. Contract `1.0.40` supplies the bounded existing-report upgrade.
+Implemented/tested locally; commit, deployment and producing-run verification
+remain. No live issue-resolution counts changed.
+
 ## Shared agent UI control framework — PLAT-292
 
 [PLAT-292](pulse_platform/plat-292.md) proposes a scoped, acknowledged UI-control

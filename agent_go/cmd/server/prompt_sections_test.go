@@ -148,14 +148,12 @@ func TestCapabilitySnapshotIsWithheldWhenItsToolsAreNotAvailable(t *testing.T) {
 	}
 }
 
-// workspace-reference is workflow-phase-only and static, so it belongs to that
-// phase's own system prompt. As a shared section it was appended BEFORE
-// ResetInstructions(phaseSystemPrompt) discarded everything, so it never
-// reached an agent at all.
-func TestWorkspaceReferenceIsNotAResettableSharedSection(t *testing.T) {
+// The general reference must not leak back into shared workflow assembly.
+// Detailed Builder guidance lives in mode-scoped reference skills.
+func TestWorkspaceReferenceIsNotASharedSection(t *testing.T) {
 	for _, section := range promptSections {
 		if section.Name == "workspace-reference" {
-			t.Fatal("workspace-reference belongs in phaseSystemPrompt; as a shared section the phase reset discards it")
+			t.Fatal("shared assembly must not inline the generic workflow guide")
 		}
 	}
 }

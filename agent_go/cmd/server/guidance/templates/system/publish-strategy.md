@@ -82,7 +82,8 @@ A live report won't work on static hosting. Bake it to static HTML at publish ti
      var deniedWrite = function () { return Promise.reject(new Error('Editing is not available on this published snapshot.')); };
      window.report = {
        query: function (sql) { return window.__REPORT_DATA__[normalize(sql)] || []; },
-       updateField: deniedWrite, updateFields: deniedWrite
+       updateField: deniedWrite, updateFields: deniedWrite,
+       sendChatMessage: function () { return Promise.reject(new Error('Agent chat is only available in the live app.')); }
      };
    </script>
    ```
@@ -93,6 +94,8 @@ A live report won't work on static hosting. Bake it to static HTML at publish ti
    viewer and a raw "not a function" error on click; there is no live backend on a static host
    for either function to reach, so a published snapshot is always read-only regardless of what
    the live report can do.
+   Hide or disable live chat/action controls on published snapshots; never embed
+   app credentials or invent a public endpoint to emulate `sendChatMessage`.
 4. The result is a self-contained static file. The data is a **snapshot as of now** — that's
    expected; auto-republish after each run keeps it current.
 

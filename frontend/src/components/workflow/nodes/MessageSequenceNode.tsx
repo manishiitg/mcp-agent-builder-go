@@ -87,7 +87,7 @@ export const MessageSequenceNode = memo(({ data, selected }: MessageSequenceNode
   const changeBadge = changeType ? changeBadgeStyles[changeType] : null
 
   const seqItems = items || []
-  const displayTitle = title || `Message Sequence ${stepIndex + 1}`
+  const displayTitle = title || `Agent ${stepIndex + 1}`
   const executionModeVisuals = getExecutionModeVisuals(effectiveExecutionMode(step), effectiveExecutionModeReason(step))
   const ModeIcon = executionModeVisuals.Icon
   const nodeBorderColor = status === 'pending' && executionModeVisuals.borderClassName
@@ -141,7 +141,7 @@ export const MessageSequenceNode = memo(({ data, selected }: MessageSequenceNode
             <ListOrdered className="w-4 h-4 text-violet-500 flex-shrink-0" />
           )}
           <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide truncate">
-            Message Sequence
+            Agent
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">

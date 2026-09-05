@@ -2,6 +2,14 @@ import { describe, it, expect } from 'vitest'
 import { withReportBootstrap } from './reportHostRuntime'
 
 describe('withReportBootstrap', () => {
+  it('rejects chat before initialization instead of replaying an action on render', async () => {
+    const win: Record<string, unknown> = {}
+    const stub = withReportBootstrap('<div></div>').match(/<script>([\s\S]*?)<\/script>/)![1]
+    new Function('window', stub)(win)
+    const api = win.report as { sendChatMessage: (message: string) => Promise<unknown> }
+    await expect(api.sendChatMessage('Apply item 42')).rejects.toThrow('not ready')
+    expect(win.__reportPendingCalls).toEqual([])
+  })
   it('injects the stub immediately after <head> so it precedes any author script', () => {
     const html = '<html><head><title>t</title></head><body><script>go()</script></body></html>'
     const out = withReportBootstrap(html)

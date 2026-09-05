@@ -18,6 +18,8 @@ import { HtmlReportFrame } from './reportWidgets/HtmlWidgetFrame'
 import { ReportEmbedProvider, type ReportDataApi } from './reportWidgets/reportEmbedContext'
 import { allowedReportPath, normalizeReportSource, renderReportMarkdown, reportMarkdownBasePath } from './reportWidgets/reportMarkdown'
 import { ReportHumanInputPanel } from './ReportHumanInputPanel'
+import { ReportChatPanel } from './reportWidgets/ReportChatPanel'
+import { useReportChat } from './reportWidgets/useReportChat'
 
 import { WORKFLOW_REPORT_REFRESH_EVENT } from './reportRefreshEvent'
 
@@ -58,7 +60,7 @@ async function readWorkspaceText(filepath: string): Promise<string | null> {
   }
 }
 
-function useReportDataApi(workspacePath: string): ReportDataApi {
+function useReportDataApi(workspacePath: string, sendChatMessage: ReportDataApi['sendChatMessage']): ReportDataApi {
   return useMemo(() => {
     const getText = async (path: string): Promise<string | null> => {
       const allowed = allowedReportPath(path)
@@ -67,6 +69,7 @@ function useReportDataApi(workspacePath: string): ReportDataApi {
     const renderMarkdown = (markdown: string): string => renderReportMarkdown(markdown)
     return {
       workspacePath,
+      sendChatMessage,
       query: async (sql: string) => {
         const response = await agentApi.queryWorkflowDB(`${workspacePath}/db/db.sqlite`, sql)
         if (!response.success || !response.data) throw new Error(response.error || 'Query failed.')
@@ -112,7 +115,7 @@ function useReportDataApi(workspacePath: string): ReportDataApi {
         return { oldValues: response.data.old_values, newValues: response.data.new_values }
       },
     }
-  }, [workspacePath])
+  }, [workspacePath, sendChatMessage])
 }
 
 async function loadReportDocument(workspacePath: string): Promise<ReportDocument | null> {
@@ -135,7 +138,8 @@ function ReportViewComponent({ workspacePath, onClose, focusTier }: ReportViewPr
     ? { value: viewTarget.target, token: viewTarget.token }
     : undefined
   const [previewPreference, setPreviewPreference] = useState<ReportPreviewDevice>(() => readReportPreviewPreference(workspacePath))
-  const dataApi = useReportDataApi(workspacePath)
+  const reportChat = useReportChat(workspacePath)
+  const dataApi = useReportDataApi(workspacePath, reportChat.request)
 
   const refresh = useCallback(() => setRefreshNonce(value => value + 1), [])
   useEffect(() => {
@@ -206,6 +210,7 @@ function ReportViewComponent({ workspacePath, onClose, focusTier }: ReportViewPr
           </div>
         </div>
         <FilePreviewModal />
+        <ReportChatPanel controller={reportChat} />
       </div>
     </ReportEmbedProvider>
   )

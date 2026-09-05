@@ -1,5 +1,10 @@
 ## Running Steps
 
+When execution needs an approval, missing input, or a correction from the user,
+read `read_skill(skills=[{"name":"builder-reference","path":"references/human-in-the-loop.md"}])`
+to choose the interaction and distinguish a saved answer from permission to
+execute. Do not prefill an approval the user has not given.
+
 ## Iterations & Groups
 
 **Iterations** are just output folders (e.g., `iteration-0`). In

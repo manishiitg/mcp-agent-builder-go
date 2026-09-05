@@ -6,7 +6,60 @@
 |---|---|
 | Assigned agent | Claude Code |
 | Ticket state | `frontend per-route reporting implemented across Execution Logs, Costs, and Evaluation` — the canonical workshop prompt and every named reference doc offer `branch` as the fixed-choice alternative to `routing`; Execution Logs retains the executed type; generic plan APIs accept branch steps; the atomic routing/branch conversion tool publishes the changelog `reason` its executor requires; and every step reached through a run's actually-selected route is now tagged and filterable by route in Execution Logs, Costs, and Evaluation. A successful live manual rerun of `/verify-branch-step`/`/migrate-routing-to-branch` remains the one open item |
-| Last synchronized | `2026-08-31` |
+| Last synchronized | `2026-09-05` |
+
+## 2026-09-05 — Route-specific Daily Actions and Pulse summaries
+
+**Codex follow-up implemented locally; not committed/deployed.** The user asked
+to extend routes-as-sub-workflows to the daily actions already produced by
+Notify and to Pulse summaries. Related: [PLAT-264](plat-264.md) (one durable
+notification source) and [PLAT-279](plat-279.md) (Daily Actions uses that source).
+
+The old `summary_route` string was only a label. Activity kept one latest Run
+and one latest Pulse summary per workflow, and fifty records per kind could
+let a busy route erase the quieter route's last status. Pulse could also
+inherit the schedule's execution route despite reviewing a different scope.
+
+The follow-up adds:
+
+- `notify_user(summary_routes=[...])`: one digest with a typed entry for each
+  route actually represented by its evidence. Identity is the exact
+  `(routing_step_id, route_id)` pair; label/title/status/message and optional
+  fields/sections describe that route. Small `branch` choices stay internal.
+  Shared work stays in the existing top-level content. The backend renders
+  the same route facts into external message text and escaped Gmail HTML.
+- The existing `org_dashboard_notifications` table gets an additive
+  `route_summaries_json` and `summary_text` columns. The original `message`
+  stays complete for old reports; new views render the shared lead and typed
+  route entries once. A digest remains one row. Retention preserves
+  fifty updates per kind and route, as well as the workflow stream, and the
+  API exposes latest Run/Pulse records per route independently of recent-list
+  limits. No copied history or workflow-owned activity table is introduced.
+- Activity displays each route's latest Run/Pulse status and keeps a quieter
+  route's blocker visible after another route succeeds. Details show individual
+  route content. Legacy labels are retained separately without guessing their
+  router identities. Missing Pulse coverage stays missing.
+- Pulse no longer inherits execution-route scope merely from schedule
+  metadata. Finalizer guidance uses actual route-scoped review evidence and
+  forbids allocating aggregate costs to routes without ledger attribution.
+- Workflow contract `1.0.40` supplies a bounded migration for existing
+  notification instructions and Daily Action / Recent Activity reports. It
+  preserves custom activity sources and legacy/absent-column fallback,
+  validates edits, adds no steps or notification calls, changes no recipients,
+  and performs no workflow execution or notification send during migration.
+
+Verification covers mixed-route digest persistence, identical route IDs under
+separate routers, independent route/kind retention beyond fifty busy updates,
+legacy-label separation, shared Pulse scope, session-to-provider delivery,
+escaped Gmail rendering, Activity route details, and upgrade sequencing.
+TypeScript compilation passes. A full guidance run also exposed and corrected
+one stale PLAT-163 test phrase about mandatory review of any measured miss.
+
+Remaining acceptance after deployment: one real multi-route run and one Pulse
+pass must produce truthful route entries; existing report upgrades must render
+both new route data and old/absent scope without inventing coverage. No live
+workflow records, notification recipients, or issue-resolution counts changed
+as part of this implementation.
 
 - **Type:** implemented platform feature. Originally filed at the
   user's explicit request immediately after the design converged, to record
@@ -799,3 +852,13 @@ Landed at `b87736573` on `main`.
 Still open, unchanged: the live manual reverify against a real workflow run
 (the two temporary operator commands from the section above), which this
 work did not touch.
+
+### 2026-09-05 — Wider plan routes and click-to-trace (local)
+
+The plan canvas now gives each primary route segment its own column (six columns for Build in Public instead of packing six routes into three). Lane gaps increase from 144 to 240 pixels. Branch handoffs remain connected; routing edges fan out above the route bodies. Steps follow their actual successor order, including LinkedIn observation → evidence → draft, instead of their order in the plan file. Shared joins and variable-height standalone rows no longer share overlapping positions. Layout version `2.8-wide-route-lanes` invalidates stale saved positions.
+
+Routing and branch choices now have keyboard-accessible trace buttons. The clicked choice follows the rendered downstream graph through nested decisions, handoffs, shared joins and cycles, while other nodes fade to 14% and edges/labels to 8%. Context-dependency edges do not expand a trace. A loop back to the source router cannot activate its other choices. Trace state is local to the canvas and workspace; it never writes runtime `selected_route_id` or changes the plan. Click the same choice, Show all, the canvas background, or Escape to clear. A Fit plan to view control supports navigating the wider map.
+
+Verified against the local Build in Public plan in the in-app browser: route switching, LinkedIn membership, CDP Unavailable branch membership, click-to-toggle and Escape. Regression coverage checks separate router identities, end routes, missing choices, shared joins, nested handoffs/cycles, immutable runtime selection, button semantics, six distinct lanes, topology ordering and join separation. This is a local implementation; no deployment or workflow execution was performed.
+
+Follow-up: clicking a colored routing/branch line or its numbered badge now toggles the same route trace. Exact source handles resolve the router/route pair; ordinary connections do not activate a route. A wider invisible line hit area makes selection easier, and badge buttons support Enter/Space. Verified locally: line activation, repeat-click clearing, switching via a faded route line, badge activation and Enter clearing. Six focused tests and the TypeScript build passed.

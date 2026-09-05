@@ -8,6 +8,8 @@ import {
 } from '@xyflow/react'
 
 interface RoutingEdgeData extends Record<string, unknown> {
+  onTraceRoute?: () => void
+  traced?: boolean
   routeIndex?: number
   routeCount?: number
   routeName?: string
@@ -54,7 +56,7 @@ export const RoutingEdge = memo(({
 }: EdgeProps) => {
   const edgeData = (data ?? {}) as RoutingEdgeData
   const color = edgeData.color || '#0f766e'
-  const selectedOpacity = edgeData.selected === false ? 0.45 : 1
+  const selectedOpacity = style.opacity ?? (edgeData.selected === false ? 0.45 : 1)
   const labelText = typeof label === 'string'
     ? label
     : edgeData.routeName
@@ -82,6 +84,11 @@ export const RoutingEdge = memo(({
     targetX,
     targetY,
     targetPosition,
+    // Fan out above route bodies instead of carrying parallel wires through
+    // the middle of other routes. Side handoffs keep their short lateral path.
+    centerY: !edgeData.isLateralHandoff && targetY > sourceY
+      ? sourceY + 48 + (edgeData.routeIndex || 0) * 24
+      : undefined,
     borderRadius: 18,
     offset: 32
   })
@@ -99,7 +106,7 @@ export const RoutingEdge = memo(({
         id={id}
         path={edgePath}
         markerEnd={markerEnd}
-        interactionWidth={18}
+        interactionWidth={24}
         style={{
           ...style,
           stroke: color,
@@ -110,19 +117,27 @@ export const RoutingEdge = memo(({
 
       {routeNumber !== null && (
         <EdgeLabelRenderer>
-          <div
-            className="nodrag nopan pointer-events-none absolute z-10 flex h-5 w-5 items-center justify-center rounded-full border text-[9px] font-semibold text-white shadow-sm"
+          <button
+            type="button"
+            disabled={!edgeData.onTraceRoute}
+            onPointerDown={event => event.stopPropagation()}
+            onClick={event => {
+              event.stopPropagation()
+              edgeData.onTraceRoute?.()
+            }}
+            aria-pressed={Boolean(edgeData.traced)}
+            className="nodrag nopan pointer-events-auto absolute z-10 flex h-5 w-5 items-center justify-center rounded-full border text-[9px] font-semibold text-white shadow-sm enabled:cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-400"
             style={{
               transform: `translate(-50%, -50%) translate(${labelPosition.x}px, ${labelPosition.y}px)`,
               borderColor: color,
               background: color,
               opacity: selectedOpacity
             }}
-            title={labelText}
-            aria-label={labelText ? `Route ${routeNumber}: ${labelText}` : `Route ${routeNumber}`}
+            title={labelText ? `Trace route: ${labelText}` : `Trace route ${routeNumber}`}
+            aria-label={labelText ? `Trace route ${routeNumber}: ${labelText}` : `Trace route ${routeNumber}`}
           >
             {routeNumber}
-          </div>
+          </button>
         </EdgeLabelRenderer>
       )}
     </>

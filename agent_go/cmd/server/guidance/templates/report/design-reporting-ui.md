@@ -33,6 +33,27 @@ table, richer per-run detail — when the parent has explicitly asked for a
 different or more detailed activity view than the run summaries give
 them; never add a step or table whose only purpose is feeding this tab.
 
+For route-specific activity, use the existing row's `route_summaries_json`
+array. Each entry has `routing_step_id`, `route_id`, `label`, `title`, `status`,
+`message`, and optional `fields`/`sections`. Group/filter by the ID pair and
+display the readable label. Major routing choices are sub-workflows; branch
+choices remain internal. Show shared work separately, and apply the same
+grouping if showing Pulse summaries. Inspect the actual schema before querying
+this additive column; absent data falls back to the original message and any
+explicit legacy Route field. Missing route scope is unknown, not healthy, and
+historical labels must not be guessed into canonical IDs. Preserve timestamps
+so a quiet route's old update cannot appear to be today's work.
+
+For report actions that should hand work to the agent, use
+`read_skill(skills=[{"name":"builder-reference","path":"references/human-in-the-loop.md"}])`
+to choose the human interaction pattern, then
+`window.report.sendChatMessage(message, { requestId })` from the button handler,
+following `reporting-policy.md`. The app lets the user review the message and
+reuse or start a chat. Save any existing report-owned approval first; include
+the exact item/version and intended route, and distinguish approval saved,
+request cancelled, request queued, and evidence of actual completion. Never
+send during rendering or polling.
+
 1. Decide the reader's questions and the durable DB/asset evidence that answers
    them. Design one coherent reporting experience; use internal views only for
    genuinely distinct questions.
@@ -86,3 +107,7 @@ Before writing a large report, briefly state the sections/views you will create
 and what each answers, including the required activity/actions section above.
 The report should lead with goal progress and key risks, then evidence and
 detail—not raw JSON or a generic data dump.
+
+For typed route rows, `summary_text` contains only the shared lead; `message`
+remains the complete rendered digest for older reports. Render the lead plus
+route entries once, or the complete message as a fallback, never both.

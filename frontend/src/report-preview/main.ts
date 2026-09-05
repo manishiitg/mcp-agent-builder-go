@@ -129,6 +129,7 @@ function createPreviewDataApi(): ReportDataApi {
     openFile: (path: string) => { openedFiles.push(path) },
     updateField: async () => { throw new Error('window.report.updateField is not available in the preview') },
     updateFields: async () => { throw new Error('window.report.updateFields is not available in the preview') },
+    sendChatMessage: async () => { throw new Error('window.report.sendChatMessage is not available in the preview. Open the report in the app to send a message.') },
   }
 }
 

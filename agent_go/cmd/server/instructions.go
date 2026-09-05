@@ -103,51 +103,21 @@ Reuse existing project folders for follow-up work on the same topic.
 // Unlike chat mode, workflow-phase work should treat the active workflow folder as the
 // primary writable root and avoid surfacing internal per-user Chats paths.
 func GetWorkflowPhaseWorkspaceMap(docsRoot, workflowFolder string) string {
+	return getWorkflowPhaseWorkspaceMapForMode(docsRoot, workflowFolder, "workshop")
+}
+
+func getWorkflowPhaseWorkspaceMapForMode(docsRoot, workflowFolder, mode string) string {
 	if strings.TrimSpace(workflowFolder) == "" {
 		return GetWorkspaceMap(docsRoot, "")
 	}
-
-	workflowFolder = path.Clean(workflowFolder)
-	absWorkflowFolder := resolveWorkspacePath(docsRoot, workflowFolder)
-	absPlanningFolder := resolveWorkspacePath(docsRoot, path.Join(workflowFolder, "planning"))
-	absWorkflowRoot := resolveWorkspacePath(docsRoot, "Workflow")
-	absDownloads := resolveWorkspacePath(docsRoot, "Downloads")
-	absConfig := resolveWorkspacePath(docsRoot, "config")
-
-	return `
-## Workspace
-
-**Always use absolute paths in shell commands.** The workspace docs root is: ` + "`" + docsRoot + "`" + `. Every absolute path you reference in a shell command MUST start with this exact prefix. The path guard rejects absolute paths under any other host root (` + "`" + "/Users/..." + "`" + `, ` + "`" + "/home/..." + "`" + `, etc.) that are not under the docs root — even if the path "looks right." Do NOT construct absolute paths by prepending the project root, your home directory, or anything else; always use ` + "`" + docsRoot + "`" + ` as the prefix.
-
-Common mistake to avoid: seeing a path like ` + "`" + "Workflow/<name>/" + "`" + ` mentioned in tool descriptions and prepending an arbitrary host prefix. The correct absolute form is ` + "`" + docsRoot + "/Workflow/<name>/" + "`" + ` — always use the docs root above. Tool descriptions that show ` + "`" + "Workflow/<name>/" + "`" + ` are referring to a path RELATIVE to the docs root; the absolute equivalent is the docs root + that suffix.
-
-**Current writable workflow folder:** ` + "`" + absWorkflowFolder + "/`" + `
-
-Save workflow outputs, generated media, test artifacts, and builder-side files inside the active workflow folder above. Do **not** default to Chats for builder work — Chats is internal session storage, not the primary workflow output location.
-
-| Path | Access | Purpose |
-|------|--------|---------|
-| ` + "`" + absWorkflowFolder + "/`" + ` | read/write | Active workflow workspace — save builder outputs and generated files here |
-| ` + "`" + absPlanningFolder + "/`" + ` | read-only via shell | Plan/config source of truth — inspect freely, but change it through workflow/builder tools rather than raw file writes |
-| ` + "`" + absConfig + "/`" + ` | tool-only | Session config — use dedicated LLM/provider config tools, not raw file reads/writes |
-| ` + "`" + absDownloads + "/`" + ` | read/write | Scratchpad for downloads and browser artifacts |
-| ` + "`" + absWorkflowRoot + "/`" + ` | read-only outside the active workflow | Other workflow definitions |
-
-### Builder File Placement
-
-Keep workflow-related files under the active workflow folder so they stay with the workflow:
-
-` + "```" + `
-` + absWorkflowFolder + `/
-  db/reports/index.html   ← complete workflow-owned live report UI
-  db/                     ← structured workflow state and results
-  knowledgebase/          ← durable narrative knowledge
-  runs/                   ← execution outputs
-  <other-artifacts>/      ← generated images, videos, temp analysis files
-` + "```" + `
-
-If you generate a test image, video, or other artifact for this workflow, place it somewhere under ` + "`" + absWorkflowFolder + "/`" + `.
-`
+	active := resolveWorkspacePath(docsRoot, path.Clean(workflowFolder))
+	access := "Workshop may write workflow-owned artifacts here; planning/config changes require dedicated tools."
+	if mode == "run" {
+		access = "Run may read workflow artifacts and execute authorized business work; it cannot edit workflow design, config, learnings, KB, eval, or report files. Confirmed runtime context uses capture_context."
+	}
+	return "\n## Workspace\n\nWorkspace docs root: `" + docsRoot + "`. Active workflow: `" + active + "/`. " + access +
+		"\nOther workflows are read-only. `config/` is tool-only. Use quoted absolute paths under the docs root in shell commands. Store workflow outputs and scratch artifacts under the active workflow, not Chats. `" +
+		resolveWorkspacePath(docsRoot, "Downloads") + "/` is available for downloads/browser artifacts. Read `builder-reference/references/file-layout.md` for paths and log schemas.\n"
 }
 
 // GetWorkspaceReference returns detailed reference documentation for workspace config,

@@ -11,7 +11,7 @@ import { defineConfig } from "vite"
 // host runtime and markdown renderer with the in-app Report tab, so the
 // preview renders a report exactly the way the app does.
 //
-// Output goes here (so a local `go run ./cmd/server` finds it without a full
+// Output goes to agent_go/static (so `go run ./cmd/server` finds it without a full
 // frontend build) AND, via the `build:report-preview` npm script, gets
 // copied into frontend/dist/ alongside the main app bundle -- every existing
 // deploy script already copies frontend/dist/ wholesale into the deployed
@@ -33,7 +33,7 @@ export default defineConfig({
     'import.meta.env.DEV': 'false',
   },
   build: {
-    outDir: path.resolve(projectRoot, "../agent_go/cmd/server/static"),
+    outDir: path.resolve(projectRoot, "../agent_go/static"),
     emptyOutDir: false,
     minify: true,
     sourcemap: false,

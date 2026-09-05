@@ -59,6 +59,7 @@ func workflowContractVersionRank(version string) (int, bool) {
 		workflowContractScriptedTypeStaysRegularVersion,
 		workflowContractDeclaredExecutionModeRetiredVersion,
 		workflowContractDeclaredExecutionModeStrippedVersion,
+		workflowContractRouteSummariesVersion,
 	}
 	for rank, candidate := range known {
 		if version == candidate {
@@ -425,6 +426,9 @@ func workflowVersionUpgradePlan(manifest *WorkflowManifest) []workflowVersionUpg
 	// workflowContractDeclaredExecutionModeStrippedVersion ("1.0.39") sits at rank 38.
 	if rank < 38 {
 		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractDeclaredExecutionModeStrippedVersion, label: "upgrade-declared-execution-mode-stripped", query: upgradeDeclaredExecutionModeStripped})
+	}
+	if rank < 39 {
+		steps = append(steps, workflowVersionUpgrade{from: version, to: workflowContractRouteSummariesVersion, label: "upgrade-route-summaries", query: upgradeRouteSummaries})
 	}
 	// Attached here rather than at the call site so the turn text is identical
 	// wherever it is built. The version pair used to be added only on the Pulse

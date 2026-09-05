@@ -154,7 +154,7 @@ export function StepContent(props: StepContentProps) {
                   <>
                     <div className="flex flex-wrap items-center gap-2">
                       <MessageSquare className="w-4 h-4 text-teal-600 dark:text-teal-300" />
-                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Message sequence</h4>
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Agent</h4>
                       <span className="rounded border border-teal-500/20 bg-teal-500/10 px-2 py-0.5 text-[10px] font-medium text-teal-700 dark:text-teal-300">
                         {stepLogs.message_sequence.status || 'recorded'}
                       </span>

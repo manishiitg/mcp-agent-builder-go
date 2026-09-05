@@ -79,9 +79,29 @@ or sections; do not invent separate lifecycle, owner, or next-action fields.
 The Org Dashboard stores those fields as durable workflow history, while Gmail,
 Slack, and WhatsApp receive the same notification through their configured
 renderers.
-Set `summary_route` to the exact top-level route represented by this run and
-its Pulse activity. Omit it only for genuinely workflow-wide Pulse work that
-is not attributable to one route; never guess a route from prose.
+Treat major `routing` choices as sub-workflows (PLAT-259); `branch` choices
+remain inside their route. Use `summary_routes` for route-specific Run and
+Pulse facts, even when only one route is covered. Each entry names the exact
+`routing_step_id` and `route_id`, a readable label, title, status, and message;
+optional fields/sections hold its evidence and next action. Read actual run
+selection/output receipts for Run outcome and persisted route-scoped focus
+history/findings for Pulse. Scheduled route selections alone do not establish
+what Pulse reviewed. Do not label unreviewed routes clean, or routes that did
+not run failed. Mention meaningful uncovered scope honestly.
+
+Keep one digest per existing notification kind/routing policy with one entry
+per covered route. Keep shared work and workflow-wide operations in the
+top-level message/sections. Do not allocate total workflow or Reviewers + Fixer
+cost to individual routes without route-attributed ledger evidence. Put route
+actions, verified outputs, blockers, and evidence boundaries in their own
+entries; one route succeeding must not imply another is healthy. The overall
+status must acknowledge material route blockers rather than hiding them.
+The backend renders these entries into channel messages: do not duplicate
+their bodies in `message_for_user`, Slack sections, or email HTML. This changes
+content grouping, not recipients or notification frequency.
+Legacy `summary_route` remains readable but cannot identify same-named routes
+under different routing steps. Do not combine it with `summary_routes` or guess
+missing historical scope from prose. A shared Pulse review has no route entry.
 Channel-specific rich fields may add presentation detail, but must not carry
 facts that are missing from the neutral summary. Never read webhook secrets or
 post directly.

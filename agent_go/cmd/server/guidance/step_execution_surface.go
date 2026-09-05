@@ -62,7 +62,7 @@ func MaterializeStepExecutionReferenceSkill(signals StepExecutionSignals) *llmty
 		Registry: referenceKinds,
 		Name:     "builder-reference",
 		Description: "Workflow execution reference docs — the contracts behind the tools this step actually holds: " +
-			"browser automation, persistent stores, provider-backed media and search tools, the MCP HTTP bridge, and " +
+			"browser automation, persistent stores, human input and approval when those tools are held, provider-backed media and search tools, the MCP HTTP bridge, and " +
 			"main.py authoring for scripted steps. Match this skill before driving one of those tools, then read the " +
 			"matching file under references/.",
 		Intro: "This skill bundles reference documentation for the tools available to this step. It deliberately contains " +

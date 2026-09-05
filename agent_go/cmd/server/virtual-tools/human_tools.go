@@ -133,7 +133,7 @@ func CreateHumanTools() []llmtypes.Tool {
 		"summary_route": map[string]interface{}{
 			"type":        "string",
 			"maxLength":   200,
-			"description": "Top-level workflow route represented by this run_summary or pulse_summary. Use the actual selected route ID/name for a route-scoped run; omit for workflow-wide activity. The backend fills this automatically when the schedule supplied a deterministic route selection.",
+			"description": "Legacy single route label; prefer summary_routes with exact routing_step_id/route_id identities. Omit for shared workflow work. Only run_summary may inherit a scheduled selection; Pulse review scope must be explicit. Do not combine with summary_routes.",
 		},
 		"summary_fields": map[string]interface{}{
 			"type":     "array",
@@ -164,6 +164,7 @@ func CreateHumanTools() []llmtypes.Tool {
 			"description": "Channel-neutral ordered details persisted for the Org Dashboard. Use for fixes, blockers, decisions, evidence, and next actions.",
 		},
 	}
+	notifyProps["summary_routes"] = notificationRoutesSchema(notifyProps["summary_fields"], notifyProps["summary_sections"])
 	if gmailEnabled() {
 		notifyProps["email_subject"] = map[string]interface{}{
 			"type":        "string",
@@ -231,7 +232,7 @@ var sendRichSlackIncomingWebhook = services.SendRichSlackIncomingWebhook
 // knows where its message will actually land. The always-on web UI connector is
 // not framed as an external channel.
 func buildNotifyDescription() string {
-	base := "Send one non-blocking notification through the configured providers. Gmail, Slack, and WhatsApp are external delivery providers; Org Dashboard durably records run_summary and pulse_summary notifications for the current workflow. Use this for FYIs, progress updates, alerts, and completion notices when you do not need to wait for a reply. For workflow, Pulse, Goal Advisor, and other structured summaries, always set the channel-neutral summary_title, summary_status, summary_fields, and summary_sections, plus summary_route when the notification represents one top-level workflow route. summary_status must plainly describe what the workflow is doing now; explain why in the title, message, facts, or sections. Channel-specific rich fields may improve presentation but must not contain facts omitted from the neutral summary. If the workflow has a Slack Incoming Webhook configured, the backend sends a backend-owned rich Block Kit card there instead of using the global Slack connector. Excluding slack suppresses both delivery paths. Never access a SECRET_* webhook variable, construct a webhook payload in shell, post with curl, disable notify_user to avoid duplication, or ask for the URL after an encrypted webhook reference is configured—the backend exclusively owns delivery. If you need the human to answer before continuing, use human_feedback instead. Returns a JSON delivery result — status (delivered|partial|failed|no_recipient|no_channels_configured) plus delivered/skipped/failed channel lists. Report it honestly to the user: do NOT claim an external message was sent when only Org Dashboard succeeded."
+	base := "Send one non-blocking notification through the configured providers. Gmail, Slack, and WhatsApp are external delivery providers; Org Dashboard durably records run_summary and pulse_summary notifications for the current workflow. Use this for FYIs, progress updates, alerts, and completion notices when you do not need to wait for a reply. For workflow, Pulse, Goal Advisor, and other structured summaries, always set the channel-neutral summary_title, summary_status, summary_fields, and summary_sections, plus summary_routes for route-specific actions and review outcomes (major routing choices are sub-workflows; branch choices are not). Keep one digest per existing notification kind, shared work at the top level, and distinct route statuses; do not infer Pulse coverage from the schedule. summary_status must plainly describe what the workflow is doing now; explain why in the title, message, facts, or sections. Channel-specific rich fields may improve presentation but must not contain facts omitted from the neutral summary. If the workflow has a Slack Incoming Webhook configured, the backend sends a backend-owned rich Block Kit card there instead of using the global Slack connector. Excluding slack suppresses both delivery paths. Never access a SECRET_* webhook variable, construct a webhook payload in shell, post with curl, disable notify_user to avoid duplication, or ask for the URL after an encrypted webhook reference is configured—the backend exclusively owns delivery. If you need the human to answer before continuing, use human_feedback instead. Returns a JSON delivery result — status (delivered|partial|failed|no_recipient|no_channels_configured) plus delivered/skipped/failed channel lists. Report it honestly to the user: do NOT claim an external message was sent when only Org Dashboard succeeded."
 
 	var labels []string
 	gmailOn := false
@@ -517,13 +518,15 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 	if dest == nil {
 		dest = &services.NotificationDestination{}
 	}
-	if strings.TrimSpace(summary.Route) == "" {
+	if notificationKind == "run_summary" && len(summary.Routes) == 0 && strings.TrimSpace(summary.Route) == "" {
 		summary.Route = notificationRouteFromSelections(dest.RouteSelections)
 	}
+	summaryMessage := messageForUser
+	messageForUser = appendNotificationRouteContent(messageForUser, summary.Routes, gc)
 	if dest.Content == nil {
 		dest.Content = &services.NotificationContent{}
 	}
-	dest.Content.Text = messageForUser
+	dest.Content.Text = summaryMessage
 	dest.Content.Summary = summary
 	// Durable per-workflow recipients for this summary kind. Applied only when
 	// the agent did not name its own, so an explicit email_to still wins for a
@@ -851,6 +854,13 @@ func notificationSummaryFromArgs(
 			sections = append(sections, services.NotificationSummarySection{Heading: section.Heading, Body: section.Body})
 		}
 	}
+	routes, err := notificationRoutesFromArg(args["summary_routes"])
+	if err != nil {
+		return nil, err
+	}
+	if len(routes) > 0 && strings.TrimSpace(route) != "" {
+		return nil, fmt.Errorf("use summary_routes or legacy summary_route, not both")
+	}
 
 	return &services.NotificationSummary{
 		Kind:     strings.ToLower(strings.TrimSpace(kind)),
@@ -859,6 +869,7 @@ func notificationSummaryFromArgs(
 		Route:    strings.TrimSpace(route),
 		Fields:   fields,
 		Sections: sections,
+		Routes:   routes,
 	}, nil
 }
 

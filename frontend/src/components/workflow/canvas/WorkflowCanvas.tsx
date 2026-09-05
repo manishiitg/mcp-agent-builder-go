@@ -9,7 +9,7 @@ import {
   type NodeChange,
   type OnNodeDrag
 } from '@xyflow/react'
-import { Braces, FileText, ListOrdered, RefreshCw, Route, Settings, X } from 'lucide-react'
+import { Braces, FileText, ListOrdered, Maximize, RefreshCw, Route, Settings, X } from 'lucide-react'
 import '@xyflow/react/dist/style.css'
 
 import { useModeStore } from '../../../stores/useModeStore'
@@ -23,6 +23,7 @@ import {
 } from '../nodes/HandoffNodeWrappers'
 import { getExecutionModeVisuals } from '../nodes/executionModeVisuals'
 import { edgeTypes } from '../edges'
+import { routeTraceFromEdge, traceRouteGraph, type RouteTrace } from './routeTrace'
 import { VariablesSidebar } from './VariablesSidebar'
 import { BatchProgressHeader } from '../BatchProgressHeader'
 import {
@@ -32,7 +33,7 @@ import {
   type ReportPreviewDevice,
 } from '../../../utils/reportPreviewPreference'
 import type { PlanChanges } from '../hooks/usePlanData'
-import { usePlanToFlow, type WorkflowNode, type WorkflowEdge, type WorkflowNodeData, type StepNodeData, type EvaluationStepNodeData } from '../hooks/usePlanToFlow'
+import { usePlanToFlow, type WorkflowNode, type WorkflowEdge, type WorkflowNodeData, type StepNodeData, type EvaluationStepNodeData, type RoutingStepNodeData } from '../hooks/usePlanToFlow'
 import type { VariablesNodeData } from '../nodes/VariablesNode'
 import { useWorkspaceViewData, type WorkflowImageExportFormat } from './workspaceViewData'
 import { useWorkflowStore } from '../../../stores/useWorkflowStore'
@@ -57,9 +58,9 @@ const PNG_EXPORT_MAX_SIDE = 16000
 const PNG_EXPORT_MAX_PIXELS = 64_000_000
 // Bump this whenever the auto-layout algorithm changes so stale saved layouts
 // (custom drag positions from the old editor) are dropped and the new computed
-// layout takes over. 2.7-route-handoffs: branch continuations use lateral
-// handoffs, so their destination cards can sit beside the decision.
-const WORKFLOW_LAYOUT_VERSION = '2.7-route-handoffs'
+// layout takes over. 2.8-wide-route-lanes: each major route gets its own
+// column; route segments follow execution order.
+const WORKFLOW_LAYOUT_VERSION = '2.8-wide-route-lanes'
 const FLOW_FIT_PADDING = 0.24
 const FLOW_FIT_MIN_ZOOM = 0.08
 const FLOW_FIT_MAX_ZOOM = 0.95
@@ -865,7 +866,7 @@ function ReadOnlyStepDetailPanel({
         ) : null}
 
         {sequenceItems?.length ? (
-          <DetailSection icon={ListOrdered} title={`Message Sequence (${sequenceItems.length})`}>
+          <DetailSection icon={ListOrdered} title={`Agent instructions (${sequenceItems.length})`}>
             <p className="mb-2 text-xs text-muted-foreground">Ordered items the step runs top to bottom.</p>
             <ol className="space-y-2">
               {sequenceItems.map((item, index) => {
@@ -1312,6 +1313,37 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
   // React Flow state (need to define before usePlanToFlow to use in callbacks)
   const [nodes, setNodes, onNodesChangeBase] = useNodesState<WorkflowNode>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<WorkflowEdge>([])
+  const [routeTrace, setRouteTrace] = React.useState<(RouteTrace & { workspace: string | null | undefined }) | null>(null)
+  const traceSource = routeTrace && routeTrace.workspace === workspacePath ? nodes.find(node => node.id === routeTrace.nodeId) : undefined
+  const tracedRoute = (traceSource?.data as RoutingStepNodeData | undefined)?.routes?.find(route => route.route_id === routeTrace?.routeId)
+  const activeTrace = tracedRoute ? routeTrace : null
+  const tracedGraph = React.useMemo(() => traceRouteGraph(nodes, edges, activeTrace), [nodes, edges, activeTrace])
+  const toggleRouteTrace = useCallback((trace: RouteTrace) => {
+    setSelectedFlowNode(null)
+    setRouteTrace(current => current?.workspace === workspacePath && current.nodeId === trace.nodeId && current.routeId === trace.routeId
+      ? null : { workspace: workspacePath, ...trace })
+  }, [workspacePath])
+  const displayNodes = React.useMemo(() => tracedGraph.nodes.map(node => {
+    if (node.type !== 'routing' && node.type !== 'branch') return node
+    return { ...node, data: { ...node.data,
+      tracedRouteId: activeTrace?.nodeId === node.id ? activeTrace.routeId : undefined,
+      onTraceRoute: (routeId: string) => toggleRouteTrace({ nodeId: node.id, routeId }),
+    } }
+  }), [tracedGraph.nodes, activeTrace, toggleRouteTrace])
+  const displayEdges = React.useMemo(() => tracedGraph.edges.map(edge => {
+    const trace = routeTraceFromEdge(nodes, edge)
+    if (!trace) return edge
+    return { ...edge, style: { ...edge.style, cursor: 'pointer' }, data: { ...edge.data,
+      traced: activeTrace?.nodeId === trace.nodeId && activeTrace.routeId === trace.routeId,
+      onTraceRoute: () => toggleRouteTrace(trace),
+    } }
+  }), [tracedGraph.edges, nodes, activeTrace, toggleRouteTrace])
+  const onEdgeClick = useCallback((event: React.MouseEvent, edge: WorkflowEdge) => {
+    const trace = routeTraceFromEdge(nodes, edge)
+    if (!trace) return
+    event.stopPropagation()
+    toggleRouteTrace(trace)
+  }, [nodes, toggleRouteTrace])
   const [, setIsExportingImage] = React.useState(false)
   // Store latest nodes in ref to avoid dependency issues
   const nodesRef = React.useRef(nodes)
@@ -2402,17 +2434,18 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
 
 
   useEffect(() => {
-    if (!selectedFlowNode) return
+    if (!selectedFlowNode && !activeTrace) return
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        setRouteTrace(null)
         setSelectedFlowNode(null)
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedFlowNode])
+  }, [selectedFlowNode, activeTrace])
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: WorkflowNode) => {
     if (node.type === 'variables') {
@@ -2423,6 +2456,7 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     setSelectedFlowNode(current => current?.id === node.id ? null : node)
   }, [])
   const onPaneClick = useCallback(() => {
+    setRouteTrace(null)
     setSelectedFlowNode(null)
   }, [])
 
@@ -2538,6 +2572,18 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
     <div className="h-full min-h-0" ref={reactFlowWrapper}>
         {/* Canvas area — skip when toolbarOnly to avoid rendering 1000+ SVG nodes */}
         {toolbarOnly ? null : <div className="h-full min-h-0 relative flex">
+          {activeTrace && tracedRoute && (
+            <div className="absolute left-3 top-3 z-20 flex max-w-[calc(100%-8rem)] items-center gap-3 rounded-lg border border-teal-500/50 bg-background/95 px-3 py-2 text-sm shadow-lg" role="status">
+              <Route className="h-4 w-4 shrink-0 text-teal-500" />
+              <span className="truncate">Tracing: {tracedRoute.route_name || tracedRoute.route_id}</span>
+              <button type="button" onClick={() => setRouteTrace(null)} className="shrink-0 rounded px-2 py-1 text-xs hover:bg-muted focus-visible:outline" title="Clear route trace (Escape)">Show all</button>
+            </div>
+          )}
+          <button type="button" onClick={() => void fitView({ padding: FLOW_FIT_PADDING, duration: 300, minZoom: FLOW_FIT_MIN_ZOOM, maxZoom: FLOW_FIT_MAX_ZOOM })}
+            className="absolute right-14 top-3 z-20 inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background/95 text-muted-foreground shadow-sm hover:bg-muted hover:text-foreground"
+            aria-label="Fit plan to view" title="Fit plan to view">
+            <Maximize className="h-3.5 w-3.5" />
+          </button>
           <button
             type="button"
             onPointerDown={event => event.stopPropagation()}
@@ -2557,11 +2603,12 @@ const WorkflowCanvasInner = forwardRef<WorkflowCanvasRef, WorkflowCanvasProps>((
         <ReactFlow
           className="w-full h-full bg-gray-50 dark:bg-gray-900"
           style={{ width: '100%', height: '100%' }}
-          nodes={nodes}
-          edges={edges}
+          nodes={displayNodes}
+          edges={displayEdges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={onNodeClick}
+          onEdgeClick={onEdgeClick}
           onPaneClick={onPaneClick}
           onNodeDragStop={readOnly ? undefined : onNodeDragStop}
           panOnDrag

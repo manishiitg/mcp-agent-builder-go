@@ -49,11 +49,21 @@ func referenceSkillSpecForMode(mode string) referenceSkillSpec {
 		}
 	}
 
+	if mode == "run" {
+		return referenceSkillSpec{
+			Name:        "builder-reference",
+			Description: "Workflow runtime references: executing and inspecting work, current results and costs, runtime context capture, human input and approvals, live reports, and tool/bridge contracts. Read the relevant reference before acting; Run cannot edit workflow design.",
+			Intro:       "Read the reference matching this runtime request. The current mode and granted tools define authority; reading a reference does not permit design/config mutations or grant additional tools.",
+		}
+	}
+
 	return referenceSkillSpec{
 		Name: "builder-reference",
 		Description: "Workflow workshop reference docs — detailed contracts and rules to consult before specific actions: " +
 			"LLM/provider configuration via tools, main.py authoring, persistent stores (skill/kb/db), routing and " +
-			"message-sequence patterns, workflow composition patterns, plan-design, report-plan, evaluation-plan, " +
+			"message-sequence patterns, workflow composition patterns, plan-design, report-plan, reporting-policy " +
+			"(dashboard approval buttons and report-to-agent chat requests), human-in-the-loop " +
+			"(choosing human review, approval, and feedback mechanisms), evaluation-plan, " +
 			"optimizer playbook, file layout, schedule and secret " +
 			"management. Match this skill when you need deep reference material for any of those topics, then read the " +
 			"matching file under references/.",
@@ -77,7 +87,7 @@ func MaterializeGuidanceSkill(mode string) *llmtypes.Skill {
 		Name:     "workflow-commands",
 		Description: "Workflow workshop slash-command flows — canonical procedural guidance for design-plan, improve-evaluation, " +
 			"review-artifact-drift, ops-review, strategy-auditor, define-success, pulse, engineering-review, pulse-fixer, " +
-			"improve-knowledge, improve-learnings, improve-database, improve-report, goal-advisor, specialize-advisors, design-plan. Match this skill when the user " +
+			"improve-knowledge, improve-learnings, improve-database, improve-report, design-reporting-ui, goal-advisor, specialize-advisors, design-plan. Match this skill when the user " +
 			"invokes one of those slash commands or describes the same intent in chat, then read the matching file under " +
 			"references/.",
 		Intro:  "This skill bundles the workshop's canonical slash-command procedures. Match it when the user invokes one of these commands (e.g. `/design-plan`, `/improve-evaluation`) or describes the same intent in plain chat. Read the single matching file under `references/` — the prose there is your instructions for the turn, follow it verbatim.",

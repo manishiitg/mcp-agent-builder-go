@@ -10,7 +10,7 @@ package instructions
 func GetSpecialWorkspaceToolsInstructions() string {
 	return `## Special Workspace Tools (cheat sheet)
 
-Provider-backed capabilities you can call directly instead of general chat reasoning. **Path contract**: every file-path argument must be a full absolute path under the workspace docs root. **Provider/model contract**: pass ` + "`provider`" + ` and ` + "`model_id`" + ` together from the same ` + "`list_llm_capabilities(capability=\"...\", include_models=true)`" + ` result — do not pass only ` + "`model_id`" + ` and ask the backend to infer.
+Provider-backed text generation uses the configured ` + "`tier`" + ` (low, medium, high). Hosted-MCP web search uses ` + "`provider`" + ` (parallel, exa, firecrawl). Do not pass provider/model overrides to text generation or a ` + "`model_id`" + ` to search. File-path arguments must be absolute paths under the workspace docs root.
 
 Available tools:
 - **Discovery + cost**: ` + "`list_llm_capabilities`" + `, ` + "`estimate_llm_cost`" + `, ` + "`set_provider_auth`" + ` (always use this for API keys — never paste into shell, scripts, or config files).

@@ -206,6 +206,14 @@ func (api *StreamingAPI) handleReportPreviewQuery(w http.ResponseWriter, r *http
 func (api *StreamingAPI) reportPreviewPageHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	if _, err := os.Stat(filepath.Join("static", "report-preview.js")); err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`<!doctype html><html data-preview-state="failed"><head><title>Report preview unavailable</title></head><body>
+<p>The report preview runtime is missing. Run npm run build:report-preview in frontend/ and retry.</p>
+<script>window.__reportPreview={getState:function(){return {previewState:'failed',fetchErrors:['Report preview runtime is missing from the server static directory. Run npm run build:report-preview in frontend/ and retry.']}}};</script>
+</body></html>`))
+		return
+	}
 	_, _ = w.Write([]byte(reportPreviewPageHTML))
 }
 

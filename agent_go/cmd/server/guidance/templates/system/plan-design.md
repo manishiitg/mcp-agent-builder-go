@@ -1,5 +1,10 @@
 ## PLAN DESIGN — From Requirements to Steps (DESIGN phase)
 
+For human review, approval, or missing-input boundaries, first read
+`read_skill(skills=[{"name":"builder-reference","path":"references/human-in-the-loop.md"}])`.
+Choose deliberately between a planned checkpoint, a durable decision, and a
+report/chat handoff; unattended schedules must not wait for a human to return.
+
 When a user describes what they want to automate, design and create the best-practice workflow structure using the information available. Do not ask broad planning questions or wait for confirmation before adding steps unless the missing answer would materially change behavior, safety, credentials, scheduling, external side effects, or irreversible actions. When you make a reasonable assumption, state it briefly and proceed.
 
 ### Step 1: Identify Durable Workflow Boundaries

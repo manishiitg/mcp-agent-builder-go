@@ -82,6 +82,10 @@ export const REPORT_BOOTSTRAP = `<script>(function(){
   api.openFile = function(){
     pending.push({ name: 'openFile', args: Array.prototype.slice.call(arguments), resolve: function(){}, reject: function(){} });
   };
+  // Actions must not be replayed from a render/initialization callback.
+  api.sendChatMessage = function(){
+    return Promise.reject(new Error('Report chat is not ready. Try again after the report loads.'));
+  };
   var theme = 'light';
   try {
     var hostRoot = window.parent && window.parent !== window ? window.parent.document.documentElement : null;
@@ -451,6 +455,7 @@ export function installReportHost(frame: HTMLIFrameElement, options: ReportHostI
     openFile: dataApi.openFile,
     updateField: dataApi.updateField,
     updateFields: dataApi.updateFields,
+    sendChatMessage: dataApi.sendChatMessage,
     theme: options.theme,
   }
 

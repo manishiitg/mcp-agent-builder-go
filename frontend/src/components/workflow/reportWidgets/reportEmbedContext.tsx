@@ -1,5 +1,14 @@
 import { createContext, useContext } from 'react'
 
+export type ReportChatReceipt =
+  | { status: 'cancelled' }
+  | { status: 'queued'; tabId: string; reused: boolean; queuedBehindRunningTurn: boolean }
+
+export type ReportChatOptions = {
+  /** Stable identity for this item/version/action. Deduplicates in this report view. */
+  requestId?: string
+}
+
 // Live data access for HTML report documents. HTML renders its OWN visuals
 // (charts/tables/branded CSS) — we just hand it the data. `query` runs read-only
 // SQL against the workflow's db/db.sqlite (the primary data source); `get`/
@@ -7,6 +16,10 @@ import { createContext, useContext } from 'react'
 // demand. Exposed inside the iframe as `window.report`.
 export interface ReportDataApi {
   workspacePath: string
+  // Opens the app's message review UI. Only the user's Send submits to chat.
+  // Uses the same queue as human-decision Ask in chat, with an optional new chat
+  // chosen by the user. Queued is not proof of execution or completion.
+  sendChatMessage: (message: string, options?: ReportChatOptions) => Promise<ReportChatReceipt>
   query: (sql: string) => Promise<Record<string, unknown>[]>
   get: (path: string) => Promise<unknown>
   getText: (path: string) => Promise<string | null>

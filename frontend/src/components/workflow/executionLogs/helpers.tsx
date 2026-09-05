@@ -601,7 +601,7 @@ export const getStepTypeLabel = (type: string): string => {
     case 'sub-agent':
       return 'Sub-Agent'
     case 'message_sequence':
-      return 'Message Sequence'
+      return 'Agent'
     case 'regular':
     default:
       return 'AI Agent Task'
@@ -616,7 +616,7 @@ export const getStepTypeDescription = (type: string): string => {
     case 'sub-agent':
       return 'Sub-agent: a child task dispatched by an orchestrator.'
     case 'message_sequence':
-      return 'Message sequence: one AI agent completing an ordered series of conversation turns.'
+      return 'Agent: completes an ordered series of instructions and conversation turns.'
     case 'routing':
       return 'Routing step: a major, self-contained sub-workflow fork that deterministically selects the next path.'
     case 'branch':

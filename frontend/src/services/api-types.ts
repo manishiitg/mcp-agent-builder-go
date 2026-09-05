@@ -3219,6 +3219,26 @@ export interface OrgDashboardNotificationSection {
   body: string
 }
 
+export interface NotificationRouteSummary {
+  routing_step_id: string
+  route_id: string
+  label?: string
+  title: string
+  status: OrgDashboardNotification['status']
+  message: string
+  fields?: OrgDashboardNotificationField[]
+  sections?: OrgDashboardNotificationSection[]
+}
+
+export interface OrgDashboardRouteNotifications {
+  routing_step_id?: string
+  route_id: string
+  label: string
+  legacy?: boolean
+  run_summary?: OrgDashboardNotification
+  pulse_summary?: OrgDashboardNotification
+}
+
 export interface OrgDashboardNotification {
   id: string
   workspace_path: string
@@ -3227,6 +3247,7 @@ export interface OrgDashboardNotification {
   status: 'completed' | 'failed' | 'blocked' | 'waiting_for_user' | 'waiting_for_platform' | 'monitoring' | 'informational' | 'no_run'
   route?: string
   message: string
+  routes?: NotificationRouteSummary[]
   fields?: OrgDashboardNotificationField[]
   sections?: OrgDashboardNotificationSection[]
   created_at: string
