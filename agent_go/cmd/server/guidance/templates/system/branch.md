@@ -16,10 +16,48 @@ actually a major sub-workflow fork (each option leads to a substantially
 different, self-contained continuation of the plan), use a routing step
 instead.
 
+A plan has at most one routing step — the mode selector whose route a
+schedule or caller picks via `route_selections`, each route a sub-workflow of
+many steps. Once a plan has it, every further fixed choice is a branch by
+definition. A simple if-condition — skip or continue, probe ok or failed,
+publish or hold, any option that goes straight to `end` — is always a branch;
+`add_routing_step` refuses a second routing step and any route to `end`
+(PLAT-294).
+
+### Human-decided branch (`route_source: "human"`)
+
+When the decision is a person's — approve or hold, publish or redraft, pick
+one of a few options — set `route_source: "human"` on the branch. The
+`routes[]` are the options shown to the person (`route_name` is the label)
+and `branch_question` is the prompt. This is the successor to a `yesno` /
+`multiple_choice` `human_input` step: same blocking prompt, same UI, but the
+answer is a route, so there is no second copy of routing fields to keep in
+sync. Resolution order is unchanged for everything a schedule or caller can
+see:
+
+1. caller `route_selections[step_id]`, a preseeded `route_selection.json`,
+   `route_source_file`, or a `context_dependencies` entry — used as-is, no
+   prompt (this is how a schedule answers the question up front);
+2. workshop `execute_step(step_id, human_input=...)` — test answer;
+3. unattended run (`start_from_beginning_no_human`) — `default_route_id`, or
+   the run fails with an actionable error if none is set. Set
+   `default_route_id` to the safe do-nothing route (typically the one that
+   goes to `end`) so scheduled runs never auto-approve;
+4. interactive run — the person is asked; the run waits (same 10-minute
+   window as `human_input`).
+
+Use `add_branch_step(..., route_source="human")` for any new yes/no or
+pick-one decision; `add_human_input_step` now rejects `yesno` and
+`multiple_choice` and points here. Keep `human_input` (`text`) only for
+capturing a free-form value into a variable. Existing `human_input` steps are
+untouched.
+
 ### When to use branch
 
 - The path forward is conditional on a known signal (e.g., "logged in",
   "MFA required", "document type is invoice")
+- A person must decide between a few fixed options mid-run — use
+  `route_source: "human"` (above)
 - The fork is small: a couple of steps differ, then the plan converges back
   to a shared continuation
 - There are 2-N mutually exclusive paths and only one should run

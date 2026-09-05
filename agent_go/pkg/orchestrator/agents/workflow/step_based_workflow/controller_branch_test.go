@@ -610,14 +610,22 @@ func TestConvertRoutingBranchStepTypeFromRoutingToBranch(t *testing.T) {
 // TestConvertRoutingBranchStepTypeFromBranchToRouting covers the reverse
 // direction.
 func TestConvertRoutingBranchStepTypeFromBranchToRouting(t *testing.T) {
+	// PLAT-294: a routing step's routes must each start a sub-workflow, so
+	// the branch being promoted routes to real steps, not to end. The plan
+	// write validates the graph, so those target steps have to exist.
 	plan := &PlanningResponse{Steps: []PlanStepInterface{
 		&BranchPlanStep{
 			Type:             StepTypeBranch,
 			CommonStepFields: CommonStepFields{ID: "decision-step", Title: "Decision"},
 			BranchQuestion:   "Which path?",
-			Routes:           convertRoutingBranchTestRoutes(),
-			DefaultRouteID:   "route-a",
+			Routes: []RoutingRoute{
+				{RouteID: "route-a", RouteName: "A", Condition: "c", NextStepID: "audit-chain"},
+				{RouteID: "route-b", RouteName: "B", Condition: "c", NextStepID: "apply-chain"},
+			},
+			DefaultRouteID: "route-a",
 		},
+		&RegularPlanStep{Type: StepTypeRegular, CommonStepFields: CommonStepFields{ID: "audit-chain", Title: "Audit", Description: "audit sub-workflow"}},
+		&RegularPlanStep{Type: StepTypeRegular, CommonStepFields: CommonStepFields{ID: "apply-chain", Title: "Apply", Description: "apply sub-workflow"}},
 	}}
 	readFile, writeFile, _, writtenPlan := convertRoutingBranchTestPlanFileIO(t, plan)
 	executor := createConvertRoutingBranchStepTypeExecutor("workflow", loggerv2.NewNoop(), readFile, writeFile)

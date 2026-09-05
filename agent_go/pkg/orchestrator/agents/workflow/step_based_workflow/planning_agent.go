@@ -546,6 +546,7 @@ type routeSwitchStep interface {
 	GetRoutes() []RoutingRoute
 	GetDefaultRouteID() string
 	GetRouteSourceFile() string
+	GetRouteSource() string // "" for a purely preseeded switch; "human" when the branch asks a person if nothing was preseeded (branch only)
 	GetRoutingQuestionText() string
 	SetSelectedRouteID(string)
 	SetRoutingResponse(*RoutingResponse)
@@ -626,6 +627,7 @@ type BranchPlanStep struct {
 	Routes          []RoutingRoute   `json:"routes"`                      // Available routes (min 2, required)
 	DefaultRouteID  string           `json:"default_route_id,omitempty"`  // Optional fallback route_id when no route file is available
 	RouteSourceFile string           `json:"route_source_file,omitempty"` // Optional route_selection.json source produced by a prior step
+	RouteSource     string           `json:"route_source,omitempty"`      // "human": when no route was preseeded, ask the person (routes are the options) instead of falling to default_route_id. Successor to yesno/multiple_choice human_input. See controller_branch_human.go.
 	SelectedRouteID string           `json:"-"`                           // runtime: stores selected route ID
 	RoutingResponse *RoutingResponse `json:"-"`                           // runtime: stores structured routing response
 	AgentConfigs    *AgentConfigs    `json:"-"`                           // runtime: per-agent configuration
@@ -1124,6 +1126,7 @@ type PartialPlanStep struct {
 	// Branch step fields (PLAT-259: same deterministic-switch shape as
 	// routing, just its own field name for the human-readable prompt)
 	BranchQuestion string `json:"branch_question,omitempty"` // Optional: Updated branch question
+	RouteSource    string `json:"route_source,omitempty"`    // Optional: "human" makes the branch ask a person when nothing was preseeded (branch only)
 	// Human input step fields
 	Question         string            `json:"question,omitempty"`            // Optional: Updated question
 	VariableName     string            `json:"variable_name,omitempty"`       // Optional: Updated variable name
@@ -1832,6 +1835,11 @@ func getAddBranchStepSchema() string {
 				"type": "string",
 				"description": "OPTIONAL: Explicit route_selection.json source file, usually a context output from a prior step. The file must contain {\"select_route\":\"<route_id>\"}."
 			},
+			"route_source": {
+				"type": "string",
+				"enum": ["human"],
+				"description": "OPTIONAL: Set to \"human\" when a person decides this branch mid-run (approve/hold, yes/no, pick one). The routes are the options shown (route_name is the label) and branch_question is the prompt. Preseeded sources still win: caller route_selections, route_selection.json, route_source_file or a context_dependencies entry answer it without asking -- that is how schedules answer up front. Unattended runs use default_route_id (set it to the safe do-nothing route) or fail. Successor to yesno/multiple_choice human_input, which add_human_input_step no longer accepts."
+			},
 			"insert_after_step_id": {
 				"type": "string",
 				"description": "REQUIRED: The ID of the step to insert after. Use the step's id field from the plan. Use empty string to insert at the beginning."
@@ -1901,6 +1909,11 @@ func getUpdateBranchStepSchema() string {
 			"route_source_file": {
 				"type": "string",
 				"description": "OPTIONAL: Updated explicit route_selection.json source file produced by a prior step."
+			},
+			"route_source": {
+				"type": "string",
+				"enum": ["human"],
+				"description": "OPTIONAL: Set to \"human\" so this branch asks the person when no route was preseeded (routes are the options, branch_question is the prompt); unattended runs use default_route_id."
 			},
 			"reason": {
 				"type": "string",
@@ -3325,6 +3338,9 @@ func mergePartialStepUpdate(existingStep PlanStepInterface, partialUpdate Partia
 		if partialUpdate.RouteSourceFile != "" {
 			updated.RouteSourceFile = partialUpdate.RouteSourceFile
 		}
+		if partialUpdate.RouteSource != "" {
+			updated.RouteSource = partialUpdate.RouteSource
+		}
 		return &updated
 
 	default:
@@ -3795,6 +3811,19 @@ func updateSingleStep(plan *PlanningResponse, partialUpdate PartialPlanStep, fie
 			Field:    "route_source_file",
 			OldValue: oldRouteSourceFile,
 			NewValue: partialUpdate.RouteSourceFile,
+		})
+	}
+	if partialUpdate.RouteSource != "" {
+		changedFields = append(changedFields, "route_source")
+		oldRouteSource := ""
+		if routingStep, ok := existingStep.(routeSwitchStep); ok {
+			oldRouteSource = routingStep.GetRouteSource()
+		}
+		*fieldChanges = append(*fieldChanges, PlanFieldChange{
+			StepID:   partialUpdate.ExistingStepID,
+			Field:    "route_source",
+			OldValue: oldRouteSource,
+			NewValue: partialUpdate.RouteSource,
 		})
 	}
 	if partialUpdate.ValidationSchema != nil {
@@ -4875,6 +4904,9 @@ func validateBranchStepFieldsTyped(step *BranchPlanStep) error {
 	if step.BranchQuestion == "" {
 		return fmt.Errorf("branch step (title: %q, ID: %s) is missing required branch_question field", step.Title, step.ID)
 	}
+	if rs := strings.TrimSpace(step.RouteSource); rs != "" && !strings.EqualFold(rs, branchRouteSourceHuman) {
+		return fmt.Errorf("branch step (title: %q, ID: %s) has unsupported route_source %q; leave it unset for a preseeded switch or set \"human\" to ask the person when no route was preseeded", step.Title, step.ID, step.RouteSource)
+	}
 	if len(step.Routes) < 2 {
 		return fmt.Errorf("branch step (title: %q, ID: %s) must have at least 2 routes, got %d", step.Title, step.ID, len(step.Routes))
 	}
@@ -5100,7 +5132,7 @@ func getConvertRoutingBranchStepTypeSchema() string {
 			"target_type": {
 				"type": "string",
 				"enum": ["routing", "branch"],
-				"description": "The type to convert the step to. Must differ from its current type -- routing to convert a branch step into a routing step, branch to convert a routing step into a branch step."
+				"description": "The type to convert the step to. Must differ from its current type -- routing to convert a branch step into a routing step, branch to convert a routing step into a branch step. A plan has at most one routing step (the mode selector), so converting to routing is rejected while another routing step exists; convert that one to branch first."
 			},
 			"reason": {
 				"type": "string",
@@ -5157,6 +5189,14 @@ func createConvertRoutingBranchStepTypeExecutor(workspacePath string, logger log
 			return "", fmt.Errorf("step ID '%s' not found in existing plan", stepID)
 		}
 
+		// PLAT-294: converting to routing must not give the plan a second
+		// routing step. Converting to branch is always allowed.
+		if targetType == "routing" {
+			if err := validateSingleRoutingStepForMutation(plan, stepID); err != nil {
+				return "", fmt.Errorf("validation failed: %w", err)
+			}
+		}
+
 		var updated PlanStepInterface
 		var oldType string
 		switch s := plan.Steps[stepIndex].(type) {
@@ -5176,6 +5216,15 @@ func createConvertRoutingBranchStepTypeExecutor(workspacePath string, logger log
 		case *BranchPlanStep:
 			if targetType != "routing" {
 				return "", fmt.Errorf("step '%s' is already a branch step", stepID)
+			}
+			// PLAT-294: a routing step's routes each start a sub-workflow;
+			// a route to end marks a simple if-condition that should stay a branch.
+			if err := validateRoutingRoutesStartSubWorkflows(stepID, s.Routes); err != nil {
+				return "", fmt.Errorf("validation failed: %w", err)
+			}
+			// Only a branch can ask a person; routing is always preseeded.
+			if isHumanRoutedBranch(s) {
+				return "", fmt.Errorf("validation failed: branch step %q has route_source \"human\" and cannot become a routing step; routing is the mode selector and is always answered up front by route_selections. Keep it a branch, or clear route_source first if a caller will always preseed it", stepID)
 			}
 			updated = &RoutingPlanStep{
 				Type:             StepTypeRouting,
@@ -5594,6 +5643,15 @@ func createSingleStepAdder(workspacePath string, logger loggerv2.Logger, readFil
 					return "", fmt.Errorf("validation failed: %w", err)
 				}
 			}
+		case "human_input":
+			// New decision-type human_input steps are branch steps with
+			// route_source "human" now; human_input keeps only free-form
+			// value capture. Existing steps are untouched (add-time only).
+			if humanStep, ok := typedStep.(*HumanInputPlanStep); ok {
+				if err := validateNewHumanInputStepIsTextOnly(humanStep); err != nil {
+					return "", fmt.Errorf("validation failed: %w", err)
+				}
+			}
 		case "message_sequence":
 			if sequenceStep, ok := typedStep.(*MessageSequencePlanStep); ok {
 				if err := validateMessageSequenceStepFieldsTyped(sequenceStep); err != nil {
@@ -5606,6 +5664,20 @@ func createSingleStepAdder(workspacePath string, logger loggerv2.Logger, readFil
 		oldPlan, err := readPlanFromFile(ctx, workspacePath, readFile)
 		if err != nil {
 			return "", fmt.Errorf("failed to read plan: %w", err)
+		}
+
+		// PLAT-294: at most one routing step per plan. Checked only here, on
+		// the mutation that would introduce a second one -- existing plans
+		// with extra routing steps are left alone (see routing_step_cardinality.go).
+		if stepType == "routing" {
+			if err := validateSingleRoutingStepForMutation(oldPlan, typedStep.GetID()); err != nil {
+				return "", fmt.Errorf("validation failed: %w", err)
+			}
+			if routingStep, ok := typedStep.(*RoutingPlanStep); ok {
+				if err := validateRoutingRoutesStartSubWorkflows(routingStep.GetID(), routingStep.Routes); err != nil {
+					return "", fmt.Errorf("validation failed: %w", err)
+				}
+			}
 		}
 
 		// Check if this is an orphan step
@@ -6009,7 +6081,7 @@ func registerPlanModificationTools(
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"add_human_input_step",
-		"Add a human input step to the plan. Use this when you need to ask a question to a human and block execution until they respond. This step has no LLM, no execution, no validation, and no learning - it simply asks a question and waits for human input. The response is saved to a JSON file and passed to the next step. Provide: id, title, question (required), response_type (text/yesno/multiple_choice), options (for multiple_choice), variable_name (optional), context_output (optional, defaults to step-{index}.json), next_step_id (required), if_yes_next_step_id/if_no_next_step_id (for yesno), option_routes (for multiple_choice), insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
+		"Add a human input step to the plan to capture a FREE-FORM VALUE from a person (an ID, a month, a note to format) into variable_name, blocking until they respond. New steps accept response_type=text only: a person's DECISION between fixed options (approve/hold, yes/no, pick one) is a branch step with route_source=\"human\" (add_branch_step) -- the routes are the options and schedules answer it via route_selections -- so yesno and multiple_choice are rejected here; existing human_input steps of every type keep working. This step has no LLM, no execution, no validation, and no learning. The response is saved to a JSON file and passed to the next step. Provide: id, title, question (required), response_type (text), options (legacy, multiple_choice only), variable_name (optional), context_output (optional, defaults to step-{index}.json), next_step_id (required), if_yes_next_step_id/if_no_next_step_id (for yesno), option_routes (for multiple_choice), insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
 		humanInputParams,
 		createAddHumanInputStepExecutor(workspacePath, logger, readFile, writeFile, moveFile),
 		"workflow",
@@ -6048,7 +6120,7 @@ func registerPlanModificationTools(
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"add_routing_step",
-		"Add a deterministic routing step to the plan. Use this when the workflow must choose exactly one of multiple existing downstream steps. Routing has one mode only: read caller route_selections, the routing step's preseeded route_selection.json, route_source_file, a context_dependencies entry named route_selection.json, or default_route_id, then switch to the selected route. Do not set description or context_output on routing steps; if an agent/probe/judgment is needed, add a prior message_sequence step that writes route_selection.json and declare that file in the routing step's route_source_file or context_dependencies. Provide: id, title, routing_question (readability/compatibility only), routes (min 2 with route_id/route_name/condition/next_step_id), context_dependencies, optional default_route_id, optional route_source_file, insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
+		"Add a deterministic routing step to the plan. Routing is the workflow's mode selector -- the single major fork whose route a schedule or caller picks via route_selections -- so a plan has AT MOST ONE routing step; this tool rejects a second one. Each route is a sub-workflow of the main work (many steps), so every route must start at a real step -- a route straight to end is rejected, because a mode that does nothing is a simple if-condition. Every other fixed choice inside the flow (skip/continue, probe ok/failed, approve/hold) is a branch step (add_branch_step). Use this when the workflow must choose exactly one of multiple existing downstream sub-workflows. Routing has one mode only: read caller route_selections, the routing step's preseeded route_selection.json, route_source_file, a context_dependencies entry named route_selection.json, or default_route_id, then switch to the selected route. Do not set description or context_output on routing steps; if an agent/probe/judgment is needed, add a prior message_sequence step that writes route_selection.json and declare that file in the routing step's route_source_file or context_dependencies. Provide: id, title, routing_question (readability/compatibility only), routes (min 2 with route_id/route_name/condition/next_step_id), context_dependencies, optional default_route_id, optional route_source_file, insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
 		routingParams,
 		createAddRoutingStepExecutor(workspacePath, logger, readFile, writeFile, moveFile),
 		"workflow",
@@ -6078,7 +6150,7 @@ func registerPlanModificationTools(
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"add_branch_step",
-		"Add a deterministic branch step to the plan. Use this for a small in-flow next-step decision -- the workflow must choose exactly one of a few existing downstream steps. (Routing steps now represent a larger, major sub-workflow fork; use branch for a lightweight decision instead.) Branch has one mode only: read caller route_selections, the branch step's preseeded route_selection.json, route_source_file, a context_dependencies entry named route_selection.json, or default_route_id, then switch to the selected route. Do not set description or context_output on branch steps; if an agent/probe/judgment is needed, add a prior message_sequence step that writes route_selection.json and declare that file in the branch step's route_source_file or context_dependencies. Provide: id, title, branch_question (readability/compatibility only), routes (min 2 with route_id/route_name/condition/next_step_id), context_dependencies, optional default_route_id, optional route_source_file, insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
+		"Add a deterministic branch step to the plan. Use this for a small in-flow next-step decision -- the workflow must choose exactly one of a few existing downstream steps. (Routing steps now represent a larger, major sub-workflow fork; use branch for a lightweight decision instead.) When a PERSON makes the decision mid-run (approve/hold, yes/no, pick one), set route_source=\"human\": the routes are the options, branch_question is the prompt, schedules answer it up front via route_selections, unattended runs use default_route_id, interactive runs ask -- this replaces yesno/multiple_choice human_input steps. Otherwise branch has one mode only: read caller route_selections, the branch step's preseeded route_selection.json, route_source_file, a context_dependencies entry named route_selection.json, or default_route_id, then switch to the selected route. Do not set description or context_output on branch steps; if an agent/probe/judgment is needed, add a prior message_sequence step that writes route_selection.json and declare that file in the branch step's route_source_file or context_dependencies. Provide: id, title, branch_question (readability/compatibility only), routes (min 2 with route_id/route_name/condition/next_step_id), context_dependencies, optional default_route_id, optional route_source_file, insert_after_step_id. The plan.json file is updated immediately when this tool is called.",
 		branchParams,
 		createAddBranchStepExecutor(workspacePath, logger, readFile, writeFile, moveFile),
 		"workflow",

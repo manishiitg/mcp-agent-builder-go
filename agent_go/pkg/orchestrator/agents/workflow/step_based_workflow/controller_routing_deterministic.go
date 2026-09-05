@@ -191,6 +191,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveDeterministicRoutingSelection(
 	stepIndex int,
 	routingStepPath string,
 	allSteps []PlanStepInterface,
+	execCtx *ExecutionContext,
 ) (*deterministicRoutingSelection, error) {
 	if routingStep == nil {
 		return nil, fmt.Errorf("routing step is nil")
@@ -227,6 +228,13 @@ func (hcpo *StepBasedWorkflowOrchestrator) resolveDeterministicRoutingSelection(
 				return selection, nil
 			}
 		}
+	}
+
+	// A human-decided branch: nothing was preseeded, so ask (or, unattended,
+	// fall back to default_route_id). Sits ahead of the plain default so an
+	// interactive run really asks instead of silently taking the default.
+	if isHumanRoutedBranch(routingStep) {
+		return hcpo.resolveHumanBranchSelection(ctx, routingStep, stepIndex, execCtx)
 	}
 
 	if defaultRouteID := strings.TrimSpace(routingStep.GetDefaultRouteID()); defaultRouteID != "" {

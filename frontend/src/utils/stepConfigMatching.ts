@@ -286,6 +286,7 @@ export interface BranchPlanStep extends CommonStepFields {
   branch_question: string;            // Question to evaluate for route selection
   routes: RoutingRoute[];             // Available routes (min 2)
   default_route_id?: string;          // Optional fallback route_id
+  route_source?: 'human';             // "human": asks the person when no route was preseeded (routes are the options); successor to yesno/multiple_choice human_input
   selected_route_id?: string;         // runtime: stores selected route
 }
 

@@ -70,7 +70,7 @@ func (hcpo *StepBasedWorkflowOrchestrator) executeRoutingStep(
 		hcpo.GetLogger().Warn(fmt.Sprintf("⚠️ Failed to ensure routing step execution folder exists: %v", err))
 	}
 
-	selection, err := hcpo.resolveDeterministicRoutingSelection(ctx, routingStep, stepIndex, routingStepPath, allSteps)
+	selection, err := hcpo.resolveDeterministicRoutingSelection(ctx, routingStep, stepIndex, routingStepPath, allSteps, execCtx)
 	if err != nil {
 		hcpo.GetLogger().Error(fmt.Sprintf("❌ Failed to resolve routing step %d deterministically: %v", stepIndex+1, err), nil)
 		hcpo.EmitOrchestratorAgentError(ctx, "workflow", "routing-step-deterministic", fmt.Sprintf("Resolve routing step: %s", step.GetTitle()), err.Error(), stepIndex, iteration)

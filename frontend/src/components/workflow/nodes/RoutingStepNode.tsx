@@ -123,6 +123,12 @@ export const RoutingStepNode = memo(({ data, selected }: RoutingStepNodeProps) =
         {routing_question && (
           <div className="px-3 pt-2 pb-1.5">
             <div className="p-1.5 rounded-lg bg-teal-50 dark:bg-teal-900/20 border border-teal-200 dark:border-teal-800/50">
+              {data.route_source === 'human' && (
+                <div className="mb-1 inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                  title="Asks the person when no route was preseeded via route_selections; unattended runs use default_route_id">
+                  asks human
+                </div>
+              )}
               <div className="text-[10px] text-teal-700 dark:text-teal-300 line-clamp-2 italic">
                 {routing_question}
               </div>

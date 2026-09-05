@@ -1,5 +1,13 @@
 # Pulse Platform-Issue Register
 
+## Human-decided branch replaces yesno/multiple_choice human_input for new steps — PLAT-295
+
+[PLAT-295](pulse_platform/plat-295.md) — `branch` gains `route_source: "human"`: the routes are the options, `branch_question` the prompt; preseeded sources (`route_selections`, `route_selection.json`, `route_source_file`, `context_dependencies`) still win so schedules answer up front, unattended runs use `default_route_id` or fail actionably, interactive runs ask through the existing `HumanFeedbackStore` prompt. `add_human_input_step` now rejects `yesno`/`multiple_choice` (points at the equivalent `add_branch_step` call) and keeps `text` for free-form value capture. Add-time only — **no migration, existing `human_input` steps untouched by owner decision.** 11 new tests pass with the full package; canvas badge added; not committed, not deployed, no live UI run yet.
+
+## At most one routing step per plan — PLAT-294
+
+[PLAT-294](pulse_platform/plat-294.md) — the review's objection to a positional "routing before any work" check is accepted and that proposal is dropped. A census of every workflow showed exactly one `routing` step per plan is the mode selector schedules pick via `route_selections`, and every second one (hetznerssh, linkedin, social-media, sheet-analysis) is a `branch` by `branch.md`'s own definition; the agentic `routing_best_practices` check passed two of them and never ran on the others. Implemented as two deterministic rules on the two mutations that can introduce a routing step (`add_routing_step`, `convert_routing_branch_step_type` to routing): at most one routing step per plan, and no routing route straight to `end` (routing = a sub-workflow of many steps; a mode that does nothing is a simple if-condition → branch). **No load-time check and no migration by owner decision**: existing plans keep their routing steps as they are. Seven new tests pass locally with the full package; not committed, not deployed.
+
 ## Shared agent UI control framework — PLAT-292
 
 [PLAT-292](pulse_platform/plat-292.md) proposes a scoped, acknowledged UI-control

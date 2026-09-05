@@ -70,6 +70,7 @@ export interface HumanInputNodeData extends Record<string, unknown> {
 }
 
 export interface RoutingStepNodeData extends Record<string, unknown> {
+  route_source?: 'human' // branch only: asks the person when nothing was preseeded
   id: string
   title: string
   routing_question?: string
@@ -1088,6 +1089,7 @@ function stepToNode(
         // component/node data shape, just its own node-type key. See PLAT-259.
         routing_question: step.branch_question,
         routes: step.routes,
+        route_source: step.route_source,
         validation_schema: step.validation_schema
       } as RoutingStepNodeData
     }

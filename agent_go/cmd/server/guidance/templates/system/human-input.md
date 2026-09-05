@@ -11,12 +11,20 @@ in the plan.
 
 ## When to use human_input
 
-- The next decision genuinely **needs user judgment** (e.g., picking
-  between approaches, confirming a destructive action, providing
-  context the agent can't infer).
-- The workflow has an **approval gate** (e.g., "proceed with sending?").
+**New steps: `human_input` is for capturing a free-form value only.** A
+person's *decision* — approve/hold, yes/no, pick one of a few options — is a
+`branch` step with `route_source: "human"` (`references/branch.md`): the
+routes are the options, schedules answer it up front with
+`route_selections`, and unattended runs fall back to `default_route_id`.
+`add_human_input_step` rejects `response_type: yesno` and `multiple_choice`
+and points there. Existing `human_input` steps of every type keep working
+unchanged.
+
 - The user must **provide data** the agent can't otherwise discover
-  (e.g., a PAN, a confirmation code from email).
+  (e.g., a PAN, a confirmation code from email, a month to reconcile, a raw
+  note to format) — capture it into `variable_name`.
+- Context the agent can't infer and that isn't a choice among fixed
+  options.
 
 **Don't use human_input for:**
 
@@ -46,10 +54,12 @@ choice as a deterministic `routing` step and have the builder/caller
 pass `route_selections` when starting the workflow.
 
 Use `human_input` only when the running workflow truly has to stop and
-ask a human because the answer is not already available at launch. If
-that in-run answer branches a small fixed menu, `option_routes` is fine.
-If the branch must be visible as an explicit deterministic router, map
-the answer to `route_selection.json` and route after it.
+ask a human because the answer is not already available at launch. If the
+in-run answer is a choice among a few fixed options, that is a **branch with
+`route_source: "human"`**, not a `human_input` with `option_routes` — the
+routes are the menu, and a schedule answers it with `route_selections`
+instead of a separate `human_inputs` argument. (`option_routes` /
+`if_yes_next_step_id` remain supported on existing steps.)
 
 ```
 routing(

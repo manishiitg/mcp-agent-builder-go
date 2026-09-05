@@ -12,6 +12,19 @@ A routing step is a deterministic switch. It reads `route_selection.json`, resol
 
 Use routing when the workflow must run **exactly one** of N existing downstream steps. The common case is a fixed branch selected from the user's request to the builder; the builder/caller passes that choice as `route_selections` when starting the workflow. Do not put judgment inside the routing step itself; put judgment in an earlier message sequence or caller-provided `route_selections`. If an agent decision is needed, add a message sequence before routing that writes `route_selection.json` in its own output folder.
 
+**A plan has at most one routing step.** Routing is the workflow's mode
+selector: the single fork whose route a schedule or caller picks via
+`route_selections` (e.g. `full_audit` vs `apply_approved_fixes`, `post` vs
+`engage` vs `measure`). Each route is a **sub-workflow of the main work** —
+many steps with their own downstream identity — so every route must start at
+a real step; a route straight to `end` is rejected, because a "mode" that does
+nothing is a simple if-condition. Every further fixed choice inside the flow —
+a skip/continue gate, an approval outcome, a "did the probe succeed" check —
+is a `branch`, however late in the plan it sits. `add_routing_step` rejects a
+second routing step or a route to `end`, and `convert_routing_branch_step_type`
+rejects a conversion to routing in the same cases; plans authored before this
+rule keep the routing steps they already have (PLAT-294).
+
 ### When to use routing
 
 - The path forward is conditional on a known signal (e.g., "logged in", "MFA required", "document type is invoice")
