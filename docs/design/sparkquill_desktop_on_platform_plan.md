@@ -5,9 +5,10 @@
 the `agent_go` server) with SparkQuill as a product (`internal/sparkquillproduct/product.yaml`, on by default),
 and `cmd/family-server` + the bubble chat in `LearningApp.tsx` are retired. Stated goal: *"very less code
 duplication between SparkQuill and AgentWorks — share the backend and frontend code as much as possible."*
-This reverses the 2026-09-03 decision to keep a separate family-server. The detailed plan for that direction
-(shell wiring, frontend consolidation, feature parity, data migration) is being written and will replace the
-"Plan" section below.
+This reverses the 2026-09-03 decision to keep a separate family-server. **Part A** below is the research (A1–A9)
+and the phased implementation plan (A10: P0 server enablers → P1 shell sharing → P2 delete the bubble chat and move
+the learning app under `frontend/src/products/sparkquill` → P3 blocking parity → P4 gaps → P5 migration → P6
+deletions → P7 live verification; ~25–30 dev-days to the first shippable milestone, ~8–11 trailing).
 
 **What follows is the research record from 2026-09-06.** Sections 1–6 (facts, reuse seams, wire contracts,
 mismatches) remain accurate and are the reference for how `PlatformChat` talks to the server. The "Plan",
@@ -206,6 +207,248 @@ Ledger of what's stubbed: `frontend/learning-app/src/api/platformApi.ts` (`notYe
 - **Where it runs:** a `cmd/server` startup hook next to the SparkQuill registration block (`server.go:1758-1771`, gated by `productEnabled("sparkquill")`), non-fatal on error (no marker → retry next boot), plus a CLI subcommand `agent-server migrate-sparkquill --from --docs-dir --user [--dry-run]`. Not the Electron shell (slug rules, `product.json` shape, `answerKeyDestination` live in Go). Idempotency: destination marker `.migrated-from-sunlit` (source path + timestamp + hash) written **only on full success**; fresh install (no source) → write marker; **non-empty target without marker → refuse and log** (never overwrite a family already on the platform). Backup `cp -a ~/.sunlit-learning ~/.sunlit-learning.pre-platform-backup` first, abort if it fails; **copy, don't move**. Tests that assert the child sandbox must build fixtures under `$HOME` (`characterization_test.go:252-263`), not `t.TempDir()` (`/var/folders` is sandbox-readable).
 
 **Build list from parity+migration** — blocking: (1) engine onboarding + the single-product 400 trap; (2) `product.json` synthesis; (3) key relocation. Gaps ranked: (4) WhatsApp route table; (5) Pulse quiet rule / configurability / dropped checks / desktop notification; (6) model picker + Fast Mode; (7) voice unload/hardware/install/transcribe; (8) `/api/browser/status`, `/api/reset`; (9) week/schedule port-or-drop. Deletes: `browser_backend.go`, `tmux_sweep.go` + `sq-*` setenvs, `skills.go` seeding, `enginedetect` use, `secrets_store.go`, then all of `cmd/family-server`.
+
+## A10. Phased plan
+
+```
+P0 server enablers ─┐
+                    ├─► P1 shell sharing ──────────────────────────────┐
+P2a delete bubble ─► P2b move learning-app ─► P3 blocking parity ─► P5 migration ─► P6 deletions ─► P7 live E2E = MVP
+                                                     └─► P4 trailing gaps (after MVP)
+```
+**MVP (P0–P3, P4 ship-first subset, P5–P7): ~25–30 dev-days. Trailing gaps: ~8–11 days.**
+
+**First shippable milestone:** a family installs `SparkQuill.dmg`; onboarding detects/selects an engine via
+`/api/llm-config/providers`; `~/.sunlit-learning` is migrated on first boot (or a fresh family scaffolded); the parent
+chats in the shared `ChatArea` (tool rows, pills); handoff opens the child's sandboxed activity conversation; check-ins
+run with the quiet rule; voice warms/unloads with window visibility; AgentWorks + SparkQuill run side by side. Trailing:
+WhatsApp, Fast Mode/model picker, cadence configurability, desktop notifications, voice tiers/install, browser status,
+week/schedule (dropped).
+
+### M1 first — the cheap live build (1–2 days, before P0/P1): platform binaries + existing learning-app dist
+Rollout review verdict: get a family-installable build on the platform **before** the shell/frontend refactors, with
+almost nothing thrown away. All in `desktop-sparkquill/main.js` (replacing `startServer` `:94-119`) + one preload line:
+1. `preload.js:8-11` adds `backend: () => 'platform'` — the learning app is already platform-capable
+   (`api/index.ts:11-14`, `platform/runtimeConfig.ts:8-12`); nothing else in the frontend changes.
+2. Stage `frontend/learning-app/dist` as `Resources/static` (not `resources/web`) and set the agent server's cwd to
+   Resources (`server.go:2533` serves `./static/`); ship `../agent_go/configs → configs` like `desktop/package.json:45-48`.
+3. **Generate + persist `AUTH_SECRET`** in `<userData>/config.json` (mirror `desktop/main.js:308-318,496-504`) — the
+   server **fatals** on an empty/default secret (`server.go:1525`, `auth_middleware.go:143-150`); the SparkQuill shell has
+   no reference to it today.
+4. Spawn `workspace-server server --port <detect(45779)> --docs-dir <userData>/workspace-docs` (env `DOCS_DIR`,
+   `DATA_DIR=<userData>/data`, `NATIVE_WORKSPACE=true`, `WORKSPACE_API_TOKEN=<32 B hex>`; ready on `DynamicPort:`), copy
+   `Resources/configs/mcp_servers_clean.json` → `<userData>/configs/mcp_servers.json`, then spawn `agent-server server
+   --port <detect(45778)> --log-file … --mcp-config …` with `AUTH_SECRET`, `WORKSPACE_API_URL`, `WORKSPACE_DOCS_PATH`,
+   `DOCS_DIR`, `LOG_FILE`, `NATIVE_WORKSPACE=true`, `WORKSPACE_API_TOKEN`, `AGENTWORKS_SKIP_GLOBAL_BROWSER_CLEANUP=true`,
+   `AGENTWORKS_BROWSER_SESSION_PREFIX=sparkquill`; `MULTI_USER_MODE` and **`AGENT_PRODUCTS` unset**. Health on
+   `/api/health`, then load `http://127.0.0.1:<agentPort>/?v=<version>`. Keep `Resources/lib` (voice dylibs, same
+   `build-darwin-voice-binary.sh` the AgentWorks release uses).
+5. Add a shell unit test asserting the spawn env contains no `AGENT_PRODUCTS`.
+**Gate:** `SPARKQUILL_PLATFORM_URL=http://127.0.0.1:<port> npx vitest run platformApi.live` against the packaged app's
+server + a live parent turn and a child handoff turn observed in ChatArea (agentic sign-off). Throwaway: only the
+`web→static` staging line; the spawn code becomes `desktop/lib/spawnServers.js` in P1. Note: without P3, a family on a
+fresh Mac has no engine onboarding (see P3) — M1 is for families who already have `claude`/`codex` logged in.
+
+### P0 — Server-side enablers (Go) — 2 days
+- `/runtime-config.js` (`server.go:2514-2521`) also emits `enabledProductSurfaces`, `defaultProductSurface`, `appName`,
+  `faviconUrl` from env (`AGENTWORKS_ENABLED_PRODUCT_SURFACES`, `AGENTWORKS_DEFAULT_PRODUCT_SURFACE`, `AGENTWORKS_APP_NAME`,
+  `AGENTWORKS_FAVICON_URL` — names already used by `run_server_with_logging.sh:1011-1021`), keys omitted when unset so
+  AgentWorks output is byte-identical. New `cmd/server/runtime_frontend_config.go` + test. Manifest `ui.surface` fallback
+  only if it stays ~15 lines (`branding.favicon` is an icon *name*, not a URL).
+- `STATIC_DIR` env for the SPA mount (`server.go:2533`) so the shell can use `userData` as cwd and drop
+  `unifyAgentLogsDir` (`desktop/main.js:891-924`); `mcp_servers_clean.json` path → `getResourcesDir()` (`main.js:1215`).
+- `registeredProductIDs()` includes `sparkquill` (`user_directory.go:827-835`).
+- `AGENTWORKS_CLI_SECURITY_DIR` override in `pkg/clisecurity/store.go:40-46` (today hardcoded + `log.Fatalf`).
+- Voice-model first-download lock in `pkg/voicestt/model.go` (~`:253,282`): `O_EXCL` lock beside `dest`, second process waits.
+- **Decision — token gate:** leave `AGENT_PRODUCTS` **unset** in the SparkQuill shell (no exemption code); the frontend
+  allowlist hides the other surfaces. `claude_code_token_gate_test.go:69` already pins the unset-exempt case.
+- **Isolation env the shell passes** (= descriptor `extraServerEnv`; recipe `scripts/run-local-instance.sh:277-297`):
+  per-product `userData` (→ separate `RUNLOOP_DOCS_DIR`), preferred ports 45778/45779,
+  `AGENTWORKS_SKIP_GLOBAL_BROWSER_CLEANUP=true`, `AGENTWORKS_BROWSER_SESSION_PREFIX=sparkquill`, `AGENT_BROWSER_CONFIG`,
+  `AGENTWORKS_CLI_SECURITY_DIR`, `AGENTWORKS_STRICT_PROCESS_OWNERSHIP=true`. **Not** `*_SESSION_PREFIX=sq-*`, not `TMUX_TMPDIR`;
+  `WHATSAPP_ENABLED`/`SCHEDULER_ENABLED` at defaults (Pulse needs the scheduler).
+
+### P1 — Shell sharing: one `desktop/` emits both apps — 3–4 days
+- Add `desktop/lib/{loginEnv,boundedLog,health,externalNav,spawnServers,updater,productJson}.js` extracted from
+  `desktop/main.js` (`:54-92, :165-202, :1358-1389, :1797-1838, :1108-1356, :1401-1525+1675-1706`), `updater` with
+  `updateMode: install|notify`.
+- Add `desktop/products/{agentworks,sparkquill}.js` descriptors (`appId, productName, userDataDirName, preferred ports,
+  windowTitle, backgroundColor '#fbf7ef', theme, trayLabels, iconPath, tagPrefix, dmgName, installScriptUrl,
+  closeBehavior quit|hide, voiceLifecycleOnVisibility, menuFolderLabel, updateMode, extraServerEnv`); selection
+  `AGENTWORKS_PRODUCT` env → `Resources/product.json` → `agentworks`.
+- Add `desktop/build/{agentworks,sparkquill}.yml` (differ in `appId`, `productName`, category, icon, `extraResources`
+  incl. `product.json`); scripts `dist:agentworks` / `dist:sparkquill` (`electron-builder --config build/<id>.yml`).
+- Modify `desktop/main.js` to use `lib/*` and descriptor-conditional bits (close-to-tray, tray/menu labels, background,
+  delete `unifyAgentLogsDir` once `STATIC_DIR` is passed). **Voice warm/unload on show/hide:** shell emits an IPC
+  `window-visibility` event via `preload.js`; the SparkQuill surface (holding the JWT) calls `/api/voice/warm|unload` —
+  no auth plumbing in the shell (`/api/voice/*` is behind `AuthMiddleware`, unlike family-server).
+- `install.sh` parameterized (`APP_NAME`, `TAG_PREFIX`, `DMG_NAME`, `ENV_PREFIX`); `install-sparkquill.sh` becomes a
+  3-line wrapper (public curl URL stays). `sparkquill-desktop.yml` mirrors `desktop-release.yml:60-106` then
+  `npm run dist:sparkquill`, keeps `gh release create sparkquill-v*`. `desktop/dev-setup.sh` builds `agent-server` via
+  `build-darwin-voice-binary.sh` so `resources/lib` exists locally (fixes the known clean-build failure) and accepts
+  `--product sparkquill`.
+- `desktop-sparkquill/` keeps nothing; deleted in P6 after P1 is verified live.
+
+### P2a — Delete the standalone bubble chat in place — 2 days (before moving anything)
+- `learning-app/src/api/index.ts`: remove the `backend` switch and token mirroring; single `createPlatformApi`.
+  Delete `apiBase.ts`, `VITE_SPARKQUILL_BACKEND/VITE_FAMILY_API/VITE_PLATFORM_API`, `api/standaloneApi.ts`(+test),
+  `stores/useParentChatStore.ts`, `useChildChatStore.ts` (fold surviving child-activity/viewer fields into
+  `useFamilyStore`/the renamed workspace store).
+- `LearningApp.tsx`: remove every `backend !== 'platform'` branch and standalone effect (history loads `:1144,1685,
+  1771,1934,2545`; watchers `:1733,1822`; send/steer `:2211-2421`; JSX `:2829-2875, 3936+`; guards `:1768,1810,1933`);
+  `PlatformChat` (`:2939`) and `ChildPlatformChat` (`:4080`) become unconditional.
+- `familyApi.ts`: drop chat methods `:94-108` and their `platformApi.ts:296-311` implementations; keep
+  `engines/validateEngine/selectEngine` for P3. CSS: bubble-only ranges (`:149-220`, child bubble ~`:596-668`) —
+  confirm each class by grep after the TSX deletion; `.fl-thread/.fl-msg/.fl-bubble` stay (landing greeting).
+- `platformApi.live.test.ts:60-61`: drop the stale `week` assertion. Two commits (stores, then JSX) with the parent
+  `tsc` as the guard — this file has never been type-checked.
+
+### P2b — Move `learning-app/src` → `frontend/src/products/sparkquill/` — 6–8 days
+Mechanical (~2 d): `git mv`; rename `useWorkspaceStore` → `useSparkQuillWorkspaceStore`, `stores/types` →
+`sparkQuillTypes`; rewrite `../../../src/X` → `../../X` (4 files); check `persist` keys vs `frontend/src/stores`;
+`SparkQuillSurface.tsx` = `LearningApp` renamed; delete `main.tsx`, `platform/runtimeConfig.ts`, `BuildUpdateNotice`
+(→ `UpdateProgressToast`/`staleChunkReload`); register the surface (`productSurfaceConfig.ts:1`, store union/version 4/
+migrate, `ProductSurfaceSwitcher.tsx:22-32` + `SparkQuillMark`, `App.tsx:45-47,908-914`) and update their tests; move
+`public/{sparkquill-*.svg,lib/jsxgraph*}` → `frontend/public/`; delete the learning-app root configs/`node_modules`/`dist`;
+retarget `dev-setup.sh`. Real work (~4–6 d): scoped preflight resets under `.learning-app` (~10 element types) +
+mandatory visual pass on all five screens; CSS tokens (`:4-72`) + `.fl-platform-chat` (`:1228-1294`) → lazy
+`sparkquill.css`, drop globals (`:1-2`, duplicate `index.css` import), nest ~80 unscoped selectors; theme: surface
+toggles `documentElement` light/dark on mount/unmount (`ThemeContext.tsx:4` forces dark); first-ever `tsc` on the
+moved code (0.5–1 d); bundle budget (`check-bundle-budget.mjs` eager gzip ≤ 1,030,000 — keep everything lazy);
+trivial dedupe now (`SyntaxHighlightedCode`). Larger dedupes (MicButton, ChatRenderer vs MarkdownRenderer, file viewer,
+secrets UI) and a shared `useProductChatTab(profileId)` across the four surfaces = post-MVP slice (2–3 d).
+
+### P3 — Blocking parity — 3–4 days
+1. **Engine onboarding + persisted choice:** add `Engine` to `FamilyState` (`profile_runtime.go:24-30`, required or
+   `set-child-profile` re-serialization drops it); `engines()` → `GET /api/llm-config/providers`
+   (`llm_provider_manifest.go:26-53`) ∩ parent `runtime.provider_options`; `validateEngine` → `usable`; `selectEngine`
+   → `family.json.engine`; `setup()` reinstates `next_step:'engine'`; existing `.engine-card` UI shows `setup_hint`.
+   Turn wiring **A (ship):** `PlatformChat`/`ChildPlatformChat` set the tab's provider/model from `family.json.engine`
+   at tab creation (`PlatformChat.tsx:83-88`; server honours exact `provider_options` pairs,
+   `agent_profile_runtime.go:111-128`). **B (later, with P4-6):** server-side per-user product runtime preference so
+   Pulse runs honour it too. **Verify live first** that the agent-profile `/query` handler forwards `req.Provider`
+   (`server.go:3578-3580` falls back to it) — the one assumption under A.
+   **Facts that shape this:** today a fresh Mac with no CLI reaches the parent screen (engine step skipped), and the first
+   turn either fails with a dev-worded spawn error or, with `claude` installed but not logged in, **hangs on the CLI's
+   login prompt for up to the adapter's 20-min inactivity timeout** (`platformApi.ts:40`; described at `server.go:3585-3589`).
+   `handleQuery` has no runtime pre-check. In the manifest `providerAuthConfigured` returns `true` unconditionally for
+   `claude-code`/`codex-cli` (`multiagent_llm_tools.go:427-439`), so `usable == runtime_available` (`LookPath`) — real
+   login state needs `POST /api/llm-config/validate-key` → `validateClaudeCodeCLI` (`llm_config_handlers.go:1023`, a real
+   turn, bounded) — same as `enginedetect.Validate` did. `setup_hint` copy is developer-worded; keep the learning app's
+   parent-facing copy per engine (`pres()` `LearningApp.tsx:4527`). Reuse AgentWorks' status semantics
+   (`components/llm/providerStatus.ts:7-19`), not its Model Library modal.
+2. **`product.json` synthesis:** extract `EnsureActivityProject(...)` from `tools.go:340-352`; call from
+   `create-learning-activity`, the migration, and as self-heal on `open-activity`/handoff.
+3. **Key relocation:** reuse `ws.relocateAnswerKeys` (`tools.go:356`) + `answerKeyDestination`; also on handoff.
+
+### P4 — Gaps: ship-first vs trail
+| Gap | Call | Effort |
+|---|---|---|
+| Pulse quiet rule inert | **ship-first** — wire `ProductScheduleService.sinceInteractive` (`product_schedules.go:117`, used `:325`) to last user-message time per (user, profile) | 0.5–1 d |
+| `/api/voice/unload` | **ship-first** — `Manager.Unload()` exists (`voicestt/manager.go:212`); handler beside `handleVoiceWarm` (`voice_stt_routes.go:124`) | 0.5 d |
+| Desktop notification for check-ins | trail — renderer toast + preload → Electron `Notification`; no new destination kind | 1 d |
+| Cadence / preferred-hour configurability | trail — per-user override where `scheduler_routes.go:1176-1179` 405s | 1–2 d |
+| Dropped checks / clean trigger line | drop the three checks (decision); trigger line trails | 0.5 d |
+| Model picker + Fast Mode | trail — extend `FamilyState` + server runtime hook (also gives P3-B); hide Settings rows until then | 2–3 d |
+| WhatsApp `@child/@parent` route table | trail — **hide the WhatsApp button/modal for MVP**; adapter in `services/whatsapp_service.go` (`resolveSlugRoute:583`) mapping to (profile, conversation key) + persistent mode + media→activity + `send_whatsapp_file`; single-user pairing would bind to the default AgentWorks chat — don't half-ship | 3–4 d |
+| Voice `/hardware`, `/model/install|remove`, `/transcribe` | trail; `/transcribe` only with WhatsApp voice notes | 1–2 d |
+| `/api/browser/status`, `/api/reset` | browser status trails (query `cdp_check.go:21`), hide row; **`/api/reset` dropped** | 0.5 d |
+| Week / child-schedule / activity log | **dropped**; `memory/*` kept as evidence | 0 |
+
+### P5 — Data migration (Go): startup hook + CLI — 3–4 days
+`agent_go/internal/sparkquillproduct/migrate.go` (+test), same package as `activitySlugPattern`/`activityProject`/
+`answerKeyDestination`/`EnsureActivityProject`. **Move** the generic primitives from `cmd/family-server/migrate.go`
+(`copyDirCmd:114`, `mergeMove:131`, `copyFile:187`, `uniqueDir:370`, `uniqueBase:384`, fuzzy matching `:561-596`,
+marker pattern `:29-47`). Direct filesystem I/O under `$WORKSPACE_DOCS_PATH/_users/default/Chats/SparkQuill/`; skip
+when the env is unset (cloud never migrates). Mapping per A9 (+ carry `engine` into `family.json` for P3). Seed
+`product-schedules.json` (`productScheduleStatePath` `product_schedules.go:100-102`, key `sparkquill/pulse`) with
+`enabled` and `last_run_at=now` so the first check-in doesn't fire mid-onboarding. Safety: backup then abort-on-failure;
+copy not move; marker `.migrated-from-sunlit` only on full success; fresh install → marker; **non-empty target without
+marker → refuse + log**; unplaceables → `_legacy/`. Entry points: startup hook inside the `productEnabled("sparkquill")`
+block (`server.go:1758-1771`), gated on `NATIVE_WORKSPACE=true` and `MULTI_USER_MODE` unset, non-fatal; env
+`SPARKQUILL_LEGACY_DIR` (default `~/.sunlit-learning`), `SPARKQUILL_SKIP_MIGRATION`; cobra subcommand
+`migrate-sparkquill --from --docs-dir --user [--dry-run]` (`agent_go/cmd/root.go:104-106`). Tests: fixture builder,
+idempotency, refuse-non-empty, dry-run, slug collision, key relocation, `product.json` with `product-` id, archived
+conversations; the sandbox assertion uses a `$HOME` fixture (`characterization_test.go:252-263` pattern, ported).
+
+### P6 — Deletion order and gates — 1–2 days
+`cmd/family-server` is one binary: piecemeal deletions inside it buy nothing, and `internal/enginedetect` has no other
+importer — treat A8's per-file list as a **ledger of behaviours that stop existing** and delete the directory in one
+flag-day commit. All code deletions are git-reversible; the family's data is not — hence copy-not-move in P5.
+
+| Step | Delete | Gate before |
+|---|---|---|
+| D1 | standalone-gated effects in `LearningApp.tsx` (`:1768-1830` 20 s poll + `watchChild`, `:1933`, `:2102`, `:2486-2491`, `:2541-2549`) | M1 live gate passed |
+| D2 | bubble branches (`:2938-2941` → `PlatformChat` only, `:4078-4080` → `ChildPlatformChat`), `useParentChatStore`/`useChildChatStore` message state (keep `focusInput`/`childSending`, used `:962-964`), CSS `.fl-thread/.fl-msg/.fl-bubble` `:297-323,634-641`, `.fl-tmsg/.fl-tbubble` `:597-628`, `.chat-bubble` `:201-207` (keep `--reply-bubble-*` tokens if `.fl-platform-chat` references them) | vitest green + visual pass on the 5 screens |
+| D3 | `standaloneApi.ts`(+test), `apiBase.ts`, backend switch in `api/index.ts`, `VITE_SPARKQUILL_BACKEND/VITE_FAMILY_API`, `FamilyApi` narrowing | D2 merged |
+| D4 | Settings rows already hidden on the platform (`:2829-2845` cadence/hour, `:3936` Fast Mode/model picker), WhatsApp QR section (`:3816` renders a broken `<img>` from `whatsappPairImageUrl()=''`) | per-behaviour decision below |
+| D5 | whole `agent_go/cmd/family-server` (incl. the checked-in binary), `internal/enginedetect`, `desktop-sparkquill/` duplication (`updater.js`, shell code), `install-sparkquill.sh` → wrapper, `sparkquill-desktop.yml` retarget | migration verified on a copied real `~/.sunlit-learning` (P5); every family on the new build ≥ 1 release |
+| D6 | `frontend/learning-app` root (after the P2b move) | P2b preflight/theme pass |
+
+Behaviours with no platform replacement — decisions: **week/child-schedule/activity log** → ship without (agent tools
+only; the UI never called `/api/week`; keep `memory/child-schedule.json` as evidence). **WhatsApp** → hide the connector
+section in platform mode (today the poll fails silently and the QR is broken); if the migration finds
+`whatsapp/session.db` in the source, show a one-time "WhatsApp comes back in the next update" notice. **Desktop
+notification** → stub in M2 with a `local` destination (osascript, gated on `NATIVE_WORKSPACE=true`, ~40 lines in
+`services/notification_destination.go`); check-in is off by default (`product.yaml:133`) so not M1-blocking. **Model
+picker / Fast Mode** → already hidden; ship without. **Voice unload/install/hardware** → the shell's hide→unload gets a
+harmless 404 in M1 (~1 GB stays resident while hidden); add `/api/voice/unload` in M2. **`/api/reset`** → drop (a hidden
+"Reset setup" that deletes `family.json` via `/api/wp` if ever needed). Sweep `family-server` mentions across `docs/`,
+`ROADMAP.md`, `task.md`, `family-learning-architecture.md`, workflows; update this doc's status.
+
+### P7 — Verification — 3 days (interleaved; final live pass last)
+- Go: `go test ./cmd/server/... ./internal/sparkquillproduct/... ./pkg/clisecurity/... ./pkg/voicestt/... ./pkg/browser/...`;
+  new tests for runtime-config emission, `registeredProductIDs`, clisecurity override, download lock, migration suite.
+- Frontend: `npm run build` (tsc + vite + bundle budget), `npm run lint`, `npm test` (moved tests; live test via env URL);
+  surface tests for five surfaces.
+- **Live Electron E2E** (project rule: LLM-driven paths verified only by a live run with agentic sign-off): fresh install
+  → onboarding shows engine detection, child, PIN; run with a **copied** real `~/.sunlit-learning` → migration log,
+  marker, backup, `product.json` + `keys/`, archived conversations; parent turn with tool rows + pills; handoff → child
+  turn with celebrate/scene; from the child shell assert `keys/` unreachable; check-in "run now" → one `notify_user`;
+  relaunch restores history; AgentWorks + SparkQuill simultaneously (distinct ports/userData/docs roots, no browser
+  kill cross-fire, tmux intact); hide → `/api/voice/unload`, show → `/warm`.
+
+## A11. Migration worst cases, multi-instance verdict, top risks
+
+**Migration worst cases (always against `cp -a ~/.sunlit-learning <fixture>`; source flag → the copy, `--docs-dir` → a
+scratch root; the original is never touched):**
+- Target `_users/default/Chats/SparkQuill/` non-empty and unmarked → refuse + log + UI notice; test asserts zero writes.
+- Slug collisions / invalid slugs → lowercase + numeric suffix via `activitySlugPattern` + `uniqueDir`; rewrite
+  `current-activity.json.dir` to the **allocated** slug; test with two `fractions` under different subjects.
+- Missing `product.json` → synthesize (else the child gets `project "<slug>" was not found`); invariant test + live handoff.
+- Keys left in-folder → `answerKeyDestination` → `keys/`, **plus an idempotent startup key-sweep in `cmd/server`** (protects
+  partial migrations and future regressions); Go test under a `$HOME` fixture (none exists in `cmd/server` today —
+  port `characterization_test.go:250-263`); live: child `cat ../../keys/…` denied.
+- Stale/old-layout `current-activity.json` → rewrite or delete the pointer (client returns null → "no activity").
+- `family.json` fields: keep `engine` when it is a known `provider_options` id; drop `fast_mode/selected_models/pulse.*/
+  schedule/whatsapp_voice_enabled` with a one-time in-app notice.
+- Secrets: never copy `secrets.key`/`secrets.enc.json` into the docs dir; re-enter via the platform store; test asserts
+  neither file exists under `<docsDir>`.
+- Check-in firing immediately: `Decide`'s cadence branch runs now on zero `LastRun` (`productschedule/schedule.go:178-190`)
+  → seed `last_run_at=now` with `enabled`; the quiet rule is inert until P4-ship-first lands.
+- Two desktops: voice-model download race (`flock` on `<modelDir>.lock`; SparkQuill delays `warm` until
+  `/api/voice/status.installed`), CLI-security store (`AGENTWORKS_CLI_SECURITY_DIR`).
+
+**One app with a product switch vs two apps from one shell codebase:** one app wins on memory (one voice engine, one
+server pair), zero collisions, one updater; it loses on everything the family sees — name/icon/tray/menus,
+close-to-tray vs quit, light-first theme vs the forced `dark` class, a product switcher visible to a child, and coupled
+release cadence. **Verdict: two apps from one shell codebase** (P1 descriptors); revisit after P2b and runtime-config
+product pinning exist.
+
+**Top risks (ranked) → mitigation → proof**
+1. `AGENT_PRODUCTS`/token gate 400s every turn → never set it in the shell → `claude_code_token_gate_test.go` + shell env
+   test + live parent turn.
+2. Fresh Mac with no/unauthenticated CLI → silent failure or 20-min hang → P3 onboarding (`providers` + `validate-key` +
+   `family.json.engine`) → frontend mapping test with fixture manifests; live with `claude` off PATH shows "Not installed",
+   unauthenticated `claude` fails within the validate bound.
+3. Answer keys readable by the child after a partial migration → relocation + startup sweep → `$HOME`-fixture sandbox test
+   + live denied read.
+4. Migration clobbers or double-runs a family already on the platform → marker-only-on-success, refuse non-empty,
+   backup-then-abort, copy-not-move → run-twice / non-empty / read-only tests, then the copied-real-data dry run + run
+   with a file-count diff.
+5. Server refuses to start in the packaged app (empty `AUTH_SECRET` fatal `server.go:1525`, CLI-security `log.Fatalf`
+   `:1713-1721`, chat store needs workspace-server first, missing `configs/`) → mirror AgentWorks' startup order and
+   settings persistence → live packaged launch on a clean userData: both `DynamicPort:` lines and `/api/health` 200 within 90 s.
 
 ---
 
