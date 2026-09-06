@@ -3931,13 +3931,15 @@ const maxWorkflowResumeScan = 5
 
 // maybeResumeLatestWorkflowThread wires restored_conversation_session_id into reqMap
 // so an opt-in scheduled workflow run continues the schedule's most recent
-// scheduled chat instead of starting fresh.
+// scheduled chat in the same Workshop/Run mode instead of starting fresh.
 //
 // We look at schedule-runs.json for this exact schedule_id first, then validate
 // the referenced chat runtime. This deliberately excludes normal user/builder
-// chats in the same workflow workspace. A different CLI's external session ID is
-// meaningless to the new one. Prior run status (success/error) is intentionally
-// ignored: resume happens regardless so the agent can recover from a failed run.
+// chats in the same workflow workspace. A different CLI's external session ID
+// is meaningless to the new one, and crossing the Workshop/Run boundary would
+// retain the wrong prompt/tool context. Prior run status (success/error) is
+// intentionally ignored: resume happens regardless so the agent can recover
+// from a failed run.
 // Returns the resumed thread's session ID, or "" when the run should start fresh.
 func (s *SchedulerService) maybeResumeLatestWorkflowThread(ctx context.Context, sctx *ScheduleContext, reqMap map[string]interface{}, currentSessionID string) string {
 	if !sctx.Schedule.ShouldResumePrevious() {
@@ -3968,6 +3970,15 @@ func (s *SchedulerService) maybeResumeLatestScheduledThread(sctx *ScheduleContex
 	}
 	if currentProvider == "" {
 		return ""
+	}
+	currentWorkshopMode := "run"
+	if execOpts, ok := reqMap["execution_options"].(map[string]interface{}); ok {
+		if requested, ok := execOpts["workshop_mode"].(string); ok {
+			currentWorkshopMode = normalizeChatHistoryWorkshopMode(requested)
+		}
+	}
+	if currentWorkshopMode == "" {
+		currentWorkshopMode = "run"
 	}
 
 	// Runs are newest-first. Within the latest maxWorkflowResumeScan scheduled
@@ -4003,6 +4014,9 @@ func (s *SchedulerService) maybeResumeLatestScheduledThread(sctx *ScheduleContex
 			continue
 		}
 		if !rt.ResumeSupported || strings.TrimSpace(rt.ExternalSessionID) == "" {
+			continue
+		}
+		if !chatHistoryResumeModesCompatible(rt.WorkshopMode, currentWorkshopMode) {
 			continue
 		}
 		reqMap["restored_conversation_session_id"] = sessionID

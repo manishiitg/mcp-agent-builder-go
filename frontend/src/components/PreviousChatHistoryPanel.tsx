@@ -12,6 +12,7 @@ import {
 } from '../services/api-types'
 import { useChatStore } from '../stores/useChatStore'
 import { isScheduledChatHistorySession } from '../utils/chatHistoryOpenDisposition'
+import { chatHistoryWorkshopMode } from '../utils/chatHistoryWorkshopMode'
 import { type ScheduleActivityItem } from '../utils/scheduleRunPresentation'
 import { ScheduleRunCard } from './ScheduleRunCard'
 import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
@@ -137,11 +138,7 @@ export function chatHistoryUsesTerminalRestore(session: ChatHistorySession): boo
 export function chatHistoryWorkshopModeLabel(session: ChatHistorySession): string | undefined {
   const raw = (session.runtime?.workshop_mode || session.workshop_mode || '').trim().toLowerCase()
   if (!raw) return undefined
-  if (raw === 'optimizer') return 'Optimizer'
-  if (raw === 'builder') return 'Builder'
-  if (raw === 'run') return 'Run'
-  if (raw === 'reporting') return 'Reporting'
-  return raw.replace(/_/g, ' ')
+  return chatHistoryWorkshopMode(session) === 'run' ? 'Run' : 'Workshop'
 }
 
 const formatChatTime = (value?: string): string => {

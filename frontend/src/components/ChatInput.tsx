@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useShallow } from 'zustand/react/shallow'
 
 const DBG = '[skill-popup]'
-import { Send, Wand2, Loader2, Globe, Layers, X, History, Bot, Server, Download, Paperclip, CalendarClock, MessageSquare, Terminal, Plus, Play } from 'lucide-react'
+import { Send, Wand2, Loader2, Globe, Layers, X, History, Server, Download, Paperclip, Terminal, Plus, Play } from 'lucide-react'
 import { Button } from './ui/Button'
 import { Textarea } from './ui/Textarea'
 import FileContextDisplay from './FileContextDisplay'
@@ -15,18 +15,12 @@ import SkillSelectionDropdown from './skills/SkillSelectionDropdown'
 import FileSelectionDialog from './FileSelectionDialog'
 import CommandSelectionDialog from './CommandSelectionDialog'
 import { CommandEditorDialog } from './commands/CommandEditorDialog'
-import {
-  CHAT_HISTORY_CLEANUP_AGE_OPTIONS,
-  CleanupOldChatsDropdown,
-  type ChatHistoryCleanupAgeDays,
-} from './CleanupOldChatsDropdown'
 import { findCommand, findCommandAnyMode, loadAndRegisterUserCommands, type CommandContext, type CommandDefinition } from '../commands'
 import { commandsApi } from '../api/commands'
 import WorkflowSelectionDialog from './WorkflowSelectionDialog'
 import { isChatCompatiblePhase } from '../utils/chatSubmitHelpers'
 import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { useWorkflowManifestStore } from '../stores/useWorkflowManifestStore'
-import { startRestoredTransportTerminal } from '../utils/restoredTerminal'
 import { chromeCdpInstallCommand, chromeCdpLaunchCommand, chromeCdpVerifyCommand, chromeCdpZipUrl } from '../utils/cdpSetup'
 import { CHAT_TOOL_COMMAND_EVENT, chatToolCommandFromEvent } from '../utils/chatToolEvents'
 import { loadAgentProfileCapabilityEnabled, loadAgentProfileRuntime } from '../utils/agentProfileCapabilities'
@@ -114,12 +108,12 @@ const liveDeliveryPreview = (message: string) => {
 }
 
 import InlineSelectionPopup from './InlineSelectionPopup'
-import type { InlineSelectionFilterTab, InlineSelectionItem } from './InlineSelectionPopup'
+import type { InlineSelectionItem } from './InlineSelectionPopup'
 import SkillImportDialog from './skills/SkillImportDialog'
 import { MCPConfigPopup } from './MCPConfigPopup'
 import MCPDetailsModal from './MCPDetailsModal'
 import LLMConfigurationModal from './LLMConfigurationModal'
-import type { PlannerFile, LLMProvider, ChatHistorySession, TerminalSnapshot } from '../services/api-types'
+import type { PlannerFile, LLMProvider, TerminalSnapshot } from '../services/api-types'
 import type { LLMOption } from '../types/llm'
 import { useAppStore, useMCPStore, useLLMStore, useChatStore } from '../stores'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
@@ -129,7 +123,6 @@ import { useModeStore } from '../stores/useModeStore'
 import { agentApi } from '../services/api'
 import { skillsApi } from '../api/skills'
 import type { Skill } from '../types/skills'
-import { chatHistorySupportsNativeResume, chatHistoryUsesTerminalRestore } from './PreviousChatHistoryPanel'
 import { getClipboardImageFiles } from './clipboardImages'
 import { shouldUsePastedTextAttachment } from '../utils/chatPasteBehavior'
 import { isMainAgentTerminal } from '../utils/terminalIdentity'
@@ -139,117 +132,6 @@ const FALLBACK_CODING_AGENT_PROVIDERS = new Set(['claude-code', 'codex-cli', 'cu
 // Providers whose chat turns never have a tmux pane (server: codingAgentUsesStructuredTransport).
 const STRUCTURED_TRANSPORT_PROVIDERS = new Set(['cursor-cli'])
 const FALLBACK_LIVE_INPUT_PROVIDERS = new Set(['claude-code', 'codex-cli', 'cursor-cli', 'pi-cli'])
-
-const formatResumeChatTime = (value?: string): string => {
-  if (!value) return 'Unknown time'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return 'Unknown time'
-  return date.toLocaleString([], {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-const resumeChatTitle = (session: ChatHistorySession): string => {
-  const query = session.query?.replace(/\s+/g, ' ').trim()
-  if (query) return query.length > 140 ? `${query.slice(0, 140)}...` : query
-  return `${(session.agent_mode || 'chat').replace(/_/g, ' ')} ${session.session_id.slice(0, 8)}`
-}
-
-const resumeChatSnippet = (value?: string, maxLength = 120): string => {
-  const text = value?.replace(/\s+/g, ' ').trim() || ''
-  if (!text) return ''
-  return text.length > maxLength ? `${text.slice(0, maxLength).trim()}...` : text
-}
-
-const resumeLastUserPreviewLabel = (session: ChatHistorySession): string | undefined => {
-  const latestUser = [...(session.preview_messages || [])].reverse().find(message => {
-    const role = (message.role || '').toLowerCase().trim()
-    return (role === 'human' || role === 'user') && message.text?.trim()
-  })
-  const text = resumeChatSnippet(latestUser?.text)
-  if (!latestUser || !text || text === resumeChatSnippet(session.query)) return undefined
-  return `Last user: ${text}`
-}
-
-const resumeSessionHasMessages = (session: ChatHistorySession): boolean => {
-  return (session.message_count ?? 0) > 0 || (session.preview_messages?.length ?? 0) > 0 || !!session.query?.trim()
-}
-
-const resumeSessionOlderThanDays = (session: ChatHistorySession, days: number): boolean => {
-  const timestamp = Date.parse(session.updated_at || session.created_at || '')
-  if (Number.isNaN(timestamp)) return false
-  return timestamp < Date.now() - days * 24 * 60 * 60 * 1000
-}
-
-const resumeChatConversationPath = (session: ChatHistorySession): string => {
-  if (session.conversation_path) return session.conversation_path
-  const userId = session.user_id || 'default'
-  return `_users/${userId}/chat_history/${session.session_id}/conversation.json`
-}
-
-const resumeChatRuntimeLabel = (session: ChatHistorySession): string | undefined => {
-  const runtime = session.runtime
-  const provider = runtime?.provider?.trim()
-  if (!runtime || !provider) return undefined
-
-  const model = runtime.model_id?.trim()
-  if (model && model !== provider) return `${provider} · ${model}`
-  return provider
-}
-
-const resumeChatWorkshopModeLabel = (session: ChatHistorySession): string | undefined => {
-  const raw = (session.runtime?.workshop_mode || session.workshop_mode || '').trim().toLowerCase()
-  if (!raw) return undefined
-  // Map legacy builder/optimizer sessions to "Workshop" so the chat history
-  // panel doesn't show the old mode names. Sessions saved before the merge
-  // still load correctly server-side; this is purely a display concern.
-  if (raw === 'workshop' || raw === 'builder' || raw === 'optimizer') return 'Workshop'
-  if (raw === 'run') return 'Run'
-  if (raw === 'reporting') return 'Reporting'
-  return raw.replace(/_/g, ' ')
-}
-
-const resumeChatDetails = (session: ChatHistorySession): React.ReactNode | undefined => {
-  const messages = (session.preview_messages || [])
-    .filter(message => message.text?.trim())
-    .slice(-6)
-
-  if (messages.length === 0) return undefined
-
-  return (
-    <div className="space-y-2 rounded-md border border-border bg-background/80 p-2 text-xs text-foreground shadow-sm">
-      {messages.map((message, index) => {
-        const normalizedRole = message.role === 'ai' || message.role === 'assistant' ? 'Assistant' : 'User'
-        const roleClass = normalizedRole === 'Assistant'
-          ? 'text-emerald-600 dark:text-emerald-400'
-          : 'text-sky-600 dark:text-sky-400'
-
-        return (
-          <div key={`${session.session_id}-preview-${index}`} className="space-y-0.5">
-            <div className={`text-[10px] font-semibold uppercase tracking-wide ${roleClass}`}>
-              {normalizedRole}
-            </div>
-            <div className="line-clamp-3 whitespace-pre-wrap break-words text-muted-foreground">
-              {message.text}
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-type ResumeSessionKind = 'chat' | 'schedule' | 'bot'
-type ResumeFilter = ResumeSessionKind | 'all'
-
-const getResumeSessionKind = (session: ChatHistorySession): ResumeSessionKind => {
-  if (session.session_id.startsWith('schedule-cron--')) return 'schedule'
-  if (session.session_id.startsWith('bot-')) return 'bot'
-  return 'chat'
-}
 
 interface ChatInputProps {
   // Handlers (callbacks only)
@@ -1483,40 +1365,17 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const [commandDialogPosition, setCommandDialogPosition] = useState({ bottom: 0, left: 0 })
   const [commandSearchQuery, setCommandSearchQuery] = useState('')
   const [slashPosition, setSlashPosition] = useState(-1) // Position of / in text
-  const [showResumeDialog, setShowResumeDialog] = useState(false)
-  const [resumeDialogPosition, setResumeDialogPosition] = useState({ bottom: 0, left: 0 })
-  const [resumeSessions, setResumeSessions] = useState<ChatHistorySession[]>([])
-  const [resumeSessionsLoading, setResumeSessionsLoading] = useState(false)
-  const [resumeCleanupLoading, setResumeCleanupLoading] = useState(false)
-  const [resumeFilter, setResumeFilter] = useState<ResumeFilter>('chat')
-
-  const restoredResumeSession = useMemo(() => {
-    if (!restoredConversationPath) return undefined
-    return resumeSessions.find(session => resumeChatConversationPath(session) === restoredConversationPath)
-  }, [restoredConversationPath, resumeSessions])
 
   const restoredResumeTitle = useMemo(() => {
     if (tabConfig?.restoredConversationTitle?.trim()) return tabConfig.restoredConversationTitle.trim()
-    if (restoredResumeSession) return resumeChatTitle(restoredResumeSession)
     return restoredConversationPath.split('/').pop() || 'Previous chat'
-  }, [restoredConversationPath, restoredResumeSession, tabConfig?.restoredConversationTitle])
+  }, [restoredConversationPath, tabConfig?.restoredConversationTitle])
 
-  const restoredResumeRuntimeLabel = useMemo(() => {
-    if (tabConfig?.restoredConversationRuntimeLabel?.trim()) return tabConfig.restoredConversationRuntimeLabel.trim()
-    return restoredResumeSession ? resumeChatRuntimeLabel(restoredResumeSession) : undefined
-  }, [restoredResumeSession, tabConfig?.restoredConversationRuntimeLabel])
+  const restoredResumeRuntimeLabel = tabConfig?.restoredConversationRuntimeLabel?.trim() || undefined
 
-  const restoredResumeWorkshopModeLabel = useMemo(() => {
-    if (tabConfig?.restoredConversationWorkshopModeLabel?.trim()) return tabConfig.restoredConversationWorkshopModeLabel.trim()
-    return restoredResumeSession ? resumeChatWorkshopModeLabel(restoredResumeSession) : undefined
-  }, [restoredResumeSession, tabConfig?.restoredConversationWorkshopModeLabel])
+  const restoredResumeWorkshopModeLabel = tabConfig?.restoredConversationWorkshopModeLabel?.trim() || undefined
 
-  const restoredResumeUsesNative = useMemo(() => {
-    if (typeof tabConfig?.restoredConversationNativeResume === 'boolean') return tabConfig.restoredConversationNativeResume
-    return restoredResumeSession
-      ? chatHistoryUsesTerminalRestore(restoredResumeSession) || chatHistorySupportsNativeResume(restoredResumeSession)
-      : false
-  }, [restoredResumeSession, tabConfig?.restoredConversationNativeResume])
+  const restoredResumeUsesNative = tabConfig?.restoredConversationNativeResume === true
   const showRestoredConversationIndicator =
     !!restoredConversationPath && (!restoredResumeUsesNative || restoredConversationPending)
 
@@ -1562,92 +1421,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // Lazy-loaded data for inline popups
   const [allSkills, setAllSkills] = useState<Skill[]>([])
   const [skillsLoading, setSkillsLoading] = useState(false)
-
-  const openResumeDialog = useCallback(() => {
-    if (selectedModeCategory !== 'workflow' && selectedModeCategory !== 'multi-agent') {
-      addToast('/resume is only available in chat or automation', 'info')
-      return
-    }
-
-    const rect = textareaRef.current?.getBoundingClientRect()
-    setResumeDialogPosition({
-      bottom: rect ? window.innerHeight - rect.top + 8 : 96,
-      left: rect ? rect.left + window.scrollX : 24,
-    })
-    setShowCommandDialog(false)
-    setSlashPosition(-1)
-    setCommandSearchQuery('')
-    setResumeFilter('chat')
-    setShowResumeDialog(true)
-  }, [addToast, selectedModeCategory])
-
-  useEffect(() => {
-    if (!showResumeDialog) return
-    let cancelled = false
-    setResumeSessionsLoading(true)
-    agentApi.listChatHistorySessions(100, 0, activeWorkflowWorkspacePath)
-      .then(response => {
-        if (cancelled) return
-        const sessions = [...(response.sessions || [])].sort((a, b) =>
-          Date.parse(b.updated_at || b.created_at || '') - Date.parse(a.updated_at || a.created_at || '')
-        )
-        setResumeSessions(sessions)
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setResumeSessions([])
-          addToast('Failed to load previous chats', 'error')
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setResumeSessionsLoading(false)
-      })
-    return () => { cancelled = true }
-  }, [activeWorkflowWorkspacePath, addToast, showResumeDialog])
-
-  const oldResumeSessionCounts = useMemo(
-    () => CHAT_HISTORY_CLEANUP_AGE_OPTIONS.reduce((counts, days) => {
-      counts[days] = resumeSessions.filter(session => resumeSessionHasMessages(session) && resumeSessionOlderThanDays(session, days)).length
-      return counts
-    }, {} as Record<ChatHistoryCleanupAgeDays, number>),
-    [resumeSessions]
-  )
-  const hasOldResumeSessions = useMemo(
-    () => CHAT_HISTORY_CLEANUP_AGE_OPTIONS.some(days => oldResumeSessionCounts[days] > 0),
-    [oldResumeSessionCounts]
-  )
-
-  const handleResumeCleanupOldChats = useCallback(async (olderThanDays: ChatHistoryCleanupAgeDays) => {
-    const oldResumeSessionCount = oldResumeSessionCounts[olderThanDays]
-    if (oldResumeSessionCount === 0) {
-      addToast(`No conversations older than ${olderThanDays} days`, 'info')
-      return
-    }
-    const scopeLabel = activeWorkflowWorkspacePath || 'all chats'
-    const confirmed = window.confirm(`Delete ${oldResumeSessionCount} conversation${oldResumeSessionCount === 1 ? '' : 's'} older than ${olderThanDays} days from ${scopeLabel}? This cannot be undone.`)
-    if (!confirmed) return
-
-    setResumeCleanupLoading(true)
-    try {
-      const response = await agentApi.cleanupChatHistorySessions(olderThanDays, activeWorkflowWorkspacePath)
-      const deletedCount = response.result?.deleted_count ?? 0
-      addToast(
-        deletedCount === 0
-          ? `No conversations older than ${olderThanDays} days`
-          : `Deleted ${deletedCount} conversation${deletedCount === 1 ? '' : 's'} older than ${olderThanDays} days`,
-        'success'
-      )
-      const refreshed = await agentApi.listChatHistorySessions(100, 0, activeWorkflowWorkspacePath)
-      const sessions = [...(refreshed.sessions || [])].sort((a, b) =>
-        Date.parse(b.updated_at || b.created_at || '') - Date.parse(a.updated_at || a.created_at || '')
-      )
-      setResumeSessions(sessions)
-    } catch {
-      addToast('Failed to delete old conversations', 'error')
-    } finally {
-      setResumeCleanupLoading(false)
-    }
-  }, [activeWorkflowWorkspacePath, addToast, oldResumeSessionCounts])
 
   // Auto-resize textarea based on content
   const adjustTextareaHeight = useCallback(() => {
@@ -2513,7 +2286,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       onSubmit: queueAwareOnSubmit,
       setInputText,
       openDialog,
-      openResumeDialog,
       setTabConfig,
       addToast,
       handleSummarize,
@@ -2526,7 +2298,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       workshopMode: effectiveModes.workshopMode,
       workflowPhaseId
     }
-  }, [activeTabId, tabSessionId, tabConfig, isSummarizing, isStreaming, routeLiveInputToCLI, onSubmit, openDialog, openResumeDialog, setTabConfig, addToast, handleSummarize, handleCompact, getEffectiveWorkflowModes, selectedModeCategory, workflowPhaseId])
+  }, [activeTabId, tabSessionId, tabConfig, isSummarizing, isStreaming, routeLiveInputToCLI, onSubmit, openDialog, setTabConfig, addToast, handleSummarize, handleCompact, getEffectiveWorkflowModes, selectedModeCategory, workflowPhaseId])
 
   const getCommandValidationError = useCallback((cmd: CommandDefinition, beforeSlash: string) => {
     if (!cmd.validate) return null
@@ -2697,7 +2469,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // If any selection dialog is open, let it handle keyboard events
-    if (showCommandDialog || showFileDialog || showWorkflowDialog || showResumeDialog || showSkillPopup || showServerPopup) {
+    if (showCommandDialog || showFileDialog || showWorkflowDialog || showSkillPopup || showServerPopup) {
       // Prevent default for arrow keys, enter, escape so textarea doesn't move cursor
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape'].includes(e.key)) {
         e.preventDefault()
@@ -2760,7 +2532,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         textarea.selectionStart = textarea.selectionEnd = start + 1
       }, 0)
     }
-  }, [showFileDialog, showCommandDialog, showWorkflowDialog, showResumeDialog, showSkillPopup, showServerPopup, isStreaming, onStopStreaming, queryToSubmit, executeSlashCommandFromQuery, tabSessionId, routeSubmit, supportsLiveCodingAgentInput, sendLiveCodingAgentControlKey, inputText, setLocalInputText])
+  }, [showFileDialog, showCommandDialog, showWorkflowDialog, showSkillPopup, showServerPopup, isStreaming, onStopStreaming, queryToSubmit, executeSlashCommandFromQuery, tabSessionId, routeSubmit, supportsLiveCodingAgentInput, sendLiveCodingAgentControlKey, inputText, setLocalInputText])
 
   const handleSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault()
@@ -2962,60 +2734,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     setFileSearchQuery('')
     textareaRef.current?.focus()
   }, [])
-
-  const handleResumeDialogClose = useCallback(() => {
-    setShowResumeDialog(false)
-    textareaRef.current?.focus()
-  }, [])
-
-  const handleResumeChatSelect = useCallback((sessionId: string) => {
-    if (!activeTabId) return
-    const session = resumeSessions.find(item => item.session_id === sessionId)
-    if (!session) return
-
-    useChatStore.getState().updateTabSessionId(activeTabId, session.session_id)
-    const path = resumeChatConversationPath(session)
-    const useTerminalRestore = chatHistoryUsesTerminalRestore(session)
-    const useNativeResume = chatHistorySupportsNativeResume(session)
-    const existingContext = useChatStore.getState().getTabConfig(activeTabId)?.fileContext || chatFileContext
-    const shouldAttachFileFallback = !useTerminalRestore && !useNativeResume
-    const nextFileContext = shouldAttachFileFallback
-      ? existingContext.some((item: { path: string }) => item.path === path)
-        ? existingContext
-        : [
-            ...existingContext,
-            {
-              name: resumeChatTitle(session),
-              path,
-              type: 'file' as const,
-            },
-          ]
-      : existingContext.filter((item: { path: string }) => item.path !== path)
-
-    setTabConfig(activeTabId, {
-      fileContext: nextFileContext,
-      restoredConversationPath: path,
-      restoredConversationSummary: undefined,
-      restoredConversationTitle: resumeChatTitle(session),
-      restoredConversationWorkshopModeLabel: resumeChatWorkshopModeLabel(session),
-      restoredConversationRuntimeLabel: resumeChatRuntimeLabel(session),
-      restoredConversationNativeResume: useTerminalRestore || useNativeResume,
-    })
-    if (useTerminalRestore || useNativeResume) {
-      const latestStore = useChatStore.getState()
-      // Resume into the user-facing conversation. The terminal session is still
-      // restored below and remains available through the Raw toggle.
-      latestStore.setTabViewMode(activeTabId, 'formatted')
-      startRestoredTransportTerminal(
-        session.session_id,
-        path,
-        session.session_id,
-        workflowPhaseWorkspacePath,
-      )
-    }
-    setShowResumeDialog(false)
-    setTimeout(() => textareaRef.current?.focus(), 0)
-  }, [activeTabId, chatFileContext, resumeSessions, setTabConfig, workflowPhaseWorkspacePath])
 
   const handleWorkflowSelect = useCallback((workflow: { presetId: string; label: string; workspacePath: string }) => {
     if (!textareaRef.current || hashPosition === -1 || !activeTabId) return
@@ -3300,68 +3018,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       isSelected: manualSelectedServers.includes(name)
     }))
   , [availableServers, manualSelectedServers])
-
-  const resumeKindCounts = useMemo(() => {
-    return resumeSessions.reduce<Record<ResumeSessionKind, number>>((counts, session) => {
-      counts[getResumeSessionKind(session)] += 1
-      return counts
-    }, { chat: 0, schedule: 0, bot: 0 })
-  }, [resumeSessions])
-
-  const resumeFilterTabs: InlineSelectionFilterTab[] = useMemo(() => [
-    { id: 'chat', label: 'Chats', count: resumeKindCounts.chat, icon: <MessageSquare className="h-3.5 w-3.5" /> },
-    { id: 'schedule', label: 'Schedules', count: resumeKindCounts.schedule, icon: <CalendarClock className="h-3.5 w-3.5" /> },
-    { id: 'bot', label: 'Bots', count: resumeKindCounts.bot, icon: <Bot className="h-3.5 w-3.5" /> },
-    { id: 'all', label: 'All', count: resumeSessions.length, icon: <History className="h-3.5 w-3.5" /> },
-  ], [resumeKindCounts, resumeSessions.length])
-
-  const resumeFooterSummary = useMemo(() => {
-    return `${resumeKindCounts.chat} chats · ${resumeKindCounts.schedule} schedules · ${resumeKindCounts.bot} bots`
-  }, [resumeKindCounts])
-
-  const resumeChatItems: InlineSelectionItem[] = useMemo(() => {
-    const contextPaths = new Set([
-      ...chatFileContext.map(item => item.path),
-      restoredConversationPath,
-    ].filter(Boolean))
-    const visibleSessions = resumeFilter === 'all'
-      ? resumeSessions
-      : resumeSessions.filter(session => getResumeSessionKind(session) === resumeFilter)
-
-    return visibleSessions.map(session => {
-      const path = resumeChatConversationPath(session)
-      const kind = getResumeSessionKind(session)
-      const botProvider = kind === 'bot' ? session.session_id.match(/^bot-([^-]+)--/)?.[1] : undefined
-      const runtimeLabel = resumeChatRuntimeLabel(session)
-      const workshopModeLabel = resumeChatWorkshopModeLabel(session)
-      const mode = botProvider || (session.agent_mode || 'chat').replace(/_/g, ' ')
-      const messageCount = session.message_count ?? 0
-      const countLabel = messageCount > 0 ? `${messageCount} message${messageCount === 1 ? '' : 's'}` : 'conversation'
-      const lastUserLabel = resumeLastUserPreviewLabel(session)
-      const leadingIcon =
-        kind === 'schedule'
-          ? <CalendarClock className="h-4 w-4 text-amber-500" />
-          : kind === 'bot'
-            ? <Bot className="h-4 w-4 text-violet-500" />
-            : <MessageSquare className="h-4 w-4 text-sky-500" />
-      return {
-        id: session.session_id,
-        name: resumeChatTitle(session),
-        description: [
-          lastUserLabel,
-          formatResumeChatTime(session.updated_at || session.created_at),
-          mode,
-          workshopModeLabel,
-          runtimeLabel,
-          countLabel,
-        ].filter(Boolean).join(' · '),
-        isSelected: contextPaths.has(path),
-        leadingIcon,
-        badge: runtimeLabel ? (session.runtime?.kind === 'coding_agent' ? 'coding' : 'llm') : kind === 'schedule' ? 'scheduled' : kind === 'bot' ? 'bot' : undefined,
-        details: resumeChatDetails(session),
-      }
-    })
-  }, [chatFileContext, restoredConversationPath, resumeFilter, resumeSessions])
 
   // When user presses → on a folder in the file dialog, set search context to that folder (input after @ becomes folder path)
   const handleNavigateIntoFolder = useCallback((folderPath: string) => {
@@ -4324,34 +3980,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
           onEditCommand: handleEditCommand,
           onDeleteCommand: handleDeleteCommand,
         })}
-      />
-
-      <InlineSelectionPopup
-        isOpen={showResumeDialog}
-        onClose={handleResumeDialogClose}
-        onToggleItem={handleResumeChatSelect}
-        items={resumeChatItems}
-        searchQuery=""
-        position={resumeDialogPosition}
-        title="Attach Previous Context"
-        icon={<History className="w-4 h-4 text-muted-foreground" />}
-        emptyMessage="No previous context found"
-        isLoading={resumeSessionsLoading}
-        filterTabs={resumeFilterTabs}
-        activeFilterId={resumeFilter}
-        onFilterChange={id => setResumeFilter(id as ResumeFilter)}
-        footerSummary={resumeFooterSummary}
-        footerActions={hasOldResumeSessions ? (
-          <CleanupOldChatsDropdown
-            counts={oldResumeSessionCounts}
-            isLoading={resumeCleanupLoading || resumeSessionsLoading}
-            onSelect={handleResumeCleanupOldChats}
-            className="h-auto border-0 px-2 py-1 text-[11px] text-red-600 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950/40 dark:hover:text-red-300"
-          />
-        ) : undefined}
-        searchPlaceholder="Search previous context..."
-        widthClassName="w-[min(720px,calc(100vw-32px))] max-w-[720px]"
-        enterHint="Enter to attach"
       />
 
       {/* Command Editor Dialog */}

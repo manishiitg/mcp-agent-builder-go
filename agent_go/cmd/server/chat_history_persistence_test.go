@@ -2098,6 +2098,45 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationRejectsWorkshopModeMismat
 	}
 }
 
+func TestChatHistoryResumeModesCompatible(t *testing.T) {
+	tests := []struct {
+		name       string
+		restored   string
+		current    string
+		compatible bool
+	}{
+		{name: "run resumes run", restored: "run", current: "run", compatible: true},
+		{name: "workshop resumes workshop", restored: "builder", current: "workshop", compatible: true},
+		{name: "run rejects workshop", restored: "workshop", current: "run", compatible: false},
+		{name: "workshop rejects run", restored: "run", current: "workshop", compatible: false},
+		{name: "legacy defaults to workshop", restored: "", current: "workshop", compatible: true},
+		{name: "legacy cannot enter run", restored: "", current: "run", compatible: false},
+		{name: "products have no workflow boundary", restored: "run", current: "", compatible: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := chatHistoryResumeModesCompatible(tt.restored, tt.current); got != tt.compatible {
+				t.Fatalf("chatHistoryResumeModesCompatible(%q, %q) = %v, want %v", tt.restored, tt.current, got, tt.compatible)
+			}
+		})
+	}
+}
+
+func TestSeedCodingAgentRuntimeFromRestoredConversationRejectsLegacyModeForRun(t *testing.T) {
+	api := &StreamingAPI{}
+	agent := &mcpagent.Agent{}
+	runtime := &ChatHistoryAgentRuntime{
+		Kind:              "coding_agent",
+		Provider:          "claude-code",
+		ExternalSessionID: "legacy-claude-session",
+		ResumeSupported:   true,
+	}
+
+	if api.seedCodingAgentRuntimeFromRestoredConversation("new-run-session", "claude-code", "run", runtime, agent) {
+		t.Fatal("legacy mode-less conversation must not native-resume into Run mode")
+	}
+}
+
 func TestRestorePersistedConversationHistoryHydratesStableProjectSession(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
@@ -2126,10 +2165,10 @@ func TestRestorePersistedConversationHistoryHydratesStableProjectSession(t *test
 	}
 
 	api := &StreamingAPI{}
-	if !api.restorePersistedConversationHistory(sessionID, "default", "") {
+	if !api.restorePersistedConversationHistory(sessionID, "default", "", "") {
 		t.Fatal("expected durable project transcript to restore into the empty cache")
 	}
-	if api.restorePersistedConversationHistory(sessionID, "default", "") {
+	if api.restorePersistedConversationHistory(sessionID, "default", "", "") {
 		t.Fatal("second restore must not replace the warm in-memory transcript")
 	}
 	api.conversationMux.RLock()
@@ -2140,6 +2179,50 @@ func TestRestorePersistedConversationHistoryHydratesStableProjectSession(t *test
 	}
 	if target, ok := api.rememberedRestoredConversationPersistTarget(sessionID); !ok || target.ConversationPath == "" {
 		t.Fatal("expected recovered session to keep its original persistence target")
+	}
+}
+
+func TestRestorePersistedConversationHistoryRejectsWorkshopHistoryForRun(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	sessionID := "legacy-workshop-chat"
+	workspacePath := "Workflow/example"
+	dateDir := filepath.Join(root, "Workflow", "example", "builder", "conversation", time.Now().Format("2006-01-02"))
+	if err := os.MkdirAll(dateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	conversationPath := filepath.Join(dateDir, chatHistoryConversationFileName(sessionID))
+	conversation := `{
+  "session_id": "legacy-workshop-chat",
+  "workshop_mode": "workshop",
+  "conversation_history": [
+    {"Role": "human", "Parts": [{"Text": "change the workflow"}]},
+    {"Role": "ai", "Parts": [{"Text": "I will edit the plan."}]}
+  ],
+  "runtime": {
+    "kind": "coding_agent",
+    "provider": "claude-code",
+    "external_session_id": "workshop-native-session",
+    "resume_supported": true,
+    "workshop_mode": "workshop"
+  }
+}`
+	if err := os.WriteFile(conversationPath, []byte(conversation), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	api := &StreamingAPI{}
+	if api.restorePersistedConversationHistory(sessionID, "default", workspacePath, "run") {
+		t.Fatal("Workshop transcript must not replay into Run mode")
+	}
+	api.conversationMux.RLock()
+	_, restored := api.conversationHistory[sessionID]
+	api.conversationMux.RUnlock()
+	if restored {
+		t.Fatal("Workshop transcript was loaded into the Run session cache")
+	}
+	if !api.restorePersistedConversationHistory(sessionID, "default", workspacePath, "workshop") {
+		t.Fatal("same-mode Workshop transcript should restore")
 	}
 }
 

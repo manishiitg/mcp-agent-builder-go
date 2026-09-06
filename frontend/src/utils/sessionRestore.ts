@@ -49,7 +49,7 @@ function applySessionStatus(tabId: string, state: RuntimeSessionState): void {
 
 /**
  * Unified session restoration function.
- * Handles all restore flows: auto-restore, page-refresh hydration, sidebar click, resume dialog.
+ * Handles all restore flows: auto-restore, page-refresh hydration, and inline history selection.
  *
  * Returns the tabId for the restored session.
  */

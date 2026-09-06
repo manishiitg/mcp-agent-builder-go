@@ -6251,6 +6251,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				sessionID,
 				currentUserID,
 				workflowPhaseFolder,
+				newWorkshopMode,
 			)
 		}
 
@@ -7154,9 +7155,10 @@ func (api *StreamingAPI) seedCodingAgentRuntimeFromCurrentConversation(sessionID
 // restorePersistedConversationHistory hydrates the process-local UI cache for a
 // stable project session after a server restart. The transcript is authoritative
 // for what the user sees, while a coding provider's native session handle is
-// authoritative for agent context. Callers must never treat this return value as
+// authoritative for agent context. Workflow history is restored only into its
+// original Workshop/Run boundary. Callers must never treat this return value as
 // a reason to suppress a compatible native resume.
-func (api *StreamingAPI) restorePersistedConversationHistory(sessionID, userID, workspacePath string) bool {
+func (api *StreamingAPI) restorePersistedConversationHistory(sessionID, userID, workspacePath, currentWorkshopMode string) bool {
 	if api == nil || strings.TrimSpace(sessionID) == "" {
 		return false
 	}
@@ -7174,6 +7176,14 @@ func (api *StreamingAPI) restorePersistedConversationHistory(sessionID, userID, 
 		return false
 	}
 	if !ok || target == nil || len(target.History) == 0 {
+		return false
+	}
+	restoredMode := target.WorkshopMode
+	if target.Runtime != nil {
+		restoredMode = firstNonEmptyTrimmed(target.Runtime.WorkshopMode, restoredMode)
+	}
+	if !chatHistoryResumeModesCompatible(restoredMode, currentWorkshopMode) {
+		log.Printf("[CHAT_HISTORY] Skipping durable conversation replay for session %s: restored mode=%s current mode=%s", sessionID, normalizeChatHistoryWorkshopMode(restoredMode), normalizeChatHistoryWorkshopMode(currentWorkshopMode))
 		return false
 	}
 
@@ -7894,10 +7904,8 @@ func (api *StreamingAPI) seedCodingAgentRuntimeFromRestoredConversation(sessionI
 	if provider == "" || (currentProvider != "" && provider != currentProvider) {
 		return false
 	}
-	runtimeWorkshopMode := normalizeChatHistoryWorkshopMode(runtime.WorkshopMode)
-	currentWorkshopMode = normalizeChatHistoryWorkshopMode(currentWorkshopMode)
-	if runtimeWorkshopMode != "" && currentWorkshopMode != "" && runtimeWorkshopMode != currentWorkshopMode {
-		log.Printf("[CHAT_HISTORY] Skipping native coding-agent resume for session %s: restored mode=%s current mode=%s", sessionID, runtimeWorkshopMode, currentWorkshopMode)
+	if !chatHistoryResumeModesCompatible(runtime.WorkshopMode, currentWorkshopMode) {
+		log.Printf("[CHAT_HISTORY] Skipping native coding-agent resume for session %s: restored mode=%s current mode=%s", sessionID, normalizeChatHistoryWorkshopMode(runtime.WorkshopMode), normalizeChatHistoryWorkshopMode(currentWorkshopMode))
 		return false
 	}
 	externalSessionID := strings.TrimSpace(runtime.ExternalSessionID)

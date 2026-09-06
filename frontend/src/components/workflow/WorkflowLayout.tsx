@@ -35,6 +35,7 @@ import {
   chatHistoryWorkshopModeLabel,
 } from '../PreviousChatHistoryPanel'
 import { chatHistoryOpenDisposition } from '../../utils/chatHistoryOpenDisposition'
+import { chatHistoryWorkshopMode } from '../../utils/chatHistoryWorkshopMode'
 import {
   REPORT_PREVIEW_PREFERENCE_CHANGED_EVENT,
   readReportPreviewPreference,
@@ -174,6 +175,7 @@ function applyRestoredWorkflowConversationConfig(tabId: string, session: ChatHis
     restoredConversationRuntimeLabel: chatHistoryRuntimeLabel(session),
     restoredConversationNativeResume: useTerminalRestore || useNativeResume,
   })
+  chatStore.setTabMetadata(tabId, { workshopMode: chatHistoryWorkshopMode(session) })
 }
 
 function isRunningWorkflowEntry(entry: RunningWorkflowInfo): boolean {
@@ -279,6 +281,7 @@ const WorkflowPreviousChatsPanel: React.FC<{
   ) => {
     let targetTabId = startingTabId
     const chatStore = useChatStore.getState()
+    const restoredWorkshopMode = chatHistoryWorkshopMode(session)
     let targetTab = chatStore.chatTabs[targetTabId]
     const targetPresetId = targetTab?.metadata?.presetQueryId
 
@@ -301,7 +304,7 @@ const WorkflowPreviousChatsPanel: React.FC<{
         presetQueryId: activePresetId || '',
         sessionId: session.session_id,
         name: 'Automation Builder',
-        metadata: { mode: 'workflow', phaseId: 'workflow-builder', phaseName: 'Automation Builder', presetQueryId: activePresetId || undefined },
+        metadata: { mode: 'workflow', phaseId: 'workflow-builder', phaseName: 'Automation Builder', presetQueryId: activePresetId || undefined, workshopMode: restoredWorkshopMode },
         createChatTab: latestStore.createChatTab,
         updateTabSessionId: latestStore.updateTabSessionId,
       })).tabId
@@ -320,6 +323,7 @@ const WorkflowPreviousChatsPanel: React.FC<{
         presetQueryId: activePresetId,
       })
     }
+    chatStore.setTabMetadata(targetTabId, { workshopMode: restoredWorkshopMode })
 
     if (targetTab?.sessionId !== session.session_id && targetTab?.sessionId) {
       chatStore.resetTabChat(targetTabId)

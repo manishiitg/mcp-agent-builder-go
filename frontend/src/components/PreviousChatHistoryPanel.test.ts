@@ -3,6 +3,7 @@ import type { ChatHistorySession, ScheduledJob, ScheduledJobRun } from '../servi
 import { chatHistoryOpenDisposition } from '../utils/chatHistoryOpenDisposition'
 import { isProviderTranscriptArtifact } from '../utils/restoredConversationFilter'
 import { scheduleRunSlotLabel } from '../utils/scheduleRunSlot'
+import { chatHistoryWorkshopMode } from '../utils/chatHistoryWorkshopMode'
 
 function session(overrides: Partial<ChatHistorySession>): ChatHistorySession {
   return {
@@ -34,6 +35,25 @@ describe('chatHistoryOpenDisposition', () => {
         resume_supported: true,
       },
     }))).toBe('interactive-transport')
+  })
+})
+
+describe('chat history workshop mode', () => {
+  it('pins a saved Run chat to Run mode', () => {
+    const runSession = session({
+      workshop_mode: 'workshop',
+      runtime: {
+        kind: 'coding_agent',
+        resume_supported: true,
+        workshop_mode: 'run',
+      },
+    })
+    expect(chatHistoryWorkshopMode(runSession)).toBe('run')
+  })
+
+  it('treats mode-less legacy chats as Workshop', () => {
+    const legacySession = session({})
+    expect(chatHistoryWorkshopMode(legacySession)).toBe('workshop')
   })
 })
 

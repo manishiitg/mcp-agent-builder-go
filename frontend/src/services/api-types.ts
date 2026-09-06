@@ -152,7 +152,7 @@ export interface AgentQueryRequest {
   selected_global_secrets?: string[]
   // Workspace paths of workflows to inject context for (via # selector in chat)
   workflow_context_paths?: string[]
-  // Conversation JSON selected from /resume or a previous chat panel. The backend
+  // Conversation JSON selected from a previous chat panel. The backend
   // can use its runtime metadata for native coding-agent resume.
   restored_conversation_path?: string
   // Auto-notification flag: when true, this is a background agent completion notification,
