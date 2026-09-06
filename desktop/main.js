@@ -1282,6 +1282,12 @@ function spawnAgent(userDataPath) {
     // in spawnWorkspace().
     const env = {
       ...process.env,
+      // Keep workflow coding-CLI projections stable across app/server restarts
+      // and separate from workspace documents. The Go server also has a safe
+      // per-user fallback for direct launches, but Desktop owns a more precise
+      // application data root and should pass it explicitly.
+      RUNLOOP_USER_DATA_DIR: userDataPath,
+      AGENTWORKS_STATE_ROOT: process.env.AGENTWORKS_STATE_ROOT || path.join(userDataPath, 'state'),
       WORKSPACE_API_URL: `http://127.0.0.1:${dynamicWorkspacePort}`,
       WORKSPACE_DOCS_PATH: docsDir,
       DOCS_DIR: docsDir,

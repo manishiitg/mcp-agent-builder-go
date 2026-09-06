@@ -1798,6 +1798,9 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationRestoresClaude(t *testing
 }
 
 func TestSeedCodingAgentRuntimeFromCurrentConversationRestoresClaude(t *testing.T) {
+	// This exercises the generic native-resume mechanism with a deliberately
+	// empty agent handle. Workflow isolation has its own directory-aware tests.
+	t.Setenv("AGENTWORKS_ISOLATE_WORKFLOW_CLI", "false")
 	root := t.TempDir()
 	t.Setenv("WORKSPACE_DOCS_PATH", root)
 
@@ -1891,6 +1894,8 @@ func TestCodingAgentHasNativeResumeRejectsHandleWithoutNativeID(t *testing.T) {
 }
 
 func TestSeedCodingAgentRuntimeFromRestoredConversationRestoresCodex(t *testing.T) {
+	// This exercises generic handle restoration, not workflow isolation.
+	t.Setenv("AGENTWORKS_ISOLATE_WORKFLOW_CLI", "false")
 	api := &StreamingAPI{}
 	agent := &mcpagent.Agent{}
 	runtime := &ChatHistoryAgentRuntime{
@@ -1915,6 +1920,8 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationRestoresCodex(t *testing.
 }
 
 func TestSeedCodingAgentRuntimeFromRestoredConversationRestoresPi(t *testing.T) {
+	// This exercises generic handle restoration, not workflow isolation.
+	t.Setenv("AGENTWORKS_ISOLATE_WORKFLOW_CLI", "false")
 	api := &StreamingAPI{}
 	agent := &mcpagent.Agent{}
 	runtime := &ChatHistoryAgentRuntime{
@@ -2015,6 +2022,9 @@ func TestSeedCodingAgentRuntimeFromRestoredConversationSkipsEmptySystemPrompt(t 
 }
 
 func TestSeedCodingAgentRuntimeFromRestoredConversationAppliesAgentSessionHandle(t *testing.T) {
+	// This verifies typed handle restoration independently of the workflow
+	// directory boundary, which has dedicated same-directory coverage.
+	t.Setenv("AGENTWORKS_ISOLATE_WORKFLOW_CLI", "false")
 	api := &StreamingAPI{}
 	agent := &mcpagent.Agent{}
 	runtime := &ChatHistoryAgentRuntime{

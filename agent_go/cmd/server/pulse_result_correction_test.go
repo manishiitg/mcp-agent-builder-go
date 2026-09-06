@@ -122,7 +122,10 @@ func TestPulseParentCannotFailReviewWhileChildRuns(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := lifecycleTestAPI()
-			api.trackedWorkflowExecutions["root"] = &TrackedWorkflowExecution{ExecutionID: "root", SessionID: "parent", Source: trackedExecutionSourceConversationTurn, Status: trackedExecutionStatusRunning, StartedAt: time.Now()}
+			// Keep the original turn observably older than the synthetic completion
+			// turn. Equal clock ticks make currentConversationTurnExecutionID's map
+			// iteration order decide which turn is current and make this test flaky.
+			api.trackedWorkflowExecutions["root"] = &TrackedWorkflowExecution{ExecutionID: "root", SessionID: "parent", Source: trackedExecutionSourceConversationTurn, Status: trackedExecutionStatusRunning, StartedAt: time.Now().Add(-time.Second)}
 			api.trackedWorkflowExecutions["child"] = &TrackedWorkflowExecution{ExecutionID: "child", SessionID: "parent", Status: tc.childStatus, Metadata: map[string]string{"parent_execution_id": tc.childParent}}
 			if strings.HasPrefix(tc.name, "notification") {
 				api.trackSyntheticConversationTurnStart("notification", "parent", "root", "Handle completion")

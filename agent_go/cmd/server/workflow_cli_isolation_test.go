@@ -77,8 +77,13 @@ func TestWorkflowCLIIsolationSelectionAndResume(t *testing.T) {
 		t.Fatal("read-only identity was not pinned to run")
 	}
 	t.Setenv("AGENTWORKS_STATE_ROOT", "")
-	if _, err := workflowCLIWorkingDir("Workflow/testing", "owner", "chat-a", "codex-cli", "workshop"); err == nil {
-		t.Fatal("missing state root fell back to shared cwd")
+	t.Setenv("RUNLOOP_USER_DATA_DIR", filepath.Join(root, "ordinary-user-data"))
+	defaulted, err := workflowCLIWorkingDir("Workflow/testing", "owner", "chat-a", "codex-cli", "workshop")
+	if err != nil {
+		t.Fatalf("missing explicit state root did not use durable application default: %v", err)
+	}
+	if defaulted == codingAgentWorkspaceWorkingDir("Workflow/testing") {
+		t.Fatal("missing explicit state root fell back to shared cwd")
 	}
 	t.Setenv("AGENTWORKS_ISOLATE_WORKFLOW_CLI", "false")
 	if get("owner", "chat-a", "codex-cli", "workshop") != codingAgentWorkspaceWorkingDir("Workflow/testing") {
@@ -94,6 +99,38 @@ func TestWorkflowCLIIsolationDefaultsOnWithExplicitRollback(t *testing.T) {
 	t.Setenv("AGENTWORKS_ISOLATE_WORKFLOW_CLI", "false")
 	if workflowCLIIsolationEnabled() {
 		t.Fatal("explicit rollback did not disable workflow CLI isolation")
+	}
+}
+
+func TestWorkflowCLIStateRootSurvivesOrdinaryRestartWithoutExplicitOverride(t *testing.T) {
+	t.Setenv("AGENTWORKS_STATE_ROOT", "")
+	userData := filepath.Join(t.TempDir(), "user-data")
+	t.Setenv("RUNLOOP_USER_DATA_DIR", userData)
+
+	first, err := workflowCLIStateRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := workflowCLIStateRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(userData, "state")
+	if first != want || second != want {
+		t.Fatalf("state root changed across restart: first=%q second=%q want=%q", first, second, want)
+	}
+}
+
+func TestWorkflowCLIStateRootRejectsRelativeLauncherConfiguration(t *testing.T) {
+	t.Setenv("AGENTWORKS_STATE_ROOT", "relative-state")
+	if _, err := workflowCLIStateRoot(); err == nil {
+		t.Fatal("relative AGENTWORKS_STATE_ROOT was accepted")
+	}
+
+	t.Setenv("AGENTWORKS_STATE_ROOT", "")
+	t.Setenv("RUNLOOP_USER_DATA_DIR", "relative-user-data")
+	if _, err := workflowCLIStateRoot(); err == nil {
+		t.Fatal("relative RUNLOOP_USER_DATA_DIR was accepted")
 	}
 }
 
