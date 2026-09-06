@@ -609,6 +609,54 @@ export type TranscriptItem =
   /** Consecutive conversation_thinking events: one collapsible block, like tools. */
   | { kind: 'thinking'; key: string; events: PollingEvent[]; text: string }
 
+const TURN_FAILURE_EVENT_TYPES = new Set(['llm_generation_error', 'conversation_error', 'agent_error', 'context_cancelled'])
+
+/**
+ * turnFailureText returns the error a transcript event carries for the turn,
+ * or '' when it is not a failure. A failed turn is reported by up to three
+ * protocol events in a row (llm_generation_error, conversation_error, then a
+ * unified_completion whose status is error) that all carry the same text.
+ */
+export function turnFailureText(event: PollingEvent): string {
+  const envelope = event.data as Record<string, unknown> | undefined
+  const inner = envelope?.data as Record<string, unknown> | undefined
+  const payload = inner && typeof inner === 'object' ? inner : (envelope ?? {})
+  const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
+  const type = event.type || ''
+  if (TURN_FAILURE_EVENT_TYPES.has(type)) {
+    return str(payload.error) || str(payload.message) || str(payload.content)
+  }
+  if (type === 'unified_completion') {
+    const error = str(payload.error)
+    if (error) return error
+    if (str(payload.status).toLowerCase() === 'error') return str(payload.final_result) || str(payload.content)
+  }
+  return ''
+}
+
+/**
+ * collapseTurnFailures keeps one failure per turn — the last one the server
+ * sent — so the reader sees a single explanation instead of the same error
+ * three times. A turn is the stretch between user messages.
+ */
+export function collapseTurnFailures(items: TranscriptItem[]): TranscriptItem[] {
+  const out: TranscriptItem[] = []
+  let lastFailureIndex = -1
+  for (const item of items) {
+    if (item.kind === 'event' && item.event.type === 'user_message') {
+      lastFailureIndex = -1
+      out.push(item)
+      continue
+    }
+    if (item.kind === 'event' && turnFailureText(item.event)) {
+      if (lastFailureIndex >= 0) out.splice(lastFailureIndex, 1)
+      lastFailureIndex = out.length
+    }
+    out.push(item)
+  }
+  return out
+}
+
 function transcriptThinkingText(event: PollingEvent): string {
   const envelope = event.data as Record<string, unknown> | undefined
   const inner = envelope?.data as Record<string, unknown> | undefined

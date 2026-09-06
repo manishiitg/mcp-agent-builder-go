@@ -3,8 +3,11 @@ import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, XCircle } from 'lucide-react'
 import { EventDispatcher } from './events/EventDispatcher'
 import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
+import { normalizeProductChatFailure } from '../platform/chat/productChatFailure'
 import {
   buildTranscriptItems,
+  collapseTurnFailures,
+  turnFailureText,
   internalTranscriptMessageTitle,
   isExecutionPromptTranscriptMessage,
   isInternalTranscriptMessage,
@@ -160,6 +163,14 @@ const TranscriptEvent: React.FC<{
 
   const run = runActivity(event)
   if (run) return <RunActivityEvent {...run} timestamp={timestamp} />
+
+  // A failed turn: one card, in plain words, with the raw error behind a
+  // disclosure. collapseTurnFailures already reduced the server's three
+  // failure events to the last one.
+  const failureText = turnFailureText(event)
+  if (failureText) {
+    return <TurnFailureMessage failure={normalizeProductChatFailure(failureText, failureHints(payload))} timestamp={timestamp} />
+  }
 
   const presentation = presentationActivity(event)
   if (presentation) {
@@ -339,6 +350,49 @@ const AssistantTranscriptMessage: React.FC<{ event: PollingEvent; content: strin
       {framed && <AssistantTurnHeader event={event} timestamp={timestamp} label={label} icon={icon} />}
       <div className="[&_li]:!text-[length:calc(14px*var(--chat-scale,1))] [&_p]:!text-[length:calc(14px*var(--chat-scale,1))] [&_li]:!leading-[calc(24px*var(--chat-scale,1))] [&_p]:!leading-[calc(24px*var(--chat-scale,1))]">
         <ConversationMarkdownRenderer content={content} framed={false} maxHeight="none" />
+      </div>
+    </article>
+  )
+}
+
+function failureHints(payload: Record<string, unknown>): { code?: unknown; provider?: unknown; retryAt?: unknown } {
+  const metadata = payload.metadata && typeof payload.metadata === 'object' ? payload.metadata as Record<string, unknown> : {}
+  return {
+    code: payload.code ?? payload.error_kind ?? payload.kind ?? metadata.code ?? metadata.error_kind,
+    provider: payload.provider ?? metadata.provider,
+    retryAt: payload.retry_at ?? payload.retryAt ?? metadata.retry_at ?? metadata.retryAt,
+  }
+}
+
+const TurnFailureMessage: React.FC<{ failure: ReturnType<typeof normalizeProductChatFailure>; timestamp: string }> = ({ failure, timestamp }) => {
+  const [open, setOpen] = useState(false)
+  return (
+    <article data-testid="terminal-clear-turn-failure" className="my-3 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3">
+      <div className="flex items-start gap-2">
+        <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[length:calc(13px*var(--chat-scale,1))] font-semibold text-foreground">{failure.title}</span>
+            {timestamp && <span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground">{timestamp}</span>}
+          </div>
+          <p className="mt-1 text-[length:calc(13px*var(--chat-scale,1))] leading-relaxed text-muted-foreground">{failure.message}</p>
+          {failure.technicalDetails && (
+            <>
+              <button
+                type="button"
+                onClick={() => setOpen(value => !value)}
+                aria-expanded={open}
+                className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                Technical details
+              </button>
+              {open && (
+                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/60 p-3 text-[11px] leading-snug text-muted-foreground">{failure.technicalDetails}</pre>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </article>
   )
@@ -658,7 +712,7 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     [events, terminal, siblingTerminals, keepInteractionKinds],
   )
   const items = useMemo<TranscriptRenderItem[]>(
-    () => removeAdjacentDuplicateAssistantResponses(buildTranscriptItems(scoped)),
+    () => removeAdjacentDuplicateAssistantResponses(collapseTurnFailures(buildTranscriptItems(scoped))),
     [scoped],
   )
   const latestUserMessageKey = useMemo(() => {
