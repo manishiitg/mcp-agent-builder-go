@@ -65,7 +65,8 @@
     "files": [
       "main.js",
       "preload.js",
-      "updater.js"
+      "updater.js",
+      "lib/agentEnv.js"
     ]
   }
 }
