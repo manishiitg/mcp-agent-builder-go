@@ -433,7 +433,7 @@
    (cross-axis stretch), which would center the goal popover under empty
    space instead of under the pill. */
 .fl-child-assignment-wrap { position: relative; align-self: flex-start; flex: 0 1 auto; min-width: 0; max-width: 100%; }
-.fl-child-assignment-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; padding: 6px 13px; border: 0; border-radius: 999px; background: #fff7e6; border: 1px solid #f2e2bd; color: #8a6d1f; font: inherit; font-weight: 700; font-size: var(--text-caption); cursor: pointer; transition: background .12s ease, border-color .12s ease, box-shadow .12s ease; }
+.fl-child-assignment-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; padding: 4px 11px; border: 0; border-radius: 999px; background: #fff7e6; border: 1px solid #f2e2bd; color: #8a6d1f; font: inherit; font-weight: 700; font-size: var(--text-caption); cursor: pointer; transition: background .12s ease, border-color .12s ease, box-shadow .12s ease; }
 .fl-child-assignment-pill:hover { background: #fdecc4; border-color: #e8cf94; box-shadow: 0 2px 8px rgba(138, 109, 31, .12); }
 .fl-child-assignment-pill:disabled { cursor: default; }
 .fl-child-assignment-pill:disabled:hover { background: #fff7e6; border-color: #f2e2bd; box-shadow: none; }
@@ -448,7 +448,11 @@
 }
 .fl-child-assignment-pill svg:last-child { flex: 0 0 auto; transition: transform .15s ease; }
 .fl-child-assignment-pill svg.is-open { transform: rotate(180deg); }
-.fl-child-goal-popover { position: absolute; top: calc(100% + 10px); left: 50%; transform: translateX(-50%); z-index: 30; width: min(360px, 82vw); padding: 14px 16px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 14px 34px rgba(13, 35, 76, .18); text-align: left; }
+/* Anchored to the pill's own left edge, not centered on it — centering pushed
+   both edges off-screen in a narrow window (the pill sits near the header's
+   left edge, so translateX(-50%) on a 360px box had nowhere to go but past
+   the right boundary too, clipping the text on both sides at once). */
+.fl-child-goal-popover { position: absolute; top: calc(100% + 10px); left: 0; z-index: 30; width: min(360px, calc(100vw - 32px)); max-width: calc(100vw - 32px); padding: 14px 16px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 14px 34px rgba(13, 35, 76, .18); text-align: left; }
 .fl-child-goal-popover p { margin: 0 0 12px; font-size: var(--text-secondary); line-height: 1.5; color: var(--heading); }
 .fl-child-goal-popover p:last-child { margin-bottom: 0; }
 .fl-child-goal-popover strong { display: block; margin-bottom: 3px; font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: #8a6d1f; }
@@ -560,7 +564,7 @@
 .fl-child-resizer:focus-visible .fl-child-resizer-grip,
 .fl-child-body.is-resizing .fl-child-resizer-grip { opacity: 1; }
 .fl-child-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; container-name: childchat; }
-.fl-child-top { display: flex; flex-direction: column; gap: 8px; min-height: 60px; padding: 10px clamp(16px, 2.5vw, 36px); border-bottom: 1px solid var(--line); background: var(--header-bg); box-shadow: 0 2px 10px rgba(13, 35, 76, .04); position: relative; z-index: 5; }
+.fl-child-top { display: flex; flex-direction: column; gap: 3px; padding: 6px clamp(16px, 2.5vw, 36px); border-bottom: 1px solid var(--line); background: var(--header-bg); box-shadow: 0 2px 10px rgba(13, 35, 76, .04); position: relative; z-index: 5; }
 .fl-child-top-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .fl-child-id { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; min-width: 0; }
 /* Never wrap the greeting mid-phrase: with flex shrink allowed it collapsed to
@@ -569,7 +573,7 @@
 .fl-child-hi { min-width: 0; }
 .fl-child-hi strong, .fl-child-hi small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fl-child-avatar.is-big { width: 46px; height: 46px; font-size: var(--text-subheading); }
-.fl-child-hi strong { display: block; color: var(--heading); font-size: var(--text-subheading); font-weight: 800; }
+.fl-child-hi strong { display: block; color: var(--heading); font-size: var(--text-body); font-weight: 800; }
 .fl-child-hi small { color: #5f708d; font-size: var(--text-secondary); }
 .fl-today-pill { display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; border-radius: 999px; background: #eaf5ff; color: #2f6db0; font-size: var(--text-secondary); font-weight: 700; }
 .fl-parent-return { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; min-height: 40px; padding: 0 13px; border: 1px solid #d7e0ec; border-radius: 12px; background: var(--surface); color: #3d567a; font: inherit; font-size: var(--text-secondary); font-weight: 650; cursor: pointer; }
