@@ -108,6 +108,28 @@ func agentProfileRuntimeWorkspace(userID, workspacePath string) string {
 	return workspacePath
 }
 
+// providerOptionRuntimeOptions returns a copy of the runtime options the
+// profile declares for the (provider, model) binding a turn resolved to —
+// nil when the binding is not one of the profile's provider_options or
+// declares none. These become LLMModel.Options, which the agent runtime
+// already turns into provider call options (reasoning_effort and friends).
+func providerOptionRuntimeOptions(runtime agentprofiles.RuntimePolicy, provider, modelID string) map[string]interface{} {
+	for _, option := range runtime.ProviderOptions {
+		if !strings.EqualFold(strings.TrimSpace(option.Provider), strings.TrimSpace(provider)) || !strings.EqualFold(strings.TrimSpace(option.ModelID), strings.TrimSpace(modelID)) {
+			continue
+		}
+		if len(option.Options) == 0 {
+			return nil
+		}
+		out := make(map[string]interface{}, len(option.Options))
+		for k, v := range option.Options {
+			out[k] = v
+		}
+		return out
+	}
+	return nil
+}
+
 func resolveProfileRuntimeModel(runtime agentprofiles.RuntimePolicy, requestedProvider, requestedModelID string) (string, string) {
 	provider, modelID := strings.TrimSpace(runtime.Provider), strings.TrimSpace(runtime.ModelID)
 	for _, option := range runtime.ProviderOptions {
@@ -302,7 +324,7 @@ func (api *StreamingAPI) resolveAgentProfileForQuery(ctx context.Context, req *Q
 		}
 		req.Provider = provider
 		req.ModelID = modelID
-		req.LLMConfig = &orchestrator.LLMConfig{Primary: orchestrator.LLMModel{Provider: provider, ModelID: modelID}}
+		req.LLMConfig = &orchestrator.LLMConfig{Primary: orchestrator.LLMModel{Provider: provider, ModelID: modelID, Options: providerOptionRuntimeOptions(profile.Runtime, provider, modelID)}}
 		req.LLMConfigSource = llmConfigSourceAgentProfile
 		if strings.EqualFold(strings.TrimSpace(profile.Runtime.CredentialScope), agentprofiles.CredentialScopeGlobal) {
 			// Some products intentionally use the server-wide coding-agent login.

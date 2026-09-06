@@ -101,11 +101,15 @@ profile:
         label: Claude Code
         provider: claude-code
         model_id: claude-fable-5-1
+        options:
+          reasoning_effort: medium
         default: true
       - id: codex-cli
         label: Codex
         provider: codex-cli
         model_id: gpt-6-astra
+        options:
+          reasoning_effort: medium
     agent_tools:
       mode: mcp_only
     capabilities:
@@ -217,11 +221,15 @@ profiles:
           label: Claude Code
           provider: claude-code
           model_id: claude-fable-5-1
+          options:
+            reasoning_effort: medium
           default: true
         - id: codex-cli
           label: Codex
           provider: codex-cli
           model_id: gpt-6-astra
+          options:
+            reasoning_effort: medium
       agent_tools:
         mode: mcp_only
       capabilities:

@@ -407,6 +407,29 @@ func TestClientSuppliedAPIKeysAreNotACredentialSource(t *testing.T) {
 	}
 }
 
+func TestProviderOptionRuntimeOptionsFollowTheResolvedBinding(t *testing.T) {
+	runtime := agentprofiles.RuntimePolicy{
+		ProviderOptions: []agentprofiles.ProviderOption{
+			{ID: "claude-code", Provider: "claude-code", ModelID: "claude-fable-5-1", Default: true, Options: map[string]interface{}{"reasoning_effort": "medium"}},
+			{ID: "codex-cli", Provider: "codex-cli", ModelID: "gpt-6-astra"},
+		},
+	}
+	got := providerOptionRuntimeOptions(runtime, "claude-code", "claude-fable-5-1")
+	if got["reasoning_effort"] != "medium" {
+		t.Fatalf("options for the declared binding = %v, want reasoning_effort=medium", got)
+	}
+	got["reasoning_effort"] = "high"
+	if runtime.ProviderOptions[0].Options["reasoning_effort"] != "medium" {
+		t.Fatal("the returned map must be a copy, not the profile's own")
+	}
+	if got := providerOptionRuntimeOptions(runtime, "codex-cli", "gpt-6-astra"); got != nil {
+		t.Fatalf("a binding with no options must yield nil, got %v", got)
+	}
+	if got := providerOptionRuntimeOptions(runtime, "codex-cli", "gpt-5.4"); got != nil {
+		t.Fatalf("an undeclared binding must yield nil, got %v", got)
+	}
+}
+
 func TestResolveProfileRuntimeModelUsesOnlyYAMLProviderOptions(t *testing.T) {
 	runtime := agentprofiles.RuntimePolicy{
 		Provider: "claude-code", ModelID: "claude-sonnet-5",

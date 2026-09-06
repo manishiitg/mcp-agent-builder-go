@@ -184,6 +184,10 @@ type ProviderOption struct {
 	Provider string `json:"provider" yaml:"provider"`
 	ModelID  string `json:"model_id" yaml:"model_id"`
 	Default  bool   `json:"default,omitempty" yaml:"default,omitempty"`
+	// Options are provider-specific runtime options applied to every turn on
+	// this binding (the same keys a published LLM entry carries, e.g.
+	// reasoning_effort for the coding CLIs). Product-owned, like the model.
+	Options map[string]interface{} `json:"options,omitempty" yaml:"options,omitempty"`
 }
 
 type RuntimeCapabilities struct {
