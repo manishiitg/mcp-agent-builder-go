@@ -106,7 +106,7 @@ func seedSparkQuillCheckinState(docsDir, userID, sourceDir string) {
 var migrateSparkQuillCmd = &cobra.Command{
 	Use:   "migrate-sparkquill",
 	Short: "Copy a standalone SparkQuill home (~/.sunlit-learning) into the platform family workspace",
-	Long: `Copies the standalone family-server's data into <docs-dir>/_users/<user>/Chats/SparkQuill.
+	Long: `Copies a pre-platform SparkQuill install (~/.sunlit-learning, the old standalone server's home) into <docs-dir>/_users/<user>/Chats/SparkQuill.
 The source is never modified. A marker in the target makes the copy idempotent;
 a non-empty target without that marker is refused unless --allow-existing is
 given, in which case files are merged and never overwritten.`,

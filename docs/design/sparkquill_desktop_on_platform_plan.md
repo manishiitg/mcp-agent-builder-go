@@ -382,7 +382,7 @@ flag-day commit. All code deletions are git-reversible; the family's data is not
 | D2 | bubble branches (`:2938-2941` → `PlatformChat` only, `:4078-4080` → `ChildPlatformChat`), `useParentChatStore`/`useChildChatStore` message state (keep `focusInput`/`childSending`, used `:962-964`), CSS `.fl-thread/.fl-msg/.fl-bubble` `:297-323,634-641`, `.fl-tmsg/.fl-tbubble` `:597-628`, `.chat-bubble` `:201-207` (keep `--reply-bubble-*` tokens if `.fl-platform-chat` references them) | vitest green + visual pass on the 5 screens |
 | D3 | `standaloneApi.ts`(+test), `apiBase.ts`, backend switch in `api/index.ts`, `VITE_SPARKQUILL_BACKEND/VITE_FAMILY_API`, `FamilyApi` narrowing | D2 merged |
 | D4 | Settings rows already hidden on the platform (`:2829-2845` cadence/hour, `:3936` Fast Mode/model picker), WhatsApp QR section (`:3816` renders a broken `<img>` from `whatsappPairImageUrl()=''`) | per-behaviour decision below |
-| D5 | whole `agent_go/cmd/family-server` (incl. the checked-in binary), `internal/enginedetect`, `desktop-sparkquill/` duplication (`updater.js`, shell code), `install-sparkquill.sh` → wrapper, `sparkquill-desktop.yml` retarget | migration verified on a copied real `~/.sunlit-learning` (P5); every family on the new build ≥ 1 release |
+| D5 **(done 2026-09-06)** | whole `agent_go/cmd/family-server`, `internal/enginedetect`, `desktop-sparkquill/` shell duplication (P1; `updater.js` stays, it is the only copy), `install-sparkquill.sh` data-path line, `sparkquill-desktop.yml` retarget | migration verified on a copied real `~/.sunlit-learning` (P5); every family on the new build ≥ 1 release |
 | D6 | `frontend/learning-app` root (after the P2b move) | P2b preflight/theme pass |
 
 Behaviours with no platform replacement — decisions: **week/child-schedule/activity log** → ship without (agent tools
@@ -412,7 +412,7 @@ harmless 404 in M1 (~1 GB stays resident while hidden); add `/api/voice/unload` 
 
 Executed in the order **M1 → P0 → P3 → P5** (not the P2-first chain above): the engine onboarding and the data
 migration do not depend on the learning-app move, and running them first puts a real family on the platform
-before the CSS/consolidation work. P1, P2a/b, P4 (beyond the notes below) and P6 remain.
+before the CSS/consolidation work. Then P4, P2a, P1 and P6 (all below). P2b and P7 remain.
 
 - **M1 done, live-verified.** `desktop-sparkquill/main.js` spawns `workspace-server` (45779) + `agent-server`
   (45778), persists a generated `AUTH_SECRET` in `<userData>/config.json`, serves `frontend/learning-app/dist` as
@@ -478,6 +478,30 @@ before the CSS/consolidation work. P1, P2a/b, P4 (beyond the notes below) and P6
   pre-existing circular import in `src/services` (`api.ts` ↔ `mcpConfigApi.ts` ↔ `useMCPStore`); the adapter now loads
   it lazily. Not done here (P2b/P4 trail): the voice Settings section still talks to family-server-only routes
   (`/api/voice/model/*`, unauthenticated `/api/voice/stream` in `useMicDictation`).
+- **P1 done, live-verified.** The two Electron shells were hand-copied files that had already drifted (the
+  SIGTERM/SIGINT orphaned-server fix existed in one and not the other). The shared mechanics now live in
+  `desktop/lib` as the `agentworks-desktop-lib` package (login-shell env import, bounded log writer, `spawnServer`
+  with dynamic ports, `waitForHealth`, external-navigation interception, `installSignalShutdown`), consumed by both
+  `desktop/main.js` and `desktop-sparkquill/main.js` (`file:../desktop/lib`; electron-builder packs it into
+  `app.asar`, verified). `desktop-sparkquill/lib/agentEnv.js` stays: it is SparkQuill's own env builder.
+- **Codex 0.153 (found live during P1 verification, fixed in `multi-llm-provider-go`).** The CLI upgrade broke
+  every pane heuristic the tmux transport relied on: a new fixed composer placeholder, a "usage limit resets"
+  footer that classified as quota exhaustion, a "Conversation interrupted" notice that swallows the next Enter (the
+  previous answer was then returned as the new reply), `turn_aborted` with no `task_complete` (the turn hung),
+  and a "Resuming session…" banner that read as a ready composer. Submission is now confirmed from the rollout's
+  `task_started`, completion is bound to that turn_id, aborts fail the turn explicitly, resumed sessions pin their
+  thread at creation, and a Codex pane left behind by a previous server process (which makes `codex resume` die
+  with "already has an active writer") is reaped by owner tag before relaunch. See `codexcli_v0153_*_test.go`.
+- **P6 done.** `agent_go/cmd/family-server` (68 files, 11,144 lines) and `internal/enginedetect` deleted;
+  `go mod tidy`; `sparkquill-desktop.yml` builds `agent-server` (cgo, from `agent_go`) + `workspace-server`, stages
+  `resources/static` and `resources/configs`, runs both shells' unit tests, and triggers on `desktop/lib` and
+  `frontend/shared` too; `dev-setup.sh` was already the local mirror. Comments and docs that described the
+  standalone as current were reworded; historical design records (`family-learning-architecture.md`, Part B
+  below, `docs/bugs`, `docs/refactor`) keep their references and are marked superseded where they had a status.
+  Deliberately not replaced (A8 decisions): WhatsApp, `/api/reset`, week/child-schedule routes, model picker.
+  **Stopped existing without a platform equivalent:** the standalone's `file://` guard on `agent_browser`
+  (`validateBrowserFileURLs`); the platform's browser tool has none, the child profile has `browser: disabled`,
+  the parent's browser can open local files. Open item, recorded in `docs/core/browser.md`.
 
 ## A11. Migration worst cases, multi-instance verdict, top risks
 

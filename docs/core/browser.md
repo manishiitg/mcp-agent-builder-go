@@ -171,9 +171,13 @@ connection pooling in `mcpagent` is independent of browser state.
 In CDP mode the browser is the user's **own** Chrome — a host process this app
 neither owns nor sandboxes — so without a guard `agent_browser` can read any
 file on the machine, including files the shell tool is explicitly denied.
-`family-server` therefore rejects any `file://` URL resolving outside the
-workspace or host Downloads (`validateBrowserFileURLs` in
-`cmd/family-server/browser_tool.go`).
+SparkQuill's standalone server rejected any `file://` URL resolving outside the
+workspace or host Downloads (`validateBrowserFileURLs` in its `browser_tool.go`).
+That server was deleted on 2026-09-06 and the platform's `agent_browser` has **no
+equivalent guard today**: a product's browser access is all-or-nothing
+(`runtime.browser` in its `product.yaml`; SparkQuill's child profile sets it to
+`disabled`, the parent profile to `preferred`). Restoring a path guard for
+`file://` navigation on the platform is an open item.
 
 **Canonical reference:** [`docs/agent-execution-architecture.html`](../agent-execution-architecture.html)
 §4 — the measured before/after, the full list of rejected spellings, and how

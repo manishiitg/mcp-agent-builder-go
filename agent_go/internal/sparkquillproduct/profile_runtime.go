@@ -69,7 +69,7 @@ func WorkspaceLayout() string {
 
 // ParentPromptVariables computes the parent prompt's Product variables:
 // who the child is, and the nudges for whatever the family has not told
-// Quill yet. Mirrors parentSystemPrompt in cmd/family-server.
+// Quill yet.
 func ParentPromptVariables(s FamilyState) map[string]string {
 	name := "your child"
 	who := name

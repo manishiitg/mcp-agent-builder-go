@@ -76,7 +76,7 @@ route exists **because** the full tool catalog is too large/dynamic to hand the
 model natively every session.
 
 Small, standalone apps with a fixed, known-in-advance tool set (e.g.
-`agent_go/internal/agentsession` — used by `family-server`) use a **leaner
+`agent_go/internal/agentsession`, which SparkQuill's standalone family server used until it was retired in September 2026) use a **leaner
 variant of the same bridge**, not the curl-discovery route:
 
 1. **No Gin server, no HTTP handlers in the app itself.** Tools are plain Go
@@ -115,7 +115,7 @@ variant of the same bridge**, not the curl-discovery route:
 **Net effect:** two hops (Claude Code → `mcpbridge` stdio → app's own executor
 HTTP → Go handler), both fast/local, and the model calls the tool **directly by
 name** — no schema discovery, no curl construction. This is more reliable for a
-small tool set and is the intended pattern for apps like family-server, not a
+small tool set and is the intended pattern for small standalone apps, not a
 workaround.
 
 **The one thing to remember:** a new custom tool registered via

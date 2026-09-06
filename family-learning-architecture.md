@@ -1,6 +1,6 @@
 # Family Learning — Architecture (working draft)
 
-**Status:** ⚠️ PARTIALLY STALE · last full pass 2026-07-19 · branch `codex/family-learning-prd`
+**Status:** ❌ SUPERSEDED · `cmd/family-server` and `internal/enginedetect` were deleted on 2026-09-06; SparkQuill runs on the platform (`agent_go/internal/sparkquillproduct`, `docs/design/sparkquill_desktop_on_platform_plan.md`). Kept as the design record of the standalone era · last full pass 2026-07-19
 
 > **Read this first.** The product moved on after 2026-07-19 and this document
 > has not had a full pass since. Trust the code over this file where they

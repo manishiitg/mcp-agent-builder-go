@@ -64,7 +64,7 @@ Most confusion about "is the agent isolated?" comes from not knowing which path 
 
 <div class="dia">
 <div class="layer"><div class="lbl">host process — trusted, unsandboxed</div>
-  <span class="node hi">family-server / agent-server (Go)</span>
+  <span class="node hi">agent-server (Go)</span>
   <span class="arrow">contains →</span>
   <span class="node">executor HTTP server</span>
   <span class="node">tool registry (Go handlers)</span>
@@ -312,8 +312,8 @@ guarded path.</p>
 <div class="flag bad"><b>a. The coding CLIs are not in the image</b>
 Grepping <code>agent_go/Dockerfile</code> for <code>claude-code|@anthropic|codex|cursor-agent</code> returns
 <b>0 matches</b> — only <code>agent-browser</code>, plus <code>pi-cli</code> behind a build arg. Docker
-isolates the <em>agent server</em>, not the CLIs, which still run on the host terminal. And
-<code>family-server</code> (SparkQuill) is in neither compose file.</div>
+isolates the <em>agent server</em>, not the CLIs, which still run on the host terminal. (SparkQuill's
+desktop runs this same <code>agent-server</code>; its former <code>family-server</code> was retired on 2026-09-06.)</div>
 
 <div class="flag bad"><b>b. The Docker socket is mounted in</b>
 <code>/var/run/docker.sock</code> is bind-mounted into <code>agent-server</code> with
@@ -347,7 +347,7 @@ it is the one thing you deliberately grant back via <code>HostReadPaths</code>. 
 </table>
 
 <footer>
-Sources: <code>workspace/security/isolator.go</code> · <code>cmd/family-server/{shell_tool,browser_tool,browser_backend}.go</code> ·
+Sources: <code>workspace/security/isolator.go</code> · <code>cmd/family-server/{shell_tool,browser_tool,browser_backend}.go</code> (deleted 2026-09-06; SparkQuill's boundaries now come from <code>internal/sparkquillproduct/product.yaml</code>) ·
 <code>internal/clisandbox/sandbox.go</code> · <code>llmtypes/cli_security.go</code> ·
 <code>cmd/mcpbridge/main.go</code> · <code>internal/agentsession/agentsession.go</code> ·
 <code>agent_go/Dockerfile</code> · <code>docker-compose{,.prod}.yml</code> ·

@@ -6,6 +6,13 @@ name: SparkQuill DMG
 #
 # Tags are namespaced `sparkquill-v*` so they can't collide with AgentWorks'
 # plain `v*` tags in the same repo.
+#
+# SparkQuill runs on the platform binaries (agent-server + workspace-server,
+# docs/design/sparkquill_desktop_on_platform_plan.md), so this builds the same
+# two servers the AgentWorks desktop builds and stages the learning app as the
+# agent server's static site. The Electron shell shares its mechanics with
+# ../desktop through desktop/lib (a file: dependency), which is why that
+# directory is in the trigger paths.
 on:
   push:
     branches:
@@ -16,8 +23,12 @@ on:
   pull_request:
     paths:
       - 'desktop-sparkquill/**'
-      - 'agent_go/cmd/family-server/**'
+      - 'desktop/lib/**'
+      - 'agent_go/**'
+      - 'workspace/**'
       - 'frontend/learning-app/**'
+      - 'frontend/shared/**'
+      - 'scripts/build-darwin-voice-binary.sh'
       - '.github/workflows/sparkquill-desktop.yml'
   workflow_dispatch:
 
@@ -83,11 +94,18 @@ jobs:
           npm ci
           npm run build
 
+      # The agent server serves ./static (relative to its resources dir) as the
+      # product's site; desktop-sparkquill/main.js points STATIC_DIR there.
       - name: Stage the frontend into the app bundle
         run: |
-          rm -rf desktop-sparkquill/resources/web
-          mkdir -p desktop-sparkquill/resources/web
-          cp -R frontend/learning-app/dist/. desktop-sparkquill/resources/web/
+          rm -rf desktop-sparkquill/resources/static
+          mkdir -p desktop-sparkquill/resources/static
+          cp -R frontend/learning-app/dist/. desktop-sparkquill/resources/static/
+
+      - name: Stage the default MCP config
+        run: |
+          mkdir -p desktop-sparkquill/resources/configs
+          cp agent_go/configs/mcp_servers_clean.json desktop-sparkquill/resources/configs/mcp_servers_clean.json
 
       - name: Point Go at the checked-out dependencies
         working-directory: agent_go
@@ -96,18 +114,32 @@ jobs:
           go mod edit -replace=github.com/manishiitg/multi-llm-provider-go=../deps/multi-llm-provider-go
           go mod download
 
-      # cgo is REQUIRED: family-server links the shared speech engine's native
-      # libraries (agent_go/pkg/voicestt). A bare GOOS/GOARCH cross-build on
-      # this Intel runner would turn cgo off and ship the stub. The script
-      # also stages the dylibs into resources/lib, which extraResources
-      # carries into the app beside the server.
-      - name: Build family-server (with the speech engine)
+      # cgo is REQUIRED: the agent server links the shared speech engine's
+      # native libraries (agent_go/pkg/voicestt). A bare GOOS/GOARCH cross-build
+      # on this Intel runner would turn cgo off and ship the stub. The script
+      # also stages the dylibs into resources/lib, which extraResources carries
+      # into the app beside the server.
+      - name: Build agent-server (with the speech engine)
         run: |
-          bash scripts/build-darwin-voice-binary.sh agent_go/cmd/family-server desktop-sparkquill/resources/family-server arm64
+          bash scripts/build-darwin-voice-binary.sh agent_go desktop-sparkquill/resources/agent-server arm64
 
+      - name: Build workspace-server
+        working-directory: workspace
+        run: |
+          go mod download
+          GOOS=darwin GOARCH=arm64 go build -o ../desktop-sparkquill/resources/workspace-server .
+
+      # package.json links agentworks-desktop-lib as file:../desktop/lib; npm ci
+      # resolves that link from the checkout and installs its dependencies here.
       - name: Install Electron dependencies
         working-directory: desktop-sparkquill
         run: npm ci
+
+      - name: Run the shell's unit tests
+        working-directory: desktop-sparkquill
+        run: |
+          npm test
+          (cd ../desktop && npm test)
 
       # Version must be synced BEFORE the build, tag push or not — it drives
       # both the dist/ filenames (SparkQuill-<version>-arm64.dmg) and the

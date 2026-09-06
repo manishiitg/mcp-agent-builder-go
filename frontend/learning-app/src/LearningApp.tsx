@@ -1615,7 +1615,7 @@ export default function LearningApp() {
     return () => window.removeEventListener('message', onMsg)
   }, [])
 
-  // On launch, ask family-server where onboarding stands. If setup is complete
+  // On launch, ask the agent server where onboarding stands. If setup is complete
   // we land straight in the chat; otherwise resume at the right step.
   useEffect(() => {
     let cancelled = false

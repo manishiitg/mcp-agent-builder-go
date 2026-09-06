@@ -362,7 +362,7 @@ func sortStrings(s []string) {
 // files, keyed by DefaultModelURLs so a change to the pinned model version
 // naturally lands in a fresh directory instead of colliding with stale files.
 // It is deliberately the same path for every AgentWorks binary on a machine
-// (the agent server, the desktop app, SparkQuill's family-server), so one
+// (the agent server and both desktop apps), so one
 // ~630MB download serves all of them.
 func DefaultModelDir() string {
 	home, err := os.UserHomeDir()

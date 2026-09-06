@@ -27,8 +27,8 @@ export type VoiceDictationOptions = {
 
 /**
  * Push-to-talk mic dictation against the shared AgentWorks speech engine
- * (agent_go/pkg/voicestt, served as /api/voice/stream by the agent server and
- * by SparkQuill's family-server alike). One hook for every composer.
+ * (agent_go/pkg/voicestt, served as /api/voice/stream by the agent server for
+ * AgentWorks and every product on it). One hook for every composer.
  *
  * Audio: AudioWorklet PCM16 at 16kHz, sent as binary WebSocket frames.
  * Text: `liveText` is the in-flight partial; `transcript` is everything the

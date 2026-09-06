@@ -28,7 +28,7 @@ export type ToolCallRecord = {
 }
 
 // Voice (speech-to-text) — mirrors the Go side's voiceTier /
-// voiceStatusResponse in cmd/family-server/voice_hardware.go.
+// voiceStatusResponse in agent_go/cmd/server/voice_stt_routes.go.
 export type VoiceTier = {
   id: string
   label: string

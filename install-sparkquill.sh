@@ -104,6 +104,6 @@ find "$DEST_APP" -exec xattr -d com.apple.quarantine {} \; 2>/dev/null || \
 [ -n "${SPARKQUILL_DMG_PATH:-}" ] && rm -f "$SPARKQUILL_DMG_PATH" 2>/dev/null || true
 
 printf '\n%s%s %s installed.%s\n' "$GREEN" "✓" "$APP_NAME $VERSION" "$RESET"
-printf '%sYour family'"'"'s learning data lives in ~/.sunlit-learning%s\n\n' "$DIM" "$RESET"
+printf '%sYour family'"'"'s learning data lives in ~/Library/Application Support/sparkquill-desktop/workspace-docs%s\n\n' "$DIM" "$RESET"
 log "Opening $APP_NAME"
 open "$DEST_APP"

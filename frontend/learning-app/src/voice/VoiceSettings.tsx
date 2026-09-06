@@ -1,7 +1,7 @@
 // The Settings → Voice panel: the speech-to-text tier catalog.
 //
 // Tier availability is computed SERVER-side against this actual machine (see
-// cmd/family-server/voice_hardware.go), so this component never has to guess
+// agent_go/cmd/server/voice_stt_routes.go), so this component never has to guess
 // what an Intel vs Apple Silicon Mac can run — it just renders what it's told.
 
 import { useState } from 'react'

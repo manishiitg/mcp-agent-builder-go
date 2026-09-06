@@ -26,8 +26,8 @@ type StreamMessage struct {
 // frames. A text frame {"action":"finish"} flushes the final transcript
 // without closing — the push-to-talk release. Closing the socket flushes too.
 //
-// Both AgentWorks' agent server and SparkQuill's family-server serve exactly
-// this; the caller only decides who may reach it and how origins are checked.
+// The agent server serves exactly this for AgentWorks and for every product
+// on it; the caller only decides who may reach it and how origins are checked.
 func ServeStream(m *Manager, upgrader *websocket.Upgrader, w http.ResponseWriter, r *http.Request) {
 	session, err := m.NewSession(r.Context())
 	if err != nil {

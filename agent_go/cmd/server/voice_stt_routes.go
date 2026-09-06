@@ -12,9 +12,9 @@ import (
 )
 
 // The shared streaming STT engine (pkg/voicestt), one Manager per process.
-// AgentWorks' composer, every product that declares
-// agentprofiles.RuntimeCapabilities.Voice, and SparkQuill's family-server all
-// run this same engine and model; this file only decides who may reach it.
+// AgentWorks' composer and every product that declares
+// agentprofiles.RuntimeCapabilities.Voice run this same engine and model;
+// this file only decides who may reach it.
 //
 // Loaded lazily (or by the startup warm in server.go) so a deployment that
 // never uses voice never pays the download or the resident memory.

@@ -5,8 +5,9 @@ its own family server (desktop). **Decided 2026-09-06: the desktop becomes an
 AgentWorks client too** — `desktop-sparkquill` will spawn the platform's
 `workspace-server` + `agent_go` server with SparkQuill as a product, and
 `cmd/family-server` plus the standalone renderers in the learning app are
-retired (see the 2026-09-06 change-log entry and
-`sparkquill_desktop_on_platform_plan.md`). Dated notes at the end of this
+retired; `cmd/family-server` and `internal/enginedetect` were deleted later
+the same day, so every `cmd/family-server` path below is historical (see the
+2026-09-06 change-log entry and `sparkquill_desktop_on_platform_plan.md`). Dated notes at the end of this
 document are the change log; the block below is the state as of 2026-09-03
 and its "Decisions" paragraph is superseded on that point.
 

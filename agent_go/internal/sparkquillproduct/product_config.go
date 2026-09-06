@@ -3,9 +3,9 @@
 // skills, and the runtime that turns a family's saved state into the
 // prompt variables both profiles need.
 //
-// The standalone family app (cmd/family-server) still runs its own copy of
-// both roles; this package is the target it migrates onto. The skills are
-// already shared: family-server embeds them from here.
+// SparkQuill ran as its own server (cmd/family-server) until September 2026;
+// that binary is gone and this package is the product. A pre-platform
+// install's ~/.sunlit-learning is copied in by migrate.go.
 package sparkquillproduct
 
 import (
