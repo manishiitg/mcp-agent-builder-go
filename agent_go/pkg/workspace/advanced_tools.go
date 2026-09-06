@@ -42,7 +42,7 @@ func imageToolDef() llmtypes.Tool {
 		Type: "function",
 		Function: &llmtypes.FunctionDefinition{
 			Name:        "read_image",
-			Description: "Read an image file from workspace and ask a question about it using a provider-backed vision model. Before choosing provider/model_id, call list_llm_capabilities(capability=\"read_image\", include_models=true). If you pass model_id, also pass the matching provider from that capability result; do not pass model_id by itself.",
+			Description: "Read an image file from the workspace and ask a question about it using a provider-backed vision model. provider and model_id are optional: leave both unset to use the workspace's configured image-analysis model. Set them only when you need a specific one, always together (a model_id without its provider is rejected). Where the list_llm_capabilities tool is available, list_llm_capabilities(capability=\"read_image\", include_models=true) is the source for a valid pair; if it is not available in this session, leave them unset.",
 			Parameters: llmtypes.NewParameters(map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -56,11 +56,11 @@ func imageToolDef() llmtypes.Tool {
 					},
 					"provider": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional image-analysis provider override. Discover currently usable providers with list_llm_capabilities(capability=\"read_image\", include_models=true). If specifying model_id, pass the matching provider too.",
+						"description": "Optional image-analysis provider override. Leave unset to use the workspace default. If set, pass the matching model_id too. Where the list_llm_capabilities tool is available, list_llm_capabilities(capability=\"read_image\", include_models=true) lists the usable providers.",
 					},
 					"model_id": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional image-analysis model id. Use a model from list_llm_capabilities(capability=\"read_image\", include_models=true), and pass the matching provider in the same call. Do not use tier labels such as low, medium, high, or auto as model IDs.",
+						"description": "Optional image-analysis model id. Leave unset to use the workspace default. If set, pass the matching provider in the same call; take the pair from list_llm_capabilities(capability=\"read_image\", include_models=true) where that tool is available. Do not use tier labels such as low, medium, high, or auto as model IDs.",
 					},
 				},
 				"required": []string{"filepath", "query"},
