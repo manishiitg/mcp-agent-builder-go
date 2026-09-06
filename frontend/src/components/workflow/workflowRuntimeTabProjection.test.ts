@@ -163,6 +163,14 @@ describe('workflowRuntimeTabProjection', () => {
 })
 
 describe('workflowTabDisplayName', () => {
+  it('labels a tab-pinned Run conversation distinctly', () => {
+    expect(workflowTabDisplayName({
+      name: 'Automation Builder',
+      sessionId: 'run-chat-session',
+      metadata: { mode: 'workflow', phaseId: 'workflow-builder', workshopMode: 'run' },
+    })).toBe('Run chat')
+  })
+
   it('renders both current and persisted legacy Builder conversations as Chat', () => {
     for (const name of ['Automation Builder', 'Workflow Builder']) {
       expect(workflowTabDisplayName({

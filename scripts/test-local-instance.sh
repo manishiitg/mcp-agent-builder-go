@@ -43,6 +43,8 @@ assert_contains "$dry_output" "AGENTWORKS_BROWSER_SESSION_PREFIX=video-product-t
 assert_contains "$dry_output" "AGENTWORKS_APP_NAME=Video Studio (Test)"
 assert_contains "$dry_output" "AGENTWORKS_FAVICON_URL=/video-studio-favicon.svg"
 assert_contains "$dry_output" "BROWSER_ONLY=true"
+assert_contains "$dry_output" "CLI_UPDATE_ENABLED=false"
+assert_contains "$dry_output" "AGENTWORKS_ISOLATE_WORKFLOW_CLI=true"
 [ -f "${DRY_ROOT}/browser/config.json" ] || fail "browser config was not created"
 [ ! -d "${DRY_ROOT}/instance.lock" ] || fail "dry run left an instance lock"
 
@@ -66,12 +68,15 @@ live_output="$(AGENTWORKS_RUNNER="$FAKE_RUNNER" "$LAUNCHER" \
     --electron-debug-port 30233 \
     --app-name "Video Studio (Test)" \
     --favicon-url /video-studio-favicon.svg \
+    --isolate-workflow-cli \
     --build)"
 assert_contains "$live_output" "fake isolated runner passed"
+assert_contains "$live_output" "CLI_UPDATE_ENABLED=false"
+assert_contains "$live_output" "AGENTWORKS_ISOLATE_WORKFLOW_CLI=true"
 [ ! -d "${LIVE_ROOT}/instance.lock" ] || fail "completed run left an instance lock"
 
 ELECTRON_ROOT="${TEST_ROOT}/electron-opt-in"
-electron_output="$(AGENTWORKS_RUNNER="$FAKE_RUNNER" "$LAUNCHER" \
+electron_output="$(CLI_UPDATE_ENABLED=true AGENTWORKS_RUNNER="$FAKE_RUNNER" "$LAUNCHER" \
     --instance video-product-electron-test \
     --state-root "$ELECTRON_ROOT" \
     --agent-port 31743 \
@@ -80,6 +85,7 @@ electron_output="$(AGENTWORKS_RUNNER="$FAKE_RUNNER" "$LAUNCHER" \
     --electron-debug-port 31233 \
     --electron)"
 assert_contains "$electron_output" "fake isolated runner passed"
+assert_contains "$electron_output" "CLI_UPDATE_ENABLED=true"
 [ ! -d "${ELECTRON_ROOT}/instance.lock" ] || fail "Electron opt-in run left an instance lock"
 
 echo "PASS: isolated local instance launcher"

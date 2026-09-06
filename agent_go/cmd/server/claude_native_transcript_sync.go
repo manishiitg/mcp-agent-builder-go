@@ -614,7 +614,7 @@ func readNewClaudeTranscriptMessages(path string, since time.Time) ([]builderCon
 		}
 
 		text := extractClaudeTranscriptText(msg.Content)
-		if text == "" {
+		if text == "" || isClaudeLocalCommandMessage(entry.Type, text) {
 			continue
 		}
 

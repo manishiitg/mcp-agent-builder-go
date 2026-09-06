@@ -39,6 +39,45 @@ func TestHumanInTheLoopReferenceIsAttachedForWorkflowModes(t *testing.T) {
 	}
 }
 
+func TestRunReferenceSurfaceExcludesWorkshopMaintenanceSkills(t *testing.T) {
+	var attached = map[string]*llmtypes.Skill{}
+	if err := AttachReferenceSurface("run", func(skill *llmtypes.Skill) error {
+		attached[skill.Name] = skill
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if attached["workflow-commands"] != nil {
+		t.Fatal("Run should not receive Workshop slash-command procedures")
+	}
+	reference := attached["builder-reference"]
+	if reference == nil {
+		t.Fatal("Run should retain its runtime reference bundle")
+	}
+	for _, path := range []string{
+		"references/pulse-gate.md",
+		"references/pulse-review-fixer.md",
+		"references/plan-drift-review.md",
+		"references/stores.md",
+		"references/secret-management.md",
+		"references/backup-strategy.md",
+	} {
+		if strings.Contains(reference.Content, path) {
+			t.Fatalf("Run reference bundle still advertises Workshop-only %s", path)
+		}
+	}
+	for _, path := range []string{
+		"references/runtime-context.md",
+		"references/running-steps.md",
+		"references/human-in-the-loop.md",
+	} {
+		if !strings.Contains(reference.Content, path) {
+			t.Fatalf("Run reference bundle lost runtime guidance %s", path)
+		}
+	}
+}
+
 func materializedFileContent(t *testing.T, skill *llmtypes.Skill, relPath string) string {
 	t.Helper()
 	if skill == nil {

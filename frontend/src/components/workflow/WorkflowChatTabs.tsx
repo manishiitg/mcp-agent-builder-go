@@ -214,6 +214,7 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ embedded = f
   })))
 
   const setShowChatArea = useWorkflowStore(state => state.setShowChatArea)
+  const activePresetId = useGlobalPresetStore(state => state.activePresetIds.workflow)
 
   // Repair tabs already corrupted by the old Restore path. The durable
   // restoredConversationPath marker proves this is an interactive restore,
@@ -233,7 +234,6 @@ export const WorkflowChatTabs: React.FC<WorkflowChatTabsProps> = ({ embedded = f
     })
   }, [chatTabs])
 
-  const activePresetId = useGlobalPresetStore(state => state.activePresetIds.workflow)
   // Filter to workflow tabs for the active preset, but always keep the active
   // workflow tab visible. Scheduled-run restores can briefly lack a preset match
   // while the tab is being created/switched, and hiding the active tab makes the

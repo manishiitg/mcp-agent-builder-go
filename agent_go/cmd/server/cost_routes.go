@@ -22,7 +22,7 @@ var (
 	withCostModel                = costobserver.WithModel
 	withCostAttribution          = costobserver.WithAttribution
 	inferCostScope               = costobserver.InferScope
-	scopeForScheduledLLMRole     = costobserver.ScopeForScheduledLLMRole
+	scopeForScheduledTurn        = costobserver.ScopeForScheduledTurn
 	costFirstNonEmpty            = costobserver.FirstNonEmpty
 	extractCacheTokens           = costobserver.ExtractCacheTokens
 	extractCostAndEffectiveModel = costobserver.ExtractCostAndEffectiveModel

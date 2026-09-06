@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulepolicy"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/productschedule"
 )
@@ -64,6 +65,7 @@ type ScheduledJobResponse struct {
 	MissedRunReason      string                 `json:"missed_run_reason,omitempty"`
 	PulseReviewOnly      bool                   `json:"pulse_review_only,omitempty"`
 	PulseMode            string                 `json:"pulse_mode,omitempty"`
+	PulseModeReason      string                 `json:"pulse_mode_reason,omitempty"`
 	CreatedAt            string                 `json:"created_at,omitempty"`
 	UpdatedAt            string                 `json:"updated_at,omitempty"`
 }
@@ -95,6 +97,7 @@ type CreateScheduleRequest struct {
 	DependencyDeadline   string                 `json:"dependency_deadline,omitempty"`
 	PulseReviewOnly      bool                   `json:"pulse_review_only,omitempty"`
 	PulseMode            string                 `json:"pulse_mode,omitempty"`
+	PulseModeReason      string                 `json:"pulse_mode_reason,omitempty"`
 }
 
 // UpdateScheduleRequest is the request body for updating a schedule.
@@ -122,6 +125,7 @@ type UpdateScheduleRequest struct {
 	AfterDelayMinutes    *int                   `json:"after_delay_minutes,omitempty"`
 	DependencyDeadline   *string                `json:"dependency_deadline,omitempty"`
 	PulseMode            *string                `json:"pulse_mode,omitempty"`
+	PulseModeReason      *string                `json:"pulse_mode_reason,omitempty"`
 }
 
 type TriggerPulseRequest struct {
@@ -175,6 +179,7 @@ func buildJobResponse(workspacePath string, manifest *WorkflowManifest, sched Wo
 		MissedRunReason:      missed.MissedRunReason,
 		PulseReviewOnly:      sched.PulseReviewOnly,
 		PulseMode:            sched.PulseMode,
+		PulseModeReason:      sched.PulseModeReason,
 		CreatedAt:            manifest.CreatedAt,
 		UpdatedAt:            manifest.UpdatedAt,
 	}
@@ -551,8 +556,13 @@ func createScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 			DependencyDeadline:   strings.TrimSpace(req.DependencyDeadline),
 			PulseReviewOnly:      req.PulseReviewOnly,
 			PulseMode:            strings.ToLower(strings.TrimSpace(req.PulseMode)),
+			PulseModeReason:      strings.TrimSpace(req.PulseModeReason),
 		}
 
+		if err := schedulepolicy.ValidatePulse(newSched.PulseMode, newSched.PulseModeReason); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		manifest.Schedules = append(manifest.Schedules, newSched)
 		if err := ValidateManifest(manifest); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -722,6 +732,13 @@ func updateScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		if req.ResumePrevious != nil {
 			sched.ResumePrevious = req.ResumePrevious
 		}
+		if req.PulseMode != nil && strings.ToLower(strings.TrimSpace(*req.PulseMode)) != sched.PulseMode && req.PulseModeReason == nil {
+			http.Error(w, "pulse_mode_reason is required when changing pulse_mode", http.StatusBadRequest)
+			return
+		}
+		if req.PulseModeReason != nil {
+			sched.PulseModeReason = strings.TrimSpace(*req.PulseModeReason)
+		}
 		if req.PulseMode != nil {
 			sched.PulseMode = strings.ToLower(strings.TrimSpace(*req.PulseMode))
 		}
@@ -745,6 +762,10 @@ func updateScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 		}
 		if req.DependencyDeadline != nil {
 			sched.DependencyDeadline = strings.TrimSpace(*req.DependencyDeadline)
+		}
+		if err := schedulepolicy.ValidatePulse(sched.PulseMode, sched.PulseModeReason); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		validGroupNames, err := validateScheduleGroupNamesForWorkspace(r.Context(), workspacePath, sched.GroupNames)
 		if err != nil {

@@ -1,0 +1,77 @@
+package {{PACKAGE}}
+
+import (
+ "bytes"
+ "encoding/json"
+ "os"
+ "path/filepath"
+ "strings"
+ "testing"
+
+ "github.com/manishiitg/multi-llm-provider-go/llmtypes"
+)
+
+func plat296ProjectPrompt(dir, marker string, restore bool) (func(), error) {
+ {{PROMPT_WRITER}}
+}
+
+func TestPLAT296TestingWorkflowProjection(t *testing.T) {
+ root := os.Getenv("AGENTWORKS_PROJECTION_TEST_ROOT")
+ fixture := os.Getenv("AGENTWORKS_PROJECTION_TEST_FIXTURE")
+ if root == "" || fixture == "" { t.Fatal("run via scripts/test-workflow-isolation.py") }
+ plan, err := os.ReadFile(filepath.Join(fixture,"planning","plan.json")); if err != nil {t.Fatal(err)}
+ for _, isolated := range []bool{false,true} {
+  layout := "shared"; if isolated {layout="private-control"}
+  for _, first := range []string{"owner","run"} {
+   for _, restore := range []bool{false,true} {
+    restoreLabel := "remove"; if restore {restoreLabel="restore"}
+    t.Run(layout+"/"+first+"-first/"+restoreLabel,func(t *testing.T){
+     second := "run"; if first=="run" {second="owner"}
+     caseRoot := filepath.Join(root,"cases","{{PACKAGE}}",layout,first,restoreLabel)
+     shared := filepath.Join(caseRoot,"Workflow","testing")
+     if err:=os.MkdirAll(filepath.Join(shared,"planning"),0700);err!=nil {t.Fatal(err)}
+     if err:=os.WriteFile(filepath.Join(shared,"planning","plan.json"),plan,0600);err!=nil {t.Fatal(err)}
+     dirs:=map[string]string{"owner":shared,"run":shared}
+     if isolated { for _, role:=range []string{"owner","run"} { dirs[role]=filepath.Join(caseRoot,"runtime",role); if err:=os.MkdirAll(dirs[role],0700);err!=nil {t.Fatal(err)} } }
+     if isolated && os.Getenv("AGENTWORKS_PROJECTION_SERVER_DIRS")!="" {
+      b,err:=os.ReadFile(os.Getenv("AGENTWORKS_PROJECTION_SERVER_DIRS"));if err!=nil{t.Fatal(err)}
+      var selected map[string]map[string]string
+      if err:=json.Unmarshal(b,&selected);err!=nil{t.Fatal(err)}
+      dirs=selected["{{PACKAGE}}/private-control/"+first+"/"+restoreLabel]
+      if dirs["owner"]==""||dirs["run"]==""||dirs["owner"]==dirs["run"]{t.Fatal("missing or shared server runtime selection")}
+      t.Logf("server-selected owner=%s run=%s",dirs["owner"],dirs["run"])
+     }
+     if isolated { if err:=os.WriteFile(filepath.Join(shared,"{{PROMPT_FILE}}"),[]byte("user-maintained workflow instructions"),0600);err!=nil{t.Fatal(err)} }
+     project:=func(role string)func(){
+      cleanup,err:=plat296ProjectPrompt(dirs[role],"PLAT296_"+role,restore); if err!=nil {t.Fatal(err)}
+      skill:=&llmtypes.Skill{Name:"builder-reference",Description:"Test-only mode marker",Content:"PLAT296_"+role,SupportingFiles:[]llmtypes.SkillFile{{RelPath:"references/mode.md",Content:[]byte("PLAT296_"+role)}}}
+      {{SKILL_WRITER}}
+      if err!=nil {t.Fatal(err)}
+      return cleanup
+     }
+     // Deterministic overlapping lifetimes: A projects, B projects while A
+     // still owns its cleanup handle, then A reads and closes while B is active.
+     closeFirst:=project(first); closeSecond:=project(second); defer closeSecond()
+     read:=func(role,rel string)string{ b,_:=os.ReadFile(filepath.Join(dirs[role],rel)); return string(b) }
+     promptClobber:=!strings.Contains(read(first,"{{PROMPT_FILE}}"),"PLAT296_"+first)
+     skillClobber:=!strings.Contains(read(first,"{{SKILLS_DIR}}/builder-reference/SKILL.md"),"PLAT296_"+first)
+     referenceClobber:=!strings.Contains(read(first,"{{SKILLS_DIR}}/builder-reference/references/mode.md"),"PLAT296_"+first)
+     closeFirst()
+     cleanupClobber:=!strings.Contains(read(second,"{{PROMPT_FILE}}"),"PLAT296_"+second)
+     t.Logf("layout=%s first=%s restore=%t prompt_collision=%t skill_collision=%t reference_collision=%t cleanup_collision=%t",layout,first,restore,promptClobber,skillClobber,referenceClobber,cleanupClobber)
+     if isolated {
+      if promptClobber||skillClobber||referenceClobber||cleanupClobber {t.Fatal("private-directory control failed")}
+     } else if os.Getenv("AGENTWORKS_PROJECTION_EXPECT") == "collision" {
+      if !promptClobber||!skillClobber||!referenceClobber||!cleanupClobber {t.Fatal("expected collision was not reproduced; inspect behavior, do not call isolation proven")}
+     } else if promptClobber||skillClobber||referenceClobber||cleanupClobber {t.Fatal("PLAT-296 regression: shared-directory sessions corrupt each other's files")}
+     if isolated { b,err:=os.ReadFile(filepath.Join(shared,"{{PROMPT_FILE}}"));if err!=nil||string(b)!="user-maintained workflow instructions"{t.Fatal("shared workflow instructions changed")} }
+     after,err:=os.ReadFile(filepath.Join(shared,"planning","plan.json"));if err!=nil||!bytes.Equal(after,plan){t.Fatal("shared plan changed")}
+     // A shared workflow remains accessible with explicit root resolution.
+     evidence:=filepath.Join(shared,"shared-test-evidence.txt")
+     if err:=os.WriteFile(evidence,[]byte("owner-to-run"),0600);err!=nil{t.Fatal(err)}
+     if b,err:=os.ReadFile(evidence);err!=nil||string(b)!="owner-to-run"{t.Fatal("shared data unavailable")}
+    })
+   }
+  }
+ }
+}

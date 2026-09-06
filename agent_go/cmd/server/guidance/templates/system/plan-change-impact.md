@@ -4,6 +4,18 @@ A workflow is a web of **implicit dependencies**: a step's output feeds downstre
 
 **Whenever you change a plan** — add / remove / reorder a step, or change a step's output contract, behavior, or description — you are not done until you have checked and reconciled the blast radius. This applies whether the change came from an active Workshop edit, an approved Goal Advisor proposal, or a bounded Pulse Fixer repair.
 
+## Interactive edits and test runs
+
+Do one combined compatibility check in the current agent after the related edits for a repair are complete, before the targeted test. Do not launch a separate drift reviewer for each edit or test retry.
+
+- **Small internal or cosmetic edits:** when outputs, DB writes, routing, and behavior remain compatible, confirm that briefly and proceed to the test. Judge the actual change, not just the field name: description/message edits can change behavior. Record unaffected surfaces as `not_applicable` with a short reason; no broad workspace audit is needed.
+- **Output, DB, routing, or behavior changes:** trace the affected dependencies using the procedure below and reconcile them before testing. Cover downstream steps, reports, evals, validation, and saved guidance only where the change reaches them. A known broken dependency needed by the test must be fixed first.
+- **Full drift audit:** reserve `review-artifact-drift` for scheduled Pulse or an explicit user request. A targeted test request does not request a full audit. The `drift_review.needs_review` flag tracks stale evidence for Pulse; it does not block interactive testing or require an immediate background reviewer.
+
+Combine all changelog entries from the same repair into that one check and record dispositions for each inspected entry. Reuse evidence while the relevant artifacts remain unchanged. If a test needs another edit, recheck only its new impact; if no artifacts changed, a retry needs no new dependency review. Never mark a full drift audit complete based only on this targeted check.
+
+**Stop when the changed step and its affected consumers are compatible.** Do not scan unrelated routes, drain old changelog/backlog entries, start a reviewer, or expand a small repair into a workflow redesign. An unrelated finding belongs in Pulse's backlog and must not delay the targeted test. Missing audit receipts alone are not a test blocker; a concrete incompatible dependency needed by the test is.
+
 ## 1. Name the change surface
 First, pin down exactly what other artifacts key off — the **surface** of the change:
 - the **step id**,
@@ -13,8 +25,8 @@ First, pin down exactly what other artifacts key off — the **surface** of the 
 
 If you renamed a field, removed an output, changed a file path, changed what's written to db, or changed what the step does — that's the surface to trace. A change with no surface change (see Scope note) has no blast radius.
 
-## 2. Trace each dimension — search, don't guess
-For each dimension, **search the workspace** for references to the surface and reconcile every hit. Don't reason about ripple effects in the abstract — grep for the *actual* references (step id, output file/field, db table/column, topic).
+## 2. Trace affected dimensions — search, don't guess
+Start with the changed step and its declared consumers. Search the relevant artifacts for actual changed references (output file/field, db table/column, route, behavior). Expand only when a concrete reference shows another affected consumer; the list below is a map of possible dependencies, not a mandatory full-workspace sweep. Skip dimensions that the change does not affect.
 
 - **Downstream steps** — search `planning/plan.json` and step descriptions for the step id / output file / changed field. A later step that consumes a field you changed must have its expectation **and** its `validation_schema` updated. (`read_skill(skills=[{"name":"builder-reference","path":"references/step-config.md"}])`)
 - **Evals** — search `evaluation/` for the step id / output path. An eval that reads the changed output must be updated so it still resolves and scores the right thing. (`read_skill(skills=[{"name":"builder-reference","path":"references/evaluation-plan.md"}])`)
@@ -33,7 +45,7 @@ For each affected dependent:
 **Never leave a plan change with a silently broken dependent.**
 
 ## 4. Record structured dependency closure and impact
-After tracing, call `mark_changelog_artifact_reviewed` with one evidence-backed disposition for every required surface: `downstream_steps`, `validation`, `evaluation`, `reporting`, `database`, and `learnings_and_knowledge`. Use only `updated`, `already_compatible`, `not_applicable`, `blocked`, or `broken`. A cosmetic change can honestly use `not_applicable`, but it still needs evidence explaining why the surface is unaffected. Every `blocked` or `broken` surface must include the durable Pulse `issue_ids` that own the unresolved repair. A bare `artifact_review.done=true` is no longer sufficient.
+When closing inspected changelog entries, call `mark_changelog_artifact_reviewed` with one evidence-backed disposition for every required surface: `downstream_steps`, `validation`, `evaluation`, `reporting`, `database`, and `learnings_and_knowledge`. Use only `updated`, `already_compatible`, `not_applicable`, `blocked`, or `broken`. A cosmetic change can honestly use `not_applicable`, with a short reason explaining why the surface is unaffected; do not run six audits just to populate these fields. Every `blocked` or `broken` surface must include the durable Pulse `issue_ids` that own the unresolved repair. If broader evidence is unavailable, leave that entry open for Pulse instead of expanding the interactive check or inventing evidence. A bare `artifact_review.done=true` is no longer sufficient. Recording audit closure is not a prerequisite for the targeted test once its affected dependencies are compatible.
 
 When the change has a defensible measurable effect, also record a typed Pulse impact intervention: what should change, the comparable baseline, and the future checkpoint. Link it back to each changelog entry with `sources=[{"source_type":"review","source_id":"<change_id>"}]`; this existing impact ledger is the effects log. Do not claim the change worked until later runs bound to the expected plan revision provide enough evidence.
 
@@ -42,7 +54,7 @@ Every plan-mod tool call is auto-written to `planning/changelog/changelog-*.json
 
 Do **not** edit or delete changelog files directly. The read-only Artifact Review agent returns exact inspected entries plus all six surface dispositions and evidence; the parent writer records typed findings/dispositions and then marks those entries through the dedicated `mark_changelog_artifact_reviewed` tool. Pulse uses that metadata to skip future no-op review turns.
 
-This proactive check is one end of a loop; the **`review-artifact-drift` audit** is the read-only checklist passed to a generic reviewer that sweeps the changelog and catches anything the proactive pass missed. Its parent writer uses changelog review metadata as the cursor and calls `mark_changelog_artifact_reviewed` only for exact inspected entries. Pulse handles the same concern inside its independent Artifact Review stage of `technical_review` — do not confuse this with the separate, dedicated `plan_drift_review` Pulse module, which tracks its own `drift_review` completion flag per step and covers a different, narrower mechanical surface (see `review-artifact-drift.md`'s deferral note).
+The full **`review-artifact-drift` audit** is a backstop for scheduled Pulse or an explicit user request. Its first part runs the scheduled `plan_drift_review` procedure; its second part audits the remaining dependent artifacts read-only. Its parent writer marks only exact inspected changelog entries. This broader audit is separate from the current agent's targeted compatibility check and is not a prerequisite for an interactive test run.
 
 ## Scope note
 The discipline **scales to the change**. A change that is purely internal to a step (same output contract, same db writes, same described behavior) has no blast radius — confirm that quickly and move on. A renamed output field touches downstream + report + eval + db; a reworded description that keeps the same contract may only touch learnings. Trace what the surface actually reaches, not a fixed checklist for its own sake.

@@ -765,6 +765,49 @@ func mergeNativeContinuationChatHistory(existing, current []llmtypes.MessageCont
 	return mergeRestoredChatHistory(existing, current)
 }
 
+// mergeModeChangedChatHistory keeps the canonical UI transcript complete when
+// a workflow session relaunches with a different prompt/tool/skill surface.
+// The first current message is the synthetic pointer supplied only to the new
+// agent process; it is transport context and must not appear as a user turn in
+// the durable conversation JSON.
+func mergeModeChangedChatHistory(previous, current []llmtypes.MessageContent) []llmtypes.MessageContent {
+	if len(current) == 0 {
+		return append([]llmtypes.MessageContent(nil), previous...)
+	}
+	merged := make([]llmtypes.MessageContent, 0, len(previous)+len(current)-1)
+	merged = append(merged, previous...)
+	merged = append(merged, current[1:]...)
+	return merged
+}
+
+func modeChangeHistorySnapshot(userID, conversationPath string, inMemory []llmtypes.MessageContent) ([]llmtypes.MessageContent, error) {
+	if len(inMemory) > 0 {
+		return append([]llmtypes.MessageContent(nil), inMemory...), nil
+	}
+	target, found, err := readRestoredChatHistoryPersistTargetFromPath(userID, conversationPath)
+	if err != nil || !found || target == nil {
+		return nil, err
+	}
+	return append([]llmtypes.MessageContent(nil), target.History...), nil
+}
+
+// phaseUsageCumulativeKey separates cumulative coding-CLI counters by native
+// process/session epoch. Run→Workshop transitions deliberately relaunch the
+// CLI; reusing only the AgentWorks session id would subtract the previous
+// process's final counters from the new process's first counters and could
+// undercount a turn whenever the new counter happened to be larger.
+func phaseUsageCumulativeKey(sessionID, turnID string, runtime *ChatHistoryAgentRuntime) string {
+	if runtime != nil {
+		if nativeID := strings.TrimSpace(runtime.ExternalSessionID); nativeID != "" {
+			return sessionID + "|native:" + strings.ToLower(strings.TrimSpace(runtime.Provider)) + ":" + nativeID
+		}
+	}
+	if turnID = strings.TrimSpace(turnID); turnID != "" {
+		return sessionID + "|turn:" + turnID
+	}
+	return sessionID
+}
+
 // boundedChatHistoryTail returns the newest messages that fit the supplied
 // limits. It is used only for durable UI storage and the explicit no-resume
 // fallback; coding providers with a native continuation never receive this
@@ -1041,8 +1084,33 @@ func listChatHistorySessionsFromWorkspaceIndex(userID, workflowPath string, limi
 	if !index.Complete {
 		return nil, false, nil
 	}
-	sessions := chatHistorySessionsFromIndex(index, userID, workflowPath)
-	return paginateChatHistorySessions(sessions, limit, offset), true, nil
+	sessions := paginateChatHistorySessions(chatHistorySessionsFromIndex(index, userID, workflowPath), limit, offset)
+	for i := range sessions {
+		if !chatHistoryHasLocalCommandPreview(sessions[i]) {
+			continue
+		}
+		source, found, readErr := readFileFromWorkspace(context.Background(), sessions[i].ConversationPath)
+		if readErr == nil && found {
+			if refreshed, ok := parseLocalChatHistorySession(userID, chatHistoryRoot(userID), workflowPath, sessions[i].SessionID, source, time.Time{}); ok {
+				sessions[i].Query = refreshed.Query
+				sessions[i].PreviewMessages = refreshed.PreviewMessages
+				sessions[i].MessageCount = refreshed.MessageCount
+				continue
+			}
+		}
+		// Keep the row reachable even if the source is temporarily unavailable.
+		if isClaudeLocalCommandRecord(sessions[i].Query) {
+			sessions[i].Query = ""
+		}
+		clean := make([]ChatHistoryPreviewMessage, 0, len(sessions[i].PreviewMessages))
+		for _, msg := range sessions[i].PreviewMessages {
+			if !isClaudeLocalCommandMessage(msg.Role, msg.Text) {
+				clean = append(clean, msg)
+			}
+		}
+		sessions[i].PreviewMessages = clean
+	}
+	return sessions, true, nil
 }
 
 type localChatHistoryFile struct {
@@ -1381,7 +1449,7 @@ func chatHistorySessionsFromIndex(index chatHistoryIndex, userID, workflowPath s
 
 func indexedLocalChatHistorySession(index chatHistoryIndex, file localChatHistoryFile) (ChatHistorySession, bool) {
 	entry, ok := index.Entries[file.workspacePath]
-	if !ok || entry.SourceSize != file.size || entry.Session.SessionID != file.sessionID {
+	if !ok || entry.SourceSize != file.size || entry.Session.SessionID != file.sessionID || chatHistoryHasLocalCommandPreview(entry.Session) {
 		return ChatHistorySession{}, false
 	}
 	if entry.SourceModifiedAtUnixNano != 0 && entry.SourceModifiedAtUnixNano != file.modTime.UnixNano() {
@@ -1756,7 +1824,7 @@ func latestHumanText(history []llmtypes.MessageContent) string {
 			}
 		}
 		cleaned := cleanChatHistoryQuery(strings.Join(textParts, "\n\n"))
-		if cleaned == "" || shouldSkipChatHistoryPreviewText(cleaned) {
+		if cleaned == "" || shouldSkipChatHistoryPreviewText(cleaned) || isClaudeLocalCommandRecord(cleaned) {
 			continue
 		}
 		if fallbackText == "" {
@@ -1819,7 +1887,7 @@ func chatHistoryPreviewMessages(history []llmtypes.MessageContent) []ChatHistory
 			continue
 		}
 		text = cleanChatHistoryQuery(text)
-		if shouldSkipChatHistoryPreviewText(text) {
+		if shouldSkipChatHistoryPreviewText(text) || isClaudeLocalCommandMessage(role, text) {
 			continue
 		}
 		if len(text) > maxPreviewChars {

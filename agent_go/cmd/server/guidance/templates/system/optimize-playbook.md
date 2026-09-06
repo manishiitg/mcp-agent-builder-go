@@ -175,7 +175,7 @@ The step **description** in plan.json is the primary instruction the execution a
 - `description_reviewed` + `review_notes`
 If the step description changes later, clear `description_reviewed` yourself — the system does not auto-invalidate the review.
 
-**Artifact drift after material changes**: If you materially change a step's contract or dependent artifacts, run the canonical read-only `/review-artifact-drift` flow. It is separate from Bug Review; the parent agent applies verified repairs. Use typed changelog review metadata as the cursor/checkpoint.
+**Dependencies after changes**: Follow `builder-reference/references/plan-change-impact.md`. After related edits, do one combined compatibility check in the current agent before the targeted test; inspect only affected dependencies. Do not launch a separate drift reviewer for each edit or test retry. Reserve the full `/review-artifact-drift` audit for scheduled Pulse or an explicit user request. Record inspected changelog entries through typed review metadata.
 
 ### 6. Post-Execution Step Review
 After running a step, review it for optimization — but follow this priority order. Fix fundamentals first before worrying about efficiency.

@@ -10,6 +10,7 @@ For the operational cheat sheet on creating / editing / deleting schedules
   { "id": "...", "name": "...", "description": "...",
     "cron_expression": "0 9 * * 1-5", "timezone": "UTC",
     "enabled": true, "trigger_payload": {},
+    "pulse_mode": "basic", "pulse_mode_reason": "Routine daily processing needs backup and a summary; no review is needed on every occurrence.",
     "group_names": ["confida-prod"],
     "mode": "workshop", "workshop_mode": "run" }
   ```
@@ -29,6 +30,7 @@ Every schedule in `workflow.json` has a `schedule_type` — `"cron"` (default) o
 
 ```
 { "name": "March content calendar", "timezone": "Asia/Kolkata",
+  "pulse_mode": "full", "pulse_mode_reason": "Each infrequent launch batch creates new outcome evidence that warrants review.",
   "group_names": ["group-1"], "mode": "workshop", "workshop_mode": "run",
   "calendar_items": [
     { "date": "2026-03-03", "time": "09:00", "description": "Optional note" },
@@ -49,9 +51,11 @@ Workflow schedules always use the workshop builder execution path. Do not create
 
 **Default mode rule:** create workflow schedules with `mode="workshop"`. New schedules should never use `mode="workflow"`.
 
-**Pulse after scheduled runs**: `workflow.json.pulse.enabled` supplies the default for schedules that omit `pulse_mode`. Set `pulse_mode="off"` to run no Pulse actions; `"basic"` for backup, report publishing, and a run-summary notification only; or `"full"` for Gate, drift review, technical/strategic review+fix, and finalization. Use an explicit mode whenever schedules in the same workflow need different treatment. The Pulse popup changes only the workflow default, not an explicit schedule override. Do not create `pulse_review_only` for new workflows: it is legacy compatibility input, migrated to `pulse.enabled`, and is not registered as an independent cron. Do not create a separate Goal Advisor schedule; Gate decides when its module is due. `/goal-advisor` is a one-off strategy review and must not change schedules.
+**Pulse after scheduled runs**: Every cron and calendar schedule must persist `pulse_mode` (`off`, `basic`, or `full`) and a non-empty `pulse_mode_reason`. New schedules cannot inherit. Updates must leave both fields complete; when changing the mode, supply a fresh reason with it. Legacy workflows can still load until the explicit-schedule-Pulse contract migration decides every schedule, including disabled entries. The workflow Pulse toggle only affects legacy inherited schedules; it does not override explicit policies. Do not create `pulse_review_only` or a separate Goal Advisor schedule. `/goal-advisor` remains a one-off review.
 
-**Choosing `pulse_mode`**: start with the workflow default unless the schedule has a clear different purpose. Use `full` for a schedule that creates or changes durable workflow state, executes external actions, changes a plan/configuration, or is the workflow's only meaningful outcome-producing run. Use `basic` for a routine or frequent operational run whose outcome still needs backup, report publication, and notification but whose work is already covered by another full schedule or does not warrant review/repair on every occurrence. Use `off` only when the user explicitly asks for no post-run stewardship, or for a disposable/test/maintenance schedule where losing backup, publication, and notification is intentional. Never select `off` merely to reduce cost; state the chosen mode and reason when creating or changing a schedule.
+**Choosing `pulse_mode`**: Before adding a schedule, inspect the existing schedules and decide how often this workflow needs Pulse. Consider token cost, route purpose, frequency, evidence maturity and retention. Prefer reviewing multiple runs together when their combined evidence makes a better review. Record the intended review cadence/window and verified cross-route coverage in the reason; choose among existing schedule timings rather than silently adding a review cron. Prefer `basic` for frequent routine operations: backup, report publication and run-summary notification continue, while Gate, drift review, reviewers and Fixer are skipped. Choose `full` when review cost is justified by this schedule's risk, evidence and cadence; external actions or durable writes alone do not require Full after every run. Use `off` when skipping all post-run backup/publication/notification is intentional, including an existing owner-disabled policy; explain that consequence. Do not choose Off merely to reduce review cost when Basic is appropriate. If a Basic schedule relies on another Full schedule, name it and verify that its review actually reads this route's evidence—one route's Full run does not automatically cover all routes.
+
+**Persist the reason**: `pulse_mode_reason` must explain this schedule's purpose/frequency, why its selected review level is appropriate, and any verified coverage dependency (schedule ID or route). Store the explanation on the schedule, not only in chat. For example: `pulse_mode="basic", pulse_mode_reason="Runs approved-queue processing four times daily; each run needs backup and a summary, but routine unchanged queue processing does not warrant review/repair every time."` Do not copy this example without checking the actual schedule.
 
 ### Back up scheduled workflows
 

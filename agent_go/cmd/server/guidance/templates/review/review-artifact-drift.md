@@ -3,6 +3,8 @@ changes — the on-demand equivalent of Pulse's scheduled pass, sharing the
 exact same candidate collector, repair contract, and completion writer as
 `plan_drift_review`, not a separate parallel implementation of it.{{if .Focus}} Focus especially on: {{.Focus}}.{{end}}
 
+Run this full audit for scheduled Pulse or an explicit user request. Ordinary plan edits and targeted test runs use `builder-reference/references/plan-change-impact.md`: one combined compatibility check in the current agent after related edits. A stale `drift_review.needs_review` flag alone does not require this audit before testing. Merely reading this guide during an edit does not authorize launching a background audit.
+
 ## Execution model
 
 - In Pulse, the parent may include this checklist in the normal Engineering

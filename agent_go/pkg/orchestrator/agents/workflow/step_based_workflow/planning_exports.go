@@ -251,7 +251,7 @@ var blankLineRunPattern = regexp.MustCompile(`\n{3,}`)
 type SchedulerCallbacks struct {
 	ListSchedules          func(ctx context.Context, workspacePath string) (string, error)
 	CreateSchedule         func(ctx context.Context, workspacePath, name, cronExpr, timezone string, groupNames []string, routeSelections map[string]string, mode string, messages []string, directMessagesReason string, workshopMode string, resumePrevious *bool, pulseReviewOnly bool, policy ScheduleRuntimePolicy) (string, error)
-	CreateCalendarSchedule func(ctx context.Context, workspacePath, name, timezone string, groupNames []string, calendarItemsJSON string, mode string, messages []string, directMessagesReason string, workshopMode string) (string, error)
+	CreateCalendarSchedule func(ctx context.Context, workspacePath, name, timezone string, groupNames []string, calendarItemsJSON string, mode string, messages []string, directMessagesReason string, workshopMode string, policy ScheduleRuntimePolicy) (string, error)
 	UpdateSchedule         func(ctx context.Context, jobID, name, cronExpr, timezone string, groupNames []string, setGroupNames bool, routeSelections map[string]string, setRouteSelections bool, enabled *bool, mode string, messages []string, setMessages bool, directMessagesReason *string, workshopMode string, resumePrevious *bool, pulseReviewOnly *bool, policy *ScheduleRuntimePolicy) (string, error)
 	DeleteSchedule         func(ctx context.Context, jobID string) error
 	TriggerSchedule        func(ctx context.Context, jobID string) (string, error)
@@ -268,6 +268,7 @@ type SchedulerCallbacks struct {
 // enforced by the runtime rather than inferred from a natural-language
 // message or a conveniently spaced cron expression.
 type ScheduleRuntimePolicy struct {
+	PulseModeReason      string
 	PulseMode            string
 	ExecutionMode        string
 	CollisionPolicy      string
@@ -280,6 +281,7 @@ type ScheduleRuntimePolicy struct {
 	// from an explicit empty/zero value, so changing one policy does not erase
 	// the other three.
 	SetExecutionMode        bool
+	SetPulseModeReason      bool
 	SetPulseMode            bool
 	SetCollisionPolicy      bool
 	SetMaxStartDelayMinutes bool

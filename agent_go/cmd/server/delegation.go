@@ -132,6 +132,13 @@ func (n *workshopExecutionBgNotifier) OnExecutionStart(start todo_creation_human
 	}
 	n.api.bgAgentRegistry.Register(n.sessionID, bgAgent)
 	n.api.trackWorkshopExecutionStart(n.sessionID, n.workspacePath, n.presetQueryID, n.userID, start.ID, start.Name, parentExecutionID, metadata)
+	if bgAgent.GetStatus() == BGAgentCanceled {
+		n.api.completeTrackedExecution(start.ID, trackedExecutionStatusCanceled, "parent execution canceled", metadata)
+		if bgAgent.MarkTerminalNotified() {
+			n.api.emitBackgroundAgentTerminated(n.sessionID, start.ID, start.Name, "")
+		}
+		return
+	}
 
 	// Pre-create the channel so NotifyCompletion never drops a completion
 	n.api.bgAgentRegistry.GetNotificationChannel(n.sessionID)
@@ -259,7 +266,9 @@ func (n *workshopExecutionBgNotifier) OnExecutionComplete(execID, name, result s
 	// it canceled would make processBackgroundAgentCompletion deliberately suppress
 	// the synthetic turn, which strands Pulse after a timed-out maintenance agent.
 	if err != nil && (strings.Contains(err.Error(), "context canceled") || strings.Contains(err.Error(), "context deadline exceeded")) {
-		agent.SetError(err.Error())
+		if !agent.SetError(err.Error()) {
+			return
+		}
 		n.api.completeTrackedExecution(execID, trackedExecutionStatusFailed, err.Error(), meta)
 		duration := time.Since(agent.CreatedAt)
 		n.api.emitBackgroundAgentCompleted(n.sessionID, execID, name, "failed", "", err.Error(), duration.Truncate(time.Second).String())
@@ -276,11 +285,15 @@ func (n *workshopExecutionBgNotifier) OnExecutionComplete(execID, name, result s
 		agent.SetMetadata(meta)
 	}
 	if err != nil {
-		agent.SetError(err.Error())
+		if !agent.SetError(err.Error()) {
+			return
+		}
 		n.api.completeTrackedExecution(execID, trackedExecutionStatusFailed, err.Error(), meta)
 		n.api.emitBackgroundAgentCompleted(n.sessionID, execID, name, "failed", "", err.Error(), duration.Truncate(time.Second).String())
 	} else {
-		agent.SetResult(result) // Store full result — truncation only happens at display/notification time
+		if !agent.SetResult(result) {
+			return
+		} // A concurrent stop owns the terminal outcome.
 		n.api.completeTrackedExecution(execID, trackedExecutionStatusCompleted, "", meta)
 		displayResult := workshopCompletionDisplayResult(n.workspacePath, result, meta)
 		n.api.emitBackgroundAgentCompleted(n.sessionID, execID, name, "completed", displayResult, "", duration.Truncate(time.Second).String())
@@ -377,19 +390,14 @@ func (n *workshopExecutionBgNotifier) OnExecutionTerminated(execID, name string)
 		n.api.completeTrackedExecution(execID, trackedExecutionStatusCanceled, "session stopped", nil)
 		return
 	}
-	agent := n.api.bgAgentRegistry.Get(n.sessionID, execID)
-	if agent == nil {
-		return
+	for _, agent := range n.api.bgAgentRegistry.CancelExecutionTree(n.sessionID, execID) {
+		snapshot := agent.GetSnapshot()
+		n.api.completeTrackedExecution(snapshot.ID, trackedExecutionStatusCanceled, "execution terminated", nil)
+		if agent.MarkTerminalNotified() {
+			n.api.emitBackgroundAgentTerminated(n.sessionID, snapshot.ID, snapshot.Name, "")
+		}
 	}
-	agent.SetCanceled()
-	n.api.completeTrackedExecution(execID, trackedExecutionStatusCanceled, "execution terminated", nil)
-	// Dedup with OnExecutionComplete's context-cancel path: emit the terminated
-	// event only once per agent regardless of which path fires first.
-	if agent.MarkTerminalNotified() {
-		n.api.emitBackgroundAgentTerminated(n.sessionID, execID, name, "")
-	}
-	// Signal completion so the loop can process any pending completions
-	n.api.bgAgentRegistry.NotifyCompletion(n.sessionID, execID)
+
 }
 
 // workflowSubAgentTrackingNotifier tracks inner workshop sub-agents in the backend

@@ -226,12 +226,12 @@ func TestArtifactReviewNotices(t *testing.T) {
 		Field:  "description",
 	}}, true, true, false)
 	for _, want := range []string{
-		"Dependent artifact review required",
-		"validation_schema",
-		"learnings/step-a",
-		"db/README.md",
-		"knowledgebase_access",
-		"db/reports/index.html",
+		"Plan change recorded",
+		"description",
+		"one combined compatibility check",
+		"small internal edits",
+		"affected dependencies before testing",
+		"plan-change-impact.md",
 		"review-artifact-drift",
 		"drift_review",
 		"plan_drift_review",
@@ -271,6 +271,40 @@ func TestArtifactReviewNotices(t *testing.T) {
 		if !strings.Contains(routeNotice, want) {
 			t.Fatalf("route notice missing %q:\n%s", want, routeNotice)
 		}
+	}
+}
+
+// These responses go straight back to the editing agent. No mutation path,
+// including a failed tracking write, should turn a targeted test into a full
+// background audit. Keep the same batching policy across add/update/delete/routes.
+func TestPlanEditNoticesUseTargetedChecks(t *testing.T) {
+	for name, notice := range map[string]string{
+		"internal edit":            buildPlanStepDependentArtifactReviewNotice("step-a", []PlanFieldChange{{Field: "description"}}, true, true, false),
+		"output change":            buildPlanStepDependentArtifactReviewNotice("step-a", []PlanFieldChange{{Field: "context_output"}}, true, true, false),
+		"new step":                 buildAddedStepArtifactSetupNotice("step-a", "message_sequence"),
+		"deleted step":             buildDeletedStepArtifactCleanupNotice([]string{"step-a"}, nil, false),
+		"failed deletion tracking": buildDeletedStepArtifactCleanupNotice([]string{"step-a"}, nil, true),
+		"route change":             buildOrchestratorRouteArtifactReviewNotice("parent", "route-a", "updated", true, true, false),
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, want := range []string{
+				"After related edits are complete",
+				"one combined compatibility check in the current agent",
+				"before the targeted test",
+				"Do not launch a separate drift reviewer for each edit or test retry",
+				"scheduled Pulse or an explicit user request",
+			} {
+				if !strings.Contains(notice, want) {
+					t.Errorf("missing %q: %s", want, notice)
+				}
+			}
+			if strings.Contains(notice, "get_workflow_command_guidance(") {
+				t.Errorf("mutation response still directs the agent to launch an audit: %s", notice)
+			}
+		})
+	}
+	if notice := buildPlanStepDependentArtifactReviewNotice("step-a", nil, false, false, false); notice != "" {
+		t.Fatalf("no-op edit should not request a new check: %s", notice)
 	}
 }
 

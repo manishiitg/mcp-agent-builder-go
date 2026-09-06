@@ -1,13 +1,10 @@
+# Retired. New deployments disable this timer; the backend checks daily even
+# when it has not restarted. Kept for compatibility with old release manifests.
 [Unit]
-Description=Daily coding-agent CLI update (quiet hour; skips while agents run)
+Description=Legacy coding-agent CLI update timer (retired)
 
 [Timer]
-# 03:30 UTC daily, jittered so several boxes don't hit the registries at once.
-# Persistent catches up a missed run after a reboot. The service itself skips
-# when a platform agent session is active, so a busy box is simply retried
-# the next day.
 OnCalendar=*-*-* 03:30:00 UTC
-RandomizedDelaySec=30min
 Persistent=true
 
 [Install]

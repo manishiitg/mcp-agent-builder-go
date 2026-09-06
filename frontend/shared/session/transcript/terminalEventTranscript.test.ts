@@ -200,6 +200,29 @@ describe('selectTerminalEvents — owned terminal (workflow step, message-sequen
 })
 
 describe('selectTerminalEvents — main agent', () => {
+  it.each([null, terminal({ session_id: 's1', owner_id: 'main:s1', execution_kind: 'main_agent' })])(
+    'keeps pre-restart replies before new work when the server sequence restarts',
+    (main) => {
+      const oldReply = evt({
+        id: 'old-queue-update', session_id: 's1', type: 'llm_generation_end',
+        timestamp: '2026-09-05T22:58:37+05:30', sequence: 2400,
+        data: { data: { content: 'That queue notification is from the old workflow.' } } as never,
+      })
+      const currentReply = evt({
+        id: 'new-status', session_id: 's1', type: 'unified_completion',
+        timestamp: '2026-09-06T00:17:35+05:30', sequence: 448,
+        data: { data: { final_result: 'Still running in its final validation repair pass.' } } as never,
+      })
+      const currentTool = evt({
+        id: 'new-tool', session_id: 's1', type: 'tool_call_end',
+        timestamp: '2026-09-06T00:18:00+05:30', sequence: 460,
+      })
+      // Replayed history may arrive after live events and keep its old sequence.
+      const ordered = selectTerminalEvents([currentReply, currentTool, oldReply], main)
+      expect(ordered.map(event => event.id)).toEqual(['old-queue-update', 'new-status', 'new-tool'])
+    },
+  )
+
   it('keeps an optimistic user message once it is tagged with the active session', () => {
     const main = terminal({
       session_id: 's-live',

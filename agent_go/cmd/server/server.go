@@ -23,9 +23,11 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulepolicy"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/manishiitg/coding-agent-loop/agent_go/internal/cliupdate"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/dominionproduct"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/financeproduct"
@@ -1471,6 +1473,29 @@ func runServer(cmd *cobra.Command, args []string) {
 		}
 	}
 
+	cliUpdateCtx, stopCLIUpdates := context.WithCancel(context.Background())
+	defer stopCLIUpdates()
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("CLI_UPDATE_ENABLED")), "false") && !strings.EqualFold(strings.TrimSpace(os.Getenv("CLI_UPDATE_DRY_RUN")), "true") {
+		root, updateErr := cliupdate.DefaultRoot()
+		if updateErr == nil {
+			var manager *cliupdate.Manager
+			manager, updateErr = cliupdate.New(root, log.Printf)
+			if updateErr == nil {
+				updateErr = manager.Prepare()
+			}
+			if updateErr == nil {
+				updateErr = manager.Activate()
+			}
+			if updateErr == nil {
+				log.Printf("[CLI UPDATE] daily checks enabled; state: %s", filepath.Join(root, "state.json"))
+				go manager.Run(cliUpdateCtx)
+			}
+		}
+		if updateErr != nil {
+			log.Printf("[CLI UPDATE] unavailable: %v", updateErr)
+		}
+	}
+
 	// Startup recovery is ownership-aware: only tagged coding-agent tmux
 	// sessions whose backend PID is dead are removed. Untagged legacy sessions
 	// and sessions owned by another live backend/test are preserved.
@@ -2588,6 +2613,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
 	<-c
+	stopCLIUpdates()
 
 	fmt.Println("\n🛑 Shutting down server...")
 
@@ -4749,11 +4775,24 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 		workspace.SetSessionWorkingDir(sessionID, chatWorkingFolder)
 		chatWorkingDir := codingAgentWorkspaceWorkingDir(chatWorkingFolder)
+		sharedChatWorkingDir := chatWorkingDir
+		if isWorkflowPhase {
+			var isolationErr error
+			chatWorkingDir, isolationErr = workflowCLIWorkingDir(chatWorkingFolder, currentUserID, sessionID, finalProvider, workflowCLIMode(&req, currentUserIsReadOnly))
+			if isolationErr != nil {
+				sendError(isolationErr.Error(), true)
+				return
+			}
+		}
+		cliWorkingPaths := []string{sharedChatWorkingDir}
+		if chatWorkingDir != sharedChatWorkingDir {
+			cliWorkingPaths = append(cliWorkingPaths, chatWorkingDir)
+		}
 		cliSecurityPolicy, err := api.cliSecurityStore.Resolve(
 			currentUserID,
 			finalProvider,
-			[]string{chatWorkingDir},
-			[]string{chatWorkingDir},
+			cliWorkingPaths,
+			cliWorkingPaths,
 		)
 		if err != nil {
 			logfWithContext(queryLogCtx, "[CLI_SECURITY] Failed to resolve policy: %v", err)
@@ -5640,8 +5679,14 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					// underlyingAgent is provably non-nil at this point
 					// (vet flags the prior nil check as tautological);
 					// nil-check removed to silence (govet/nilness).
-					if err := llmAgent.SetCodingAgentWorkingDir(codingAgentWorkspaceWorkingDir(phaseWorkspacePath)); err != nil {
-						log.Printf("[WORKFLOW_PHASE] Failed to configure coding-agent working directory: %v", err)
+					phaseCLIWorkingDir, isolationErr := workflowCLIWorkingDir(phaseWorkspacePath, currentUserID, sessionID, finalProvider, workflowCLIMode(&req, currentUserIsReadOnly))
+					if isolationErr != nil {
+						sendError(isolationErr.Error(), true)
+						return
+					}
+					if err := llmAgent.SetCodingAgentWorkingDir(phaseCLIWorkingDir); err != nil {
+						sendError(fmt.Sprintf("Failed to configure coding-agent working directory: %v", err), true)
+						return
 					}
 					// Restrict shell commands to the workflow folder via Isolator
 					// Include #workflow read-only paths so the builder can read referenced workflows
@@ -5955,6 +6000,9 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					sendError(fmt.Sprintf("Failed to assemble the system prompt for phase %s: %v", workflowPhaseID, phasePromptErr), true)
 					return
 				}
+				if workflowCLIIsolationEnabled() && isCodingAgentProvider(finalProvider, finalModelID) {
+					phaseSystemPrompt += workflowCLIWorkspaceInstructions(phaseWorkspacePath)
+				}
 				if err := llmAgent.ResetInstructions(phaseSystemPrompt); err != nil {
 					sendError(fmt.Sprintf("Failed to set the system prompt for phase %s: %v", workflowPhaseID, err), true)
 					return
@@ -6013,17 +6061,16 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// before finalization instead of mutating the live agent afterward.
 		eventObserver := events.NewEventObserverWithLogger(api.eventStore, sessionID, api.logger)
 		// Scope resolution, in priority order (PLAT-088):
-		//  1. The scheduler's explicit llm_config_source marker. A scheduled
-		//     Pulse turn is indistinguishable from the workflow-orchestration
-		//     turns around it by mode or phase alone — same session, same phase
-		//     id — so this stamp is the only reliable Pulse signal here.
+		//  1. The scheduler's explicit pulse_lifecycle_turn flag, with the older
+		//     llm_config_source marker retained as compatibility. Pulse may use
+		//     the Builder model, so model selection is not an attribution signal.
 		//  2. Otherwise the agent mode + phase. req.AgentMode is rewritten to
 		//     "multi-agent" far above purely to route workflow_phase requests
 		//     down the standard agent path, so inferring from it directly
 		//     charged every scheduled workflow AND Pulse turn to "chat".
 		//     isWorkflowPhase is captured before that rewrite and is what the
 		//     inference is supposed to see.
-		costScope := scopeForScheduledLLMRole(req.LLMConfigSource)
+		costScope := scopeForScheduledTurn(req.PulseLifecycleTurn, req.LLMConfigSource)
 		if costScope == "" {
 			agentModeForScope := req.AgentMode
 			if isWorkflowPhase {
@@ -6090,6 +6137,9 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		if newWorkshopMode == "" && isWorkflowPhase {
 			newWorkshopMode = "workshop"
 		}
+		if isWorkflowPhase && currentUserIsReadOnly {
+			newWorkshopMode = "run"
+		}
 		modeChangedThisTurn := false
 		modeChangePrevMode := ""
 		modeChangeConversationPath := ""
@@ -6123,6 +6173,17 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 					logfWithContext(queryLogCtx, "[WORKSHOP_MODE] Failed to find previous conversation file for mode switch: %v", err)
 				} else if ok {
 					modeChangeConversationPath = existingPath
+					// The process-local cache can be empty after recovery or cache
+					// cleanup even though the canonical JSON exists. Load it before
+					// switching modes; otherwise the overwrite guard correctly keeps
+					// the old file but has no way to append this new turn.
+					if len(preModeChangeSnapshot) == 0 {
+						if snapshot, readErr := modeChangeHistorySnapshot(currentUserID, existingPath, nil); readErr != nil {
+							logfWithContext(queryLogCtx, "[WORKSHOP_MODE] Failed to load previous conversation for mode-change merge: %v", readErr)
+						} else if len(snapshot) > 0 {
+							preModeChangeSnapshot = snapshot
+						}
+					}
 				}
 				if modeChangeConversationPath == "" && len(preModeChangeSnapshot) > 0 {
 					modeChangeConversationPath = workflowBuilderConversationLogPath(workflowPhaseFolder, sessionID, time.Now())
@@ -6338,7 +6399,7 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				!api.isSessionMarkedStopped(sessionID) {
 				if runtime, ok, err := ReadChatHistoryRuntimeForSession(currentUserID, sessionID, workflowPhaseFolder); err != nil {
 					logfWithContext(queryLogCtx, "[CHAT_HISTORY] Materialize guard: failed to read runtime for session %s: %v", sessionID, err)
-				} else if ok && runtime != nil && restoredRuntimeUsesLaunchableTerminalTransport(runtime) {
+				} else if ok && runtime != nil && workflowCLIResumeAllowed(underlyingAgent, runtime) && restoredRuntimeUsesLaunchableTerminalTransport(runtime) {
 					restoredRuntime = runtime
 					restoredNativeCodingResume = true
 					logfWithContext(queryLogCtx, "[CHAT_HISTORY] Materialize guard: session %s tmux is gone but agent has a native-resume handle; re-launching + materializing terminal so the next turn is visible", sessionID)
@@ -6532,12 +6593,13 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 		// the rest to the pre-change snapshot so the persisted file stays
 		// the canonical record of the conversation.
 		persistedHistory := finalHistory
-		if modeChangedThisTurn && len(finalHistory) >= 1 {
-			merged := make([]llmtypes.MessageContent, 0, len(preModeChangeSnapshot)+len(finalHistory)-1)
-			merged = append(merged, preModeChangeSnapshot...)
-			merged = append(merged, finalHistory[1:]...) // skip the conversation-file pointer
-			persistedHistory = merged
-			log.Printf("[CONVERSATION DEBUG] Mode-change merge: persisting %d msgs (snapshot %d + new %d)", len(persistedHistory), len(preModeChangeSnapshot), len(finalHistory)-1)
+		if modeChangedThisTurn {
+			persistedHistory = mergeModeChangedChatHistory(preModeChangeSnapshot, finalHistory)
+			newHistoryCount := len(finalHistory)
+			if newHistoryCount > 0 {
+				newHistoryCount--
+			}
+			log.Printf("[CONVERSATION DEBUG] Mode-change merge: persisting %d msgs (snapshot %d + new %d)", len(persistedHistory), len(preModeChangeSnapshot), newHistoryCount)
 		}
 		// Deliberately NOT bounded: the comment above calls this file the
 		// canonical record of the conversation, and trimming it here deletes the
@@ -6715,7 +6777,8 @@ func (api *StreamingAPI) handleQuery(w http.ResponseWriter, r *http.Request) {
 				if modelID == "" {
 					modelID = runtimeInfo.LLMConfig.ModelID
 				}
-				deltaUsage := orchestrator.ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(&tokenFile, persistSessionID, phaseKey, modelID, modelUsage, now)
+				usageSessionKey := phaseUsageCumulativeKey(persistSessionID, queryID, chatRuntime)
+				deltaUsage := orchestrator.ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(&tokenFile, usageSessionKey, phaseKey, modelID, modelUsage, now)
 
 				if tokenJSON, err := json.MarshalIndent(tokenFile, "", "  "); err == nil {
 					if err := writeRawFileToWorkspace(context.Background(), tokenFilePath, string(tokenJSON)); err != nil {
@@ -7809,6 +7872,10 @@ func codingAgentProviderContract(provider, modelID string) (llmproviders.CodingA
 
 func (api *StreamingAPI) seedCodingAgentRuntimeFromRestoredConversation(sessionID, currentProvider, currentWorkshopMode string, runtime *ChatHistoryAgentRuntime, underlyingAgent *mcpagent.Agent) bool {
 	if api == nil || underlyingAgent == nil || runtime == nil {
+		return false
+	}
+	if !workflowCLIResumeAllowed(underlyingAgent, runtime) {
+		log.Printf("[CHAT_HISTORY] Native resume skipped for session %s: CLI runtime directory changed; using saved application history", sessionID)
 		return false
 	}
 	hasAgentSessionHandle := runtime.AgentSessionHandle != nil && !runtime.AgentSessionHandle.Empty()
@@ -9542,6 +9609,7 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				} else {
 					sb.WriteString("- **Groups**: all\n")
 				}
+				sb.WriteString(fmt.Sprintf("- **Pulse**: %s\n- **Pulse reason**: %s\n", manifest.EffectivePulseMode(sched), sched.PulseModeReason))
 				if len(sched.RouteSelections) > 0 {
 					sb.WriteString(fmt.Sprintf("- **Route selections**: %v\n", sched.RouteSelections))
 				}
@@ -9595,6 +9663,7 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				ResumePrevious:       resumePrevious,
 				PulseReviewOnly:      pulseReviewOnly,
 				PulseMode:            strings.ToLower(strings.TrimSpace(policy.PulseMode)),
+				PulseModeReason:      strings.TrimSpace(policy.PulseModeReason),
 				ExecutionMode:        strings.TrimSpace(policy.ExecutionMode),
 				CollisionPolicy:      strings.TrimSpace(policy.CollisionPolicy),
 				MaxStartDelayMinutes: policy.MaxStartDelayMinutes,
@@ -9604,6 +9673,9 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				DependencyDeadline:   strings.TrimSpace(policy.DependencyDeadline),
 			}
 			if err := validateScheduleRuntimePolicy(newSched); err != nil {
+				return "", err
+			}
+			if err := schedulepolicy.ValidatePulse(newSched.PulseMode, newSched.PulseModeReason); err != nil {
 				return "", err
 			}
 			manifest.Schedules = append(manifest.Schedules, newSched)
@@ -9631,7 +9703,7 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 			}
 			return result, nil
 		},
-		CreateCalendarSchedule: func(ctx context.Context, workspacePath, name, timezone string, groupNames []string, calendarItemsJSON string, mode string, messages []string, directMessagesReason string, workshopMode string) (string, error) {
+		CreateCalendarSchedule: func(ctx context.Context, workspacePath, name, timezone string, groupNames []string, calendarItemsJSON string, mode string, messages []string, directMessagesReason string, workshopMode string, policy todo_creation_human.ScheduleRuntimePolicy) (string, error) {
 			mode = scheduleModeOrDefault(mode)
 			if mode == "multi-agent" {
 				return "", fmt.Errorf("workflow calendar schedules must use workshop mode")
@@ -9674,6 +9746,11 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				Messages:             messages,
 				DirectMessagesReason: directMessagesReason,
 				WorkshopMode:         workshopMode,
+				PulseMode:            strings.ToLower(strings.TrimSpace(policy.PulseMode)),
+				PulseModeReason:      strings.TrimSpace(policy.PulseModeReason),
+			}
+			if err := schedulepolicy.ValidatePulse(newSched.PulseMode, newSched.PulseModeReason); err != nil {
+				return "", err
 			}
 			manifest.Schedules = append(manifest.Schedules, newSched)
 			if err := WriteWorkflowManifest(ctx, workspacePath, manifest); err != nil {
@@ -9770,6 +9847,12 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				sched.PulseReviewOnly = *pulseReviewOnly
 			}
 			if policy != nil {
+				if policy.SetPulseMode && strings.ToLower(strings.TrimSpace(policy.PulseMode)) != sched.PulseMode && !policy.SetPulseModeReason {
+					return "", fmt.Errorf("pulse_mode_reason is required when changing pulse_mode")
+				}
+				if policy.SetPulseModeReason {
+					sched.PulseModeReason = strings.TrimSpace(policy.PulseModeReason)
+				}
 				if policy.SetPulseMode {
 					sched.PulseMode = strings.ToLower(strings.TrimSpace(policy.PulseMode))
 				}
@@ -9797,6 +9880,9 @@ func (api *StreamingAPI) buildSchedulerCallbacks() *todo_creation_human.Schedule
 				if err := validateScheduleRuntimePolicy(*sched); err != nil {
 					return "", err
 				}
+			}
+			if err := schedulepolicy.ValidatePulse(sched.PulseMode, sched.PulseModeReason); err != nil {
+				return "", err
 			}
 			// PLAT-115: a PulseReviewOnly schedule carries no GroupNames — same
 			// reason CreateSchedule skips the group-name requirement for it.

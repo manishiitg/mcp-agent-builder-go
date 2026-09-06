@@ -148,34 +148,36 @@ func (a *BackgroundAgent) MarkTerminalNotified() bool {
 // SetResult marks the agent as completed with the given result.
 // If the agent was already canceled (e.g. parent workflow stopped), the status is preserved
 // to prevent stale completion notifications from racing with CancelAll.
-func (a *BackgroundAgent) SetResult(result string) {
+func (a *BackgroundAgent) SetResult(result string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.Status == BGAgentCanceled {
 		log.Printf("[BG AGENT] SetResult skipped for canceled agent %s", a.ID)
-		return
+		return false
 	}
 	a.Result = result
 	a.Status = BGAgentCompleted
 	now := time.Now()
 	a.CompletedAt = &now
+	return true
 }
 
 // SetError updates the agent error and status atomically
 // SetError marks the agent as failed with the given error message.
 // If the agent was already canceled, the status is preserved to prevent
 // stale error notifications from racing with CancelAll.
-func (a *BackgroundAgent) SetError(errMsg string) {
+func (a *BackgroundAgent) SetError(errMsg string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.Status == BGAgentCanceled {
 		log.Printf("[BG AGENT] SetError skipped for canceled agent %s", a.ID)
-		return
+		return false
 	}
 	a.Error = errMsg
 	a.Status = BGAgentFailed
 	now := time.Now()
 	a.CompletedAt = &now
+	return true
 }
 
 // FailAndCancel records an unexpected runtime failure before canceling the
@@ -465,11 +467,84 @@ func (r *BackgroundAgentRegistry) NextID(name string) string {
 // Register adds a background agent to the registry
 func (r *BackgroundAgentRegistry) Register(sessionID string, agent *BackgroundAgent) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.agents[sessionID] == nil {
 		r.agents[sessionID] = make(map[string]*BackgroundAgent)
 	}
 	r.agents[sessionID][agent.ID] = agent
+	// Registration races with stop: a child created after the tree was marked
+	// must inherit its ancestor's cancellation instead of becoming new live work.
+	seen := map[string]bool{agent.ID: true}
+	parentID := agent.ParentExecutionID
+	canceled := false
+	for parentID != "" && !seen[parentID] {
+		seen[parentID] = true
+		parent := r.agents[sessionID][parentID]
+		if parent == nil {
+			break
+		}
+		if parent.GetStatus() == BGAgentCanceled {
+			canceled = true
+			break
+		}
+		parentID = parent.ParentExecutionID
+	}
+	if canceled {
+		agent.SetCanceled()
+		agent.finishCompletionNotification(true)
+	}
+	r.mu.Unlock()
+	if canceled && agent.cancel != nil {
+		agent.cancel()
+	}
+}
+
+// CancelExecutionTree marks the entire owned subtree before canceling any
+// contexts. Workers can finish synchronously during cancel(); they must already
+// see cancellation on every child. Unrelated executions and terminal history
+// are preserved, including independently running sibling tests.
+func (r *BackgroundAgentRegistry) CancelExecutionTree(sessionID, rootID string) []*BackgroundAgent {
+	r.mu.Lock()
+	agents := r.agents[sessionID]
+	owned := map[string]bool{rootID: true}
+	for changed := true; changed; {
+		changed = false
+		for id, agent := range agents {
+			if !owned[id] && owned[agent.ParentExecutionID] {
+				owned[id] = true
+				changed = true
+			}
+		}
+	}
+	canceled := make([]*BackgroundAgent, 0)
+	callbacks := make([]context.CancelFunc, 0)
+	for id, agent := range agents {
+		if !owned[id] {
+			continue
+		}
+		agent.mu.Lock()
+		running := agent.Status == BGAgentRunning
+		if running {
+			agent.Status = BGAgentCanceled
+			now := time.Now()
+			agent.CompletedAt = &now
+			if agent.cancel != nil {
+				callbacks = append(callbacks, agent.cancel)
+			}
+		}
+		stopped := agent.Status == BGAgentCanceled
+		agent.mu.Unlock()
+		// Keep terminal history, but discard queued replies from earlier items
+		// of this stopped execution as well as replies from running children.
+		agent.finishCompletionNotification(true)
+		if stopped {
+			canceled = append(canceled, agent)
+		}
+	}
+	r.mu.Unlock()
+	for _, cancel := range callbacks {
+		cancel()
+	}
+	return canceled
 }
 
 // Get returns a background agent by session and agent ID

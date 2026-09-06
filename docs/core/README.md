@@ -14,6 +14,7 @@ These docs describe platform subsystems that cut across workflow and multi-agent
 - `azure_foundry_integration.md`
 - `bot_connector_system.md`
 - `browser.md`
+- [Coding CLI updates](coding-cli-updates.md): daily checks, persisted status, and per-chat release selection.
 - `coding_agent_builder_e2e_contract.md`
 - `coding_agent_continuation_architecture.md`
 - `electron_standalone_app_plan.md`

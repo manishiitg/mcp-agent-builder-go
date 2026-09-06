@@ -1,11 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import {
   Activity, AlertTriangle, CheckCircle2, CircleAlert, CircleHelp,
-  LayoutDashboard, Loader2, RefreshCw, X,
+  ArrowUpRight, ChevronRight, LayoutDashboard, Loader2, RefreshCw, Search,
 } from 'lucide-react'
 import { agentApi } from '../../services/api'
 import type { OrgDashboardNotification, OrgDashboardRouteNotifications, ReportHumanInput } from '../../services/api-types'
-import ModalPortal from '../ui/ModalPortal'
 
 type SummaryStatus = OrgDashboardNotification['status']
 
@@ -63,21 +62,37 @@ function summaryNeedsAttention(summary: OrgDashboardNotification | null): boolea
 }
 
 function summaryScopes(entry: WorkflowDashEntry) {
-	return [
-		{ key: 'workflow', label: 'Workflow overview', runSummary: entry.runSummary, pulseSummary: entry.pulseSummary },
-		...entry.byRoute.map(route => ({
-			key: JSON.stringify([route.legacy ? 'legacy' : 'route', route.routing_step_id, route.route_id]),
-			label: route.label, runSummary: route.run_summary || null, pulseSummary: route.pulse_summary || null,
-		})),
-	]
+  const routes = entry.byRoute.map(route => ({
+    key: JSON.stringify([route.legacy ? 'legacy' : 'route', route.routing_step_id, route.route_id]),
+    label: route.label, runSummary: route.run_summary || null, pulseSummary: route.pulse_summary || null,
+  }))
+  // The API's workflow summary can be the same notification projected into a
+  // route. Show that update once, under its route, while preserving distinct
+  // aggregate content and different runs that happen to use identical prose.
+  const representedByRoute = (summary: OrgDashboardNotification | null) => !!summary &&
+    routes.some(route => [route.runSummary, route.pulseSummary].some(candidate =>
+      candidate?.id === summary.id && candidate.status === summary.status &&
+      candidate.title === summary.title && candidate.message === summary.message &&
+      JSON.stringify(candidate.fields) === JSON.stringify(summary.fields) &&
+      JSON.stringify(candidate.sections) === JSON.stringify(summary.sections) &&
+      (summary.routes?.length || 0) <= 1))
+  const runSummary = representedByRoute(entry.runSummary) ? null : entry.runSummary
+  const pulseSummary = representedByRoute(entry.pulseSummary) ? null : entry.pulseSummary
+  return [
+    ...(runSummary || pulseSummary ? [{ key: 'workflow', label: 'Automation overview', runSummary, pulseSummary }] : []),
+    ...routes.filter(route => route.runSummary || route.pulseSummary),
+  ]
 }
 
-function latestOpenSummary(entry: Pick<WorkflowDashEntry, 'runSummary' | 'pulseSummary'>): { kind: 'run' | 'pulse'; summary: OrgDashboardNotification } | null {
-	const candidates = (['run', 'pulse'] as const)
-		.map(kind => ({ kind, summary: kind === 'run' ? entry.runSummary : entry.pulseSummary }))
-		.filter((candidate): candidate is { kind: 'run' | 'pulse'; summary: OrgDashboardNotification } => summaryNeedsAttention(candidate.summary))
-		.sort((a, b) => b.summary.created_at.localeCompare(a.summary.created_at))
-	return candidates[0] || null
+function needsAttention(entry: WorkflowDashEntry): boolean {
+  return entry.failed || entry.pendingInputs.length > 0 || summaryScopes(entry)
+    .some(scope => [scope.runSummary, scope.pulseSummary].some(summaryNeedsAttention))
+}
+
+function latestSummary(entry: WorkflowDashEntry): OrgDashboardNotification | undefined {
+  return [...summaryScopes(entry).flatMap(scope => [scope.runSummary, scope.pulseSummary]), ...entry.recent]
+    .filter((summary): summary is OrgDashboardNotification => !!summary)
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0]
 }
 
 const SummaryDetail: React.FC<{ title: string; summary: OrgDashboardNotification | null }> = ({ title, summary }) => (
@@ -103,42 +118,37 @@ const SummaryDetail: React.FC<{ title: string; summary: OrgDashboardNotification
 const WorkflowSummaryRow: React.FC<{
   label: 'Run' | 'Pulse'
   summary: OrgDashboardNotification | null
-  onSelect: () => void
-}> = ({ label, summary, onSelect }) => {
-  if (!summary) {
-    return <div className="rounded-md border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground">No {label.toLowerCase()} summary recorded yet.</div>
-  }
+}> = ({ label, summary }) => {
+  const [expanded, setExpanded] = useState(false)
+  const detailsId = useId()
+  if (!summary) return null
 
   return (
-    <button type="button" onClick={onSelect} className="w-full rounded-md border border-border bg-background/60 px-3 py-2.5 text-left transition-colors hover:border-primary/40 hover:bg-muted/40">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <Pill status={summary.status} label={label} />
-          <span className="truncate text-xs font-semibold text-foreground/90">{summary.title || `${label} summary`}</span>
+    <div className="overflow-hidden rounded-md border border-border bg-background/60">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={expanded ? detailsId : undefined}
+        onClick={() => setExpanded(value => !value)}
+        className="w-full px-3 py-2.5 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
+            <Pill status={summary.status} />
+            <span className="min-w-0 break-words text-sm font-semibold text-foreground/90">{summary.title || `${label} summary`}</span>
+          </div>
+          <div className="flex shrink-0 items-center gap-2 pt-0.5">
+            <span className="font-runloop-mono text-[10px] text-muted-foreground">{relativeTime(summary.created_at)}</span>
+            <ChevronRight aria-hidden="true" className={`h-4 w-4 text-muted-foreground transition-transform ${expanded ? 'rotate-90' : ''}`} />
+          </div>
         </div>
-        <span className="shrink-0 font-runloop-mono text-[10px] text-muted-foreground">{relativeTime(summary.created_at)}</span>
-      </div>
-      <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-muted-foreground">{summary.message}</p>
-    </button>
-  )
-}
-
-const NotificationDetailModal: React.FC<{
-  entry: WorkflowDashEntry
-	summary: OrgDashboardNotification
-	onSelectSummary: (summary: OrgDashboardNotification) => void
-  onClose: () => void
-}> = ({ entry, summary, onSelectSummary, onClose }) => {
-	const title = summary.kind === 'pulse_summary' ? 'Pulse update' : 'Workflow run'
-  return (
-  <ModalPortal><div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/55 p-4" onClick={event => { if (event.target === event.currentTarget) onClose() }}>
-    <div role="dialog" aria-modal="true" className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl">
-      <div className="flex items-start justify-between gap-3 border-b border-border bg-card/95 px-4 py-3"><div className="min-w-0"><div className="font-runloop-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">{title}</div><h2 className="mt-1 truncate text-lg font-semibold text-foreground">{entry.label}</h2><p className="mt-1 truncate text-xs text-muted-foreground">{entry.workspacePath}</p></div><button type="button" onClick={onClose} aria-label="Close details" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"><X className="h-4 w-4" /></button></div>
-	  <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4"><SummaryDetail title={title} summary={summary} />
-		{entry.recent.length > 1 && <section className="rounded-lg border border-border bg-card/95 p-3"><div className="mb-2 flex items-center justify-between gap-2"><h3 className="text-sm font-semibold text-foreground">Recent history</h3><span className="font-runloop-mono text-[10px] text-muted-foreground">{entry.recent.length} retained</span></div><div className="divide-y divide-border">{entry.recent.map(item => <button key={item.id} type="button" onClick={() => onSelectSummary(item)} className="flex w-full items-center gap-2 px-1 py-2.5 text-left hover:bg-muted/50"><Pill status={item.status} label={item.kind === 'pulse_summary' ? 'Pulse' : 'Run'} /><span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90">{item.title || item.message}</span><span className="shrink-0 font-runloop-mono text-[10px] text-muted-foreground">{relativeTime(item.created_at)}</span></button>)}</div></section>}
-	  </div>
+        {!expanded && <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-muted-foreground">{summary.message}</p>}
+      </button>
+      {expanded && <div id={detailsId} role="region" aria-label={`${label} details: ${summary.title || 'Summary'}`} className="border-t border-border p-3">
+        <SummaryDetail title={label === 'Pulse' ? 'Pulse update' : 'Workflow run'} summary={summary} />
+      </div>}
     </div>
-  </div></ModalPortal>
   )
 }
 
@@ -146,7 +156,9 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenWor
   const [entries, setEntries] = useState<WorkflowDashEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-	const [selectedNotification, setSelectedNotification] = useState<{ entry: WorkflowDashEntry; summary: OrgDashboardNotification } | null>(null)
+  const [selectedPath, setSelectedPath] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [attentionOnly, setAttentionOnly] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true); setError(null)
@@ -177,94 +189,90 @@ export const OrgDashboard: React.FC<OrgDashboardProps> = ({ workflows, onOpenWor
   }, [workflows])
 
   useEffect(() => { void load() }, [load])
-  useEffect(() => {
-    if (!selectedNotification) return
-    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setSelectedNotification(null) }
-    window.addEventListener('keydown', close); return () => window.removeEventListener('keydown', close)
-  }, [selectedNotification])
 
-  const triage = useMemo(() => ({
-    attention: entries.filter(entry => summaryScopes(entry).some(scope => latestOpenSummary(scope)) || entry.pendingInputs.length > 0).length,
-    critical: entries.filter(entry => summaryScopes(entry).some(scope => [scope.runSummary, scope.pulseSummary].some(summary => summary?.status === 'failed'))).length,
-    healthy: entries.filter(entry => !summaryScopes(entry).some(scope => latestOpenSummary(scope)) && summaryScopes(entry).some(scope => [scope.runSummary, scope.pulseSummary].some(summary => summary?.status === 'completed'))).length,
-    awaiting: entries.filter(entry => !entry.runSummary && !entry.pulseSummary).length,
-    decisions: entries.reduce((count, entry) => count + entry.pendingInputs.length, 0),
-  }), [entries])
 
-  const decisionGroups = useMemo(() => entries
-    .filter(entry => entry.pendingInputs.length > 0)
-    .map(entry => ({
-      ...entry,
-      pendingInputs: [...entry.pendingInputs].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()),
-    }))
-    .sort((a, b) => new Date(b.pendingInputs[0].updated_at).getTime() - new Date(a.pendingInputs[0].updated_at).getTime()), [entries])
-  const attentionItems = useMemo(() => entries
-    .flatMap(entry => summaryScopes(entry).flatMap(scope => {
-      const active = latestOpenSummary(scope)
-      return active ? [{ entry, scope, active }] : []
-    }))
-    .sort((a, b) => b.active.summary.created_at.localeCompare(a.active.summary.created_at)), [entries])
-  const activityHistory = useMemo(() => entries
-    .flatMap(entry => entry.recent.map(summary => ({ entry, summary })))
-    .sort((a, b) => b.summary.created_at.localeCompare(a.summary.created_at)), [entries])
-  const workflowActivity = useMemo(() => entries
-    .map(entry => {
-      const latest = [entry.runSummary, entry.pulseSummary]
-        .filter((summary): summary is OrgDashboardNotification => !!summary)
-        .sort((a, b) => b.created_at.localeCompare(a.created_at))[0] || null
-      return { entry, latest }
-    })
-    .sort((a, b) => (b.latest?.created_at || '').localeCompare(a.latest?.created_at || '')),
-  [entries])
+  const sortedEntries = useMemo(() => [...entries].sort((a, b) =>
+    Number(needsAttention(b)) - Number(needsAttention(a)) ||
+    b.pendingInputs.length - a.pendingInputs.length ||
+    (Date.parse(latestSummary(b)?.created_at || '') || 0) - (Date.parse(latestSummary(a)?.created_at || '') || 0) ||
+    a.label.localeCompare(b.label)), [entries])
+  const visibleEntries = sortedEntries.filter(entry =>
+    (!attentionOnly || needsAttention(entry)) && entry.label.toLowerCase().includes(search.trim().toLowerCase()))
+  const selected = visibleEntries.find(entry => entry.workspacePath === selectedPath) || visibleEntries[0]
+  const attentionCount = entries.filter(needsAttention).length
+  const decisionCount = entries.reduce((count, entry) => count + entry.pendingInputs.length, 0)
+  const selectedScopes = selected ? summaryScopes(selected) : []
+  const selectedLatest = selected ? latestSummary(selected) : undefined
+  const selectedHistory = selected ? [...selected.recent].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)) : []
 
-  const header = <div className="flex items-center justify-between gap-3 px-6 pt-6"><div className="flex items-center gap-3"><LayoutDashboard className="h-6 w-6 text-primary" /><div><h2 className="text-xl font-semibold tracking-tight text-foreground">Activity</h2><p className="mt-0.5 text-sm text-muted-foreground">Workflow runs, Pulse work, and decisions</p></div></div><button type="button" onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/90 px-3 py-2 text-sm font-medium text-muted-foreground shadow-sm hover:bg-muted disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button></div>
+  const header = <div className="flex shrink-0 items-center justify-between gap-3 px-6 pt-6 pb-5">
+    <div className="flex items-center gap-3"><LayoutDashboard className="h-6 w-6 text-primary" /><div>
+      <h2 className="text-xl font-semibold tracking-tight text-foreground">Activity</h2>
+      <p className="mt-0.5 text-sm text-muted-foreground">Runs, Pulse updates, and decisions — by automation</p>
+    </div></div>
+    <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-muted disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
+  </div>
 
-  if (loading && !entries.length) return <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 text-muted-foreground"><Loader2 className="h-6 w-6 animate-spin" /><p className="text-sm">Loading Org Dashboard…</p></div>
+  if (loading && !entries.length) return <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 text-muted-foreground"><Loader2 className="h-6 w-6 animate-spin" /><p className="text-sm">Loading activity…</p></div>
   if (!workflows.length) return <div className="flex h-full min-h-[320px] flex-col">{header}<div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">No automations yet</div></div>
 
-  return <div className="flex h-full flex-col">{header}
-    {error && <div className="mx-6 mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600">{error}</div>}
-    <div className="mx-6 mt-5 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/95 px-4 py-3 shadow-sm"><span className="font-runloop-mono rounded-md border border-border bg-background/70 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground">Attention {triage.attention}</span><Pill status="failed" label={`Failed ${triage.critical}`} /><Pill status="completed" label={`Completed ${triage.healthy}`} /><Pill status="informational" label={`Awaiting ${triage.awaiting}`} />{triage.decisions > 0 && <span className={`${PILL_BASE} border-violet-500/25 bg-violet-500/10 text-violet-600`}><CircleHelp className="h-3 w-3" />Decisions {triage.decisions}</span>}</div>
-    <div className="flex-1 space-y-8 overflow-auto px-6 py-6">
-      {!!decisionGroups.length && <section className="space-y-2">
-        <div className="flex items-center gap-2"><CircleHelp className="h-4 w-4 text-violet-500" /><h3 className="text-sm font-semibold text-foreground">Decisions required</h3><span className="font-runloop-mono text-[11px] text-muted-foreground">{triage.decisions} across {decisionGroups.length} workflow{decisionGroups.length !== 1 ? 's' : ''}</span></div>
-        <div className="grid gap-3 lg:grid-cols-2">{decisionGroups.map(entry => <article key={entry.workspacePath} className="overflow-hidden rounded-lg border border-violet-500/25 bg-card/95 shadow-sm">
-          <button type="button" onClick={() => onOpenWorkflow(entry.workspacePath)} className="flex w-full items-center justify-between gap-3 border-b border-violet-500/15 px-3 py-2.5 text-left hover:bg-violet-500/[0.06]"><span className="truncate text-sm font-semibold text-foreground">{entry.label}</span><span className={`${PILL_BASE} border-violet-500/25 bg-violet-500/10 text-violet-600`}>{entry.pendingInputs.length} open</span></button>
-          <div className="divide-y divide-border">{entry.pendingInputs.map(input => <button key={input.id} type="button" onClick={() => onOpenWorkflow(entry.workspacePath)} className="flex w-full items-start gap-3 px-3 py-3 text-left hover:bg-violet-500/[0.06]"><span className={`${PILL_BASE} mt-0.5 border-violet-500/25 bg-violet-500/10 text-violet-600`}>{input.priority}</span><span className="line-clamp-2 min-w-0 flex-1 text-sm text-foreground/90">{input.question}</span></button>)}</div>
-        </article>)}</div>
-      </section>}
-
-      {!!attentionItems.length && <section className="space-y-2">
-        <div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-500" /><h3 className="text-sm font-semibold text-foreground">Needs attention</h3><span className="font-runloop-mono text-[11px] text-muted-foreground">{attentionItems.length} update{attentionItems.length !== 1 ? 's' : ''}</span></div>
-		<div className="grid gap-3 lg:grid-cols-2">{attentionItems.map(({ entry, scope, active }) => <button key={`${entry.workspacePath}:${scope.key}`} type="button" onClick={() => setSelectedNotification({ entry, summary: active.summary })} className="rounded-lg border border-amber-500/25 bg-card/95 p-3 text-left shadow-sm hover:border-amber-500/50"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h4 className="truncate text-sm font-semibold text-foreground">{entry.label} · {scope.label}</h4><div className="mt-2 flex flex-wrap gap-1.5"><Pill status={active.summary.status} label={active.kind === 'run' ? 'Run' : 'Pulse'} /></div></div><span className="font-runloop-mono shrink-0 text-[10px] text-muted-foreground">{relativeTime(active.summary.created_at)}</span></div><p className="mt-3 line-clamp-1 text-sm font-semibold text-foreground/90">{active.summary.title || 'Action needed'}</p><p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{active.summary.message}</p></button>)}</div>
-      </section>}
-
-      <section className="space-y-3">
-        <div className="flex items-center gap-2"><LayoutDashboard className="h-4 w-4 text-primary" /><h3 className="text-sm font-semibold text-foreground">Workflow activity</h3><span className="font-runloop-mono text-[11px] text-muted-foreground">{entries.length} workflow{entries.length !== 1 ? 's' : ''}</span></div>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {workflowActivity.map(({ entry, latest }) => (
-            <article key={entry.workspacePath} className="rounded-lg border border-border bg-card/95 p-3 shadow-sm">
-              <div className="flex items-start justify-between gap-2">
-                <h4 className="truncate text-sm font-semibold text-foreground">{entry.label}</h4>
-                {latest && <span className="font-runloop-mono shrink-0 text-[10px] text-muted-foreground">{relativeTime(latest.created_at)}</span>}
-              </div>
-              <div className="mt-3 space-y-4">
-                {summaryScopes(entry).map(scope => <section key={scope.key} aria-label={`${entry.label} · ${scope.label}`} className="space-y-2">
-                  <h5 className="text-xs font-semibold text-muted-foreground">{scope.label}</h5>
-                  <WorkflowSummaryRow label="Run" summary={scope.runSummary} onSelect={() => setSelectedNotification({ entry, summary: scope.runSummary! })} />
-                  <WorkflowSummaryRow label="Pulse" summary={scope.pulseSummary} onSelect={() => setSelectedNotification({ entry, summary: scope.pulseSummary! })} />
-                </section>)}
-              </div>
-            </article>
-          ))}
+  return <div className="flex h-full min-h-0 flex-col">{header}
+    {error && <div role="status" className="mx-6 mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600">{error}</div>}
+    <div className="mx-6 mb-6 grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-border md:grid-cols-[280px_minmax(0,1fr)] md:grid-rows-1">
+      <aside className="flex min-h-0 flex-col border-b border-border bg-card/70 md:border-b-0 md:border-r">
+        <div className="space-y-3 p-4">
+          <div className="flex items-center justify-between gap-2"><h3 className="text-sm font-semibold">Automations</h3><span className="text-xs text-muted-foreground">{entries.length}</span></div>
+          <label className="flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-2 focus-within:ring-2 focus-within:ring-primary/50"><Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /><input aria-label="Search automations" value={search} onChange={event => setSearch(event.target.value)} placeholder="Find an automation" className="w-full min-w-0 bg-transparent text-xs outline-none" /></label>
+          <div className="flex flex-wrap gap-1" aria-label="Activity filters">
+            {([{ label: `All ${entries.length}`, value: false }, { label: `Needs attention ${attentionCount}`, value: true }]).map(filter => <button key={filter.label} type="button" aria-pressed={attentionOnly === filter.value} onClick={() => setAttentionOnly(filter.value)} className={`rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${attentionOnly === filter.value ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'}`}>{filter.label}</button>)}
+          </div>
+          <p className="text-xs text-muted-foreground">{decisionCount} pending decision{decisionCount !== 1 ? 's' : ''} across your automations</p>
         </div>
-      </section>
-
-      <section className="space-y-3 border-t border-border pt-6">
-        <div className="flex items-center gap-2"><Activity className="h-4 w-4 text-primary" /><h3 className="text-base font-semibold text-foreground">Activity history</h3><span className="font-runloop-mono text-[11px] text-muted-foreground">{activityHistory.length} retained updates</span></div>
-        {activityHistory.length ? <div className="grid gap-3 lg:grid-cols-2">{activityHistory.map(({ entry, summary }) => <button key={summary.id} type="button" onClick={() => setSelectedNotification({ entry, summary })} className="rounded-lg border border-border bg-card/95 p-4 text-left shadow-sm hover:border-primary/40"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h4 className="truncate text-sm font-semibold text-foreground">{entry.label}</h4><Pill status={summary.status} label={summary.kind === 'pulse_summary' ? 'Pulse' : 'Run'} /></div><p className="mt-2 line-clamp-1 text-sm font-medium text-foreground/90">{summary.title || summary.message}</p><p className="mt-1 line-clamp-2 text-sm leading-5 text-muted-foreground">{summary.message}</p></div><span className="font-runloop-mono shrink-0 text-[10px] text-muted-foreground">{relativeTime(summary.created_at)}</span></div></button>)}</div> : <div className="rounded-lg border border-dashed border-border px-3 py-5 text-center text-sm text-muted-foreground">No run or Pulse history has been recorded yet.</div>}
-      </section>
-	</div>{selectedNotification && <NotificationDetailModal entry={selectedNotification.entry} summary={selectedNotification.summary} onSelectSummary={summary => setSelectedNotification({ entry: selectedNotification.entry, summary })} onClose={() => setSelectedNotification(null)} />}
+        <nav aria-label="Automations" className="max-h-44 min-h-0 overflow-y-auto px-2 pb-2 md:max-h-none md:flex-1">
+          {visibleEntries.map(entry => {
+            const latest = latestSummary(entry)
+            const active = selected?.workspacePath === entry.workspacePath
+            const attention = needsAttention(entry)
+            const decision = entry.pendingInputs.length > 0 || summaryScopes(entry)
+              .some(scope => [scope.runSummary, scope.pulseSummary].some(summary => summary?.status === 'waiting_for_user'))
+            const statusColor = entry.failed ? 'text-amber-600 dark:text-amber-300'
+              : decision ? 'text-violet-600 dark:text-violet-300'
+              : attention ? 'text-amber-600 dark:text-amber-300' : 'text-muted-foreground'
+            const statusLabel = entry.failed ? 'Data unavailable' : decision ? 'Needs your decision'
+              : attention ? 'Needs attention' : latest ? STATUS_PILL[latest.status]?.label || 'Update' : 'No activity yet'
+            return <button key={entry.workspacePath} type="button" aria-pressed={active} aria-label={`View ${entry.label} activity`} onClick={() => setSelectedPath(entry.workspacePath)} className={`mb-1 w-full rounded-lg border px-3 py-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${active ? 'border-primary/30 bg-primary/[0.08]' : 'border-transparent hover:bg-muted/60'}`}>
+              <div className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground" title={entry.label}>{entry.label}</span>{!!entry.pendingInputs.length && <span className="flex shrink-0 items-center gap-1 rounded-full bg-violet-500/10 px-1.5 py-0.5 text-xs text-violet-600 dark:text-violet-300" aria-label={`${entry.pendingInputs.length} decisions`}><CircleHelp className="h-3 w-3" />{entry.pendingInputs.length}</span>}<ChevronRight className={`h-3.5 w-3.5 shrink-0 ${active ? 'text-primary' : 'text-muted-foreground/50'}`} /></div>
+              <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px]"><span className={statusColor}>{statusLabel}</span>{latest && <span className="shrink-0 text-muted-foreground" title={absoluteTime(latest.created_at)}>{relativeTime(latest.created_at)}</span>}</div>
+            </button>
+          })}
+          {!visibleEntries.length && <p className="px-3 py-4 text-xs text-muted-foreground">No matching automations.</p>}
+        </nav>
+      </aside>
+      {selected ? <section key={selected.workspacePath} aria-label={`${selected.label} activity`} className="min-h-0 min-w-0 overflow-y-auto bg-background p-4 sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-5">
+          <div className="min-w-0"><h3 className="break-words text-xl font-semibold tracking-tight text-foreground">{selected.label}</h3><p className="mt-1 text-xs text-muted-foreground">{selectedLatest ? `Latest update ${relativeTime(selectedLatest.created_at)}` : 'No recorded activity yet'}{selected.byRoute.length > 0 && ` · ${selected.byRoute.length} route${selected.byRoute.length !== 1 ? 's' : ''}`}</p></div>
+          <button type="button" onClick={() => onOpenWorkflow(selected.workspacePath)} className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-xs font-medium text-foreground hover:bg-muted">Open automation<ArrowUpRight className="h-3.5 w-3.5" /></button>
+        </div>
+        {selected.failed && <p className="mt-4 text-sm text-amber-600 dark:text-amber-300">Some data could not be loaded. Refresh to try again.</p>}
+        {!!selected.pendingInputs.length && <section aria-label="Decisions required" className="mt-5 overflow-hidden rounded-lg border border-violet-500/25">
+          <div className="flex items-center gap-2 bg-violet-500/[0.05] px-4 py-3"><CircleHelp className="h-4 w-4 text-violet-500" /><h4 className="text-sm font-semibold">Needs your decision</h4><span className="text-xs text-muted-foreground">{selected.pendingInputs.length}</span></div>
+          <div className="divide-y divide-border">{[...selected.pendingInputs].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at)).map(input => <button key={input.id} type="button" onClick={() => onOpenWorkflow(selected.workspacePath)} className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-muted/50"><span className={`${PILL_BASE} mt-0.5 shrink-0 border-violet-500/25 text-violet-600 dark:text-violet-300`}>{input.priority}</span><span className="min-w-0 flex-1 text-sm leading-5 text-foreground/90">{input.question}</span><ArrowUpRight className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" /></button>)}</div>
+        </section>}
+        <div className="mt-6 space-y-5">
+          <div className="flex items-center gap-2"><Activity className="h-4 w-4 text-primary" /><h4 className="text-sm font-semibold">Latest updates</h4></div>
+          {selectedScopes.map(scope => <section key={scope.key} aria-label={`${selected.label} · ${scope.label}`} className="space-y-2">
+            <h5 className="text-xs font-semibold text-muted-foreground">{scope.label}</h5>
+            <WorkflowSummaryRow label="Run" summary={scope.runSummary} />
+            <WorkflowSummaryRow label="Pulse" summary={scope.pulseSummary} />
+          </section>)}
+          {!selectedScopes.length && <p className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">No run or Pulse updates recorded yet. New activity will appear here.</p>}
+        </div>
+        {!!selectedHistory.length && <details className="group mt-6 border-t border-border pt-4">
+          <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md py-2 text-sm font-medium text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"><ChevronRight className="h-4 w-4 transition-transform group-open:rotate-90" />Activity history<span className="ml-auto text-xs font-normal">{selectedHistory.length} retained updates</span></summary>
+          <div className="mt-3 space-y-2">{selectedHistory.map(summary => <WorkflowSummaryRow key={summary.id} label={summary.kind === 'pulse_summary' ? 'Pulse' : 'Run'} summary={summary} />)}</div>
+        </details>}
+      </section> : <div className="flex items-center justify-center p-6 text-sm text-muted-foreground">{attentionOnly && !search ? 'No automations need attention.' : 'No automations match your search.'}</div>}
+    </div>
   </div>
 }
 

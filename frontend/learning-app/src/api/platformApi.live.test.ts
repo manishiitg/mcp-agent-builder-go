@@ -4,12 +4,12 @@
 // the adapter produced what the UI needs from it.
 import { describe, expect, it } from 'vitest'
 import type { TurnStreamEvent } from './familyApi'
-import { createPlatformApi } from './platformApi'
 
 const url = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.SPARKQUILL_PLATFORM_URL
 
 describe.skipIf(!url)('platformApi (live)', () => {
   it('runs a parent turn end to end', async () => {
+    const { createPlatformApi } = await import('./platformApi')
     let saved: string | null = null
     const api = createPlatformApi({ baseUrl: url!, tokenStore: { get: () => saved, set: (t) => { saved = t } }, turnInactivityMs: 4 * 60 * 1000 })
     const setup = await api.setup()

@@ -1,0 +1,192 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
+)
+
+func TestWorkflowCLIIsolationSelectionAndResume(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace-docs")
+	if err := os.MkdirAll(filepath.Join(workspace, "Workflow", "testing"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WORKSPACE_DOCS_PATH", workspace)
+	t.Setenv("AGENTWORKS_STATE_ROOT", root)
+	t.Setenv("AGENTWORKS_ISOLATE_WORKFLOW_CLI", "true")
+	get := func(user, session, provider, mode string) string {
+		t.Helper()
+		dir, err := workflowCLIWorkingDir("Workflow/testing", user, session, provider, mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	dir := get("owner", "chat-a", "codex-cli", "workshop")
+	if dir == codingAgentWorkspaceWorkingDir("Workflow/testing") {
+		t.Fatal("shared workflow selected as CLI cwd")
+	}
+	if dir != get("owner", "chat-a", "codex-cli", "workshop") {
+		t.Fatal("directory changed on restart")
+	}
+	for _, other := range []string{get("runner", "chat-a", "codex-cli", "workshop"), get("owner", "chat-b", "codex-cli", "workshop"), get("owner", "chat-a", "claude-code", "workshop"), get("owner", "chat-a", "codex-cli", "run")} {
+		if other == dir {
+			t.Fatal("identity collision")
+		}
+	}
+	for _, savedDir := range []string{dir, codingAgentWorkspaceWorkingDir("Workflow/testing"), get("owner", "chat-b", "codex-cli", "workshop"), ""} {
+		agent := testAgentWithHandle("chat-a", llmtypes.CodingProviderSessionHandle{Provider: "codex-cli", WorkingDir: dir})
+		runtime := &ChatHistoryAgentRuntime{Kind: "coding_agent", Provider: "codex-cli", ResumeSupported: true, WorkshopMode: "workshop", ExternalSessionID: "native-1"}
+		runtime.AgentSessionHandle = requireAgentHandle(t, testAgentWithHandle("old", llmtypes.CodingProviderSessionHandle{Provider: "codex-cli", WorkingDir: savedDir, NativeSessionID: "native-1"}))
+		got := (&StreamingAPI{}).seedCodingAgentRuntimeFromRestoredConversation("chat-a", "codex-cli", "workshop", runtime, agent)
+		if got != (savedDir == dir) {
+			t.Fatalf("resume from %q = %v", savedDir, got)
+		}
+		if requireAgentHandle(t, agent).Provider.WorkingDir != dir {
+			t.Fatal("resume replaced private directory")
+		}
+	}
+	for _, nested := range []bool{false, true} {
+		agent := testAgentWithHandle("chat-a", llmtypes.CodingProviderSessionHandle{Provider: "codex-cli", WorkingDir: dir})
+		runtime := &ChatHistoryAgentRuntime{Kind: "coding_agent", Provider: "codex-cli", ResumeSupported: true, ExternalSessionID: "native-1"}
+		runtime.AgentSessionHandle = requireAgentHandle(t, testAgentWithHandle("old", llmtypes.CodingProviderSessionHandle{Provider: "codex-cli", WorkingDir: dir}))
+		if nested {
+			runtime.AgentSessionHandle.Provider.ProjectDirID = codingAgentWorkspaceWorkingDir("Workflow/testing")
+		} else {
+			runtime.ProjectDirID = codingAgentWorkspaceWorkingDir("Workflow/testing")
+		}
+		if (&StreamingAPI{}).seedCodingAgentRuntimeFromRestoredConversation("chat-a", "codex-cli", "workshop", runtime, agent) {
+			t.Fatal("Codex project directory bypassed isolation")
+		}
+	}
+	for _, provider := range []string{"claude-code", "pi-cli", "cursor-cli"} {
+		private := get("owner", "chat-a", provider, "workshop")
+		agent := testAgentWithHandle("chat-a", llmtypes.CodingProviderSessionHandle{Provider: provider, WorkingDir: private})
+		runtime := &ChatHistoryAgentRuntime{Kind: "coding_agent", Provider: provider, ResumeSupported: true, ExternalSessionID: "native-1"}
+		runtime.AgentSessionHandle = requireAgentHandle(t, testAgentWithHandle("old", llmtypes.CodingProviderSessionHandle{Provider: provider, WorkingDir: private}))
+		if !(&StreamingAPI{}).seedCodingAgentRuntimeFromRestoredConversation("chat-a", provider, "workshop", runtime, agent) {
+			t.Fatalf("same-directory resume rejected for %s", provider)
+		}
+	}
+	if workflowCLIMode(&QueryRequest{ExecutionOptions: &ExecutionOptions{WorkshopMode: "workshop"}}, true) != "run" {
+		t.Fatal("read-only identity was not pinned to run")
+	}
+	t.Setenv("AGENTWORKS_STATE_ROOT", "")
+	if _, err := workflowCLIWorkingDir("Workflow/testing", "owner", "chat-a", "codex-cli", "workshop"); err == nil {
+		t.Fatal("missing state root fell back to shared cwd")
+	}
+	t.Setenv("AGENTWORKS_ISOLATE_WORKFLOW_CLI", "false")
+	if get("owner", "chat-a", "codex-cli", "workshop") != codingAgentWorkspaceWorkingDir("Workflow/testing") {
+		t.Fatal("disabled rollout changed existing behavior")
+	}
+}
+
+func TestWorkflowCLIIsolationDefaultsOnWithExplicitRollback(t *testing.T) {
+	t.Setenv("AGENTWORKS_ISOLATE_WORKFLOW_CLI", "")
+	if !workflowCLIIsolationEnabled() {
+		t.Fatal("workflow CLI isolation must default on")
+	}
+	t.Setenv("AGENTWORKS_ISOLATE_WORKFLOW_CLI", "false")
+	if workflowCLIIsolationEnabled() {
+		t.Fatal("explicit rollback did not disable workflow CLI isolation")
+	}
+}
+
+func TestScheduledWorkflowUsesPrivateRunRuntimeAndSeparateMaintenanceRuntime(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace-docs")
+	if err := os.MkdirAll(filepath.Join(workspace, "Workflow", "testing"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WORKSPACE_DOCS_PATH", workspace)
+	t.Setenv("AGENTWORKS_STATE_ROOT", root)
+	t.Setenv("AGENTWORKS_ISOLATE_WORKFLOW_CLI", "true")
+
+	sctx := &ScheduleContext{
+		WorkflowID:    "testing",
+		WorkspacePath: "Workflow/testing",
+		Schedule:      WorkflowSchedule{ID: "daily", Name: "Daily", WorkshopMode: "run"},
+	}
+	base := (&SchedulerService{}).buildWorkshopRequest(context.Background(), sctx)
+	execOpts, ok := base["execution_options"].(map[string]interface{})
+	if !ok || execOpts["workshop_mode"] != "run" {
+		t.Fatalf("scheduled request execution_options = %#v, want Run mode", base["execution_options"])
+	}
+
+	sessionID := "schedule-cron--daily_123"
+	runDir, err := workflowCLIWorkingDir(sctx.WorkspacePath, "owner", sessionID, "codex-cli", "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runDir == codingAgentWorkspaceWorkingDir(sctx.WorkspacePath) {
+		t.Fatal("scheduled Run selected the shared workflow as its CLI cwd")
+	}
+	maintenanceDir, err := workflowCLIWorkingDir(sctx.WorkspacePath, "owner", sessionID, "codex-cli", "workshop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if maintenanceDir == runDir {
+		t.Fatal("scheduled Run and maintenance turns shared a private CLI runtime")
+	}
+}
+
+// The offline harness consumes these paths to run real provider projection and
+// cleanup against the SAME selector that workflow chat construction uses.
+func TestPLAT296WorkflowCLIDirectories(t *testing.T) {
+	root := os.Getenv("AGENTWORKS_PROJECTION_TEST_ROOT")
+	fixture := os.Getenv("AGENTWORKS_PROJECTION_TEST_FIXTURE")
+	if root == "" || fixture == "" {
+		t.Skip("invoked by test-workflow-isolation.py --server-isolation")
+	}
+	t.Setenv("AGENTWORKS_ISOLATE_WORKFLOW_CLI", "true")
+	t.Setenv("AGENTWORKS_STATE_ROOT", filepath.Join(root, "server-state"))
+	t.Setenv("WORKSPACE_DOCS_PATH", filepath.Join(root, "cases"))
+	plan, err := os.ReadFile(filepath.Join(fixture, "planning", "plan.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	directories := map[string]map[string]string{}
+	for _, provider := range []string{"codexcli", "claudecode"} {
+		cliProvider := "codex-cli"
+		if provider == "claudecode" {
+			cliProvider = "claude-code"
+		}
+		for _, first := range []string{"owner", "run"} {
+			for _, cleanup := range []string{"remove", "restore"} {
+				key := provider + "/private-control/" + first + "/" + cleanup
+				folder := key + "/Workflow/testing"
+				shared := codingAgentWorkspaceWorkingDir(folder)
+				if err := os.MkdirAll(filepath.Join(shared, "planning"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(shared, "planning", "plan.json"), plan, 0600); err != nil {
+					t.Fatal(err)
+				}
+				directories[key] = map[string]string{}
+				for _, role := range []string{"owner", "run"} {
+					mode := "workshop"
+					if role == "run" {
+						mode = "run"
+					}
+					dir, err := workflowCLIWorkingDir(folder, role, "test-"+role, cliProvider, mode)
+					if err != nil {
+						t.Fatal(err)
+					}
+					directories[key][role] = dir
+				}
+			}
+		}
+	}
+	data, err := json.MarshalIndent(directories, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "server-runtime-directories.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}

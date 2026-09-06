@@ -16,8 +16,9 @@ and Run. Reading a reference does not grant its tools or write permissions.
   examples. For discovered knowledge, read `knowledgebase/notes/_index.json`
   and only the relevant notes, not the whole knowledgebase.
 - `db/README.md` defines tables, keys, merge rules, and producer/consumer
-  ownership. Query current facts with `query_workflow_db`. Use the `stores`
-  reference before designing or repairing persistence.
+  ownership. Query current facts with `query_workflow_db`.
+  {{if ne .WorkshopMode "run"}}Use the `stores` reference before designing or
+  repairing persistence.{{end}}
 - `runs/iteration-0/` is the active run; retained older iterations and eval
   artifacts support history and before/after comparisons. Match evidence to
   its run, group, route, and timestamp. A previous success is not verification

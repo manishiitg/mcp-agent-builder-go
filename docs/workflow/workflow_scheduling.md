@@ -131,7 +131,9 @@ That runtime state is not written back into `workflow.json`.
 
 ## Execution Mode
 
-Workflow schedules use one execution path: the workshop builder path. The old direct orchestrator schedule mode (`mode = workflow`, `agent_mode = workflow`) is no longer generated or executed for workflow schedules. Existing manifests with `mode = workflow` are normalized to workshop execution at runtime.
+Workflow schedules use the workflow-phase transport (`mode = workshop`, `agent_mode = workflow_phase`). Normal scheduled messages execute with `workshop_mode = run`, which gives them the constrained Run prompt, tool catalog, projected skills, and—when CLI isolation is enabled—a private runtime working directory. The old direct orchestrator schedule mode (`mode = workflow`, `agent_mode = workflow`) is no longer generated or executed. Existing manifests with `mode = workflow` are normalized to the workflow-phase transport at runtime.
+
+Contract-upgrade and answered-decision preflight turns temporarily use `workshop_mode = workshop` because they are explicitly allowed to update workflow artifacts. Post-run Pulse turns also use Workshop mode. The scheduler switches modes per turn, so a normal unattended run never inherits the maintenance surface.
 
 Multi-agent schedules remain separate under `_users/{userID}/multiagent-schedules.json`.
 
@@ -145,7 +147,7 @@ The scheduler builds a request with:
 - `execution_options.run_mode = use_same_run`
 - `execution_options.selected_run_folder = iteration-0`
 - `execution_options.execution_strategy = start_from_beginning_no_human`
-- `execution_options.workshop_mode = schedule.workshop_mode || run`
+- `execution_options.workshop_mode = run` for normal schedule messages
 - `execution_options.enabled_group_ids = schedule.group_ids`
 
 Then it sends the configured `messages[]` one by one and waits for the workshop session to become idle after each message.
