@@ -1,8 +1,31 @@
 # Pulse Platform-Issue Register
 
+## Codex retained-session, resume and structured-event reliability — PLAT-297
+
+[PLAT-297](pulse_platform/plat-297.md) records the completed Codex reliability
+work across AgentWorks, `mcpagent` and `multi-llm-provider-go`. Codex rollout
+JSONL is now authoritative for completion, final responses, failures, usage and
+semantic MCP tool events; tmux remains the interactive control channel only.
+Resume preserves Builder/Run mode and the private absolute runtime, physical
+path trust prevents unattended startup prompts, and each retained agent pins
+one managed CLI release. Unit suites plus live retained-session and isolated
+two-step workflow P0 checks pass. All implementation commits are on `main`;
+cross-provider cleanup and two-user isolation remain tracked by PLAT-296.
+
 ## Isolate workflow chat CLI prompts and skills across Owner and Run sessions — PLAT-296
 
-[PLAT-296](pulse_platform/plat-296.md) — source inspection found that separate workflow chats can project different prompts and skills into the same CLI working directory. Proposes private session runtime folders while preserving shared workflow data, with ownership-aware cleanup, stable resume/migration, path compatibility and independent server authorization. **In progress; private runtime selection now defaults on, with an explicit server rollback, and resume guards are implemented. Offline server-selection and real Codex/Claude projection checks pass. A live isolated Codex builder chat edited the shared plan, authored and repaired script code, validated changes, and completed a targeted scripted execution with verified JSON output. An earlier retained chat hit an already-in-flight completion race. A fresh chat with ordinary user messages subsequently added an agent summary step, autonomously repaired missing step read permissions, reran successfully and displayed its actual output through automatic notifications. Concurrent same-user Builder and Run chats pin their mode per tab; live testing confirmed distinct prompts and private runtimes while both read the shared workflow. Normal scheduled messages use the Run prompt/reference surface and a private per-schedule CLI runtime; bounded upgrade/decision preflights and Pulse elevate only their own turns to Workshop. Mode-switch conversation JSON falls back to its canonical disk history when memory is empty, Pulse cost scope uses the explicit lifecycle marker, and phase-token cumulative counters are separated by native runtime epoch. The earlier race, complete Run authorization boundary, two-user authorization and restart/native-resume acceptance remain pending.** An already-running server needs a restart before the default applies.
+[PLAT-296](pulse_platform/plat-296.md) records the delivered two-mode execution
+model. Builder/Workshop and Run chats now pin distinct prompts, tools and skills
+per tab and execute from private session runtimes while guarded tools continue
+to use the same authoritative workflow workspace. Concurrent same-user Builder
+and Run chats were live-tested: Builder received 128 tools, Run received 67,
+both read the shared testing workflow, and Run refused a plan mutation. Normal
+schedules use the smaller Run surface and private per-schedule runtimes; bounded
+maintenance and Pulse turns elevate only their own requests. Mode-stable resume,
+conversation continuity and cost attribution are covered by focused tests, with
+Codex resume reliability completed in PLAT-297. **Implemented on `main`; full
+cross-provider cleanup and real two-user authorization remain follow-up
+acceptance.**
 
 ## Human-decided branch replaces yesno/multiple_choice human_input for new steps — PLAT-295
 
