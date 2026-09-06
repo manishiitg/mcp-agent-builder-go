@@ -232,6 +232,9 @@ export interface AgentProfileChatRequest {
   // A model within that engine's provider, from the platform's model catalog
   // (/api/llm-config/models/metadata); omitted keeps the option's own model.
   model_id?: string
+  // A reasoning level from the engine's declared reasoning_efforts; omitted
+  // keeps whatever the engine's own runtime options declare.
+  reasoning_effort?: string
 }
 
 export interface AgentProfileConversationRequest {

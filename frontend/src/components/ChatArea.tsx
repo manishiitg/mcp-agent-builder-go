@@ -3052,7 +3052,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       const response = currentTab.metadata?.agentProfileChatContract === 'profile-v1' && currentTab.metadata.agentProfileId
         ? await agentApi.startAgentProfileQuery(
             currentTab.metadata.agentProfileId,
-            buildAgentProfileChatRequest(requestPayload, currentTab.metadata.agentProfileConversationKey, currentTab.metadata.agentProfileEngine, currentTab.metadata.agentProfileModelID),
+            buildAgentProfileChatRequest(requestPayload, currentTab.metadata.agentProfileConversationKey, currentTab.metadata.agentProfileEngine, currentTab.metadata.agentProfileModelID, currentTab.metadata.agentProfileReasoningEffort),
             tabSessionId,
           )
         : await agentApi.startQuery(requestPayload, tabSessionId)

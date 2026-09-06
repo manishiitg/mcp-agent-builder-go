@@ -99,6 +99,8 @@ profile:
         label: Claude Code
         provider: claude-code
         model_id: claude-fable-5-1
+        models: [claude-fable-5-1, claude-sonnet-5]
+        reasoning_efforts: [low, medium, high]
         options:
           reasoning_effort: medium
         default: true
@@ -106,6 +108,8 @@ profile:
         label: Codex
         provider: codex-cli
         model_id: gpt-6-astra
+        models: [gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna]
+        reasoning_efforts: [low, medium, high]
         options:
           reasoning_effort: medium
     agent_tools:

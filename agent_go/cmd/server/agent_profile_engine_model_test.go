@@ -52,19 +52,86 @@ func TestConversationProviderBindsOnFirstTurn(t *testing.T) {
 	if _, err := store.resolveOrCreate(ctx, "u", profile, binding, ""); err != nil {
 		t.Fatalf("resolveOrCreate: %v", err)
 	}
-	bound, err := store.bindProvider(ctx, "u", profile, "main", "codex-cli")
+	bound, _, err := store.bindRuntime(ctx, "u", profile, "main", "codex-cli", "gpt-6-astra", "")
 	if err != nil || bound != "codex-cli" {
 		t.Fatalf("first bind = %q, %v", bound, err)
 	}
-	bound, err = store.bindProvider(ctx, "u", profile, "main", "claude-code")
+	bound, _, err = store.bindRuntime(ctx, "u", profile, "main", "claude-code", "claude-fable-5-1", "")
 	if err != nil || bound != "codex-cli" {
 		t.Fatalf("second bind should report the bound provider, got %q, %v", bound, err)
 	}
 	if _, err := store.rotate(ctx, "u", profile, binding); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
-	bound, err = store.bindProvider(ctx, "u", profile, "main", "claude-code")
+	bound, _, err = store.bindRuntime(ctx, "u", profile, "main", "claude-code", "claude-fable-5-1", "")
 	if err != nil || bound != "claude-code" {
 		t.Fatalf("a new conversation should bind afresh, got %q, %v", bound, err)
+	}
+}
+
+// An engine that curates its own Models offers exactly those, refusing
+// anything the platform catalog would otherwise allow for its provider.
+func TestProfileQueryModelCurationNarrowsAcceptedModels(t *testing.T) {
+	profile := engineModelTestProfile()
+	profile.Runtime.ProviderOptions[1].Models = []string{"gpt-6-astra", "gpt-5.6-sol"}
+	conversation := ProductConversationRecord{SessionID: "s", WorkspacePath: "Chats/P", ConversationKey: "main"}
+
+	if _, err := queryRequestForAgentProfileChat(profile, AgentProfileChatRequest{Message: "hi", Engine: "codex-cli", ModelID: "gpt-5.6-sol"}, conversation); err != nil {
+		t.Fatalf("curated model rejected: %v", err)
+	}
+	_, err := queryRequestForAgentProfileChat(profile, AgentProfileChatRequest{Message: "hi", Engine: "codex-cli", ModelID: "gpt-5.5"}, conversation)
+	if err == nil || !strings.Contains(err.Error(), "not offered") {
+		t.Fatalf("a model outside the curated list should be refused, got %v", err)
+	}
+}
+
+// A reasoning effort must be one the engine declares; an engine with no
+// declared levels accepts none at all.
+func TestProfileQueryReasoningEffortMustBeDeclared(t *testing.T) {
+	profile := engineModelTestProfile()
+	profile.Runtime.ProviderOptions[0].ReasoningEfforts = []string{"low", "medium", "high"}
+	conversation := ProductConversationRecord{SessionID: "s", WorkspacePath: "Chats/P", ConversationKey: "main"}
+
+	req, err := queryRequestForAgentProfileChat(profile, AgentProfileChatRequest{Message: "hi", Engine: "claude-code", ReasoningEffort: "high"}, conversation)
+	if err != nil || req.ReasoningEffort != "high" {
+		t.Fatalf("declared reasoning effort rejected: %q, %v", req.ReasoningEffort, err)
+	}
+	_, err = queryRequestForAgentProfileChat(profile, AgentProfileChatRequest{Message: "hi", Engine: "claude-code", ReasoningEffort: "extreme"}, conversation)
+	if err == nil || !strings.Contains(err.Error(), "not offered") {
+		t.Fatalf("an undeclared reasoning effort should be refused, got %v", err)
+	}
+	_, err = queryRequestForAgentProfileChat(profile, AgentProfileChatRequest{Message: "hi", Engine: "codex-cli", ReasoningEffort: "high"}, conversation)
+	if err == nil || !strings.Contains(err.Error(), "not offered") {
+		t.Fatalf("an engine with no declared levels should refuse any reasoning effort, got %v", err)
+	}
+}
+
+// A model or reasoning-effort change on an already-bound conversation must
+// be reported as needing a restart — the running tmux-backed CLI process
+// only reads its launch flags once, so the caller must close it or the next
+// turn silently keeps generating with the old value. The provider itself
+// changing is a different, refused case (TestConversationProviderBindsOnFirstTurn).
+func TestConversationRuntimeChangeReportsRestartNeeded(t *testing.T) {
+	store, _ := memoryProductConversationStore()
+	profile := engineModelTestProfile()
+	binding := productConversationBinding{ConversationKey: "main", WorkspacePath: "Chats/P", Title: "P"}
+	ctx := t.Context()
+	if _, err := store.resolveOrCreate(ctx, "u", profile, binding, ""); err != nil {
+		t.Fatalf("resolveOrCreate: %v", err)
+	}
+	if _, restart, err := store.bindRuntime(ctx, "u", profile, "main", "codex-cli", "gpt-6-astra", "medium"); err != nil || restart {
+		t.Fatalf("first bind should never need a restart: restart=%v err=%v", restart, err)
+	}
+	if _, restart, err := store.bindRuntime(ctx, "u", profile, "main", "codex-cli", "gpt-6-astra", "medium"); err != nil || restart {
+		t.Fatalf("unchanged model/effort should not need a restart: restart=%v err=%v", restart, err)
+	}
+	if _, restart, err := store.bindRuntime(ctx, "u", profile, "main", "codex-cli", "gpt-5.6-sol", "medium"); err != nil || !restart {
+		t.Fatalf("a model change should need a restart: restart=%v err=%v", restart, err)
+	}
+	if _, restart, err := store.bindRuntime(ctx, "u", profile, "main", "codex-cli", "gpt-5.6-sol", "high"); err != nil || !restart {
+		t.Fatalf("a reasoning-effort change should need a restart: restart=%v err=%v", restart, err)
+	}
+	if _, restart, err := store.bindRuntime(ctx, "u", profile, "main", "codex-cli", "gpt-5.6-sol", "high"); err != nil || restart {
+		t.Fatalf("the now-current model/effort should not need another restart: restart=%v err=%v", restart, err)
 	}
 }

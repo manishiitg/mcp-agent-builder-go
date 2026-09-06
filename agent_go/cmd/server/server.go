@@ -661,6 +661,10 @@ type QueryRequest struct {
 	SelectedTools   []string                `json:"selected_tools,omitempty"` // Array of "server:tool" strings
 	Provider        string                  `json:"provider,omitempty"`
 	ModelID         string                  `json:"model_id,omitempty"`
+	// ReasoningEffort overrides the "reasoning_effort" key of an agent
+	// profile's provider_options[].Options for this turn only; every other
+	// key stays as declared. Ignored outside the profile query path.
+	ReasoningEffort string                  `json:"reasoning_effort,omitempty"`
 	Temperature     float64                 `json:"temperature,omitempty"`
 	MaxTurns        int                     `json:"max_turns,omitempty"`
 	AgentMode       string                  `json:"agent_mode,omitempty"`

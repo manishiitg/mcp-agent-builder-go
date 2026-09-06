@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useShallow } from 'zustand/react/shallow'
 
 const DBG = '[skill-popup]'
-import { Send, Wand2, Loader2, Globe, Layers, X, History, Server, Download, Paperclip, Terminal, Plus, Play, MessageSquarePlus } from 'lucide-react'
+import { Send, Wand2, Loader2, Globe, Layers, X, History, Server, Download, Paperclip, Terminal, Plus, Play } from 'lucide-react'
 import { Button } from './ui/Button'
 import { Textarea } from './ui/Textarea'
 import FileContextDisplay from './FileContextDisplay'
@@ -25,6 +25,8 @@ import { chromeCdpInstallCommand, chromeCdpLaunchCommand, chromeCdpVerifyCommand
 import { CHAT_TOOL_COMMAND_EVENT, chatToolCommandFromEvent } from '../utils/chatToolEvents'
 import { loadAgentProfileCapabilityEnabled, loadAgentProfileProviderOptions, loadAgentProfileRuntime, type AgentProfileProviderOption } from '../utils/agentProfileCapabilities'
 import { llmConfigService, type ModelMetadata } from '../services/llm-config-api'
+import ModelReasoningControl from './ui/ModelReasoningControl'
+import NewChatControl from './ui/NewChatControl'
 import { MicButton, type MicButtonHandle, type MicState } from '../voice/MicButton'
 import { useCapabilitiesStore } from '../stores/useCapabilitiesStore'
 import { hasActiveSessionWork } from '../utils/activitySessions'
@@ -520,21 +522,29 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const pseudo = new Set(['high', 'medium', 'low'])
     return engineOptions.map((option) => {
       const provider = (option.provider ?? '').trim()
-      const models = modelCatalog
-        .filter((m) => m.provider === provider && m.model_id !== provider && !pseudo.has(m.model_id))
-        .map((m) => ({ id: m.model_id, label: m.model_name || m.model_id }))
+      const catalogByID = new Map(modelCatalog.filter((m) => m.provider === provider).map((m) => [m.model_id, m]))
+      // An engine that curates its own Models offers exactly those, in that
+      // order; otherwise every model the catalog lists for its provider.
+      const models = option.models && option.models.length > 0
+        ? option.models.map((id) => ({ id, label: catalogByID.get(id)?.model_name || id }))
+        : modelCatalog
+            .filter((m) => m.provider === provider && m.model_id !== provider && !pseudo.has(m.model_id))
+            .map((m) => ({ id: m.model_id, label: m.model_name || m.model_id }))
       const own = (option.model_id ?? '').trim()
       if (own && !models.some((m) => m.id === own)) models.unshift({ id: own, label: own })
-      return { option, models }
+      const reasoningLevels = (option.reasoning_efforts ?? []).map((id) => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) }))
+      return { option, models, reasoningLevels }
     })
   }, [engineOptions, modelCatalog])
   const currentGroup = engineGroups.find((g) => g.option.id === currentEngine)
   const currentModel = activeTab?.metadata?.agentProfileModelID || (currentGroup?.option.model_id ?? '') || currentGroup?.models[0]?.id || ''
+  const defaultReasoningEffort = typeof currentGroup?.option.options?.reasoning_effort === 'string' ? currentGroup.option.options.reasoning_effort : undefined
+  const currentReasoningEffort = activeTab?.metadata?.agentProfileReasoningEffort || defaultReasoningEffort || currentGroup?.reasoningLevels[0]?.id || ''
   const chatHasTurns = useMemo(() => (activeTabEvents ?? []).some((e) => e.type === 'user_message'), [activeTabEvents])
-  const selectProductEngine = useCallback((engine: string, modelId: string) => {
+  const selectProductEngine = useCallback((engine: string, modelId: string, reasoningEffort?: string) => {
     if (!activeTabId || !agentProfileId) return
-    useChatStore.getState().setTabMetadata(activeTabId, { agentProfileEngine: engine, agentProfileModelID: modelId })
-    window.dispatchEvent(new CustomEvent('agentworks:product-engine-selected', { detail: { profileId: agentProfileId, engine, modelId } }))
+    useChatStore.getState().setTabMetadata(activeTabId, { agentProfileEngine: engine, agentProfileModelID: modelId, ...(reasoningEffort ? { agentProfileReasoningEffort: reasoningEffort } : {}) })
+    window.dispatchEvent(new CustomEvent('agentworks:product-engine-selected', { detail: { profileId: agentProfileId, engine, modelId, reasoningEffort } }))
   }, [activeTabId, agentProfileId])
 
   // "New chat" for product surfaces, offered when the profile declares
@@ -551,9 +561,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     })
     return () => { cancelled = true }
   }, [isProductSurface, agentProfileId, agentProfileVersion])
-  const requestNewConversation = useCallback(() => {
+  const requestNewConversation = useCallback((engine: string) => {
     if (!agentProfileId) return
-    window.dispatchEvent(new CustomEvent('agentworks:product-new-conversation', { detail: { profileId: agentProfileId } }))
+    window.dispatchEvent(new CustomEvent('agentworks:product-new-conversation', { detail: { profileId: agentProfileId, engine } }))
   }, [agentProfileId])
 
   useEffect(() => {
@@ -3563,36 +3573,24 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         />
                       )}
                       {isProductSurface && newConversationEnabled && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 w-7 p-0"
-                          aria-label="New chat"
-                          title="Start a new chat — this one stays in history"
+                        <NewChatControl
+                          engines={engineGroups.map((g) => ({ id: g.option.id, label: g.option.label || g.option.id }))}
                           disabled={isSummarizing}
-                          onClick={requestNewConversation}
-                        >
-                          <MessageSquarePlus className="w-3.5 h-3.5" />
-                        </Button>
+                          onStart={requestNewConversation}
+                        />
                       )}
-                      {isProductSurface && engineGroups.some((g) => g.models.length > 0) && (engineGroups.length > 1 || (currentGroup?.models.length ?? 0) > 1) && (
-                        <select
-                          className="h-7 max-w-[12rem] rounded-md border border-border bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground focus:outline-none"
-                          aria-label="Which AI answers this chat"
-                          title={chatHasTurns ? `This chat runs on ${currentGroup?.option.label || currentEngine}. Start a new chat to switch between ${engineGroups.map((g) => g.option.label || g.option.id).join(' and ')}.` : 'Which AI answers this chat'}
-                          value={`${currentEngine}::${currentModel}`}
+                      {isProductSurface && engineGroups.some((g) => g.models.length > 0) && (
+                        <ModelReasoningControl
+                          engines={engineGroups.map((g) => ({ id: g.option.id, label: g.option.label || g.option.id, models: g.models }))}
+                          currentEngineId={currentEngine}
+                          currentModelId={currentModel}
+                          engineChangeable={!chatHasTurns}
+                          reasoningLevels={currentGroup?.reasoningLevels ?? []}
+                          currentReasoningEffort={currentReasoningEffort}
+                          defaultReasoningEffort={defaultReasoningEffort}
                           disabled={isSummarizing}
-                          onChange={(e) => { const [engine, model] = e.target.value.split('::'); if (engine) selectProductEngine(engine, model ?? '') }}
-                        >
-                          {engineGroups
-                            .filter((g) => !chatHasTurns || g.option.id === currentEngine)
-                            .map((g) => (
-                              <optgroup key={g.option.id} label={g.option.label || g.option.id}>
-                                {g.models.map((m) => <option key={m.id} value={`${g.option.id}::${m.id}`}>{m.label}</option>)}
-                              </optgroup>
-                            ))}
-                        </select>
+                          onSelect={selectProductEngine}
+                        />
                       )}
                       <>
                         {!hideExtras && !isMultiAgentMode && (

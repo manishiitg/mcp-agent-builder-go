@@ -838,12 +838,17 @@ export default function LearningApp() {
   const [parentChatEpoch, setParentChatEpoch] = useState(0)
   useEffect(() => {
     const onNewChat = (e: Event) => {
-      const detail = (e as CustomEvent<{ profileId?: string }>).detail
+      const detail = (e as CustomEvent<{ profileId?: string; engine?: string }>).detail
       if (detail?.profileId !== PARENT_PROFILE_ID || newChatBusyRef.current) return
       newChatBusyRef.current = true
-      startNewParentConversation()
+      // The engine is chosen once, here, for the fresh conversation; no
+      // model yet, so it starts on that engine's own default. selectEngine
+      // drops any leftover model from the old engine along with it.
+      const engineChoice = detail.engine ? api.selectEngine(detail.engine).catch(() => undefined) : Promise.resolve()
+      engineChoice
+        .then(() => startNewParentConversation())
         .catch(() => undefined)
-        .finally(() => { setParentChatEpoch((n) => n + 1); newChatBusyRef.current = false })
+        .finally(() => { if (detail.engine) applyFamilyEngineToOpenTabs(detail.engine); setParentChatEpoch((n) => n + 1); newChatBusyRef.current = false })
     }
     window.addEventListener('agentworks:product-new-conversation', onNewChat)
     return () => window.removeEventListener('agentworks:product-new-conversation', onNewChat)

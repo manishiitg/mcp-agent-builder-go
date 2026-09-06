@@ -187,7 +187,21 @@ type ProviderOption struct {
 	// Options are provider-specific runtime options applied to every turn on
 	// this binding (the same keys a published LLM entry carries, e.g.
 	// reasoning_effort for the coding CLIs). Product-owned, like the model.
+	// A declared ReasoningEfforts value lets a turn override the
+	// "reasoning_effort" key here specifically; every other key is fixed.
 	Options map[string]interface{} `json:"options,omitempty" yaml:"options,omitempty"`
+	// Models narrows the composer's model switcher (and the server's accepted
+	// model_id) to exactly these ids under this engine, in the order to show
+	// them — curation over the platform's full model catalog. Empty offers
+	// every model the catalog lists for Provider (the prior, uncurated
+	// behavior); this never widens past what the catalog actually has.
+	Models []string `json:"models,omitempty" yaml:"models,omitempty"`
+	// ReasoningEfforts, when non-empty, offers a reasoning-level control in
+	// the composer for this engine and lets a turn's reasoning_effort request
+	// override the matching key in Options (every other key in Options stays
+	// fixed). Empty means no such control — Options.reasoning_effort, if any,
+	// is fixed for every turn on this engine, as before.
+	ReasoningEfforts []string `json:"reasoning_efforts,omitempty" yaml:"reasoning_efforts,omitempty"`
 }
 
 type RuntimeCapabilities struct {
