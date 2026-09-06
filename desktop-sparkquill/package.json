@@ -14,6 +14,7 @@
     "dist": "electron-builder --mac --arm64 --publish always"
   },
   "dependencies": {
+    "agentworks-desktop-lib": "file:../desktop/lib",
     "detect-port": "^1.6.1"
   },
   "devDependencies": {

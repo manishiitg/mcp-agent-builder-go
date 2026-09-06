@@ -1,0 +1,62 @@
+'use strict';
+
+// Spawning the two local servers every AgentWorks-family desktop shell runs.
+// The mechanics are shared here: pick a port (preferred, else next free),
+// spawn, stream stdout/stderr into a bounded log, resolve on the server's
+// "DynamicPort: N" line, reject on spawn error, and report exit. What differs
+// per app — binary paths, cwd, env — is passed in by the caller.
+
+const { spawn } = require('child_process');
+const detect = require('detect-port');
+
+const DYNAMIC_PORT_RE = /DynamicPort: (\d+)/;
+
+// spawnServer resolves { child, port } once the server prints its port.
+//   name           label used in log lines ("workspace", "agent")
+//   bin, args      args may contain the placeholder PORT_PLACEHOLDER
+//   preferredPort  detect() returns it if free, else the next available
+//   cwd, env       passed to spawn
+//   log            a bounded log writer ({ write })
+//   onExit(code, signal)   optional
+function spawnServer({ name, bin, args, preferredPort, cwd, env, log, onExit, echoToConsole = false }) {
+  return detect(preferredPort).then((port) => new Promise((resolve, reject) => {
+    const finalArgs = args.map((a) => (a === spawnServer.PORT_PLACEHOLDER ? String(port) : a));
+    const child = spawn(bin, finalArgs, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let portFound = false;
+
+    child.on('error', (err) => {
+      const msg = `[${name}] spawn error: ${err}\n`;
+      log.write(msg);
+      if (echoToConsole) console.error(msg.trim());
+      if (!portFound) reject(err);
+    });
+    child.on('exit', (code, signal) => {
+      log.write(`\n=== ${name}-server exited code=${code} signal=${signal} ===\n`);
+      if (onExit) onExit(code, signal);
+    });
+    child.stdout.on('data', (d) => {
+      const output = d.toString();
+      log.write(output);
+      if (echoToConsole) process.stdout.write(`[${name}] ${output}`);
+      if (!portFound) {
+        const match = output.match(DYNAMIC_PORT_RE);
+        if (match) {
+          portFound = true;
+          resolve({ child, port: parseInt(match[1], 10) });
+        }
+      }
+    });
+    child.stderr.on('data', (d) => {
+      log.write(d);
+      if (echoToConsole) process.stderr.write(`[${name}] ${d}`);
+    });
+  }));
+}
+spawnServer.PORT_PLACEHOLDER = '__PORT__';
+
+function killServer(child, signal = 'SIGTERM') {
+  if (!child) return;
+  try { child.kill(signal); } catch (_) { /* already gone */ }
+}
+
+module.exports = { spawnServer, killServer, DYNAMIC_PORT_RE };

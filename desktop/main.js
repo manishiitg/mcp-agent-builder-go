@@ -1,11 +1,19 @@
 const { app, BrowserWindow, dialog, shell, nativeTheme, Menu, Tray, ipcMain, nativeImage, session } = require('electron');
 const path = require('path');
-const { spawn, spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 const http = require('http');
 const https = require('https');
-const detect = require('detect-port');
 const fs = require('fs');
 const crypto = require('crypto');
+const {
+  importLoginShellEnv,
+  createBoundedLogWriter: createSharedBoundedLogWriter,
+  waitForHealth: waitForServersHealth,
+  makeOpenExternalUrl,
+  attachExternalNavigation,
+  installSignalShutdown,
+  spawnServer,
+} = require('./lib');
 
 // Keep the historical data path while presenting the AgentWorks name to macOS.
 // Changing userData would make existing installs appear empty after the rename.
@@ -50,46 +58,9 @@ nativeTheme.themeSource = 'dark';
 
 // GUI-launched Mac apps inherit a minimal PATH (no Homebrew, no nvm, no ~/.local/bin),
 // so spawned tools like `claude`, `npx`, etc. are not found. Read PATH from the user's
-// login shell once at startup and use it for all spawned children.
-function resolveLoginEnv() {
-  if (process.platform !== 'darwin' && process.platform !== 'linux') return {};
-  const shellBin = process.env.SHELL || '/bin/zsh';
-  // Wrap printenv with unique markers so we can isolate the env block even if
-  // the user's .zshrc/.bashrc echoes extra text to stdout (e.g. ssh-agent banners).
-  const BEGIN = '__RL_ENV_BEGIN__';
-  const END = '__RL_ENV_END__';
-  try {
-    const result = spawnSync(shellBin, ['-ilc', `printf '%s' '${BEGIN}'; /usr/bin/env -0; printf '%s' '${END}'`], {
-      encoding: 'buffer',
-      timeout: 4000,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    const stdout = result.stdout ? result.stdout.toString('binary') : '';
-    const beginIdx = stdout.indexOf(BEGIN);
-    const endIdx = stdout.indexOf(END);
-    if (beginIdx === -1 || endIdx === -1) return {};
-    const block = stdout.slice(beginIdx + BEGIN.length, endIdx);
-    const out = {};
-    for (const entry of block.split('\0')) {
-      if (!entry) continue;
-      const eq = entry.indexOf('=');
-      if (eq <= 0) continue;
-      out[entry.slice(0, eq)] = entry.slice(eq + 1);
-    }
-    return out;
-  } catch (e) {
-    console.warn('[main] Failed to resolve login shell env:', e);
-    return {};
-  }
-}
-const LOGIN_ENV = resolveLoginEnv();
-// Merge into process.env so spawned children pick up PATH + API keys + any other vars
-// the user has in their login shell. Existing process.env values win (don't clobber).
-for (const [k, v] of Object.entries(LOGIN_ENV)) {
-  if (process.env[k] === undefined) process.env[k] = v;
-}
-if (LOGIN_ENV.PATH) process.env.PATH = LOGIN_ENV.PATH; // PATH must always come from login shell
-console.log('[main] Imported', Object.keys(LOGIN_ENV).length, 'env vars from login shell');
+// login shell once at startup and use it for all spawned children. Shared with the
+// other desktop shells in ./lib (see lib/index.js).
+importLoginShellEnv();
 
 const MANAGED_LOG_MAX_BYTES = parsePositiveIntegerEnv('RUNLOOP_MAX_LOG_BYTES', DEFAULT_MANAGED_LOG_MAX_BYTES);
 const AGENT_PROMPT_LOG_MAX_SESSIONS = parseNonNegativeIntegerEnv(
@@ -118,87 +89,10 @@ function safeStringify(value) {
   try { return JSON.stringify(value); } catch (_e) { return String(value); }
 }
 
-function toLogBuffer(chunk) {
-  if (Buffer.isBuffer(chunk)) return chunk;
-  if (chunk instanceof Uint8Array) return Buffer.from(chunk);
-  return Buffer.from(String(chunk));
-}
-
-function trimLogFileToTail(filePath, maxBytes = MANAGED_LOG_MAX_BYTES, keepBytesOverride = null) {
-  if (!maxBytes || maxBytes <= 0) return 0;
-
-  let stat;
-  try {
-    stat = fs.statSync(filePath);
-  } catch (_e) {
-    return 0;
-  }
-
-  if (!stat.isFile()) return 0;
-
-  const targetKeepBytes = keepBytesOverride == null
-    ? Math.floor(maxBytes * LOG_TRIM_KEEP_RATIO)
-    : Math.max(0, keepBytesOverride);
-  if (stat.size <= maxBytes && stat.size <= targetKeepBytes) return stat.size;
-
-  const header = Buffer.from(
-    `[${new Date().toISOString()}] Log truncated by AgentWorks to stay under ${maxBytes} bytes; kept the tail of a ${stat.size} byte file.\n`
-  );
-  const readBytes = Math.min(targetKeepBytes, Math.max(0, maxBytes - header.length), stat.size);
-  let tail = Buffer.alloc(0);
-
-  if (readBytes > 0) {
-    const fd = fs.openSync(filePath, 'r');
-    try {
-      tail = Buffer.allocUnsafe(readBytes);
-      fs.readSync(fd, tail, 0, readBytes, stat.size - readBytes);
-    } finally {
-      fs.closeSync(fd);
-    }
-  }
-
-  const nextContent = Buffer.concat([header, tail]);
-  fs.writeFileSync(filePath, nextContent, { mode: 0o600 });
-  return nextContent.length;
-}
-
+// Bounded log writers are shared with the other desktop shells (lib/boundedLog.js);
+// this keeps the local signature every call site here uses.
 function createBoundedLogWriter(filePath, maxBytes = MANAGED_LOG_MAX_BYTES) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  let currentSize = trimLogFileToTail(filePath, maxBytes);
-
-  return {
-    write(chunk) {
-      const buffer = toLogBuffer(chunk);
-      if (buffer.length === 0) return;
-
-      try {
-        if (maxBytes > 0 && buffer.length >= maxBytes) {
-          const header = Buffer.from(
-            `[${new Date().toISOString()}] Oversized log chunk truncated by AgentWorks; kept the final bytes of a ${buffer.length} byte write.\n`
-          );
-          const tailBudget = Math.max(0, maxBytes - header.length);
-          const tail = buffer.subarray(Math.max(0, buffer.length - tailBudget));
-          const nextContent = Buffer.concat([header, tail]);
-          fs.writeFileSync(filePath, nextContent, { mode: 0o600 });
-          currentSize = nextContent.length;
-          return;
-        }
-
-        if (maxBytes > 0 && currentSize + buffer.length > maxBytes) {
-          const keepBudget = Math.max(0, maxBytes - buffer.length - 1024);
-          currentSize = trimLogFileToTail(filePath, maxBytes, keepBudget);
-        }
-
-        fs.appendFileSync(filePath, buffer, { mode: 0o600 });
-        currentSize += buffer.length;
-      } catch (err) {
-        console.warn('[main] Failed to write bounded log:', err && err.message ? err.message : err);
-      }
-    },
-    end() {
-      // Synchronous writer; retained for compatibility with stream-like call sites.
-    }
-  };
+  return createSharedBoundedLogWriter(filePath, { maxBytes, keepRatio: LOG_TRIM_KEEP_RATIO, appName: 'AgentWorks' });
 }
 
 function pruneAgentPromptLogs(userDataPath) {
@@ -839,31 +733,8 @@ ipcMain.on('set-running-activity', (_event, payload) => {
   updateDockActivityAnimation();
 });
 
-function normalizeExternalUrl(rawUrl) {
-  if (typeof rawUrl !== 'string') return null;
-  const trimmed = rawUrl.trim();
-  if (!trimmed) return null;
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:') {
-      return parsed.toString();
-    }
-  } catch (_) {
-    return null;
-  }
-  return null;
-}
-
-function openExternalUrl(rawUrl, source) {
-  const externalUrl = normalizeExternalUrl(rawUrl);
-  if (!externalUrl) {
-    console.warn(`[main] Blocked unsupported external URL from ${source}:`, rawUrl);
-    return;
-  }
-  shell.openExternal(externalUrl).catch(err => {
-    console.error(`[main] Failed to open external URL from ${source}:`, err);
-  });
-}
+// External-URL handling is shared with the other desktop shells (lib/externalNav.js).
+const openExternalUrl = makeOpenExternalUrl(shell);
 
 // IPC Handler for opening external URLs
 ipcMain.on('open-external', (event, url) => {
@@ -1138,45 +1009,16 @@ function spawnWorkspace(userDataPath) {
       WORKSPACE_API_TOKEN: workspaceApiToken
     };
 
-    // Prefer fixed port 45679 so frontend localStorage stays stable across launches.
-    // detect() returns the preferred port if free, otherwise the next available one.
-    detect(45679).then((port) => {
-      const child = spawn(bin, ['server', '--port', String(port), '--docs-dir', docsDir], {
-        env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+    // Prefer fixed port 45679 so frontend localStorage stays stable across launches;
+    // spawnServer (lib/servers.js) falls forward to the next free port.
+    spawnServer({
+      name: 'workspace', bin, args: ['server', '--port', spawnServer.PORT_PLACEHOLDER, '--docs-dir', docsDir],
+      preferredPort: 45679, env, log: logStream, echoToConsole: true,
+    }).then(({ child, port }) => {
       workspaceProcess = child;
-
-    let portFound = false;
-
-    child.on('error', (err) => {
-      const msg = `[workspace] spawn error: ${err}\n`;
-      console.error(msg);
-      logStream.write(msg);
-      if (!portFound) reject(err);
-    });
-    
-    child.stdout.on('data', (d) => {
-      const output = d.toString();
-      process.stdout.write(`[workspace] ${output}`);
-      logStream.write(output);
-      
-      // Parse dynamic port
-      if (!portFound) {
-        const match = output.match(/DynamicPort: (\d+)/);
-        if (match) {
-          dynamicWorkspacePort = parseInt(match[1], 10);
-          console.log(`[main] Workspace server started on dynamic port: ${dynamicWorkspacePort}`);
-          portFound = true;
-          resolve();
-        }
-      }
-    });
-    
-    child.stderr.on('data', (d) => {
-      process.stderr.write(`[workspace] ${d}`);
-      logStream.write(d);
-    });
+      dynamicWorkspacePort = port;
+      console.log(`[main] Workspace server started on dynamic port: ${dynamicWorkspacePort}`);
+      resolve();
     }).catch(reject);
   });
 }
@@ -1266,10 +1108,10 @@ function spawnAgent(userDataPath) {
       saveSettings({ ...settings, previousDocsDir: docsDir });
     }
 
-    // Port resolved below via detect() — prefer fixed 45678 so frontend localStorage persists.
+    // Port resolved by spawnServer — prefer fixed 45678 so frontend localStorage persists.
     const args = [
       'server',
-      '--port', '0',
+      '--port', spawnServer.PORT_PLACEHOLDER,
       '--log-file', logFile,
       '--log-level', 'debug',
       '--mcp-config', mcpConfigPath
@@ -1307,85 +1149,31 @@ function spawnAgent(userDataPath) {
       delete env.LOG_AGENT_PROMPTS;
     }
 
-    detect(45678).then((port) => {
-      const portIdx = args.indexOf('--port');
-      args[portIdx + 1] = String(port);
-
-      const child = spawn(bin, args, {
-        cwd,
-        env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+    spawnServer({
+      name: 'agent', bin, args, preferredPort: 45678, cwd, env, log: logStream, echoToConsole: true,
+    }).then(({ child, port }) => {
       agentProcess = child;
-
-      const startupMsg = `[agent] Spawning agent-server with log-file=${logFile}, port=${port}\n`;
+      dynamicAgentPort = port;
+      const startupMsg = `[agent] Spawned agent-server with log-file=${logFile}, port=${port}\n`;
       console.log(startupMsg.trim());
       logStream.write(startupMsg);
-
-      let portFound = false;
-
-      child.on('error', (err) => {
-        const msg = `[agent] spawn error: ${err}\n`;
-        console.error(msg);
-        logStream.write(msg);
-        if (!portFound) reject(err);
-      });
-
-      child.stdout.on('data', (d) => {
-        const output = d.toString();
-        process.stdout.write(`[agent] ${output}`);
-        logStream.write(output);
-
-        if (!portFound) {
-          const match = output.match(/DynamicPort: (\d+)/);
-          if (match) {
-            dynamicAgentPort = parseInt(match[1], 10);
-            console.log(`[main] Agent server started on port: ${dynamicAgentPort}`);
-            portFound = true;
-            resolve();
-          }
-        }
-      });
-
-      child.stderr.on('data', (d) => {
-        process.stderr.write(`[agent] ${d}`);
-        logStream.write(d);
-      });
+      resolve();
     }).catch(reject);
   });
 }
 
-function fetchHealth(url) {
-  return new Promise((resolve) => {
-    const req = http.get(url, (res) => {
-      resolve(res.statusCode === 200);
-    });
-    req.on('error', () => resolve(false));
-    req.setTimeout(5000, () => {
-      req.destroy();
-      resolve(false);
-    });
-  });
-}
-
+// Readiness polling is shared with the other desktop shells (lib/health.js).
 function waitForHealth(agentUrl, workspaceUrl) {
-  const deadline = Date.now() + HEALTH_TIMEOUT_MS;
-  function poll() {
-    if (Date.now() > deadline) {
-      return Promise.all([fetchHealth(agentUrl), fetchHealth(workspaceUrl)]).then(([agentOk, workspaceOk]) => {
-        const parts = [];
-        if (!agentOk) parts.push('agent (port ' + dynamicAgentPort + ')');
-        if (!workspaceOk) parts.push('workspace (port ' + dynamicWorkspacePort + ')');
-        const which = parts.length ? parts.join(' and ') : 'one or both';
-        return Promise.reject(new Error('Servers did not become ready in time. Not ready: ' + which + '. Ensure agent-server and workspace-server are in desktop/resources/.'));
-      });
-    }
-    return Promise.all([fetchHealth(agentUrl), fetchHealth(workspaceUrl)]).then(([agentOk, workspaceOk]) => {
-      if (agentOk && workspaceOk) return;
-      return new Promise((r) => setTimeout(r, HEALTH_POLL_MS)).then(poll);
-    });
-  }
-  return new Promise((r) => setTimeout(r, HEALTH_INITIAL_DELAY_MS)).then(poll);
+  return waitForServersHealth({
+    checks: [
+      { name: 'agent (port ' + dynamicAgentPort + ')', url: agentUrl },
+      { name: 'workspace (port ' + dynamicWorkspacePort + ')', url: workspaceUrl },
+    ],
+    timeoutMs: HEALTH_TIMEOUT_MS,
+    pollMs: HEALTH_POLL_MS,
+    initialDelayMs: HEALTH_INITIAL_DELAY_MS,
+    hint: 'Ensure agent-server and workspace-server are in desktop/resources/.',
+  });
 }
 
 // Update flow for the unsigned macOS build.
@@ -1793,49 +1581,10 @@ function createWindow(initialUrl) {
     diagLog('[main] Preload error:', preloadPath, String((error && error.stack) || error));
   });
 
-  // Handle new window requests (e.g. target="_blank" or window.open)
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    console.log('[main] setWindowOpenHandler intercepted request for:', url);
-
-    if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) {
-      console.log('[main] Allowing internal window/popup for:', url);
-      return { action: 'allow' };
-    }
-
-    const externalUrl = normalizeExternalUrl(url);
-    if (externalUrl) {
-      console.log('[main] Opening external URL in system browser:', externalUrl);
-      openExternalUrl(externalUrl, 'window-open');
-    } else {
-      console.warn('[main] Blocking unsupported window-open URL:', url);
-    }
-
-    return { action: 'deny' };
-  });
-
-  // Same-window navigations — a plain <a href> click (e.g. a URL printed in
-  // terminal output) would otherwise REPLACE the app in the Electron window.
-  // Intercept external http(s) navigations and open them in the system browser;
-  // let internal app / dev-server navigation proceed normally.
-  const isInternalNavUrl = (u) =>
-    u.startsWith('http://127.0.0.1') ||
-    u.startsWith('http://localhost') ||
-    u.startsWith('file://') ||
-    u.startsWith('app://') ||
-    u.startsWith('about:');
-  const redirectExternalNavigation = (event, url) => {
-    const externalUrl = normalizeExternalUrl(url);
-    if (!isInternalNavUrl(url) && externalUrl) {
-      event.preventDefault();
-      console.log('[main] will-navigate -> opening external URL in system browser:', externalUrl);
-      openExternalUrl(externalUrl, 'will-navigate');
-    } else if (!isInternalNavUrl(url) && !externalUrl) {
-      event.preventDefault();
-      console.warn('[main] Blocking unsupported navigation URL:', url);
-    }
-  };
-  mainWindow.webContents.on('will-navigate', redirectExternalNavigation);
-  mainWindow.webContents.on('will-redirect', redirectExternalNavigation);
+  // window.open / target=_blank and plain <a href> navigations to anything
+  // non-local open in the system browser; loopback/app navigation proceeds.
+  // Shared with the other desktop shells (lib/externalNav.js).
+  attachExternalNavigation(mainWindow.webContents, shell);
 
   const devUrl = process.env.DEV_URL;
   if (devUrl && process.env.ELECTRON_OPEN_DEVTOOLS === '1') {
@@ -1990,14 +1739,6 @@ app.on('quit', (_event, exitCode) => {
   console.log('[main] quit with exit code:', exitCode);
 });
 
-// A SIGTERM/SIGINT to the Electron main process (a `kill`, a supervisor, a
-// dev script) does not run the app 'before-quit'/'will-quit' events above,
-// and would otherwise orphan both servers — still bound to their ports,
-// still writing into the workspace the next launch expects to own.
-for (const signal of ['SIGTERM', 'SIGINT']) {
-  process.on(signal, () => {
-    console.log(`[main] received ${signal}`);
-    killChildren();
-    app.exit(0);
-  });
-}
+// A signal to the main process never runs the quit handlers above; without
+// this the servers are orphaned. Shared with the other desktop shells.
+installSignalShutdown({ app, stop: killChildren });

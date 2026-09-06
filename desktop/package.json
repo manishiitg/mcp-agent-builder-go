@@ -6,6 +6,7 @@
   "main": "main.js",
   "private": true,
   "scripts": {
+    "test": "node --test lib/*.test.js",
     "start": "npx electron .",
     "build": "electron-builder --mac --dir",
     "dist": "electron-builder --mac --publish always"

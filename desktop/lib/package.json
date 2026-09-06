@@ -1,0 +1,11 @@
+{
+  "name": "agentworks-desktop-lib",
+  "version": "0.1.0",
+  "description": "Shared Electron-shell mechanics for the AgentWorks-family desktop apps (login-shell env, bounded logs, server spawn, health, external navigation, signal shutdown).",
+  "main": "index.js",
+  "private": true,
+  "license": "UNLICENSED",
+  "dependencies": {
+    "detect-port": "^1.6.1"
+  }
+}
