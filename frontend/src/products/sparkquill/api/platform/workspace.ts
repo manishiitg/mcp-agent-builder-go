@@ -44,6 +44,10 @@ export function documentsURL(rel: string, suffix = ''): string {
   return `/api/wp/api/documents/${encodePath(workspacePath(rel))}${suffix}`
 }
 
+export function foldersURL(rel: string): string {
+  return `/api/wp/api/folders/${encodePath(workspacePath(rel))}?confirm=true`
+}
+
 export class FamilyWorkspace {
   private readonly request: Requester
 
@@ -69,6 +73,11 @@ export class FamilyWorkspace {
 
   async writeJSON(rel: string, value: unknown): Promise<void> {
     await this.writeFile(rel, JSON.stringify(value, null, 2) + '\n')
+  }
+
+  /** Permanently removes a folder and everything under it. No undo. */
+  async deleteFolder(rel: string): Promise<void> {
+    await this.request('DELETE', foldersURL(rel))
   }
 
   /** The family tree in the UI's shape: family-relative paths, folders first as the API returns them. */

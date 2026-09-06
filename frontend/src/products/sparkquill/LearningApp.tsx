@@ -34,6 +34,8 @@ import {
   Pin,
   PinOff,
   Bell,
+  MessagesSquare,
+  Trash2,
 } from 'lucide-react'
 import './learning-app.css'
 import {
@@ -1059,6 +1061,15 @@ export default function LearningApp() {
       .catch((err) => setClearPulseHistoryError(err instanceof Error ? err.message : 'Could not clear the history.'))
       .finally(() => setClearingPulseHistory(false))
   }
+  // "Chats" toolbar popover: every activity (each is one child conversation),
+  // newest first, with per-item delete and a bulk "older than N days" sweep —
+  // the missing cleanup mechanism for old activities. Independent of which
+  // drawer tab is open (the Activities tab's own fetch is gated on that).
+  const [chatsPopoverOpen, setChatsPopoverOpen] = useState(false)
+  const [loadingChats, setLoadingChats] = useState(false)
+  const [deleteOlderDays, setDeleteOlderDays] = useState('30')
+  const [deletingChatDirs, setDeletingChatDirs] = useState<string[]>([])
+  const [deleteChatsError, setDeleteChatsError] = useState<string | null>(null)
   const wsFiles = useSparkQuillWorkspaceStore((s) => s.wsFiles)
   const setWsFiles = useSparkQuillWorkspaceStore((s) => s.setWsFiles)
   const allFiles = useSparkQuillWorkspaceStore((s) => s.allFiles)
@@ -1289,6 +1300,33 @@ export default function LearningApp() {
   const setFilesGroupBy = useSparkQuillWorkspaceStore((s) => s.setFilesGroupBy)
   const activities = useSparkQuillWorkspaceStore((s) => s.activities)
   const setActivities = useSparkQuillWorkspaceStore((s) => s.setActivities)
+  useEffect(() => {
+    if (!chatsPopoverOpen) return
+    let cancelled = false
+    setLoadingChats(true)
+    api.activities()
+      .then((d) => { if (!cancelled) setActivities(d ?? []) })
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setLoadingChats(false) })
+    return () => { cancelled = true }
+  }, [chatsPopoverOpen, setActivities])
+  const deleteChats = (dirs: string[], confirmMessage: string) => {
+    if (dirs.length === 0 || !window.confirm(confirmMessage)) return
+    setDeleteChatsError(null)
+    setDeletingChatDirs((cur) => [...cur, ...dirs])
+    api.deleteActivities(dirs)
+      .then(() => setActivities((cur) => cur.filter((a) => !dirs.includes(a.dir))))
+      .catch((err) => setDeleteChatsError(err instanceof Error ? err.message : 'Could not delete.'))
+      .finally(() => setDeletingChatDirs((cur) => cur.filter((d) => !dirs.includes(d))))
+  }
+  const deleteOldChats = () => {
+    const days = Number(deleteOlderDays)
+    if (!Number.isFinite(days) || days <= 0) { setDeleteChatsError('Enter a positive number of days.'); return }
+    const cutoff = Date.now() - days * 86_400_000
+    const dirs = activities.filter((a) => a.created_at && new Date(a.created_at).getTime() < cutoff).map((a) => a.dir)
+    if (dirs.length === 0) { setDeleteChatsError(`No chats older than ${days} days.`); return }
+    deleteChats(dirs, `Permanently delete ${dirs.length} chat${dirs.length === 1 ? '' : 's'} older than ${days} days? This cannot be undone.`)
+  }
   const viewerPath = useSparkQuillWorkspaceStore((s) => s.viewerPath)
   const setViewerPath = useSparkQuillWorkspaceStore((s) => s.setViewerPath)
   const viewerRefreshKey = useSparkQuillWorkspaceStore((s) => s.viewerRefreshKey)
@@ -2002,6 +2040,69 @@ export default function LearningApp() {
                 </div>
               </div>
               <div className="fl-toolbar-right">
+                <div className="fl-pulse-wrap">
+                  <button
+                    className="fl-pulse-pill"
+                    type="button"
+                    aria-label="Chats"
+                    title="Chats"
+                    onClick={() => setChatsPopoverOpen((v) => !v)}
+                  >
+                    <MessagesSquare size={14} />
+                    <span>Chats</span>
+                  </button>
+                  {chatsPopoverOpen && (
+                    <>
+                      <div className="fl-pulse-backdrop" onClick={() => setChatsPopoverOpen(false)} />
+                      <div className="fl-pulse-popover fl-chats-popover" role="dialog">
+                        <div className="fl-pulse-popover-head">
+                          <MessagesSquare size={15} />
+                          <span>Chats</span>
+                          <button type="button" className="fl-pulse-popover-close" onClick={() => setChatsPopoverOpen(false)} aria-label="Close">×</button>
+                        </div>
+                        <div className="fl-chats-cleanup">
+                          <span>Delete chats older than</span>
+                          <input
+                            type="number"
+                            min={1}
+                            className="fl-chats-days-input"
+                            value={deleteOlderDays}
+                            onChange={(e) => setDeleteOlderDays(e.target.value)}
+                          />
+                          <span>days</span>
+                          <button type="button" className="fl-chats-delete-old" onClick={deleteOldChats}>Delete</button>
+                        </div>
+                        {deleteChatsError && <p className="fl-pulse-run-error">{deleteChatsError}</p>}
+                        <div className="fl-chats-list">
+                          {loadingChats && activities.length === 0 ? (
+                            <p className="fl-note">Loading…</p>
+                          ) : activities.length === 0 ? (
+                            <p className="fl-note">No chats yet.</p>
+                          ) : (
+                            activities.map((act) => (
+                              <div key={act.dir} className="fl-chats-row">
+                                <div className="fl-chats-row-info">
+                                  <span className="fl-chats-row-title">{act.title}</span>
+                                  <span className="fl-chats-row-date">{dateTimeLabel(act.created_at) || 'Undated'}</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="fl-chats-row-delete"
+                                  aria-label={`Delete ${act.title}`}
+                                  title="Delete this chat"
+                                  disabled={deletingChatDirs.includes(act.dir)}
+                                  onClick={() => deleteChats([act.dir], `Permanently delete "${act.title}"? This cannot be undone.`)}
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
                 <div className="fl-pulse-wrap">
                   <button
                     className="fl-pulse-pill"

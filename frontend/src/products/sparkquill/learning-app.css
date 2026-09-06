@@ -768,6 +768,19 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-pulse-popover-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; background: linear-gradient(135deg, #17306b, #23407f); color: #fff; font-weight: 800; }
 .fl-pulse-popover-close { margin-left: 4px; width: 24px; height: 24px; display: grid; place-items: center; border: 0; border-radius: 7px; background: rgba(255,255,255,.14); color: #fff; font-size: 18px; line-height: 1; cursor: pointer; }
 .fl-pulse-popover-close:hover { background: rgba(255,255,255,.28); }
+.fl-chats-popover { width: 420px; }
+.fl-chats-cleanup { display: flex; align-items: center; gap: 8px; padding: 12px 14px 0; font-size: var(--text-secondary); color: var(--heading); }
+.fl-chats-days-input { width: 56px; padding: 4px 6px; border: 1px solid #d7e0ec; border-radius: 8px; font: inherit; text-align: center; }
+.fl-chats-delete-old { margin-left: auto; padding: 6px 12px; border: 0; border-radius: 9px; background: #b23b3b; color: #fff; font: inherit; font-size: var(--text-caption); font-weight: 650; cursor: pointer; }
+.fl-chats-delete-old:hover { filter: brightness(0.95); }
+.fl-chats-list { max-height: 360px; overflow-y: auto; padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 6px; }
+.fl-chats-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--panel-soft, #f6f8fc); }
+.fl-chats-row-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.fl-chats-row-title { font-weight: 650; font-size: var(--text-secondary); color: var(--heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-chats-row-date { font-size: var(--text-caption); color: #6b7a94; }
+.fl-chats-row-delete { flex: 0 0 auto; width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: #b23b3b; cursor: pointer; }
+.fl-chats-row-delete:hover { background: #fbe6e6; }
+.fl-chats-row-delete:disabled { opacity: 0.5; cursor: default; }
 .fl-pulse-badge { margin-left: auto; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 800; letter-spacing: .02em; background: rgba(255,255,255,.16); color: #cbd6ec; }
 .fl-pulse-badge.is-on { background: #1fae6b; color: #fff; }
 .fl-pulse-popover-desc { margin: 12px 14px 0; font-size: var(--text-secondary); color: #45566f; line-height: 1.55; }

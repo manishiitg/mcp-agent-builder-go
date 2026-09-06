@@ -78,6 +78,8 @@ export interface FamilyApi {
   saveState(key: string, data: unknown): Promise<void>
   loadState(key: string): Promise<unknown>
   activities(): Promise<Activity[]>
+  /** Permanently removes these activities (folder, files, attempts). No undo. */
+  deleteActivities(dirs: string[]): Promise<void>
 
   /** Make sure this app is logged in (platform); a no-op on the standalone server. */
   ensureSession(): Promise<void>

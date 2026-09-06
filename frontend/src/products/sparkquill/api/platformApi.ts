@@ -278,6 +278,9 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     saveState: (key, data) => ws.writeJSON(ws.stateFile(key), { key, data }),
     loadState: async (key) => (await ws.readJSON<{ data?: unknown }>(ws.stateFile(key)))?.data ?? null,
     activities: () => ws.activities(),
+    deleteActivities: async (dirs) => {
+      for (const dir of dirs) await ws.deleteFolder(dir).catch(() => undefined)
+    },
 
     models: async () => null as ModelInfo | null,
     saveModel: async () => {},
