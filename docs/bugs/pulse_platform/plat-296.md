@@ -4,9 +4,13 @@
 
 | Coordination | Value |
 |---|---|
-| Assigned agent | Unassigned (Codex code investigation) |
-| Ticket state | `in progress — isolated Codex builder edits and targeted execution pass; completion notification and concurrent Owner/Run acceptance remain open` |
+| Assigned agent | Codex |
+| Ticket state | `implemented on main — concurrent Builder and Run chats use separate prompts, tools, skills and private CLI runtimes while sharing the guarded workflow workspace; scheduled runs use the Run surface. Cross-provider cleanup and real two-user authorization remain follow-up acceptance work` |
 | Last synchronized | `2026-09-06` |
+
+- **Related:** [PLAT-262](plat-262.md) (server-enforced Run permissions),
+  [PLAT-297](plat-297.md) (Codex retained-session, resume and structured-event
+  reliability).
 
 ## Problem
 
@@ -131,10 +135,10 @@ construction and workflow-phase setup select private directories; the workspace
 bridge retains the shared workflow root. Resume checks reject mismatched cwd and
 Codex project-directory overrides. Read-only mode identity is pinned to Run.
 
-The implementation is ready in mainline source; an already-running server needs
-a restart before the new default applies. Full two-user authorization and the
-real restart/native-resume acceptance matrix remain open, so the ticket remains
-in progress.
+The implementation is on main. Full cross-provider cleanup and two-user
+authorization acceptance remain open. Codex restart/resume behavior and its
+structured transcript boundary were subsequently hardened and tested under
+[PLAT-297](plat-297.md).
 The current policy replays application history into a fresh native conversation
 when resuming into a different app chat; only the same private chat identity
 retains native continuation. Runtime directory garbage collection is deferred.
