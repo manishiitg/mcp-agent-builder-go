@@ -13,6 +13,7 @@ import (
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 	"github.com/manishiitg/multi-llm-provider-go/pkg/adapters/cursorcli"
 	"github.com/manishiitg/multi-llm-provider-go/pkg/adapters/picli"
+	"github.com/manishiitg/multi-llm-provider-go/pkg/pathidentity"
 )
 
 // claudeNativeTranscriptRuntime is the minimal subset of a persisted builder
@@ -529,13 +530,7 @@ func resolveClaudeNativeTranscriptPath(workingDir, sessionID string) (string, er
 		return "", err
 	}
 
-	candidates := []string{workingDir}
-	if abs, err := filepath.Abs(workingDir); err == nil {
-		candidates = append(candidates, abs)
-	}
-	if resolved, err := filepath.EvalSymlinks(workingDir); err == nil {
-		candidates = append(candidates, resolved)
-	}
+	candidates := pathidentity.Candidates(workingDir)
 
 	seen := make(map[string]struct{}, len(candidates))
 	for _, dir := range candidates {

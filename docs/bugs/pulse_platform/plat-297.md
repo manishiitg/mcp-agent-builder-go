@@ -147,3 +147,16 @@ This ticket is complete for the implemented Codex path when:
 Cross-provider parity, private-runtime garbage collection and two-user
 authorization belong to PLAT-296 follow-up acceptance rather than this Codex
 repair.
+
+## 2026-09-06 — Broader audit and completion-source clarification
+
+The follow-up path/resume audit is recorded in PLAT-296. Codex filesystem
+matching and trust spelling now share tested filesystem-identity helpers with
+the other providers. Codex's existing trust aliases remain compatible, including
+macOS `/var` and `/private/var` forms. The full Codex unit package passes.
+
+The earlier register description that tmux was "the interactive control channel
+only" was too strong: the adapter still contains a terminal fallback when the
+structured transcript cannot bind. The observed case-mismatch trigger is fixed;
+this is not proof that every possible fallback or live restart failure is gone.
+No server or live workflow was started in this audit.
