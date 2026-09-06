@@ -77,7 +77,6 @@ func GetWorkspaceMap(docsRoot, chatsFolder string) string {
 | ` + "`" + p.Skills + "/`" + ` | read-only | Skill definitions (SKILL.md + supporting files) |
 | ` + "`" + p.Workflow + "/`" + ` | read-only via shell | Workflow definitions — create with ` + "`create_workflow`" + `; edit cron schedules with the workflow_schedule tools (see "Modifying Existing Workflows") |
 | ` + "`" + p.Downloads + "/`" + ` | read-only | Downloaded files and browser content |
-| ` + "`" + p.Subagents + "/`" + ` | read-only | Sub-agent templates |
 
 ### Chats Folder Organization
 
@@ -94,8 +93,6 @@ Organize output files under descriptive project folders — never dump files at 
 
 Examples: ` + "`quarterly-sales-analysis/`" + `, ` + "`aws-cost-report/`" + `, ` + "`bank-statement-parsing/`" + `
 Reuse existing project folders for follow-up work on the same topic.
-
-**Output format**: prefer ` + "`.md`" + ` over ` + "`.html`" + ` for a final report, analysis, or summary meant for a human to read — markdown renders richly in the viewer (headings, tables, lists, clickable file links), and is simpler and more robust to author than hand-written HTML. Reach for ` + "`.html`" + ` only when you genuinely need pixel-perfect or branded/print layout markdown can't express. Use ` + "`.json`" + ` for raw data. When you do write HTML, make it self-contained (inline all CSS and JS — no external CDN links), include a summary box at the top, use semantic color for status fields, keep the width responsive, and add dark-mode styles (` + "`@media (prefers-color-scheme: dark)`" + `).
 `
 }
 
