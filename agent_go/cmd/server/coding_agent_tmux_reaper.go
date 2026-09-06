@@ -11,6 +11,7 @@ import (
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/terminalleases"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/terminals"
+	"github.com/manishiitg/multi-llm-provider-go/pkg/pathidentity"
 )
 
 const (
@@ -369,7 +370,7 @@ func codingAgentSnapshotWorkingDir(snapshot terminals.Snapshot) string {
 func sameCodingAgentWorkingDir(left, right string) bool {
 	left = cleanCodingAgentWorkingDir(left)
 	right = cleanCodingAgentWorkingDir(right)
-	return left != "" && right != "" && left == right
+	return pathidentity.Same(left, right)
 }
 
 func cleanCodingAgentWorkingDir(path string) string {

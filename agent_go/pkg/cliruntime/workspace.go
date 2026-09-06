@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/manishiitg/multi-llm-provider-go/pkg/pathidentity"
 )
 
 // Prepare returns a stable private projection directory. StateRoot is owned by
@@ -39,11 +41,26 @@ func Prepare(stateRoot, workspaceRoot, user, workflow, session, provider, mode s
 	if err != nil {
 		return "", err
 	}
-	if !within(workspaceRoot, workflow) {
+	// Use physical spelling for containment, but preserve the v1 digest input:
+	// changing the workflow hash would move existing saved chats to new runtimes.
+	physicalWorkspace, err := pathidentity.Resolve(workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+	physicalWorkflow, err := pathidentity.Resolve(workflow)
+	if err != nil {
+		return "", err
+	}
+	physicalState, err := pathidentity.Resolve(stateRoot)
+	if err != nil {
+		return "", err
+	}
+	if !within(physicalWorkspace, physicalWorkflow) {
 		return "", fmt.Errorf("workflow is outside the workspace root")
 	}
 	base := filepath.Join(stateRoot, "cli-runtimes")
-	if within(workspaceRoot, base) || within(base, workspaceRoot) {
+	physicalBase := filepath.Join(physicalState, "cli-runtimes")
+	if within(physicalWorkspace, physicalBase) || within(physicalBase, physicalWorkspace) {
 		return "", fmt.Errorf("CLI runtime storage must be separate from workspace documents")
 	}
 	identity, _ := json.Marshal([]string{user, workflow, session, provider, mode})
@@ -77,5 +94,5 @@ func within(root, path string) bool {
 // it belongs to the same user. The application can replay saved history into a
 // fresh native session without sharing mutable projection files.
 func CanResume(current, saved string) bool {
-	return current != "" && saved != "" && filepath.Clean(current) == filepath.Clean(saved)
+	return pathidentity.Same(current, saved)
 }

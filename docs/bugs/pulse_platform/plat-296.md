@@ -346,3 +346,91 @@ process's counters. Non-native phase turns use their query/turn id as the epoch.
 Tests cover cumulative history across mode changes, disk-history recovery,
 native-runtime counter resets, explicit Pulse scope, and the existing immutable
 cost-ledger behavior.
+
+## 2026-09-06 — Cross-provider path and resume audit
+
+The private-directory design remains necessary: the offline negative control
+reproduces prompt, skill, reference and cleanup collisions when two modes share
+one directory. The review found additional provider lifecycle defects, now
+covered by failing-before/fixed-after regressions:
+
+- Cursor compared Git-root strings, misidentifying case aliases on macOS. Its
+  fallback removed existing `.git` metadata. Root checks now use filesystem
+  identity, marker creation refuses existing files/directories, setup fails
+  explicitly instead of loading the parent project's configuration, and cleanup
+  checks that it still owns the marker directory.
+- Cursor used one textual cwd hash for transcripts. Physical spelling now drives
+  discovery; exact native-session lookup also accepts legacy path hashes.
+  Missing known transcripts no longer fall through to a different chat's newest
+  database. Resumed streaming follows the same native-ID rule and primes old
+  messages before submitting the next prompt.
+- Cursor cleanup deleted the entire `.cursor` tree, overriding even the explicit
+  restore option. It now cleans generated files individually, preserves unrelated
+  content, and honors restore mode for configuration and projected instructions.
+  The existing default remains non-restoring for the specific generated files.
+- Pi's workspace MCP lease and retained-launch comparison used literal paths;
+  aliases could bypass the conflicting-configuration check. They now use physical
+  identity/canonical keys. Claude trust, MCP approvals and transcript candidates
+  now include physical spellings alongside legacy keys.
+- AgentWorks containment, resume and Pi cleanup matching now account for physical
+  filesystem identity. The existing v1 runtime digest input is deliberately
+  unchanged, so this repair does not migrate saved chats to new directories.
+  User, session, provider and mode boundaries remain enforced.
+
+A shared `pathidentity` package in the provider library implements these rules.
+It does not blindly lowercase paths or change the process working directory.
+Case-sensitive filesystems must continue distinguishing genuinely different
+folders. The test suite exercises symlinks everywhere and real case aliases on
+case-insensitive filesystems.
+
+### Repeatable offline acceptance
+
+From the AgentWorks repository:
+
+```sh
+python3 scripts/test-workflow-isolation.py --server-isolation --expect collision
+```
+
+`collision` is the expectation for the deliberately shared-folder negative
+control. Every private-directory case must remain isolated. The harness now
+covers Codex, Claude, Cursor and Pi using production prompt/skill writers and
+server-selected runtime directories (32 projection cases). Pi always restores
+prior projected-file contents; the two restore parameter cases exercise the
+same Pi behavior. It copies only testing-workflow design inputs, disables
+schedules/capabilities, verifies source hashes afterward, and launches no server,
+CLI session or model. All four providers and server selection passed in
+`.local/workflow-tests/plat-296-p3q25_68/`.
+
+The full four provider adapter unit packages and shared path tests pass, as do
+focused AgentWorks resume/mode/schedule, prompt, conversation/cost-continuity and
+mcpagent continuation tests. Provider lint reports zero issues.
+
+Remaining acceptance is explicit: live cross-provider restart/resume and real
+two-user authorization were not rerun during this audit. Cursor's first-ever
+turn still uses time-based transcript discovery until a native ID is known.
+Changing the workflow path spelling itself can still select a different v1
+runtime digest; a future identity migration must preserve existing sessions.
+The case-alias resume fix covers different spellings of the same runtime, not
+an automatic migration between different runtime directories.
+
+### Standalone dependency validation
+
+The audit also found that `mcpagent` compiled inside the local `go.work`, but
+failed with `GOWORK=off`: its published provider pin did not define
+`llmtypes.WithCodingAgentReleaseSession`, already used by its code. The provider
+pin is now updated, with the required transitive module versions selected by Go.
+Focused continuation, session-handle and isolated-workspace tests pass against
+the published module with the workspace disabled. Future acceptance must include
+this check; local replacement modules alone cannot prove a deployable build.
+
+AgentWorks also passes focused isolation, resume, prompt and conversation/cost
+checks with `GOWORK=off` and both provider/mcpagent local replacements removed
+from a temporary module file. That verifies the published dependencies rather
+than sibling checkouts. The tested pins are provider `62c1b6e` and mcpagent
+`6073b0a`. The check uses published dependency modules and deletes its temporary
+module file afterward. Focused path/Pi-lease race tests also pass.
+
+The AgentWorks repository-wide commit hook still reports 18 existing non-blocking
+lint findings (one `reflect.Ptr` vet suggestion and 17 spelling findings), all in
+files outside this patch. This audit does not claim that repository-wide lint is
+clean; provider and mcpagent lint are clean.

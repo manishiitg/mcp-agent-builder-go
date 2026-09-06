@@ -188,11 +188,10 @@ func TestPLAT296WorkflowCLIDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 	directories := map[string]map[string]string{}
-	for _, provider := range []string{"codexcli", "claudecode"} {
-		cliProvider := "codex-cli"
-		if provider == "claudecode" {
-			cliProvider = "claude-code"
-		}
+	for provider, cliProvider := range map[string]string{
+		"codexcli": "codex-cli", "claudecode": "claude-code",
+		"cursorcli": "cursor-cli", "picli": "pi-cli",
+	} {
 		for _, first := range []string{"owner", "run"} {
 			for _, cleanup := range []string{"remove", "restore"} {
 				key := provider + "/private-control/" + first + "/" + cleanup

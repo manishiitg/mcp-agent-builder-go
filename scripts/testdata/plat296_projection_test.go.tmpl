@@ -41,6 +41,7 @@ func TestPLAT296TestingWorkflowProjection(t *testing.T) {
       if dirs["owner"]==""||dirs["run"]==""||dirs["owner"]==dirs["run"]{t.Fatal("missing or shared server runtime selection")}
       t.Logf("server-selected owner=%s run=%s",dirs["owner"],dirs["run"])
      }
+     if isolated { if err:=os.MkdirAll(filepath.Dir(filepath.Join(shared,"{{PROMPT_FILE}}")),0700);err!=nil{t.Fatal(err)} }
      if isolated { if err:=os.WriteFile(filepath.Join(shared,"{{PROMPT_FILE}}"),[]byte("user-maintained workflow instructions"),0600);err!=nil{t.Fatal(err)} }
      project:=func(role string)func(){
       cleanup,err:=plat296ProjectPrompt(dirs[role],"PLAT296_"+role,restore); if err!=nil {t.Fatal(err)}

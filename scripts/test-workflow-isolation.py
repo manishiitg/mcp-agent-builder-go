@@ -55,11 +55,11 @@ def prepare(destination):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expect", choices=("collision", "isolated"), default="collision",
-                        help="collision reproduces today's bug; isolated fails while it remains")
+                        help="expectation for the deliberately shared-directory negative control; private runtime cases always require isolation")
     parser.add_argument("--server-isolation", action="store_true",
                         help="verify server-selected private directories with real provider projection")
-    parser.add_argument("--providers", nargs="+", choices=("codexcli", "claudecode"),
-                        default=["codexcli", "claudecode"])
+    parser.add_argument("--providers", nargs="+", choices=("codexcli", "claudecode", "cursorcli", "picli"),
+                        default=["codexcli", "claudecode", "cursorcli", "picli"])
     parser.add_argument("--provider-repo", type=Path, default=REPO.parent / "multi-llm-provider-go")
     args = parser.parse_args()
     provider_repo = args.provider_repo.resolve(strict=True)
@@ -82,6 +82,18 @@ def main():
             "PROMPT_FILE": "CLAUDE.md", "SKILLS_DIR": ".claude/skills",
         },
     }
+    definitions.update({
+        "cursorcli": {
+            "PROMPT_WRITER": "opts := &llmtypes.CallOptions{}; WithRestoreProjectFiles(restore)(opts); return prepareCursorProjectFiles(dir, marker, opts, marker)",
+            "SKILL_WRITER": "err = (&CursorCLIAdapter{}).ProjectSkills(dirs[role], []*llmtypes.Skill{skill})",
+            "PROMPT_FILE": ".cursor/rules/mlp-system.mdc", "SKILLS_DIR": ".cursor/skills",
+        },
+        "picli": {
+            "PROMPT_WRITER": "return preparePiProjectFiles(dir, marker, &llmtypes.CallOptions{})",
+            "SKILL_WRITER": "err = (&PiCLIAdapter{}).ProjectSkills(dirs[role], []*llmtypes.Skill{skill})",
+            "PROMPT_FILE": ".pi/APPEND_SYSTEM.md", "SKILLS_DIR": ".pi/skills",
+        },
+    })
     # Do not source live .env files or forward provider keys. No CLI is launched.
     env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "USER") if key in os.environ}
     (root / "tmp").mkdir()

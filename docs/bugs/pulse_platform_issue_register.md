@@ -5,13 +5,15 @@
 [PLAT-297](pulse_platform/plat-297.md) records the completed Codex reliability
 work across AgentWorks, `mcpagent` and `multi-llm-provider-go`. Codex rollout
 JSONL is now authoritative for completion, final responses, failures, usage and
-semantic MCP tool events; tmux remains the interactive control channel only.
+semantic MCP tool events when bound; tmux remains the interactive control
+channel and retains a compatibility fallback if transcript binding fails.
 Resume preserves Builder/Run mode and the private absolute runtime, physical
 path trust prevents unattended startup prompts, filesystem-identity matching
 binds JSONL even when macOS changes the directory's case spelling, and each
 retained agent pins one managed CLI release. Unit suites plus live retained-session and isolated
 two-step workflow P0 checks pass. All implementation commits are on `main`;
-cross-provider cleanup and two-user isolation remain tracked by PLAT-296.
+The cross-provider path/resume audit and remaining live/two-user acceptance
+are tracked by PLAT-296.
 
 ## Isolate workflow chat CLI prompts and skills across Owner and Run sessions — PLAT-296
 
@@ -25,8 +27,12 @@ schedules use the smaller Run surface and private per-schedule runtimes; bounded
 maintenance and Pulse turns elevate only their own requests. Mode-stable resume,
 conversation continuity and cost attribution are covered by focused tests, with
 Codex resume reliability completed in PLAT-297. **Implemented on `main`; full
-cross-provider cleanup and real two-user authorization remain follow-up
-acceptance.**
+live cross-provider restart and real two-user authorization remain follow-up
+acceptance.** The follow-up audit fixes Cursor metadata cleanup and wrong-chat
+transcript fallback, Pi alias lease conflicts, and shared path identity. Offline
+projection acceptance now covers all four coding providers; saved v1 runtime
+identifiers remain compatible. The audit also fixes an outdated `mcpagent`
+provider pin that failed standalone compilation while local `go.work` masked it.
 
 ## Human-decided branch replaces yesno/multiple_choice human_input for new steps — PLAT-295
 
