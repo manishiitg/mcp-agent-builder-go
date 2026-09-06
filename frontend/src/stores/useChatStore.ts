@@ -402,7 +402,7 @@ export interface ChatTab {
     mode?: 'workflow' | 'multi-agent'  // Which mode this tab belongs to
     presetQueryId?: string  // For workflow mode: preset query ID (workflow identifier)
     isOrganizationAssistant?: boolean // True when tab is reserved for Organization panel
-    isRestored?: boolean  // True when restored from history (sidebar, resume dialog, page refresh)
+    isRestored?: boolean  // True when restored from history (inline history panel or page refresh)
     isRestoringSession?: boolean  // True while session events are being loaded from backend
     isViewOnly?: boolean // True when tab is in view-only mode (e.g. shared session or bot connector)
     isScheduledRun?: boolean // True when tab is observing a scheduled-run session (read-only live view)

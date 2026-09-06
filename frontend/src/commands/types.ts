@@ -44,7 +44,6 @@ export interface CommandContext {
   onSubmit: (msg: string) => void
   setInputText: (text: string) => void
   openDialog: (name: DialogName) => void
-  openResumeDialog?: () => void
   setTabConfig: ReturnType<typeof useChatStore.getState>['setTabConfig']
   addToast: (msg: string, type: 'success' | 'error' | 'info') => void
   handleSummarize: (ctx?: string) => void

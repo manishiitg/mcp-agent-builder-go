@@ -2499,8 +2499,8 @@ func TestMaybeResumeLatestWorkflowThreadUsesPreviousScheduledSessionOnly(t *test
 
 	workspacePath := "Workflow/rtslatency"
 	scheduleID := "schedule-1"
-	writeWorkflowChatRuntime(t, root, workspacePath, "normal-user-chat", "claude-code", true)
-	writeWorkflowChatRuntime(t, root, workspacePath, "previous-schedule-chat", "claude-code", true)
+	writeWorkflowChatRuntime(t, root, workspacePath, "normal-user-chat", "claude-code", "run", true)
+	writeWorkflowChatRuntime(t, root, workspacePath, "previous-schedule-chat", "claude-code", "run", true)
 	writeScheduleRunsForTest(t, root, workspacePath, []ScheduleRunEntry{
 		{
 			ID:         "current-run",
@@ -2534,7 +2534,7 @@ func TestMaybeResumeLatestWorkflowThreadIgnoresNormalUserChat(t *testing.T) {
 
 	workspacePath := "Workflow/rtslatency"
 	scheduleID := "schedule-1"
-	writeWorkflowChatRuntime(t, root, workspacePath, "normal-user-chat", "claude-code", true)
+	writeWorkflowChatRuntime(t, root, workspacePath, "normal-user-chat", "claude-code", "run", true)
 	writeScheduleRunsForTest(t, root, workspacePath, []ScheduleRunEntry{
 		{
 			ID:         "current-run",
@@ -2552,6 +2552,33 @@ func TestMaybeResumeLatestWorkflowThreadIgnoresNormalUserChat(t *testing.T) {
 	}
 	if _, ok := reqMap["restored_conversation_session_id"]; ok {
 		t.Fatalf("restored_conversation_session_id was set for a normal user chat: %#v", reqMap)
+	}
+}
+
+func TestMaybeResumeLatestWorkflowThreadDoesNotCrossModeBoundary(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+
+	workspacePath := "Workflow/rtslatency"
+	scheduleID := "schedule-1"
+	writeWorkflowChatRuntime(t, root, workspacePath, "previous-workshop-chat", "claude-code", "workshop", true)
+	writeScheduleRunsForTest(t, root, workspacePath, []ScheduleRunEntry{{
+		ID:         "previous-run",
+		ScheduleID: scheduleID,
+		SessionID:  "previous-workshop-chat",
+		Status:     "success",
+		StartedAt:  time.Now().Add(-time.Hour).UTC(),
+	}})
+
+	reqMap := map[string]interface{}{
+		"execution_options": map[string]interface{}{"workshop_mode": "run"},
+	}
+	resumed := (&SchedulerService{}).maybeResumeLatestWorkflowThread(context.Background(), resumeTestScheduleContext(workspacePath, scheduleID), reqMap, "current-schedule-chat")
+	if resumed != "" {
+		t.Fatalf("resumed session = %q, want fresh Run session for Workshop-only history", resumed)
+	}
+	if _, ok := reqMap["restored_conversation_session_id"]; ok {
+		t.Fatalf("restored_conversation_session_id crossed Workshop/Run boundary: %#v", reqMap)
 	}
 }
 
@@ -2591,7 +2618,7 @@ func writeScheduleRunsForTest(t *testing.T, root, workspacePath string, runs []S
 	}
 }
 
-func writeWorkflowChatRuntime(t *testing.T, root, workspacePath, sessionID, provider string, resumeSupported bool) {
+func writeWorkflowChatRuntime(t *testing.T, root, workspacePath, sessionID, provider, workshopMode string, resumeSupported bool) {
 	t.Helper()
 	convDir := filepath.Join(root, filepath.FromSlash(workspacePath), "builder", "conversation", "2026-05-20")
 	if err := os.MkdirAll(convDir, 0o755); err != nil {
@@ -2600,7 +2627,7 @@ func writeWorkflowChatRuntime(t *testing.T, root, workspacePath, sessionID, prov
 	data, err := json.MarshalIndent(map[string]interface{}{
 		"session_id":    sessionID,
 		"agent_mode":    "workflow_phase",
-		"workshop_mode": "workshop",
+		"workshop_mode": workshopMode,
 		"runtime": map[string]interface{}{
 			"kind":                 "coding_agent",
 			"provider":             provider,
@@ -2609,7 +2636,7 @@ func writeWorkflowChatRuntime(t *testing.T, root, workspacePath, sessionID, prov
 			"resume_supported":     resumeSupported,
 			"resume_flag":          "--resume",
 			"workspace_path":       workspacePath,
-			"workshop_mode":        "workshop",
+			"workshop_mode":        workshopMode,
 			"agent_session_handle": map[string]interface{}{},
 		},
 	}, "", "  ")

@@ -79,6 +79,7 @@ type restoredChatHistoryPersistTarget struct {
 	ConversationPath string
 	History          []llmtypes.MessageContent
 	Runtime          *ChatHistoryAgentRuntime
+	WorkshopMode     string
 }
 
 const (
@@ -562,9 +563,7 @@ func shouldPersistIntoRestoredCodingConversation(runtime *ChatHistoryAgentRuntim
 	if provider == "" || (currentProvider != "" && provider != currentProvider) {
 		return false
 	}
-	runtimeWorkshopMode := normalizeChatHistoryWorkshopMode(runtime.WorkshopMode)
-	currentWorkshopMode = normalizeChatHistoryWorkshopMode(currentWorkshopMode)
-	if runtimeWorkshopMode != "" && currentWorkshopMode != "" && runtimeWorkshopMode != currentWorkshopMode {
+	if !chatHistoryResumeModesCompatible(runtime.WorkshopMode, currentWorkshopMode) {
 		return false
 	}
 	return restoredRuntimeCodingAgentTransport(runtime) != ""
@@ -584,6 +583,7 @@ func (api *StreamingAPI) rememberRestoredConversationPersistTarget(currentSessio
 		SessionID:        target.SessionID,
 		ConversationPath: target.ConversationPath,
 		Runtime:          target.Runtime,
+		WorkshopMode:     target.WorkshopMode,
 	}
 }
 
@@ -670,6 +670,7 @@ func parseRestoredChatHistoryPersistTarget(data []byte, fallbackSessionID, conve
 		ConversationPath: conversationPath,
 		History:          raw.History,
 		Runtime:          raw.Runtime,
+		WorkshopMode:     normalizeChatHistoryWorkshopMode(raw.Mode),
 	}, true, nil
 }
 
@@ -1769,6 +1770,25 @@ func normalizeChatHistoryWorkshopMode(mode string) string {
 	default:
 		return "workshop"
 	}
+}
+
+// chatHistoryResumeModesCompatible keeps provider-native context and durable
+// replay inside the prompt/tool boundary that created it. Workflow chats saved
+// before workshop_mode was persisted are legacy Builder chats, so they may
+// continue in Workshop mode but must never be adopted by Run mode.
+//
+// A blank current mode is used by non-workflow product chats and has no
+// Workshop/Run boundary to enforce.
+func chatHistoryResumeModesCompatible(restoredMode, currentMode string) bool {
+	current := normalizeChatHistoryWorkshopMode(currentMode)
+	if current == "" {
+		return true
+	}
+	restored := normalizeChatHistoryWorkshopMode(restoredMode)
+	if restored == "" {
+		return current == "workshop"
+	}
+	return restored == current
 }
 
 func paginateChatHistorySessions(sessions []ChatHistorySession, limit, offset int) []ChatHistorySession {
