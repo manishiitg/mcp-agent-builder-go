@@ -78,6 +78,34 @@ if [[ -f "$ROOT_DIR/agent_go/.env" ]]; then
   set +a
 fi
 
+# Match the coding-CLI release selected by the live AgentWorks server. The
+# server prepends this private shim directory during startup, but a separately
+# launched P0 shell cannot inherit environment changes from that process.
+# Without this, P0 can silently exercise an older CLI from the developer's
+# PATH while the application is using the current managed release.
+if [[ -z "${AGENTWORKS_MANAGED_CLI_BIN:-}" ]]; then
+  if [[ -n "${AGENTWORKS_STATE_ROOT:-}" ]]; then
+    managed_cli_bin="$AGENTWORKS_STATE_ROOT/cli-updates/bin"
+  elif [[ "$(uname -s)" == "Darwin" ]]; then
+    managed_cli_bin="$HOME/Library/Application Support/agentworks/cli-updates/bin"
+  else
+    managed_cli_bin="${XDG_CONFIG_HOME:-$HOME/.config}/agentworks/cli-updates/bin"
+  fi
+  if [[ -d "$managed_cli_bin" ]]; then
+    export AGENTWORKS_MANAGED_CLI_BIN="$managed_cli_bin"
+  fi
+fi
+if [[ -n "${AGENTWORKS_MANAGED_CLI_BIN:-}" ]]; then
+  export PATH="$AGENTWORKS_MANAGED_CLI_BIN:$PATH"
+fi
+
+# Keep release certification on the same Go line required by AgentWorks.
+# Developer machines may have a newer auto-selected toolchain installed; a
+# Go 1.27.1 runtime regression currently corrupts the heap after a completed
+# interactive Codex turn, while the identical contract is stable on 1.26.0.
+# The override remains available for validating a future fixed toolchain.
+export GOTOOLCHAIN="${CODING_CLI_P0_GO_TOOLCHAIN:-go1.26.0}"
+
 if [[ -z "${MCP_API_TOKEN:-}" ]]; then
   echo "Live P0 requires MCP_API_TOKEN to match the live server's MCP_SERVER_API_TOKEN." >&2
   echo "Start the isolated server with MCP_SERVER_API_TOKEN set, then run this command with the same value in MCP_API_TOKEN." >&2
@@ -145,8 +173,16 @@ for raw_provider in "${provider_list[@]}"; do
       ;;
     codex-cli)
       test_regex="$(p0_test_regex "$provider" pkg/adapters/codexcli)"
-      run_required_go_tests go -C "$MULTI_LLM_DIR" test -json ./pkg/adapters/codexcli \
-        -run "$test_regex" -count=1 -timeout=35m -args -coding-cli-p0-live
+      # Codex P0 cases own global tmux/session cleanup. Keep each live case in
+      # its own Go process so cleanup from a completed test cannot corrupt or
+      # tear down state belonging to the next one. This also gives each failed
+      # contract an exact receipt instead of losing it in a package crash.
+      while IFS= read -r test_name; do
+        [[ -n "$test_name" ]] || continue
+        run_required_go_tests go -C "$MULTI_LLM_DIR" test -json ./pkg/adapters/codexcli \
+          -run "^${test_name}$" -count=1 -timeout=8m -args -coding-cli-p0-live
+      done < <(printf '%s\n' "$test_regex" | sed -e 's/^\^(//' -e 's/)\$$//' -e 's/|/\
+/g')
       ;;
     cursor-cli)
       test_regex="$(p0_test_regex "$provider" pkg/adapters/cursorcli)"

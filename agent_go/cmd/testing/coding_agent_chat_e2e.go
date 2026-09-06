@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -441,8 +442,8 @@ func (c *codingAgentChatE2EClient) runRetainedWindowP0(ctx context.Context, sess
 
 	since := before.LastProcessedIndex
 	progressToken := "RETAINED_PROGRESS_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	toolToken := "RETAINED_TOOL_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	query := fmt.Sprintf("Before using any tool, send a brief progress update containing exactly %s. That update is intermediate commentary, not your final answer. Then use execute_shell_command exactly once to run `sleep 2; printf %s`. Only after the tool returns, reply with exactly %s and nothing else.", progressToken, toolToken, rememberedToken)
+	toolMarker := "RETAINED_TOOL_"
+	query := fmt.Sprintf("Before using any tool, send a brief progress update containing exactly %s. That update is intermediate commentary, not your final answer. This is a tool-lifecycle test and it fails unless you emit a real MCP tool receipt: you MUST call the api-bridge `execute_shell_command` MCP tool exactly once with command `sleep 2; python3 -c 'import secrets; print(\"RETAINED_TOOL_\"+secrets.token_hex(12))'`. Do not calculate, guess, or invent its random stdout. Only after the MCP call returns, reply with exactly your complete response from the previous turn, then a vertical bar, then the complete command stdout, and nothing else.", progressToken)
 	ack, deliveryLatency, err := c.startQueryWithResponse(ctx, sessionID, provider, model, query)
 	if err != nil {
 		return fmt.Errorf("submit retained follow-up: %w", err)
@@ -470,16 +471,21 @@ func (c *codingAgentChatE2EClient) runRetainedWindowP0(ctx context.Context, sess
 	if err != nil {
 		return fmt.Errorf("retained follow-up did not complete: %w", err)
 	}
-	if strings.TrimSpace(final) != rememberedToken {
-		return fmt.Errorf("retained final response=%q, want exactly %q; raw=%s", final, rememberedToken, truncateE2E(completionRaw, 1500))
-	}
-	if err := assertOneRetainedCompletion(events, rememberedToken); err != nil {
-		return err
-	}
 	if err := assertCanonicalRetainedTurnIdentity(events, "execute_shell_command"); err != nil {
 		return err
 	}
-	if err := assertOneRetainedToolReceipt(events, "execute_shell_command", toolToken); err != nil {
+	if err := assertOneRetainedToolReceipt(events, "execute_shell_command", toolMarker); err != nil {
+		return err
+	}
+	toolToken, err := retainedToolResultToken(events, "execute_shell_command")
+	if err != nil {
+		return err
+	}
+	expectedFinal := "ACK_" + rememberedToken + "|" + toolToken
+	if strings.TrimSpace(final) != expectedFinal {
+		return fmt.Errorf("retained final response=%q, want exactly %q; raw=%s", final, expectedFinal, truncateE2E(completionRaw, 1500))
+	}
+	if err := assertOneRetainedCompletion(events, expectedFinal); err != nil {
 		return err
 	}
 	if err := assertRetainedCompletionAfterTool(events, "execute_shell_command"); err != nil {
@@ -670,23 +676,35 @@ func assertOneRetainedToolReceipt(events []map[string]interface{}, toolName, tok
 	return nil
 }
 
+var retainedToolTokenPattern = regexp.MustCompile(`RETAINED_TOOL_[0-9a-f]{24}`)
+
+func retainedToolResultToken(events []map[string]interface{}, toolName string) (string, error) {
+	for _, event := range events {
+		if fmt.Sprint(event["type"]) != "tool_call_end" || eventPayloadString(event, "tool_name") != toolName {
+			continue
+		}
+		if token := retainedToolTokenPattern.FindString(eventPayloadString(event, "result")); token != "" {
+			return token, nil
+		}
+	}
+	return "", fmt.Errorf("retained %s result has no random probe output", toolName)
+}
+
 func (c *codingAgentChatE2EClient) assertRetainedTmuxLive(ctx context.Context, sessionID string) error {
-	resp, raw, err := c.getTerminals(ctx, sessionID)
+	terminal, raw, err := c.getMainTerminal(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	for _, terminal := range resp.Terminals {
-		if strings.TrimSpace(terminal.TmuxSession) == "" {
-			continue
-		}
-		// The backend owns an isolated TMUX_TMPDIR, so invoking tmux from this
-		// test process addresses a different socket. These fields are computed by
-		// the backend that owns the real socket and are the authoritative
-		// cross-process liveness signal.
-		if strings.EqualFold(terminal.ProcessState, "live") && strings.EqualFold(terminal.SnapshotKind, "live") {
-			return nil
-		}
+	if strings.TrimSpace(terminal.TmuxSession) != "" &&
+		strings.EqualFold(terminal.ProcessState, "live") &&
+		strings.EqualFold(terminal.SnapshotKind, "live") {
+		return nil
 	}
+	// The backend owns an isolated TMUX_TMPDIR, so invoking tmux from this
+	// test process addresses a different socket. These fields are computed by
+	// the backend that owns the real socket and are the authoritative
+	// cross-process liveness signal. Use the product-facing main-terminal route:
+	// terminal enumeration is intentionally diagnostics-only in normal servers.
 	return fmt.Errorf("no live tmux session found; raw=%s", truncateE2E(raw, 1500))
 }
 
@@ -856,6 +874,16 @@ func (c *codingAgentChatE2EClient) getTerminals(ctx context.Context, sessionID s
 		return nil, raw, err
 	}
 	return &resp, raw, nil
+}
+
+func (c *codingAgentChatE2EClient) getMainTerminal(ctx context.Context, sessionID string) (*codingAgentTerminalSnapshot, string, error) {
+	endpoint := fmt.Sprintf("/api/sessions/%s/main-terminal", url.PathEscape(sessionID))
+	var terminal codingAgentTerminalSnapshot
+	raw, err := c.doJSONRaw(ctx, http.MethodGet, endpoint, sessionID, nil, &terminal)
+	if err != nil {
+		return nil, raw, err
+	}
+	return &terminal, raw, nil
 }
 
 func providerSupportsTmuxLossResumeE2E(provider string) bool {
