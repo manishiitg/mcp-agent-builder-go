@@ -2824,7 +2824,10 @@ export default function LearningApp() {
               <header className="fl-child-top">
                 <div className="fl-child-id">
                   <img className="fl-header-logo" src="/sparkquill-mark.svg" alt="" width={30} height={30} />
-                  <div className="fl-child-hi"><strong>Hi {childName || 'Maya'}!</strong><small>Let’s keep learning together</small></div>
+                  {/* The subtitle is a welcome line for an empty header; once an
+                      assignment pill is showing, the room it took is worth more
+                      than the greeting, and the pill already says what's next. */}
+                  <div className="fl-child-hi"><strong>Hi {childName || 'Maya'}!</strong>{!childActivity?.title && <small>Let’s keep learning together</small>}</div>
                 </div>
                 {childActivity?.title && (() => {
                   const hasInfo = !!childActivity.goal
