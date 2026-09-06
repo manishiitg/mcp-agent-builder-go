@@ -349,7 +349,9 @@
 .fl-context-card p { margin: 13px 0 0; color: #554e39; font-size: var(--text-secondary); line-height: 1.5; }
 /* Pinned pages add tabs here without limit, so the strip wraps into rows
    instead of squeezing every tab to nothing; a long title is clipped. */
-.fl-drawer-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 16px 12px 10px; border-bottom: 1px solid var(--line); }
+/* Same height as .learning-header (86px) so the two panes' header dividers
+   land on the same line instead of the drawer's row reading shorter. */
+.fl-drawer-tabs { display: flex; flex-wrap: wrap; align-items: center; min-height: 86px; gap: 4px; padding: 16px 12px; border-bottom: 1px solid var(--line); box-sizing: border-box; }
 .fl-drawer-tabs button { flex: 1 1 auto; min-width: 0; max-width: 100%; min-height: 34px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; color: #5f708d; font: inherit; font-size: var(--text-secondary); font-weight: 650; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fl-drawer-tabs button:hover { background: #f1f5fa; color: var(--heading); }
 .fl-drawer-tabs button.is-active { background: var(--navy); color: #fff; }
@@ -424,8 +426,12 @@
    clickable (when it has a goal/plan to show) to reveal it in a small
    popover, so the child always sees what they're working on without extra
    clutter, but can still check the goal without asking. */
-.fl-child-assignment-wrap { position: relative; flex: 0 1 auto; min-width: 0; }
-.fl-child-assignment-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 42vw; min-width: 0; padding: 6px 13px; border: 0; border-radius: 999px; background: #fff7e6; border: 1px solid #f2e2bd; color: #8a6d1f; font: inherit; font-weight: 700; font-size: var(--text-caption); cursor: pointer; transition: background .12s ease, border-color .12s ease, box-shadow .12s ease; }
+/* fl-child-top is now a column flex (header row, then this pill row); without
+   align-self the wrap would stretch to the header's full width by default
+   (cross-axis stretch), which would center the goal popover under empty
+   space instead of under the pill. */
+.fl-child-assignment-wrap { position: relative; align-self: flex-start; flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.fl-child-assignment-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; padding: 6px 13px; border: 0; border-radius: 999px; background: #fff7e6; border: 1px solid #f2e2bd; color: #8a6d1f; font: inherit; font-weight: 700; font-size: var(--text-caption); cursor: pointer; transition: background .12s ease, border-color .12s ease, box-shadow .12s ease; }
 .fl-child-assignment-pill:hover { background: #fdecc4; border-color: #e8cf94; box-shadow: 0 2px 8px rgba(138, 109, 31, .12); }
 .fl-child-assignment-pill:disabled { cursor: default; }
 .fl-child-assignment-pill:disabled:hover { background: #fff7e6; border-color: #f2e2bd; box-shadow: none; }
@@ -552,7 +558,8 @@
 .fl-child-resizer:focus-visible .fl-child-resizer-grip,
 .fl-child-body.is-resizing .fl-child-resizer-grip { opacity: 1; }
 .fl-child-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; container-name: childchat; }
-.fl-child-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 60px; padding: 10px clamp(16px, 2.5vw, 36px); border-bottom: 1px solid var(--line); background: var(--header-bg); box-shadow: 0 2px 10px rgba(13, 35, 76, .04); position: relative; z-index: 5; }
+.fl-child-top { display: flex; flex-direction: column; gap: 8px; min-height: 60px; padding: 10px clamp(16px, 2.5vw, 36px); border-bottom: 1px solid var(--line); background: var(--header-bg); box-shadow: 0 2px 10px rgba(13, 35, 76, .04); position: relative; z-index: 5; }
+.fl-child-top-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .fl-child-id { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; min-width: 0; }
 /* Never wrap the greeting mid-phrase: with flex shrink allowed it collapsed to
    one word per line once the worksheet was widened. The activity pill is the

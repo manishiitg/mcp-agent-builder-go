@@ -4319,9 +4319,11 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         modeCategory={selectedModeCategory}
         workshopMode={selectedModeCategory === 'workflow' ? getEffectiveWorkflowModes().workshopMode : undefined}
         agentProfileId={activeTab?.metadata?.agentProfileId}
-        onManageCommands={handleManageCommands}
-        onEditCommand={handleEditCommand}
-        onDeleteCommand={handleDeleteCommand}
+        {...(isProductSurface ? {} : {
+          onManageCommands: handleManageCommands,
+          onEditCommand: handleEditCommand,
+          onDeleteCommand: handleDeleteCommand,
+        })}
       />
 
       <InlineSelectionPopup

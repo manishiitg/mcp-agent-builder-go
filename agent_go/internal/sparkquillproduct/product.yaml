@@ -168,9 +168,9 @@ profiles:
           render: chat.scene
       - id: sparkquill.find-activity-image
     commands:
-      - name: update-answers-for-print
-        description: "Update answers for print"
-        prompt: "Please update all my answered questions on this page so it's ready to print."
+      - name: score-by-answer
+        description: "Score by answer"
+        prompt: "Go through every question I've answered so far on this page and score me question by question: for each one, show the question, my answer, and whether it's right or wrong with the correct answer if it's wrong. Then give me a total score."
       - name: no-more-hints
         description: "No more hints"
         prompt: "Don't give me any more hints \u2014 just tell me if I'm right or wrong."
@@ -189,18 +189,9 @@ profiles:
       - name: keep-quizzing-me-harder-each-time
         description: "Keep quizzing me, harder each time"
         prompt: "Keep asking me progressively harder questions on this until I fully understand it."
-      - name: one-section-at-a-time
-        description: "One section at a time"
-        prompt: "Let's go one section at a time \u2014 keep quizzing me on this section until I really understand it before moving to the next."
-      - name: explain-it-a-different-way
-        description: "Explain it a different way"
-        prompt: "Can you explain this in a completely different way \u2014 not just the same explanation again?"
       - name: give-me-a-real-example
         description: "Give me a real example"
         prompt: "Can you give me a real-world example of this, not just the definition?"
-      - name: check-my-full-working
-        description: "Check my full working"
-        prompt: "Please check my full working step by step, not just whether my final answer is right."
     tool_policy:
       mode: allowlist
       enabled:

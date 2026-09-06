@@ -2822,13 +2822,33 @@ export default function LearningApp() {
           >
             <section className="fl-child-chat" style={{ ['--chat-scale' as string]: childChatZoom }}>
               <header className="fl-child-top">
-                <div className="fl-child-id">
-                  <img className="fl-header-logo" src="/sparkquill-mark.svg" alt="" width={30} height={30} />
-                  {/* The subtitle is a welcome line for an empty header; once an
-                      assignment pill is showing, the room it took is worth more
-                      than the greeting, and the pill already says what's next. */}
-                  <div className="fl-child-hi"><strong>Hi {childName || 'Maya'}!</strong>{!childActivity?.title && <small>Let’s keep learning together</small>}</div>
+                <div className="fl-child-top-row">
+                  <div className="fl-child-id">
+                    <img className="fl-header-logo" src="/sparkquill-mark.svg" alt="" width={30} height={30} />
+                    {/* The subtitle is a welcome line for an empty header; once an
+                        assignment pill is showing, the room it took is worth more
+                        than the greeting, and the pill already says what's next. */}
+                    <div className="fl-child-hi"><strong>Hi {childName || 'Maya'}!</strong>{!childActivity?.title && <small>Let’s keep learning together</small>}</div>
+                  </div>
+                  <div className="fl-child-top-right">
+                    {/* Chat reading size — same cycle as the worksheet's button but
+                        its own preference, since the two sides are read differently. */}
+                    <button
+                      className={`fl-icon-btn fl-zoom-btn${childChatZoom > 1 ? ' is-on' : ''}`}
+                      type="button"
+                      aria-label={`Chat text size: ${Math.round(childChatZoom * 100)}% — tap for bigger`}
+                      title={childChatZoom > 1 ? `Chat text ${Math.round(childChatZoom * 100)}% — tap for bigger` : 'Make the chat text bigger'}
+                      onClick={cycleChildChatZoom}
+                    >
+                      <Type size={14} />
+                      {childChatZoom > 1 && <span className="fl-zoom-badge">{Math.round(childChatZoom * 100)}%</span>}
+                    </button>
+                    <button className="fl-parent-return" type="button" title="Parent Mode" onClick={() => { setGateValue(''); setGateError(''); setPinGate(true) }}><LockKeyhole size={16} /><span>Parent Mode</span></button>
+                  </div>
                 </div>
+                {/* Its own row: the pill's title needs the header's full width to
+                    read without truncating, which sharing a row with the greeting
+                    and the right-side buttons never left it. */}
                 {childActivity?.title && (() => {
                   const hasInfo = !!childActivity.goal
                   return (
@@ -2853,21 +2873,6 @@ export default function LearningApp() {
                     </div>
                   )
                 })()}
-                <div className="fl-child-top-right">
-                  {/* Chat reading size — same cycle as the worksheet's button but
-                      its own preference, since the two sides are read differently. */}
-                  <button
-                    className={`fl-icon-btn fl-zoom-btn${childChatZoom > 1 ? ' is-on' : ''}`}
-                    type="button"
-                    aria-label={`Chat text size: ${Math.round(childChatZoom * 100)}% — tap for bigger`}
-                    title={childChatZoom > 1 ? `Chat text ${Math.round(childChatZoom * 100)}% — tap for bigger` : 'Make the chat text bigger'}
-                    onClick={cycleChildChatZoom}
-                  >
-                    <Type size={14} />
-                    {childChatZoom > 1 && <span className="fl-zoom-badge">{Math.round(childChatZoom * 100)}%</span>}
-                  </button>
-                  <button className="fl-parent-return" type="button" title="Parent Mode" onClick={() => { setGateValue(''); setGateError(''); setPinGate(true) }}><LockKeyhole size={16} /><span>Parent Mode</span></button>
-                </div>
               </header>
               {(
                 childActivity?.dir ? (

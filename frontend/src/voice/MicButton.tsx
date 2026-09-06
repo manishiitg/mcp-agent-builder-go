@@ -263,7 +263,14 @@ export const MicButton = forwardRef(function MicButton({
             ? `Set up voice (one-time ${sizeLabel} download)`
             : 'Speak your message (tap ⌥, or ⌘⇧M)'
 
-  const bannerClass = 'flex items-start gap-2.5 rounded-2xl bg-slate-900 px-4 py-3 text-sm text-white shadow-[0_14px_32px_rgba(13,35,76,0.3)] dark:bg-slate-950 dark:ring-1 dark:ring-slate-700'
+  // Arbitrary-value colors, not `bg-slate-900`/`dark:bg-slate-950`: the VS Code
+  // theme retrofit (src/index.css, src/themes/vscode-*.css) remaps every
+  // hardcoded slate-900 utility to the active theme's `--background` with
+  // `!important`, so it can't stay literally dark. That's invisible in
+  // AgentWorks (its theme is forced dark), but this banner is meant to read as
+  // a dark caption box on ANY page — including a product surface's own light
+  // theme, where the remap turned it into white text on a near-white pill.
+  const bannerClass = 'flex items-start gap-2.5 rounded-2xl bg-[#0f172a] px-4 py-3 text-sm text-white shadow-[0_14px_32px_rgba(13,35,76,0.3)] dark:bg-[#020617] dark:ring-1 dark:ring-slate-700'
   const bannerLabelClass = 'shrink-0 text-[11px] font-extrabold uppercase tracking-wider text-amber-300'
   let banner: React.ReactNode = null
   if (preparing) {
