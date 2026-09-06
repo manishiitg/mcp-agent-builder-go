@@ -100,12 +100,12 @@ profile:
       - id: claude-code
         label: Claude Code
         provider: claude-code
-        model_id: claude-sonnet-5
+        model_id: claude-fable-5-1
         default: true
       - id: codex-cli
         label: Codex
         provider: codex-cli
-        model_id: gpt-5.6-sol
+        model_id: gpt-6-astra
     agent_tools:
       mode: mcp_only
     capabilities:
@@ -216,12 +216,12 @@ profiles:
         - id: claude-code
           label: Claude Code
           provider: claude-code
-          model_id: claude-sonnet-5
+          model_id: claude-fable-5-1
           default: true
         - id: codex-cli
           label: Codex
           provider: codex-cli
-          model_id: gpt-5.6-sol
+          model_id: gpt-6-astra
       agent_tools:
         mode: mcp_only
       capabilities:
