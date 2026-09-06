@@ -1214,3 +1214,6 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-notice-close:hover { background: #fdecc4; color: var(--heading); }
 .learning-app[data-theme="dark"] .fl-notice { background: #2a2416; border-color: #4a3d1c; }
 .learning-app[data-theme="dark"] .fl-notice-body p { color: #d5dcea; }
+
+/* A pinned page's own bar sits inside the map frame's zero-padding scroll area: give it its own. */
+.fl-drawer-scroll:has(> .fl-map-frame) > .fl-viewer-bar { margin: 0; padding: 10px 18px; border-bottom: 1px solid #e3e9f2; background: var(--surface); }

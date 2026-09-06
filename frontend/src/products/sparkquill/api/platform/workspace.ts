@@ -10,7 +10,7 @@ export const ACTIVITIES = 'activities'
 
 export type Requester = <T>(method: string, path: string, body?: unknown) => Promise<T>
 
-export type FamilyFile = { engine?: string; child?: { name?: string; grade?: string; board?: string } | null; parent_label?: string; pin_hash?: string; watch_sites?: string[] }
+export type FamilyFile = { engine?: string; model?: string; child?: { name?: string; grade?: string; board?: string } | null; parent_label?: string; pin_hash?: string; watch_sites?: string[] }
 
 export async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
@@ -140,9 +140,14 @@ export class FamilyWorkspace {
     return (await this.readJSON<FamilyFile>('family.json')) ?? {}
   }
 
-  async saveEngine(engine: string): Promise<void> {
+  async saveEngine(engine: string, model?: string): Promise<void> {
     const current = await this.readFamily()
-    await this.writeJSON('family.json', { ...current, engine: engine.trim() })
+    // A model belongs to its engine: switching engine without naming a model
+    // drops the old one rather than carrying a foreign model id along.
+    const next: Record<string, unknown> = { ...current, engine: engine.trim() }
+    if (model && model.trim()) next.model = model.trim()
+    else delete next.model
+    await this.writeJSON('family.json', next)
   }
 
   async saveChild(child: { name: string; grade: string; board: string }): Promise<void> {

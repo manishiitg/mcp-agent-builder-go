@@ -30,6 +30,9 @@ type AgentProfileChatRequest struct {
 	Message         string `json:"message"`
 	ConversationKey string `json:"conversation_key,omitempty"`
 	Engine          string `json:"engine,omitempty"`
+	// ModelID picks a model within the engine's provider: one the platform's
+	// model catalog lists for that provider. Empty keeps the option's own model.
+	ModelID         string `json:"model_id,omitempty"`
 }
 
 type AgentProfileConversationRequest struct {
@@ -76,8 +79,44 @@ func queryRequestForAgentProfileChat(profile agentprofiles.Profile, input AgentP
 		}
 		req.Provider = option.Provider
 		req.ModelID = option.ModelID
+		if modelID := strings.TrimSpace(input.ModelID); modelID != "" {
+			if !providerOffersModel(option.Provider, modelID) {
+				return QueryRequest{}, fmt.Errorf("model %q is not offered for engine %q", modelID, engine)
+			}
+			req.ModelID = modelID
+		}
 	}
 	return req, nil
+}
+
+// providerOffersModel reports whether the platform's model catalog lists
+// modelID under provider — the same catalog the composer's switcher is
+// filled from, so a client can only send back what it was offered. A
+// provider the catalog does not know at all accepts any id: nothing to
+// check against.
+func providerOffersModel(provider, modelID string) bool {
+	known := false
+	for _, model := range allProviderModelMetadata() {
+		if model == nil || !strings.EqualFold(strings.TrimSpace(model.Provider), strings.TrimSpace(provider)) {
+			continue
+		}
+		known = true
+		if strings.EqualFold(strings.TrimSpace(model.ModelID), modelID) {
+			return true
+		}
+	}
+	return !known
+}
+
+// providerOptionLabelForProvider names a provider the way the profile
+// labels it (product.yaml provider_options[].label), or by the provider id.
+func providerOptionLabelForProvider(options []agentprofiles.ProviderOption, provider string) string {
+	for _, option := range options {
+		if strings.EqualFold(strings.TrimSpace(option.Provider), strings.TrimSpace(provider)) {
+			return firstNonEmptyTrimmed(option.Label, option.ID)
+		}
+	}
+	return provider
 }
 
 func findProviderOptionByID(options []agentprofiles.ProviderOption, id string) (agentprofiles.ProviderOption, bool) {
@@ -269,6 +308,22 @@ func (api *StreamingAPI) handleAgentProfileChatQuery(w http.ResponseWriter, r *h
 	if err != nil {
 		writeAgentProfileError(w, http.StatusUnprocessableEntity, err.Error())
 		return
+	}
+	// The provider is bound by the conversation's first turn: a Codex thread
+	// and a Claude Code session are separate CLI state, so switching would
+	// start the other runtime blank. Models within the provider may change.
+	if engine := strings.TrimSpace(input.Engine); engine != "" {
+		if option, ok := findProviderOptionByID(profile.Runtime.ProviderOptions, engine); ok {
+			bound, err := defaultProductConversationRegistryStore().bindProvider(r.Context(), productWorkspaceUserID(r.Context()), profile, conversation.ConversationKey, option.Provider)
+			if err != nil {
+				writeAgentProfileError(w, http.StatusUnprocessableEntity, err.Error())
+				return
+			}
+			if !strings.EqualFold(bound, option.Provider) {
+				writeAgentProfileError(w, http.StatusConflict, fmt.Sprintf("this chat runs on %s; start a new chat to switch to %s", providerOptionLabelForProvider(profile.Runtime.ProviderOptions, bound), firstNonEmptyTrimmed(option.Label, option.ID)))
+				return
+			}
+		}
 	}
 	query, err := queryRequestForAgentProfileChat(profile, input, conversation)
 	if err != nil {

@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useShallow } from 'zustand/react/shallow'
 
 const DBG = '[skill-popup]'
-import { Send, Wand2, Loader2, Globe, Layers, X, History, Server, Download, Paperclip, Terminal, Plus, Play } from 'lucide-react'
+import { Send, Wand2, Loader2, Globe, Layers, X, History, Server, Download, Paperclip, Terminal, Plus, Play, MessageSquarePlus } from 'lucide-react'
 import { Button } from './ui/Button'
 import { Textarea } from './ui/Textarea'
 import FileContextDisplay from './FileContextDisplay'
@@ -24,6 +24,7 @@ import { useWorkflowManifestStore } from '../stores/useWorkflowManifestStore'
 import { chromeCdpInstallCommand, chromeCdpLaunchCommand, chromeCdpVerifyCommand, chromeCdpZipUrl } from '../utils/cdpSetup'
 import { CHAT_TOOL_COMMAND_EVENT, chatToolCommandFromEvent } from '../utils/chatToolEvents'
 import { loadAgentProfileCapabilityEnabled, loadAgentProfileProviderOptions, loadAgentProfileRuntime, type AgentProfileProviderOption } from '../utils/agentProfileCapabilities'
+import { llmConfigService, type ModelMetadata } from '../services/llm-config-api'
 import { MicButton, type MicButtonHandle, type MicState } from '../voice/MicButton'
 import { useCapabilitiesStore } from '../stores/useCapabilitiesStore'
 import { hasActiveSessionWork } from '../utils/activitySessions'
@@ -485,12 +486,16 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const platformVoiceAvailable = useCapabilitiesStore(state => state.capabilities?.voice?.available ?? false)
   const [profileVoiceEnabled, setProfileVoiceEnabled] = useState(false)
   const voiceCapabilityEnabled = isProductSurface ? profileVoiceEnabled : platformVoiceAvailable
-  // Model switcher for product surfaces: the (provider, model) bindings the
-  // profile declares in product.yaml (runtime.provider_options). One option
-  // or none means nothing to switch, so no control. A choice lands on the
-  // tab (ChatArea sends it as `engine` on every profile query) and is
-  // announced for the product to persist however it likes.
+  // Model switcher for product surfaces. The profile declares its runtimes
+  // (product.yaml runtime.provider_options: Claude Code, Codex…); the
+  // platform's model catalog supplies the models each of those offers. The
+  // provider is chosen for a new chat and locked once the chat has a turn —
+  // a Codex thread and a Claude Code session are separate CLI state, so the
+  // other runtime would start blank — while the model can change any time.
+  // A choice lands on the tab (sent as `engine` + `model_id` on every
+  // profile query) and is announced for the product to persist.
   const [engineOptions, setEngineOptions] = useState<AgentProfileProviderOption[]>([])
+  const [modelCatalog, setModelCatalog] = useState<ModelMetadata[]>([])
   useEffect(() => {
     if (!isProductSurface || !agentProfileId) {
       setEngineOptions([])
@@ -500,17 +505,56 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     void loadAgentProfileProviderOptions(agentProfileId, agentProfileVersion).then((options) => {
       if (!cancelled) setEngineOptions(options)
     })
+    void llmConfigService.getModelMetadata().then((r) => {
+      if (!cancelled) setModelCatalog(Array.isArray(r?.models) ? r.models : [])
+    }).catch(() => undefined)
     return () => { cancelled = true }
   }, [isProductSurface, agentProfileId, agentProfileVersion])
   const currentEngine = activeTab?.metadata?.agentProfileEngine
     || engineOptions.find((o) => o.default)?.id
     || engineOptions[0]?.id
     || ''
-  const selectProductEngine = useCallback((engine: string) => {
+  const engineGroups = useMemo(() => {
+    // The catalog carries a few pseudo-entries per coding CLI (its own name,
+    // reasoning levels); only real model ids are offered.
+    const pseudo = new Set(['high', 'medium', 'low'])
+    return engineOptions.map((option) => {
+      const provider = (option.provider ?? '').trim()
+      const models = modelCatalog
+        .filter((m) => m.provider === provider && m.model_id !== provider && !pseudo.has(m.model_id))
+        .map((m) => ({ id: m.model_id, label: m.model_name || m.model_id }))
+      const own = (option.model_id ?? '').trim()
+      if (own && !models.some((m) => m.id === own)) models.unshift({ id: own, label: own })
+      return { option, models }
+    })
+  }, [engineOptions, modelCatalog])
+  const currentGroup = engineGroups.find((g) => g.option.id === currentEngine)
+  const currentModel = activeTab?.metadata?.agentProfileModelID || (currentGroup?.option.model_id ?? '') || currentGroup?.models[0]?.id || ''
+  const chatHasTurns = useMemo(() => (activeTabEvents ?? []).some((e) => e.type === 'user_message'), [activeTabEvents])
+  const selectProductEngine = useCallback((engine: string, modelId: string) => {
     if (!activeTabId || !agentProfileId) return
-    useChatStore.getState().setTabMetadata(activeTabId, { agentProfileEngine: engine })
-    window.dispatchEvent(new CustomEvent('agentworks:product-engine-selected', { detail: { profileId: agentProfileId, engine } }))
+    useChatStore.getState().setTabMetadata(activeTabId, { agentProfileEngine: engine, agentProfileModelID: modelId })
+    window.dispatchEvent(new CustomEvent('agentworks:product-engine-selected', { detail: { profileId: agentProfileId, engine, modelId } }))
   }, [activeTabId, agentProfileId])
+
+  // "New chat" for product surfaces, offered when the profile declares
+  // runtime.capabilities.new_conversation; the product owns what happens.
+  const [newConversationEnabled, setNewConversationEnabled] = useState(false)
+  useEffect(() => {
+    if (!isProductSurface || !agentProfileId) {
+      setNewConversationEnabled(false)
+      return
+    }
+    let cancelled = false
+    void loadAgentProfileCapabilityEnabled(agentProfileId, 'new_conversation', agentProfileVersion).then((enabled) => {
+      if (!cancelled) setNewConversationEnabled(enabled)
+    })
+    return () => { cancelled = true }
+  }, [isProductSurface, agentProfileId, agentProfileVersion])
+  const requestNewConversation = useCallback(() => {
+    if (!agentProfileId) return
+    window.dispatchEvent(new CustomEvent('agentworks:product-new-conversation', { detail: { profileId: agentProfileId } }))
+  }, [agentProfileId])
 
   useEffect(() => {
     if (!isProductSurface || !agentProfileId) {
@@ -3518,16 +3562,36 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                           disabled={isSummarizing}
                         />
                       )}
-                      {isProductSurface && engineOptions.length > 1 && (
-                        <select
-                          className="h-7 max-w-[10rem] rounded-md border border-border bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground focus:outline-none"
-                          aria-label="Which AI answers this chat"
-                          title="Which AI answers this chat"
-                          value={currentEngine}
+                      {isProductSurface && newConversationEnabled && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 w-7 p-0"
+                          aria-label="New chat"
+                          title="Start a new chat — this one stays in history"
                           disabled={isSummarizing}
-                          onChange={(e) => selectProductEngine(e.target.value)}
+                          onClick={requestNewConversation}
                         >
-                          {engineOptions.map((o) => <option key={o.id} value={o.id}>{o.label || o.id}</option>)}
+                          <MessageSquarePlus className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                      {isProductSurface && engineGroups.some((g) => g.models.length > 0) && (engineGroups.length > 1 || (currentGroup?.models.length ?? 0) > 1) && (
+                        <select
+                          className="h-7 max-w-[12rem] rounded-md border border-border bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground focus:outline-none"
+                          aria-label="Which AI answers this chat"
+                          title={chatHasTurns ? `This chat runs on ${currentGroup?.option.label || currentEngine}. Start a new chat to switch between ${engineGroups.map((g) => g.option.label || g.option.id).join(' and ')}.` : 'Which AI answers this chat'}
+                          value={`${currentEngine}::${currentModel}`}
+                          disabled={isSummarizing}
+                          onChange={(e) => { const [engine, model] = e.target.value.split('::'); if (engine) selectProductEngine(engine, model ?? '') }}
+                        >
+                          {engineGroups
+                            .filter((g) => !chatHasTurns || g.option.id === currentEngine)
+                            .map((g) => (
+                              <optgroup key={g.option.id} label={g.option.label || g.option.id}>
+                                {g.models.map((m) => <option key={m.id} value={`${g.option.id}::${m.id}`}>{m.label}</option>)}
+                              </optgroup>
+                            ))}
                         </select>
                       )}
                       <>

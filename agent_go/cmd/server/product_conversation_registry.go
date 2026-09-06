@@ -39,6 +39,11 @@ type ProductConversationRecord struct {
 	ResourceID      string `json:"resource_id,omitempty"`
 	Title           string `json:"title,omitempty"`
 	Description     string `json:"description,omitempty"`
+	// Provider is the coding-agent runtime the conversation runs on, bound by
+	// its first turn. A Codex thread and a Claude Code session are separate
+	// CLI state, so the other runtime would start blank: the model can change
+	// mid-chat, the provider cannot — a new conversation starts unbound.
+	Provider        string `json:"provider,omitempty"`
 	CreatedAt       string `json:"created_at"`
 	UpdatedAt       string `json:"updated_at"`
 }
@@ -243,6 +248,53 @@ func (store productConversationRegistryStore) rotate(
 		return ProductConversationRecord{}, err
 	}
 	return record, nil
+}
+
+// bindProvider records the runtime a conversation runs on the first time a
+// turn names one, and afterwards reports the runtime it is bound to. The
+// caller compares: a different provider on a bound conversation is refused.
+func (store productConversationRegistryStore) bindProvider(
+	ctx context.Context,
+	userID string,
+	profile agentprofiles.Profile,
+	conversationKey string,
+	provider string,
+) (string, error) {
+	provider = strings.TrimSpace(provider)
+	path := productConversationRegistryPath(userID)
+	mutex := productConversationRegistryMutex(path)
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	document := productConversationRegistryDocument{Version: productConversationRegistryVersion, Entries: map[string]ProductConversationRecord{}}
+	raw, exists, err := store.read(ctx, path)
+	if err != nil {
+		return "", fmt.Errorf("read product conversation registry: %w", err)
+	}
+	if exists && strings.TrimSpace(raw) != "" {
+		if err := json.Unmarshal([]byte(raw), &document); err != nil {
+			return "", fmt.Errorf("decode product conversation registry: %w", err)
+		}
+		if document.Entries == nil {
+			document.Entries = map[string]ProductConversationRecord{}
+		}
+	}
+	entryKey := productConversationRegistryEntryKey(profile.ID, conversationKey)
+	record, ok := document.Entries[entryKey]
+	if !ok {
+		return "", fmt.Errorf("product conversation %q is not registered", entryKey)
+	}
+	if bound := strings.TrimSpace(record.Provider); bound != "" {
+		return bound, nil
+	}
+	record.Provider = provider
+	record.UpdatedAt = store.now().UTC().Format(time.RFC3339Nano)
+	document.Version = productConversationRegistryVersion
+	document.Entries[entryKey] = record
+	if err := store.writeDocument(ctx, path, document); err != nil {
+		return "", err
+	}
+	return provider, nil
 }
 
 func (store productConversationRegistryStore) writeManifestSessionID(ctx context.Context, manifestPath, sessionID string) error {

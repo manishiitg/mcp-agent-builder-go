@@ -159,6 +159,7 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     const pinSet = !!state.pin_hash
     return {
       engine: state.engine,
+      model: state.model,
       child: state.child ?? null,
       parent_label: state.parent_label,
       pin_set: pinSet,
@@ -224,8 +225,8 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     return { valid: res.valid, message: res.message ?? res.error }
   }
 
-  async function selectEngine(engineID: string): Promise<void> {
-    await ws.saveEngine(engineID)
+  async function selectEngine(engineID: string, model?: string): Promise<void> {
+    await ws.saveEngine(engineID, model)
   }
 
   const api: FamilyApi = {

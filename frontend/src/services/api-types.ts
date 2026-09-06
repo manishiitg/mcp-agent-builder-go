@@ -229,6 +229,9 @@ export interface AgentProfileChatRequest {
   // One of the profile's declared runtime.provider_options[].id; the server
   // resolves it to that option's (provider, model_id) and rejects any other.
   engine?: string
+  // A model within that engine's provider, from the platform's model catalog
+  // (/api/llm-config/models/metadata); omitted keeps the option's own model.
+  model_id?: string
 }
 
 export interface AgentProfileConversationRequest {

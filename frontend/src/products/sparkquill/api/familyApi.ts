@@ -7,6 +7,7 @@ import type { ApiEngine, Activity, QuickCommand, StoredMsg, TreeNode, VoiceStatu
 
 export type SetupState = {
   engine?: string
+  model?: string
   child?: { name?: string; grade?: string; board?: string } | null
   pin_set?: boolean
   setup_complete?: boolean
@@ -43,7 +44,7 @@ export interface FamilyApi {
   setup(): Promise<SetupState>
   engines(): Promise<ApiEngine[]>
   validateEngine(provider: string): Promise<{ valid: boolean; message?: string }>
-  selectEngine(engine: string): Promise<void>
+  selectEngine(engine: string, model?: string): Promise<void>
   saveChild(child: { name: string; grade: string; board: string }): Promise<void>
   setPin(pin: string): Promise<{ error?: string }>
   verifyPin(pin: string): Promise<{ ok?: boolean }>

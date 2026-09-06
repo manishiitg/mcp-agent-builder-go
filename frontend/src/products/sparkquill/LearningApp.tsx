@@ -33,7 +33,6 @@ import {
   Sun,
   Pin,
   PinOff,
-  MessageSquarePlus,
   Bell,
 } from 'lucide-react'
 import './learning-app.css'
@@ -55,7 +54,6 @@ import {
 } from './stores'
 import PlatformChat, { PARENT_PROFILE_ID, applyFamilyEngineToOpenTabs, startNewParentConversation, type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
 import type { ProductNotification } from '../../platform/notifications/useProductNotifications'
-import { loadAgentProfileCapabilityEnabled } from '../../utils/agentProfileCapabilities'
 import ChildPlatformChat, { forgetChildChat, submitToChildChat, type ChildKickoff } from './platform/ChildPlatformChat'
 import { api } from './api'
 import { VoiceSettings } from './voice/VoiceSettings'
@@ -832,24 +830,24 @@ function parseMaterialPath(p: string): { subject?: string; topic?: string; date?
 }
 
 export default function LearningApp() {
-  // "New chat" for the parent conversation: offered only when the profile
-  // declares runtime.capabilities.new_conversation (product.yaml). The chat
-  // is remounted (key) after the server rotates the conversation.
-  const [newChatEnabled, setNewChatEnabled] = useState(false)
-  const [newChatBusy, setNewChatBusy] = useState(false)
+  // "New chat" for the parent conversation lives in the composer (ChatInput
+  // offers it when the profile declares runtime.capabilities.new_conversation)
+  // and announces it; the chat is remounted (key) after the server rotates
+  // the conversation.
+  const newChatBusyRef = useRef(false)
   const [parentChatEpoch, setParentChatEpoch] = useState(0)
   useEffect(() => {
-    let cancelled = false
-    void loadAgentProfileCapabilityEnabled(PARENT_PROFILE_ID, 'new_conversation').then((enabled) => { if (!cancelled) setNewChatEnabled(enabled) })
-    return () => { cancelled = true }
+    const onNewChat = (e: Event) => {
+      const detail = (e as CustomEvent<{ profileId?: string }>).detail
+      if (detail?.profileId !== PARENT_PROFILE_ID || newChatBusyRef.current) return
+      newChatBusyRef.current = true
+      startNewParentConversation()
+        .catch(() => undefined)
+        .finally(() => { setParentChatEpoch((n) => n + 1); newChatBusyRef.current = false })
+    }
+    window.addEventListener('agentworks:product-new-conversation', onNewChat)
+    return () => window.removeEventListener('agentworks:product-new-conversation', onNewChat)
   }, [])
-  const startNewChat = () => {
-    if (newChatBusy) return
-    setNewChatBusy(true)
-    startNewParentConversation()
-      .catch(() => undefined)
-      .finally(() => { setParentChatEpoch((e) => e + 1); setNewChatBusy(false) })
-  }
   // Activities the parent pinned to the top of the Activities tab. Stored in
   // the workspace (state/pinned-activities.json) so it follows the family,
   // not the browser; pinned cards show in their own section above the groups.
@@ -873,9 +871,10 @@ export default function LearningApp() {
   // holds across relaunches and reaches the child's tab too.
   useEffect(() => {
     const onEngine = (e: Event) => {
-      const detail = (e as CustomEvent<{ profileId?: string; engine?: string }>).detail
+      const detail = (e as CustomEvent<{ profileId?: string; engine?: string; modelId?: string }>).detail
       if (!detail?.engine || (detail.profileId !== PARENT_PROFILE_ID && detail.profileId !== 'sparkquill-child')) return
-      api.selectEngine(detail.engine).catch(() => undefined).finally(() => applyFamilyEngineToOpenTabs(detail.engine!))
+      const { engine, modelId } = detail
+      api.selectEngine(engine, modelId).catch(() => undefined).finally(() => applyFamilyEngineToOpenTabs(engine, modelId))
     }
     window.addEventListener('agentworks:product-engine-selected', onEngine)
     return () => window.removeEventListener('agentworks:product-engine-selected', onEngine)
@@ -1985,18 +1984,6 @@ export default function LearningApp() {
                 </div>
               </div>
               <div className="fl-toolbar-right">
-                {newChatEnabled && (
-                  <button
-                    className="fl-icon-btn fl-newchat-btn"
-                    type="button"
-                    aria-label="New chat"
-                    title="Start a new chat — this one stays in history"
-                    disabled={newChatBusy}
-                    onClick={startNewChat}
-                  >
-                    <MessageSquarePlus size={16} />
-                  </button>
-                )}
                 <div className="fl-pulse-wrap">
                   <button
                     className="fl-pulse-pill"
