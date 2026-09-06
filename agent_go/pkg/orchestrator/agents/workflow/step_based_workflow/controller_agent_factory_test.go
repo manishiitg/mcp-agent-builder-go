@@ -689,9 +689,11 @@ func TestInjectStepEnvIntoShellExecutor_OverridesStaleMCPSessionEnv(t *testing.T
 	t.Setenv("MCP_API_TOKEN", "step-token")
 
 	var capturedArgs map[string]interface{}
+	var capturedSessionID string
 	executors := map[string]interface{}{
 		"execute_shell_command": func(ctx context.Context, args map[string]interface{}) (string, error) {
 			capturedArgs = args
+			capturedSessionID, _ = ctx.Value(common.ChatSessionIDKey).(string)
 			return "ok", nil
 		},
 	}
@@ -760,6 +762,9 @@ func TestInjectStepEnvIntoShellExecutor_OverridesStaleMCPSessionEnv(t *testing.T
 	}
 	if got := rawExtraEnv["SECRET_LOGIN_PASSWORD"]; got != "password" {
 		t.Fatalf("expected workflow secret, got %#v", got)
+	}
+	if capturedSessionID != "step-session-123" {
+		t.Fatalf("expected trusted step session in executor context, got %q", capturedSessionID)
 	}
 }
 

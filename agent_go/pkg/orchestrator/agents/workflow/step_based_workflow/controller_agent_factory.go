@@ -266,6 +266,15 @@ func injectStepEnvIntoShellExecutor(executors map[string]interface{}, stepOutput
 			mergedEnv[k] = v
 		}
 		args["extra_env"] = mergedEnv
+		// The executor's workspace client may have been created for the parent
+		// workflow session. Its security lookup reads ChatSessionIDKey before the
+		// command environment, so carry the trusted step identity in the internal
+		// context too. This keeps the working directory and folder guard aligned
+		// with the step-scoped MCP URL above; model-supplied extra_env cannot
+		// select a different security session.
+		if strings.TrimSpace(mcpSessionID) != "" {
+			ctx = context.WithValue(ctx, common.ChatSessionIDKey, mcpSessionID)
+		}
 		return original(ctx, args)
 	}
 }
