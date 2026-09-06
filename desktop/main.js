@@ -1989,3 +1989,15 @@ app.on('will-quit', () => {
 app.on('quit', (_event, exitCode) => {
   console.log('[main] quit with exit code:', exitCode);
 });
+
+// A SIGTERM/SIGINT to the Electron main process (a `kill`, a supervisor, a
+// dev script) does not run the app 'before-quit'/'will-quit' events above,
+// and would otherwise orphan both servers — still bound to their ports,
+// still writing into the workspace the next launch expects to own.
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.on(signal, () => {
+    console.log(`[main] received ${signal}`);
+    killChildren();
+    app.exit(0);
+  });
+}
