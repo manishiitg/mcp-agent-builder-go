@@ -1,5 +1,34 @@
-*, *::before, *::after { box-sizing: border-box; }
-html, body, #root { margin: 0; height: 100%; }
+/* The main frontend ships Tailwind's preflight (src/index.css). This app was
+   written against browser defaults and, as its own Vite root, was built with
+   preflight off. Put the defaults it relies on back for its own markup, at
+   the lowest specificity that still beats preflight's element selectors
+   (0,0,1) — every rule below and every Tailwind utility still wins — and
+   not inside the shared chat (.fl-platform-chat), which was written for
+   preflight. Values are the UA stylesheet's. */
+:where(.learning-app) h1:not(:where(.fl-platform-chat *)) { font-size: 2em; font-weight: bold; margin: .67em 0; }
+:where(.learning-app) h2:not(:where(.fl-platform-chat *)) { font-size: 1.5em; font-weight: bold; margin: .83em 0; }
+:where(.learning-app) h3:not(:where(.fl-platform-chat *)) { font-size: 1.17em; font-weight: bold; margin: 1em 0; }
+:where(.learning-app) h4:not(:where(.fl-platform-chat *)) { font-size: 1em; font-weight: bold; margin: 1.33em 0; }
+:where(.learning-app) h5:not(:where(.fl-platform-chat *)) { font-size: .83em; font-weight: bold; margin: 1.67em 0; }
+:where(.learning-app) h6:not(:where(.fl-platform-chat *)) { font-size: .67em; font-weight: bold; margin: 2.33em 0; }
+:where(.learning-app) :is(p, figure, pre, dl):not(:where(.fl-platform-chat *)) { margin: 1em 0; }
+:where(.learning-app) blockquote:not(:where(.fl-platform-chat *)) { margin: 1em 40px; }
+:where(.learning-app) :is(ul, ol):not(:where(.fl-platform-chat *)) { margin: 1em 0; padding-left: 40px; }
+:where(.learning-app) ul:not(:where(.fl-platform-chat *)) { list-style: disc; }
+:where(.learning-app) ol:not(:where(.fl-platform-chat *)) { list-style: decimal; }
+:where(.learning-app) dd:not(:where(.fl-platform-chat *)) { margin-left: 40px; }
+:where(.learning-app) hr:not(:where(.fl-platform-chat *)) { border-style: inset; border-width: 1px; color: gray; margin: .5em auto; height: auto; }
+:where(.learning-app) pre:not(:where(.fl-platform-chat *)) { white-space: pre; }
+:where(.learning-app) a:not(:where(.fl-platform-chat *)) { color: -webkit-link; text-decoration: underline; cursor: pointer; }
+:where(.learning-app) img:not(:where(.fl-platform-chat *)) { display: inline; max-width: none; }
+:where(.learning-app) :is(svg, video, canvas, audio, iframe, embed, object):not(:where(.fl-platform-chat *)) { display: inline; vertical-align: baseline; }
+:where(.learning-app) table:not(:where(.fl-platform-chat *)) { border-collapse: separate; border-spacing: 2px; }
+:where(.learning-app) th:not(:where(.fl-platform-chat *)) { font-weight: bold; text-align: center; }
+:where(.learning-app) :is(button, input, select, textarea, fieldset, legend):not(:where(.fl-platform-chat *)) { all: revert; box-sizing: border-box; }
+/* preflight also sets line-height: 1.5 on <html>; this app was laid out on the
+   browser's "normal". The shared chat keeps 1.5. */
+:where(.learning-app) { line-height: normal; }
+:where(.learning-app) .fl-platform-chat { line-height: 1.5; }
 
 .learning-app {
   --navy: #0b1d42;
@@ -112,7 +141,7 @@ html, body, #root { margin: 0; height: 100%; }
 .learning-stage.is-child .setup-panel,
 .learning-stage.is-pin .setup-panel { display: flex; flex-direction: column; }
 .learning-stage.is-child .child-form-card { width: 100%; max-width: 1320px; box-sizing: border-box; }
-.lead { max-width: 68ch; margin: 20px 0 30px; color: #455979; font-size: var(--text-body); line-height: 1.6; text-wrap: pretty; }
+.fl-lead { max-width: 68ch; margin: 20px 0 30px; color: #455979; font-size: var(--text-body); line-height: 1.6; text-wrap: pretty; }
 .engine-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .engine-card { display: flex; align-items: center; gap: 13px; min-height: 104px; padding: 17px; border: 1px solid var(--line); border-radius: 17px; background: var(--surface); color: var(--ink); text-align: left; cursor: pointer; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
 .engine-card:hover { transform: translateY(-2px); box-shadow: 0 12px 22px rgba(15, 36, 78, .08); }
@@ -1129,12 +1158,11 @@ audio.fl-viewer-media { background: var(--surface); }
 /* Preflight's border reset: Tailwind's border utilities only set a width and
    rely on this for the style, so without it the transcript's turn rail and
    card borders never draw. */
-.fl-platform-chat :where(*, *::before, *::after) { border-width: 0; border-style: solid; border-color: hsl(var(--border)); }
-.fl-platform-chat :where(button) { appearance: none; background: transparent; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; cursor: pointer; box-shadow: none; }
-.fl-platform-chat :where(button:disabled) { cursor: default; }
-.fl-platform-chat :where(textarea, input) { font: inherit; color: inherit; }
-.fl-platform-chat :where(pre, code) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.fl-platform-chat :where(p, ul, ol) { margin: 0; }
+/* The shared chat's element resets used to live here: the learning app was
+   built without Tailwind's preflight, so it re-created the parts of it the
+   chat relies on. The main build ships preflight (src/index.css), and a copy
+   loading after the utility classes overrode them (the send button lost its
+   fill), so the copy is gone. */
 
 /* Child Mode on the platform chat: the shared chat fills the section under the
    header; its rows reuse the child's celebration and scene styling. */

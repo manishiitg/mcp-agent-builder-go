@@ -38,7 +38,7 @@ import './learning-app.css'
 import {
   useSetupStore,
   useFamilyStore,
-  useWorkspaceStore,
+  useSparkQuillWorkspaceStore,
   useChildChatStore,
   useWhatsAppStore,
   usePinGateStore,
@@ -53,10 +53,9 @@ import {
 } from './stores'
 import PlatformChat, { applyFamilyEngineToOpenTabs, type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
 import ChildPlatformChat, { forgetChildChat, submitToChildChat, type ChildKickoff } from './platform/ChildPlatformChat'
-import { BuildUpdateNotice } from './platform/BuildUpdateNotice'
 import { api } from './api'
 import { VoiceSettings } from './voice/VoiceSettings'
-import { ChatMarkdown as SharedChatMarkdown } from '../../shared/chat/ChatRenderer'
+import { ChatMarkdown as SharedChatMarkdown } from '../../../shared/chat/ChatRenderer'
 
 // The child/file viewer iframe is deliberately sandbox="allow-scripts" with
 // NO allow-same-origin (adding that would let a srcDoc page's script escape
@@ -578,10 +577,10 @@ function workspaceRelativePath(href: string): string | null {
 // dev/packaged server can't serve, and which was breaking "open this file"
 // requests). Anything else (real http(s) links) behaves normally.
 function ChatLink({ href, children }: { href?: string; children?: React.ReactNode }) {
-  const setDrawerTab = useWorkspaceStore((s) => s.setDrawerTab)
-  const setViewerPath = useWorkspaceStore((s) => s.setViewerPath)
-  const setViewerImageList = useWorkspaceStore((s) => s.setViewerImageList)
-  const setViewerRefreshKey = useWorkspaceStore((s) => s.setViewerRefreshKey)
+  const setDrawerTab = useSparkQuillWorkspaceStore((s) => s.setDrawerTab)
+  const setViewerPath = useSparkQuillWorkspaceStore((s) => s.setViewerPath)
+  const setViewerImageList = useSparkQuillWorkspaceStore((s) => s.setViewerImageList)
+  const setViewerRefreshKey = useSparkQuillWorkspaceStore((s) => s.setViewerRefreshKey)
   const rel = href ? workspaceRelativePath(href) : null
   if (rel) {
     return (
@@ -824,6 +823,24 @@ function parseMaterialPath(p: string): { subject?: string; topic?: string; date?
 
 export default function LearningApp() {
   const [theme] = useState<Theme>(readTheme)
+  // The main frontend forces the document to dark (ThemeProvider). While this
+  // surface is mounted the family's choice wins, and the shared chat inside it
+  // follows the same root class; what ThemeProvider set comes back on unmount.
+  useEffect(() => {
+    const root = document.documentElement
+    const previous = { className: root.className, dataTheme: root.dataset.theme, colorScheme: root.style.colorScheme }
+    const docTheme = theme === 'dark' ? 'dark' : 'light'
+    root.classList.remove('light', 'dark')
+    root.classList.add(docTheme)
+    root.dataset.theme = docTheme
+    root.style.colorScheme = docTheme
+    return () => {
+      root.className = previous.className
+      if (previous.dataTheme === undefined) delete root.dataset.theme
+      else root.dataset.theme = previous.dataTheme
+      root.style.colorScheme = previous.colorScheme
+    }
+  }, [theme])
 
   const screen = useSetupStore((s) => s.screen)
   const setScreen = useSetupStore((s) => s.setScreen)
@@ -933,10 +950,10 @@ export default function LearningApp() {
   const [pulsePopoverOpen, setPulsePopoverOpen] = useState(false)
   const [pulseRunning, setPulseRunning] = useState(false)
   const [pulseRunError, setPulseRunError] = useState<string | null>(null)
-  const wsFiles = useWorkspaceStore((s) => s.wsFiles)
-  const setWsFiles = useWorkspaceStore((s) => s.setWsFiles)
-  const allFiles = useWorkspaceStore((s) => s.allFiles)
-  const setAllFiles = useWorkspaceStore((s) => s.setAllFiles)
+  const wsFiles = useSparkQuillWorkspaceStore((s) => s.wsFiles)
+  const setWsFiles = useSparkQuillWorkspaceStore((s) => s.setWsFiles)
+  const allFiles = useSparkQuillWorkspaceStore((s) => s.allFiles)
+  const setAllFiles = useSparkQuillWorkspaceStore((s) => s.setAllFiles)
   // Which activity's conversation is currently loaded into childMessages.
   // Keyed by dir rather than a plain "have we resumed once" flag: the bound
   // activity CHANGES underneath the child whenever the parent runs
@@ -946,10 +963,10 @@ export default function LearningApp() {
   const parentLabel = useFamilyStore((s) => s.parentLabel)
   const setParentLabel = useFamilyStore((s) => s.setParentLabel)
 
-  const wsRefreshKey = useWorkspaceStore((s) => s.wsRefreshKey)
-  const setWsRefreshKey = useWorkspaceStore((s) => s.setWsRefreshKey)
-  const treeNodes = useWorkspaceStore((s) => s.treeNodes)
-  const setTreeNodes = useWorkspaceStore((s) => s.setTreeNodes)
+  const wsRefreshKey = useSparkQuillWorkspaceStore((s) => s.wsRefreshKey)
+  const setWsRefreshKey = useSparkQuillWorkspaceStore((s) => s.setWsRefreshKey)
+  const treeNodes = useSparkQuillWorkspaceStore((s) => s.treeNodes)
+  const setTreeNodes = useSparkQuillWorkspaceStore((s) => s.setTreeNodes)
   // Reflect the workspace file system in the drawer (materials the agent can
   // read). Refetches when entering the chat and after each upload/tool event.
   // The child's own conversation resume lives in a separate effect below,
@@ -1101,8 +1118,8 @@ export default function LearningApp() {
   // "Wide" once past the midpoint between default and max, so the button's icon
   // always shows which way the next tap will move it.
   const childSideWide = childSideWidth > (childSideDefault() + childSideMax(windowWidth)) / 2
-  const drawerTab = useWorkspaceStore((s) => s.drawerTab)
-  const setDrawerTab = useWorkspaceStore((s) => s.setDrawerTab)
+  const drawerTab = useSparkQuillWorkspaceStore((s) => s.drawerTab)
+  const setDrawerTab = useSparkQuillWorkspaceStore((s) => s.setDrawerTab)
   // The ONE activity the child is currently bound to (/api/child/activity) —
   // the child workspace shows only this, not every activity ever created.
   const childActivity = useChildChatStore((s) => s.childActivity)
@@ -1157,18 +1174,18 @@ export default function LearningApp() {
   const setChildViewerContent = useChildChatStore((s) => s.setChildViewerContent)
   const childTreeRefreshKey = useChildChatStore((s) => s.childTreeRefreshKey)
   const setChildTreeRefreshKey = useChildChatStore((s) => s.setChildTreeRefreshKey)
-  const filesSubjectFilter = useWorkspaceStore((s) => s.filesSubjectFilter)
-  const setFilesSubjectFilter = useWorkspaceStore((s) => s.setFilesSubjectFilter)
-  const filesGroupBy = useWorkspaceStore((s) => s.filesGroupBy)
-  const setFilesGroupBy = useWorkspaceStore((s) => s.setFilesGroupBy)
-  const activities = useWorkspaceStore((s) => s.activities)
-  const setActivities = useWorkspaceStore((s) => s.setActivities)
-  const viewerPath = useWorkspaceStore((s) => s.viewerPath)
-  const setViewerPath = useWorkspaceStore((s) => s.setViewerPath)
-  const viewerRefreshKey = useWorkspaceStore((s) => s.viewerRefreshKey)
-  const setViewerRefreshKey = useWorkspaceStore((s) => s.setViewerRefreshKey)
-  const viewerImageList = useWorkspaceStore((s) => s.viewerImageList)
-  const setViewerImageList = useWorkspaceStore((s) => s.setViewerImageList)
+  const filesSubjectFilter = useSparkQuillWorkspaceStore((s) => s.filesSubjectFilter)
+  const setFilesSubjectFilter = useSparkQuillWorkspaceStore((s) => s.setFilesSubjectFilter)
+  const filesGroupBy = useSparkQuillWorkspaceStore((s) => s.filesGroupBy)
+  const setFilesGroupBy = useSparkQuillWorkspaceStore((s) => s.setFilesGroupBy)
+  const activities = useSparkQuillWorkspaceStore((s) => s.activities)
+  const setActivities = useSparkQuillWorkspaceStore((s) => s.setActivities)
+  const viewerPath = useSparkQuillWorkspaceStore((s) => s.viewerPath)
+  const setViewerPath = useSparkQuillWorkspaceStore((s) => s.setViewerPath)
+  const viewerRefreshKey = useSparkQuillWorkspaceStore((s) => s.viewerRefreshKey)
+  const setViewerRefreshKey = useSparkQuillWorkspaceStore((s) => s.setViewerRefreshKey)
+  const viewerImageList = useSparkQuillWorkspaceStore((s) => s.viewerImageList)
+  const setViewerImageList = useSparkQuillWorkspaceStore((s) => s.setViewerImageList)
   // The dir of an activity opened via open_activity (the whole activity
   // overview). Can be set ALONGSIDE viewerPath (not just instead of it):
   // clicking an item inside the activity view sets viewerPath without
@@ -1176,8 +1193,8 @@ export default function LearningApp() {
   // activity view again instead of the raw file list — viewerPath simply
   // takes render priority over viewerActivityDir whenever both are set.
   const [viewerActivityDir, setViewerActivityDir] = useState<string | null>(null)
-  const viewerContent = useWorkspaceStore((s) => s.viewerContent)
-  const setViewerContent = useWorkspaceStore((s) => s.setViewerContent)
+  const viewerContent = useSparkQuillWorkspaceStore((s) => s.viewerContent)
+  const setViewerContent = useSparkQuillWorkspaceStore((s) => s.setViewerContent)
   const [viewerMeta, setViewerMeta] = useState<Record<string, unknown> | null>(null)
   const [metaOpen, setMetaOpen] = useState(false)
   // Which activity's goal (the parent's own instructions for that activity)
@@ -1190,10 +1207,10 @@ export default function LearningApp() {
   // back to the default top-level-only view. Absent from this map = use the
   // component's own default (top level open, everything nested closed).
   const [treeExpanded, setTreeExpanded] = useState<Record<string, boolean>>({})
-  const mapRefreshKey = useWorkspaceStore((s) => s.mapRefreshKey)
-  const setMapRefreshKey = useWorkspaceStore((s) => s.setMapRefreshKey)
-  const progressHtml = useWorkspaceStore((s) => s.progressHtml)
-  const setProgressHtml = useWorkspaceStore((s) => s.setProgressHtml)
+  const mapRefreshKey = useSparkQuillWorkspaceStore((s) => s.mapRefreshKey)
+  const setMapRefreshKey = useSparkQuillWorkspaceStore((s) => s.setMapRefreshKey)
+  const progressHtml = useSparkQuillWorkspaceStore((s) => s.progressHtml)
+  const setProgressHtml = useSparkQuillWorkspaceStore((s) => s.setProgressHtml)
   const booting = useSetupStore((s) => s.booting)
   const setBooting = useSetupStore((s) => s.setBooting)
   const bootError = useSetupStore((s) => s.bootError)
@@ -2791,7 +2808,6 @@ export default function LearningApp() {
   if (screen === 'tutor') {
     return (
       <main className="learning-app" data-theme={theme}>
-        <BuildUpdateNotice />
         <div className="fl-child">
           <div
             ref={childBodyRef}
@@ -3064,7 +3080,6 @@ export default function LearningApp() {
 
   return (
     <main className="learning-app" data-theme={theme}>
-      <BuildUpdateNotice />
       <header className="learning-header">
         <div className="learning-brand">
           <img className="brand-mark" src="/sparkquill-mark.svg" alt="" width={30} height={30} />
@@ -3086,7 +3101,7 @@ export default function LearningApp() {
           <section className="learning-panel setup-panel">
             <span className="eyebrow">01 · Choose your learning helper</span>
             <h1>Pick the AI that will help your child learn.</h1>
-            <p className="lead">It runs on this computer and powers every lesson, hint, and practice session.</p>
+            <p className="fl-lead">It runs on this computer and powers every lesson, hint, and practice session.</p>
 
             {enginesState === 'loading' && (
               <p className="engine-note">Checking which AI teachers are installed on this computer…</p>
@@ -3144,7 +3159,7 @@ export default function LearningApp() {
           <section className="learning-panel setup-panel">
             <span className="eyebrow">02 · Add your child</span>
             <h1>Create one calm learning space.</h1>
-            <p className="lead">Tell the learning guide just enough to make each session feel personal.</p>
+            <p className="fl-lead">Tell the learning guide just enough to make each session feel personal.</p>
             <div className="child-form-card">
               <label>
                 <span>Name or nickname</span>
@@ -3183,7 +3198,7 @@ export default function LearningApp() {
           <section className="learning-panel setup-panel">
             <span className="eyebrow">03 · Set a parent PIN</span>
             <h1>Create your parent PIN.</h1>
-            <p className="lead">This keeps Parent Mode — your notes, answer keys, grading, and settings — separate from {childName || 'your child'}’s space on this shared computer.</p>
+            <p className="fl-lead">This keeps Parent Mode — your notes, answer keys, grading, and settings — separate from {childName || 'your child'}’s space on this shared computer.</p>
             <div className="child-form-card">
               <div className="form-row">
                 <label>

@@ -11,7 +11,7 @@ import type { ApiEngine, QuickCommand, VoiceStatus } from '../stores/types'
 // resolves when entered from the AgentWorks app's own entry point. The
 // desktop app is fine either way; a bare test or node consumer of this
 // adapter is not.
-const secrets = () => import('../../../src/api/secrets').then((m) => m.secretsApi)
+const secrets = () => import('../../../api/secrets').then((m) => m.secretsApi)
 import type {
   FamilyApi, FastMode, ModelInfo, PulseConfig, SetupState,
   StoredConversation,
@@ -19,7 +19,7 @@ import type {
 } from './familyApi'
 import { messagesFromEvents, type PlatformEvent } from './platform/events'
 import { quickCommandsFromProfile } from './platform/commands'
-import { fetchSessionEvents, conversationToRestoredEvents, type RestorableConversation } from '../../../shared/session'
+import { fetchSessionEvents, conversationToRestoredEvents, type RestorableConversation } from '../../../../shared/session'
 import { FamilyWorkspace, documentsURL } from './platform/workspace'
 
 export const PARENT_PROFILE = 'sparkquill'
@@ -308,7 +308,7 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
         installing: p.downloading === true || p.loading === true,
         got_bytes: p.got_bytes ?? 0,
         total_bytes: p.total_bytes ?? 0,
-        can_install: false,
+        can_install: p.installed === false && p.available !== false,
         can_remove: false,
       }
       return { hardware: { arch: '', is_apple_silicon: false, total_ram_bytes: 0 }, stt_tiers: [tier] } as VoiceStatus

@@ -4,8 +4,8 @@
 // own mapping from a session's events to the stored transcript the
 // activity history reads (turns themselves render in the shared ChatArea).
 import type { StoredMsg } from '../../stores/types'
-import { eventBelongsToSession, isForegroundSessionEvent, mcpToolDisplayName } from '../../../../shared/session'
-import type { PollingEvent, SSEEventMessage } from '../../../../shared/session'
+import { eventBelongsToSession, isForegroundSessionEvent, mcpToolDisplayName } from '../../../../../shared/session'
+import type { PollingEvent, SSEEventMessage } from '../../../../../shared/session'
 
 /** The shapes the UI code below reads; aliases of the shared contract. */
 export type PlatformEvent = PollingEvent

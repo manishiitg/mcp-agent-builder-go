@@ -7,9 +7,8 @@ import { FAMILY_API } from '../apiBase'
 import type { FamilyApi } from './familyApi'
 import { createPlatformApi } from './platformApi'
 
-const env = (import.meta as { env?: Record<string, string | undefined> }).env ?? {}
 
-export const platformBaseUrl = env.VITE_PLATFORM_API ?? FAMILY_API
+export const platformBaseUrl = FAMILY_API
 
 // The shared service layer's base URL is set in platform/runtimeConfig.ts,
 // which main.tsx imports before anything else; only the login token is

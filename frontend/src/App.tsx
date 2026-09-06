@@ -45,6 +45,7 @@ const WorkflowsOverviewPage = lazy(() => import('./components/WorkflowsOverviewP
 const VideoStudioSurface = lazy(() => import('./products/video-studio/VideoStudioSurface').then(module => ({ default: module.VideoStudioSurface })))
 const FinanceSurface = lazy(() => import('./products/finance/FinanceSurface').then(module => ({ default: module.FinanceSurface })))
 const DominionSurface = lazy(() => import('./products/dominion/DominionSurface').then(module => ({ default: module.DominionSurface })))
+const SparkQuillSurface = lazy(() => import('./products/sparkquill/SparkQuillSurface').then(module => ({ default: module.SparkQuillSurface })))
 
 const FileSurfaceFallback = () => (
   <div className="flex h-full min-h-40 items-center justify-center text-muted-foreground">
@@ -913,6 +914,8 @@ function App() {
           <Suspense fallback={<FileSurfaceFallback />}><FinanceSurface /></Suspense>
         ) : productSurface === 'dominion' ? (
           <Suspense fallback={<FileSurfaceFallback />}><DominionSurface /></Suspense>
+        ) : productSurface === 'sparkquill' ? (
+          <Suspense fallback={<FileSurfaceFallback />}><SparkQuillSurface /></Suspense>
         ) : (
         <>
         <UpdateProgressToast />

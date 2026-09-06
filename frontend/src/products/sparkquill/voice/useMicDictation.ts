@@ -1,6 +1,11 @@
 import { useCallback, useRef, useState } from 'react'
 import { FAMILY_API } from '../apiBase'
-import { useVoiceDictation } from '../../../shared/voice/useVoiceDictation'
+import { getAuthToken } from '../../../services/api'
+import { useVoiceDictation } from '../../../../shared/voice/useVoiceDictation'
+
+// The parent profile id (internal/sparkquillproduct/product.yaml): the
+// platform gates the voice capability per product profile.
+const PROFILE_ID = 'sparkquill'
 
 // 'preparing' covers the gap between clicking the mic and audio actually
 // flowing — opening the device, and on a cold start loading (or on a first
@@ -16,6 +21,8 @@ export type MicState = 'idle' | 'preparing' | 'recording' | 'transcribing'
  * its own state names, ⌥-tap / ⌘⇧M shortcuts and stop-and-send behaviour,
  * while the capture, transport and engine are exactly what AgentWorks uses:
  * raw 16kHz PCM over the /api/voice/stream WebSocket into pkg/voicestt.
+ * Auth rides in the query because a browser cannot set a header on a
+ * WebSocket upgrade — the same shape as the main composer's MicButton.
  *
  * `liveText` is the running preview as the engine hears it, punctuated the
  * same way the committed text will be. `onText` fires ONCE per session, on
@@ -24,7 +31,12 @@ export type MicState = 'idle' | 'preparing' | 'recording' | 'transcribing'
  */
 export function useMicDictation(onText: (text: string, autoSubmit?: boolean) => void) {
   const autoSubmitRef = useRef(false)
-  const streamUrl = useCallback(() => `${FAMILY_API.replace(/^http/, 'ws')}/api/voice/stream`, [])
+  const streamUrl = useCallback(() => {
+    const params = new URLSearchParams({ profile_id: PROFILE_ID })
+    const token = getAuthToken()
+    if (token) params.set('token', token)
+    return `${FAMILY_API.replace(/^http/i, 'ws')}/api/voice/stream?${params.toString()}`
+  }, [])
   const { state, error, level, transcript, start, stop, clearError } = useVoiceDictation({ streamUrl })
 
   const micState: MicState =
@@ -52,7 +64,7 @@ export function useMicDictation(onText: (text: string, autoSubmit?: boolean) => 
     // than leaving the mic on "Getting voice ready" for a silent 690MB fetch.
     void (async () => {
       try {
-        const res = await fetch(`${FAMILY_API}/api/voice/warm`, { method: 'POST' })
+        const res = await fetch(`${FAMILY_API}/api/voice/warm?profile_id=${PROFILE_ID}`, { method: 'POST', headers: authHeaders() })
         const status = (await res.json()) as { available?: boolean; installed?: boolean; size_mb?: number }
         if (status.available === false) {
           setSetupError('Voice isn’t included in this build of SparkQuill.')
@@ -85,6 +97,11 @@ export function useMicDictation(onText: (text: string, autoSubmit?: boolean) => 
     stopAndSubmit,
     clearError: () => { setSetupError(null); clearError() },
   }
+}
+
+export function authHeaders(): Record<string, string> {
+  const token = getAuthToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 function friendlyError(message: string): string {

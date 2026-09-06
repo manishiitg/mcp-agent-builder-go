@@ -1,5 +1,5 @@
 import { Sparkles } from 'lucide-react'
-import type { CommandDefinition } from '../../../src/commands/types'
+import type { CommandDefinition } from '../../../commands/types'
 import type { QuickCommand } from '../stores/types'
 
 // SparkQuill's product commands (product.yaml `commands:`) as slash commands

@@ -42,7 +42,7 @@ interface WorkspaceState {
   setActivities: (v: SetStateAction<Activity[]>) => void
 }
 
-export const useWorkspaceStore = create<WorkspaceState>()((set) => ({
+export const useSparkQuillWorkspaceStore = create<WorkspaceState>()((set) => ({
   drawerTab: 'progress',
   setDrawerTab: (v) => set((s) => ({ drawerTab: resolveSetState(v, s.drawerTab) })),
   treeNodes: [],

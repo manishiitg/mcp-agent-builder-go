@@ -45,7 +45,11 @@ export function documentsURL(rel: string, suffix = ''): string {
 }
 
 export class FamilyWorkspace {
-  constructor(private readonly request: Requester) {}
+  private readonly request: Requester
+
+  constructor(request: Requester) {
+    this.request = request
+  }
 
   async readFile(rel: string): Promise<FileContent> {
     const resp = await this.request<APIResponse<Document>>('GET', documentsURL(rel))

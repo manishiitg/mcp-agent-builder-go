@@ -13,7 +13,7 @@ afterEach(() => {
 
 describe('product surface deployment configuration', () => {
   it('keeps the complete product suite when no deployment allowlist is configured', () => {
-    expect(enabledProductSurfaces()).toEqual(['agentworks', 'video-studio', 'finance', 'dominion'])
+    expect(enabledProductSurfaces()).toEqual(['agentworks', 'video-studio', 'finance', 'dominion', 'sparkquill'])
     expect(deploymentDefaultProductSurface()).toBe('agentworks')
     expect(isSingleProductDeployment()).toBe(false)
   })
@@ -32,6 +32,20 @@ describe('product surface deployment configuration', () => {
     expect(isEnabledProductSurface('finance')).toBe(false)
     expect(isEnabledProductSurface('dominion')).toBe(false)
     expect(isSingleProductDeployment()).toBe(false)
+  })
+
+  it('lets the SparkQuill desktop pin itself to the one surface it ships', () => {
+    vi.stubGlobal('window', {
+      __APP_RUNTIME_CONFIG__: {
+        defaultProductSurface: 'sparkquill',
+        enabledProductSurfaces: ['sparkquill'],
+      },
+    })
+
+    expect(enabledProductSurfaces()).toEqual(['sparkquill'])
+    expect(deploymentDefaultProductSurface()).toBe('sparkquill')
+    expect(isEnabledProductSurface('agentworks')).toBe(false)
+    expect(isSingleProductDeployment()).toBe(true)
   })
 })
 

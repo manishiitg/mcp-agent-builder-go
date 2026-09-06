@@ -3,11 +3,11 @@
 # own deps. Run this once before `npm start`, and again after changing the Go
 # servers or the frontend.
 #
-# M1 of docs/design/sparkquill_desktop_on_platform_plan.md: this now builds
-# the same two platform binaries the AgentWorks desktop builds
-# (workspace-server + agent-server) instead of the standalone family-server,
-# and stages the existing learning-app dist as resources/static (the agent
-# server's `./static/` mount, server.go:2533) instead of resources/web.
+# This builds the same two platform binaries the AgentWorks desktop builds
+# (workspace-server + agent-server) and stages the main frontend build as
+# resources/static (the agent server's `./static/` mount); the shell pins that
+# build to the SparkQuill surface through the runtime config env it passes
+# the server (lib/agentEnv.js).
 #
 # Voice (agent_go/pkg/voicestt) needs cgo + the shared engine's dylibs, hence
 # build-darwin-voice-binary.sh rather than a plain `go build` — see that
@@ -18,13 +18,13 @@ set -euo pipefail
 cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
 
-echo "==> Building the frontend"
-(cd "$ROOT/frontend/learning-app" && npm ci --silent && npm run build)
+echo "==> Building the frontend (the main AgentWorks build; SparkQuill is one of its product surfaces)"
+(cd "$ROOT/frontend" && npm ci --silent && npm run build)
 
 echo "==> Staging the frontend into resources/static"
 rm -rf resources/static
 mkdir -p resources/static
-cp -R "$ROOT/frontend/learning-app/dist/." resources/static/
+cp -R "$ROOT/frontend/dist/." resources/static/
 
 echo "==> Staging the default MCP config into resources/configs"
 mkdir -p resources/configs

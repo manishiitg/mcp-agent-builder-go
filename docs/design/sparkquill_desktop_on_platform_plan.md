@@ -412,7 +412,7 @@ harmless 404 in M1 (~1 GB stays resident while hidden); add `/api/voice/unload` 
 
 Executed in the order **M1 → P0 → P3 → P5** (not the P2-first chain above): the engine onboarding and the data
 migration do not depend on the learning-app move, and running them first puts a real family on the platform
-before the CSS/consolidation work. Then P4, P2a, P1 and P6 (all below). P2b and P7 remain.
+before the CSS/consolidation work. Then P4, P2a, P1, P6 and P2b (all below). P7 remains.
 
 - **M1 done, live-verified.** `desktop-sparkquill/main.js` spawns `workspace-server` (45779) + `agent-server`
   (45778), persists a generated `AUTH_SECRET` in `<userData>/config.json`, serves `frontend/learning-app/dist` as
@@ -502,6 +502,24 @@ before the CSS/consolidation work. Then P4, P2a, P1 and P6 (all below). P2b and 
   **Stopped existing without a platform equivalent:** the standalone's `file://` guard on `agent_browser`
   (`validateBrowserFileURLs`); the platform's browser tool has none, the child profile has `browser: disabled`,
   the parent's browser can open local files. Open item, recorded in `docs/core/browser.md`.
+- **P2b done, visually verified.** `frontend/learning-app/src` is `frontend/src/products/sparkquill/` and SparkQuill is
+  a product surface of the one Vite build (`SparkQuillSurface.tsx`, lazy; registered in `productSurfaceConfig`, the
+  surface store (version 4), the switcher with `SparkQuillMark`, `App.tsx`). The desktop shell pins the build to it
+  through `AGENTWORKS_ENABLED_PRODUCT_SURFACES/_DEFAULT_PRODUCT_SURFACE/_APP_NAME/_FAVICON_URL` (`lib/agentEnv.js`);
+  `dev-setup.sh` and the workflow build `frontend` and stage `frontend/dist`. Deleted: the learning-app Vite root and
+  its configs, `main.tsx`, `platform/runtimeConfig.ts` (runtime-config.js does this now), `BuildUpdateNotice`
+  (`staleChunkReload` does this now), the duplicate `index.css` import. First `tsc` under the main config: three real
+  errors fixed (a parameter property, a stale `autoScrollMode` prop). The voice modules now call the platform's
+  authenticated routes (`/api/voice/stream?profile_id&token`, warm as "install"), closing the P2a trail. CSS: the
+  main build ships preflight, which the app was never built against, so `learning-app.css` opens with a scoped
+  browser-defaults block (`:where(.learning-app) h1 … { UA values }`, zero-specificity-plus-one so every app rule and
+  Tailwind utility still wins, excluding `.fl-platform-chat`), `line-height: normal` for the app's own markup, and the
+  app's own copy of the chat resets is gone (loading after the utilities it beat them: the send button lost its fill).
+  `useWorkspaceStore` → `useSparkQuillWorkspaceStore`; `.lead` → `.fl-lead` (collided). `LearningApp` syncs the
+  document theme class while mounted (ThemeProvider forces dark) so the shared chat follows the family's theme.
+  Visual pass: before/after screenshots of parent, activities, settings, child, dark mode, and the three onboarding
+  steps on a throwaway profile (`SPARKQUILL_USER_DATA_DIR`, dev-only). Not done: the react-refresh lint findings the
+  moved files already had, and the larger dedupes (MicButton, ChatRenderer vs MarkdownRenderer, file viewer).
 
 ## A11. Migration worst cases, multi-instance verdict, top risks
 

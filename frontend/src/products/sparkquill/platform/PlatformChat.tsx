@@ -4,21 +4,20 @@
 // SparkQuill adds only what is its own: the suggestion pills under a reply,
 // and the product events (presentations, family/activity/pin updates) that
 // the workspace panel reacts to.
-import '../../../src/index.css'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import ChatArea, { type ChatContentRendererProps } from '../../../src/components/ChatArea'
-import { TerminalEventTranscript } from '../../../src/components/TerminalEventTranscript'
-import ToastHost from '../../../src/components/ui/ToastHost'
-import { agentApi } from '../../../src/services/api'
-import { useChatStore, waitForChatStoreHydration } from '../../../src/stores/useChatStore'
-import { useModeStore } from '../../../src/stores/useModeStore'
-import { useAppStore } from '../../../src/stores/useAppStore'
-import { hydrateTabEvents, restoreSession } from '../../../src/utils/sessionRestore'
-import { setProductCommands } from '../../../src/commands/registry'
-import { usePresentationEvents } from '../../../src/platform/presentations/usePresentationEvents'
-import { useProductInteractions } from '../../../src/platform/interactions/useProductInteractions'
-import { ProductSuggestions } from '../../../src/platform/chat/ProductSuggestions'
+import ChatArea, { type ChatContentRendererProps } from '../../../components/ChatArea'
+import { TerminalEventTranscript } from '../../../components/TerminalEventTranscript'
+import ToastHost from '../../../components/ui/ToastHost'
+import { agentApi } from '../../../services/api'
+import { useChatStore, waitForChatStoreHydration } from '../../../stores/useChatStore'
+import { useModeStore } from '../../../stores/useModeStore'
+import { useAppStore } from '../../../stores/useAppStore'
+import { hydrateTabEvents, restoreSession } from '../../../utils/sessionRestore'
+import { setProductCommands } from '../../../commands/registry'
+import { usePresentationEvents } from '../../../platform/presentations/usePresentationEvents'
+import { useProductInteractions } from '../../../platform/interactions/useProductInteractions'
+import { ProductSuggestions } from '../../../platform/chat/ProductSuggestions'
 import type { QuickCommand } from '../stores/types'
 import { api } from '../api'
 import { toProductCommandDefinitions } from './productCommands'
@@ -87,7 +86,6 @@ function SparkQuillConversation({ events, isStreaming, isRestoring, streamingTex
         onLoadOlder={onLoadOlder}
         onRetry={onLoadOlder}
         surfaceClassName="fl-platform-surface"
-        autoScrollMode="follow-turn"
         assistantLabel="Quill"
         assistantIcon={<img src="/sparkquill-mark.svg" alt="" width={16} height={16} />}
       />

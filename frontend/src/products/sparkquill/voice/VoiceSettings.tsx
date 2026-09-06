@@ -1,13 +1,18 @@
-// The Settings → Voice panel: the speech-to-text tier catalog.
+// The Settings → Voice panel: the speech-to-text engine.
 //
-// Tier availability is computed SERVER-side against this actual machine (see
-// agent_go/cmd/server/voice_stt_routes.go), so this component never has to guess
-// what an Intel vs Apple Silicon Mac can run — it just renders what it's told.
+// The platform runs one shared engine (agent_go/pkg/voicestt) whose state
+// comes from /api/voice/status, so this renders what the server reports and
+// never guesses what this Mac can run. "Install" is the platform's warm
+// call: it starts the one-time model download and keeps the status polling
+// (owned by the parent) showing progress.
 
 import { useState } from 'react'
 import type { VoiceStatus } from '../stores'
 import { VoiceTierCard } from './VoiceTierCard'
 import { FAMILY_API } from '../apiBase'
+import { authHeaders } from './useMicDictation'
+
+const PROFILE_ID = 'sparkquill'
 
 export function VoiceSettings({
   status,
@@ -22,19 +27,13 @@ export function VoiceSettings({
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
-  const modelAction = (path: string, id: string) => {
+  const install = () => {
     setBusy(true)
     setActionError(null)
-    fetch(`${FAMILY_API}/api/voice/model/${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
-    })
+    fetch(`${FAMILY_API}/api/voice/warm?profile_id=${PROFILE_ID}`, { method: 'POST', headers: authHeaders() })
       .then(async (r) => {
         const data = await r.json().catch(() => ({}))
-        // A refused removal (e.g. "this is the only model") is a real,
-        // actionable message — show it rather than failing silently.
-        if (!r.ok) throw new Error(data?.error || `Failed (${r.status})`)
+        if (!r.ok) throw new Error((data as { error?: string })?.error || `Failed (${r.status})`)
       })
       .catch((err) => setActionError(err instanceof Error ? err.message : 'Something went wrong'))
       .finally(() => { setBusy(false); onRefresh() })
@@ -53,7 +52,7 @@ export function VoiceSettings({
       ) : (
         <>
           <p className="fl-voice-group-label">Talking instead of typing</p>
-          <p className="fl-note">Used by the microphone in the message box, and for voice notes on WhatsApp.</p>
+          <p className="fl-note">Used by the microphone in the message box.</p>
           <div className="fl-settings-engines">
             {(status.stt_tiers ?? []).map((t) => (
               <VoiceTierCard
@@ -61,8 +60,7 @@ export function VoiceSettings({
                 tier={t}
                 busy={busy}
                 testable
-                onInstall={(id) => modelAction('install', id)}
-                onRemove={(id) => modelAction('remove', id)}
+                onInstall={install}
               />
             ))}
           </div>

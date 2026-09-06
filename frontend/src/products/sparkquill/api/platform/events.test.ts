@@ -14,7 +14,7 @@ describe('messagesFromEvents', () => {
   // Shaped like /api/chat-history/sessions/{id} for a claude-code turn: the
   // narration, the tool call and the closing line are separate "ai" messages.
   it('rebuilds a restored claude-code conversation with the whole turn text', async () => {
-    const { conversationToRestoredEvents } = await import('../../../../shared/session')
+    const { conversationToRestoredEvents } = await import('../../../../../shared/session')
     const conversation = {
       session_id: SID,
       conversation_history: [

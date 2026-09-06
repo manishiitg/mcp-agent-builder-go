@@ -27,6 +27,14 @@ function buildAgentServerEnv(baseEnv, { authSecret, workspacePort, docsDir, logF
     // browser cleanup/kill-all or a shared session-prefix namespace.
     AGENTWORKS_SKIP_GLOBAL_BROWSER_CLEANUP: 'true',
     AGENTWORKS_BROWSER_SESSION_PREFIX: 'sparkquill',
+    // One frontend build serves every product; these pin it to SparkQuill
+    // (runtime_frontend_config.go emits them into runtime-config.js, which the
+    // frontend reads before it mounts): only the SparkQuill surface exists
+    // here, it is the default, and the window carries SparkQuill's name and mark.
+    AGENTWORKS_ENABLED_PRODUCT_SURFACES: 'sparkquill',
+    AGENTWORKS_DEFAULT_PRODUCT_SURFACE: 'sparkquill',
+    AGENTWORKS_APP_NAME: 'SparkQuill',
+    AGENTWORKS_FAVICON_URL: '/sparkquill-mark.svg',
   }
 }
 

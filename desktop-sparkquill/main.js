@@ -1,8 +1,9 @@
 // SparkQuill desktop shell.
 //
 // Spawns the same two platform binaries the AgentWorks desktop spawns
-// (workspace-server + agent-server) and serves the learning-app frontend as
-// the agent server's static/ directory. The turn engine, tools, and
+// (workspace-server + agent-server) and serves the main frontend build as
+// the agent server's static/ directory, pinned to the SparkQuill product
+// surface through the runtime config env (lib/agentEnv.js). The turn engine, tools, and
 // workspace API are shared with AgentWorks; so are the shell mechanics —
 // login-shell env, bounded logs, server spawn, readiness, external
 // navigation, signal shutdown — through agentworks-desktop-lib
@@ -32,6 +33,11 @@ const {
 } = require('agentworks-desktop-lib')
 const { checkForUpdates, startUpdateChecks, openReleaseNotes } = require('./updater')
 const { buildAgentServerEnv } = require('./lib/agentEnv')
+
+// A throwaway data directory (a visual pass on onboarding, a fresh-install
+// check) without touching the family's real userData. Development only; a
+// packaged app never sets it. Must run before the app is ready.
+if (process.env.SPARKQUILL_USER_DATA_DIR) app.setPath('userData', process.env.SPARKQUILL_USER_DATA_DIR)
 
 const HEALTH_TIMEOUT_MS = 90000
 const HEALTH_POLL_MS = 500
