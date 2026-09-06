@@ -1,8 +1,14 @@
 # Reusable Platform for Dedicated Agent Products
 
-**Status:** In use. SparkQuill runs on the platform (hosted) and on its own
-family server (desktop). Dated notes at the end of this document are the
-change log; this block is the state as of 2026-09-03.
+**Status:** In use. SparkQuill runs on the platform (hosted) and, today, on
+its own family server (desktop). **Decided 2026-09-06: the desktop becomes an
+AgentWorks client too** — `desktop-sparkquill` will spawn the platform's
+`workspace-server` + `agent_go` server with SparkQuill as a product, and
+`cmd/family-server` plus the standalone renderers in the learning app are
+retired (see the 2026-09-06 change-log entry and
+`sparkquill_desktop_on_platform_plan.md`). Dated notes at the end of this
+document are the change log; the block below is the state as of 2026-09-03
+and its "Decisions" paragraph is superseded on that point.
 
 ## Where things stand (2026-09-03)
 
@@ -1454,3 +1460,33 @@ for, not the agent's default judgment call. Updated: reporting-policy.md,
 design-reporting-ui.md, improve-report.md (item 8 now also flags a
 report-only step/table as unnecessary complexity when it duplicates
 run_summary data).
+
+### 2026-09-06 — The desktop becomes an AgentWorks client; family-server retires
+
+Decision (user), reversing 2026-09-03's "the desktop app keeps its own family
+server": `desktop-sparkquill` will spawn the same two binaries the AgentWorks
+desktop spawns (`workspace-server` + the `agent_go` server, see
+`desktop/main.js:1110-1285`) with SparkQuill enabled as a product, and
+`cmd/family-server` plus the standalone renderers in the learning app are
+retired. Stated goal: "very less code duplication between SparkQuill and
+AgentWorks — share the backend and frontend code as much as possible."
+
+What prompted it: the desktop's bubble chat seen next to AgentWorks'
+`ChatArea` — "this looks nothing like agentworks … i want only agentworks ui,
+so we can maintain one single ui." The alternative — teaching family-server
+the AgentWorks session protocol so `PlatformChat` could run against it — was
+researched in full the same day (wire contracts, `internal/events.EventObserver`
+reuse, `/api/wp` document mapping, ~12–15 days) and rejected: the hosted product
+already works, and the shim would be a second engine kept in sync forever. The
+research is kept in `sparkquill_desktop_on_platform_plan.md`.
+
+Costs accepted: a heavier family install (two platform binaries and the
+platform's startup subsystems), a one-time migration of `~/.sunlit-learning`
+into the workspace root under `Chats/SparkQuill/` (flat `activities/<slug>/`),
+and onboarding that satisfies the single-product deployment's token gate
+(`CLAUDE_CODE_OAUTH_TOKEN` / setup token) plus `WORKSPACE_API_TOKEN` and
+`NATIVE_WORKSPACE`. Open as of this entry: whether the learning app stays a
+separate Vite build or becomes a product surface under `frontend/src/products/`
+(the Video Studio / Dominion pattern), feature parity for WhatsApp, voice
+model install and engine onboarding, and how the two desktop shells share
+code.
