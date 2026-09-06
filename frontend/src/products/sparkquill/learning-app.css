@@ -349,9 +349,11 @@
 .fl-context-card p { margin: 13px 0 0; color: #554e39; font-size: var(--text-secondary); line-height: 1.5; }
 /* Pinned pages add tabs here without limit, so the strip wraps into rows
    instead of squeezing every tab to nothing; a long title is clipped. */
-/* Same height as .learning-header (86px) so the two panes' header dividers
-   land on the same line instead of the drawer's row reading shorter. */
-.fl-drawer-tabs { display: flex; flex-wrap: wrap; align-items: center; min-height: 86px; gap: 4px; padding: 16px 12px; border-bottom: 1px solid var(--line); box-sizing: border-box; }
+/* Same height as .fl-toolbar (60px, the conversation's own header) so the two
+   panes' dividers land on the same line instead of the drawer's row reading
+   taller. .learning-header (86px) is the ONBOARDING screen's header, a
+   different element the drawer never sits beside. */
+.fl-drawer-tabs { display: flex; flex-wrap: wrap; align-items: center; min-height: 60px; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--line); box-sizing: border-box; }
 .fl-drawer-tabs button { flex: 1 1 auto; min-width: 0; max-width: 100%; min-height: 34px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; color: #5f708d; font: inherit; font-size: var(--text-secondary); font-weight: 650; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fl-drawer-tabs button:hover { background: #f1f5fa; color: var(--heading); }
 .fl-drawer-tabs button.is-active { background: var(--navy); color: #fff; }
