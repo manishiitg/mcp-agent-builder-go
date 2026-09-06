@@ -193,6 +193,7 @@ describe('isBlankWorkflowBuilderTab', () => {
     expect(isBlankWorkflowBuilderTab(chat({ metadata: { mode: 'workflow', presetQueryId: 'workflow-upwork', phaseId: 'workflow-builder', isViewOnly: true } }), 'workflow-upwork', noEvents)).toBe(false)
     expect(isBlankWorkflowBuilderTab(chat({}), 'workflow-social', noEvents)).toBe(false)
     expect(isBlankWorkflowBuilderTab(chat({ metadata: { mode: 'workflow', presetQueryId: 'workflow-upwork', phaseId: 'planning' } }), 'workflow-upwork', noEvents)).toBe(false)
+    expect(isBlankWorkflowBuilderTab(chat({ name: 'Run chat', metadata: { mode: 'workflow', presetQueryId: 'workflow-upwork', phaseId: 'workflow-builder', workshopMode: 'run' } }), 'workflow-upwork', noEvents)).toBe(false)
   })
 
   it('is not the Builder once named from a first message, even before its events arrive', () => {

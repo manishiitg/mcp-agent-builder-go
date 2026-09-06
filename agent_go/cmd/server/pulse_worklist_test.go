@@ -2042,7 +2042,7 @@ func TestGetPulseModuleStateExposesLoopClosureButNotShadowHistory(t *testing.T) 
 	if !exists || planDependencies["coverage_status"] != "verified" || planDependencies["failed"] != false {
 		t.Fatalf("plan dependency intake = %#v, want verified clean evidence", intake["plan_change_dependencies"])
 	}
-	if note, _ := payload["deterministic_intake_note"].(string); !strings.Contains(note, "not an automatic Pulse issue") {
+	if note, _ := payload["deterministic_intake_note"].(string); !strings.Contains(note, "not automatic Pulse issues") {
 		t.Fatalf("deterministic_intake_note = %q", note)
 	}
 	note, _ := payload["loop_closure_note"].(string)

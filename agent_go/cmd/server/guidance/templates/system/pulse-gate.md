@@ -36,7 +36,11 @@ material evidence exists. Compare run timestamps with each module's
 `last_ran_at` and `last_review_receipts` to measure evidence accumulated
 since an actual review. `last_checked_at` records a Gate check, not a completed
 review: repeated skips must not reset the evidence window. Do not treat every
-retained folder as new.
+retained folder as new. The triggering run is an entry point, not the entire
+review window: include relevant accumulated Basic-mode runs across routes
+since each module's last completed review. Use compact summaries first, keep
+route attribution, and state which run IDs/time window support the worklist.
+Do not claim another route is covered without reading its evidence.
 
 Use returned open concerns, plan-change backlog, loop-closure state,
 `deterministic_intake`, module history, and focus history as selectors. Do not inject or mechanically parse

@@ -398,6 +398,7 @@ export interface ChatTab {
   metadata?: {
     phaseId?: string  // For workflow mode: phase ID
     phaseName?: string  // For workflow mode: phase name
+    workshopMode?: 'workshop' | 'run' // Prompt/tool policy pinned to this workflow chat
     mode?: 'workflow' | 'multi-agent'  // Which mode this tab belongs to
     presetQueryId?: string  // For workflow mode: preset query ID (workflow identifier)
     isOrganizationAssistant?: boolean // True when tab is reserved for Organization panel

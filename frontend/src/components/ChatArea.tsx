@@ -1174,6 +1174,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
   const handleScroll = useCallback(() => {
     if (!chatContentRef.current) return;
     const element = chatContentRef.current;
+    if (element.classList.contains('overflow-hidden')) return;
     const currentScrollTop = element.scrollTop;
     if (isProgrammaticScrollRef.current) {
       lastScrollTopRef.current = currentScrollTop;
@@ -1257,7 +1258,10 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
     // Use requestAnimationFrame for smoother scrolling
     requestAnimationFrame(() => {
       const element = chatContentRef.current
-      if (!element) return
+      if (!element || element.classList.contains('overflow-hidden')) {
+        isProgrammaticScrollRef.current = false
+        return
+      }
 
       const targetScrollTop = element.scrollHeight - element.clientHeight
       element.scrollTo({
@@ -2724,11 +2728,21 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
       logger.debug('ChatArea', `Rotated empty tab ${currentTab.tabId} to fresh session ${freshSessionId}`)
     }
 
-    const effectiveExecutionOptions = executionOptions ?? (
+    const baseExecutionOptions = executionOptions ?? (
       submitModeCategory === 'workflow' && currentTab?.metadata?.phaseId
         ? buildExecutionOptions()
         : undefined
     )
+    // Builder and Run chats can be open concurrently. Their prompt/tool policy
+    // belongs to the tab that owns the conversation, not the workflow-wide mode
+    // selector (which can change while another tab is still alive).
+    const effectiveExecutionOptions =
+      submitModeCategory === 'workflow' && currentTab?.metadata?.workshopMode
+        ? {
+            ...(baseExecutionOptions ?? buildExecutionOptions()),
+            workshop_mode: currentTab.metadata.workshopMode,
+          }
+        : baseExecutionOptions
     executionOptionsRef.current = effectiveExecutionOptions
 
     if (
@@ -3623,6 +3637,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
               showMainTerminal
                 ? <MainAgentTerminal sessionId={activeTab.sessionId} onUnavailable={() => useChatStore.getState().setTabViewMode(activeTab.tabId, 'formatted')} />
                 : <TerminalEventTranscript
+                    scrollKey={activeTab.tabId}
                     events={transcriptEvents}
                     terminal={null}
                     streamingText={activeStreamingText}
@@ -3677,6 +3692,7 @@ const ChatAreaInner = forwardRef((props: ChatAreaProps, ref: ForwardedRef<ChatAr
               showMainTerminal
                 ? <MainAgentTerminal sessionId={activeTab.sessionId} onUnavailable={() => useChatStore.getState().setTabViewMode(activeTab.tabId, 'formatted')} />
                 : <TerminalEventTranscript
+                    scrollKey={activeTab.tabId}
                     events={transcriptEvents}
                     terminal={null}
                     streamingText={activeStreamingText}

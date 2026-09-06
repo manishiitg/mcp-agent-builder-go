@@ -18,6 +18,7 @@ ELECTRON_DEBUG_PORT_VALUE=19233
 BROWSER_ONLY=true
 BUILD_FRONTEND=false
 DRY_RUN=false
+ISOLATE_WORKFLOW_CLI=true
 APP_NAME_VALUE="AgentWorks"
 FAVICON_URL_VALUE="/logo.svg"
 
@@ -39,6 +40,8 @@ usage() {
         "  --browser-only                  Serve the frontend without launching Electron (default)" \
         "  --electron                      Explicitly launch the isolated Electron desktop app" \
         "  --build                         Build and preview the frontend" \
+        "  --isolate-workflow-cli          Test private per-chat CLI instructions (PLAT-296)" \
+        "  --no-isolate-workflow-cli       Explicit rollback to shared workflow CLI instructions" \
         "  --dry-run                       Validate and print the isolation configuration" \
         "  -h, --help                      Show this help"
 }
@@ -105,6 +108,14 @@ while [ "$#" -gt 0 ]; do
             ;;
         --build)
             BUILD_FRONTEND=true
+            shift
+            ;;
+        --isolate-workflow-cli)
+            ISOLATE_WORKFLOW_CLI=true
+            shift
+            ;;
+        --no-isolate-workflow-cli)
+            ISOLATE_WORKFLOW_CLI=false
             shift
             ;;
         --dry-run)
@@ -210,6 +221,8 @@ print_configuration() {
     printf '%s\n' \
         "AGENTWORKS_INSTANCE_ID=${INSTANCE_ID}" \
         "AGENTWORKS_STATE_ROOT=${STATE_ROOT}" \
+        "CLI_UPDATE_ENABLED=${CLI_UPDATE_ENABLED:-false}" \
+        "AGENTWORKS_ISOLATE_WORKFLOW_CLI=${ISOLATE_WORKFLOW_CLI}" \
         "AGENT_PORT=${AGENT_PORT_VALUE}" \
         "WORKSPACE_PORT=${WORKSPACE_PORT_VALUE}" \
         "FRONTEND_PORT=${FRONTEND_PORT_VALUE}" \
@@ -276,6 +289,9 @@ trap handle_signal INT TERM
 
 export AGENTWORKS_INSTANCE_ID="$INSTANCE_ID"
 export AGENTWORKS_STATE_ROOT="$STATE_ROOT"
+# Test instances opt in explicitly to network CLI installations.
+export CLI_UPDATE_ENABLED="${CLI_UPDATE_ENABLED:-false}"
+export AGENTWORKS_ISOLATE_WORKFLOW_CLI="$ISOLATE_WORKFLOW_CLI"
 export AGENTWORKS_ENV_FILE="$ENV_FILE"
 export AGENTWORKS_RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_FILE"
 export AGENTWORKS_APP_NAME="$APP_NAME_VALUE"

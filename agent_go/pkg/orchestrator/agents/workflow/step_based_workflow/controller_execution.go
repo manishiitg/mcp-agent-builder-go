@@ -15,11 +15,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	virtualtools "github.com/manishiitg/coding-agent-loop/agent_go/cmd/server/virtual-tools"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents"
-	orchestrator_events "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/events"
 
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
@@ -3474,16 +3472,9 @@ func (hcpo *StepBasedWorkflowOrchestrator) runExecutionPhase(
 					callOptions.ReentryMessage = stepExecCtx.WorkshopHumanInput
 				}
 			}
-			// A standalone execute_step already owns an exec-<step>-<timestamp>
-			// ID. Reuse it so the start, transcript, and completion events settle
-			// the same terminal. Full-workflow runs still need an ID per step.
-			stepExecID := messageSequenceExecutionID(ctx, sequenceExecutionStep.GetID())
-			if stepExecID == "" {
-				stepExecID = fmt.Sprintf("exec-%s-%d", sequenceExecutionStep.GetID(), time.Now().UnixNano())
-			}
-			stepScopedCtx := virtualtools.WithBackgroundAgentID(ctx, stepExecID)
-			stepScopedCtx = context.WithValue(stepScopedCtx, orchestrator_events.ParentExecutionIDKey, stepExecID)
+			stepScopedCtx, finishSequence := hcpo.beginMessageSequenceExecution(ctx, sequenceExecutionStep)
 			executionResult, _, err := hcpo.executeMessageSequenceStep(stepScopedCtx, sequenceExecutionStep, i, stepPath, progress, stepExecCtx, breakdownSteps, callOptions)
+			finishSequence(executionResult, err)
 			if err != nil {
 				if isWorkflowCancellationErr(ctx, err) {
 					hcpo.GetLogger().Info(fmt.Sprintf("Message sequence step %d canceled", i+1))

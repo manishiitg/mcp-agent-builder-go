@@ -151,6 +151,13 @@ func startRestoredTerminalHandler(api *StreamingAPI) http.HandlerFunc {
 		// If the tmux pane is gone, defer the launch to the user's next
 		// /api/query, which registers the phase tools first and then launches
 		// the CLI — same path a fresh chat takes, no race.
+		// During the isolation rollout, defer attachment until /api/query has
+		// rebuilt and checked the current user/mode/private runtime identity.
+		// Otherwise a saved live pane can bypass the native-resume migration.
+		if workflowCLIIsolationEnabled() && strings.HasPrefix(runtime.WorkspacePath, "Workflow/") {
+			_ = json.NewEncoder(w).Encode(startRestoredTerminalResponse{OK: true, Started: false, Reason: "private_runtime_requires_query"})
+			return
+		}
 		var fallbackReason string
 		if terminal, started, reason := api.attachRestoredExistingTmuxTerminal(r.Context(), req.SessionID, runtime); started {
 			api.logRestoredTerminalInfof("restore session=%s tier=attach_existing result=started", req.SessionID)
@@ -504,6 +511,8 @@ func getChatHistoryConversationHandler(api *StreamingAPI) http.HandlerFunc {
 			}
 		} else if limit := parsePositiveQueryInt(r, "preview_messages"); limit > 0 {
 			data = trimChatHistoryConversationForPreview(data, limit)
+		} else {
+			data = filterClaudeLocalCommandHistory(data)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -624,6 +633,9 @@ func projectChatHistoryConversationForResumePage(data []byte, maxTurns, offset i
 		role, text := chatHistoryMessageRoleAndText(raw)
 		switch role {
 		case "human", "user":
+			if isClaudeLocalCommandRecord(text) {
+				continue
+			}
 			turns = append(turns, turn{user: resumeMessage{raw: raw, order: order}})
 			current = &turns[len(turns)-1]
 		case "ai", "assistant":
@@ -816,8 +828,18 @@ func trimChatHistoryConversationForPreview(data []byte, limit int) []byte {
 
 	if raw, ok := doc["conversation_history"]; ok {
 		var history []json.RawMessage
-		if err := json.Unmarshal(raw, &history); err == nil && len(history) > limit {
-			trimmed, err := json.Marshal(history[len(history)-limit:])
+		if err := json.Unmarshal(raw, &history); err == nil {
+			clean := make([]json.RawMessage, 0, len(history))
+			for _, message := range history {
+				role, text := chatHistoryMessageRoleAndText(message)
+				if !isClaudeLocalCommandMessage(role, text) {
+					clean = append(clean, message)
+				}
+			}
+			if limit > 0 && len(clean) > limit {
+				clean = clean[len(clean)-limit:]
+			}
+			trimmed, err := json.Marshal(clean)
 			if err == nil {
 				doc["conversation_history"] = trimmed
 			}

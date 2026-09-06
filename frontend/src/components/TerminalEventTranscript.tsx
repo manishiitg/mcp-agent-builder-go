@@ -1,5 +1,6 @@
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { memo, createContext, useContext, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
+import { prependedIndex, transcriptReadingState, useTranscriptScroll, type TranscriptReadingState } from './useTranscriptScroll'
 import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, XCircle } from 'lucide-react'
 import { EventDispatcher } from './events/EventDispatcher'
 import { ConversationMarkdownRenderer } from './ui/MarkdownRenderer'
@@ -267,21 +268,16 @@ const AssistantTurnHeader: React.FC<{ event: PollingEvent; timestamp: string; la
 
 const AGENT_BLOCK_CLASS = 'pl-3 pr-1'
 
-const IS_ELECTRON = typeof navigator !== 'undefined' && /Electron/i.test(navigator.userAgent)
-
-// Pins a scroller to its end over a few frames: Virtuoso measures newly
-// rendered items after paint and compensates scrollTop for the difference,
-// so a single assignment can land short. Stops early once it is there.
-function settleToEnd(scroller: HTMLElement, frames = 8): void {
-  let left = frames
-  const step = () => {
-    scroller.scrollTop = scroller.scrollHeight
-    left -= 1
-    if (left > 0 && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 1) {
-      window.requestAnimationFrame(step)
-    }
-  }
-  window.requestAnimationFrame(step)
+const DisclosureContext = createContext<Map<string, boolean> | null>(null)
+function useDisclosure(key: string, initial = false) {
+  const cache = useContext(DisclosureContext)
+  const [value, setValue] = useState(() => cache?.get(key) ?? initial)
+  const toggle = useCallback(() => setValue(previous => {
+    const next = !previous
+    cache?.set(key, next)
+    return next
+  }), [cache, key])
+  return [value, toggle] as const
 }
 
 // Where an item sits in its agent turn. A turn is everything between two user
@@ -459,21 +455,8 @@ const RunActivityEvent: React.FC<{ label: string; target: string; state: 'starte
   </div>
 )
 
-function wheelDeltaPixels(deltaY: number, deltaMode: number, pageHeight: number): number {
-  if (deltaMode === 1) return deltaY * 16
-  if (deltaMode === 2) return deltaY * Math.max(1, pageHeight)
-  return deltaY
-}
-
-function elementCanConsumeVerticalWheel(element: HTMLElement, deltaY: number): boolean {
-  if (element.scrollHeight <= element.clientHeight + 1) return false
-  if (deltaY < 0) return element.scrollTop > 0
-  if (deltaY > 0) return element.scrollTop + element.clientHeight < element.scrollHeight - 1
-  return false
-}
-
 const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
-  const [open, setOpen] = useState(false)
+  const [open, toggleOpen] = useDisclosure(`tool:${pair.key}`)
   const hasDetail = Boolean(pair.args || pair.result)
   const resultFormatting = useMemo(
     () => pair.result ? formatToolCallResult(pair.result) : null,
@@ -501,7 +484,7 @@ const ToolCallCard: React.FC<{ pair: PairedToolCall }> = ({ pair }) => {
     >
       <button
         type="button"
-        onClick={() => setOpen(prev => !prev)}
+        onClick={toggleOpen}
         aria-expanded={open}
         className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-muted/60"
       >
@@ -589,8 +572,7 @@ const ToolCallField: React.FC<{ label: string; value: string }> = ({ label, valu
 // hid commentary people were still reading). `live` only drives the pulse dot
 // while the agent is still reasoning; the toggle is the user's alone.
 const ThinkingBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'thinking' }>; live: boolean }> = ({ item, live }) => {
-  const [expanded, setExpanded] = useState(true)
-  const toggle = useCallback(() => setExpanded(prev => !prev), [])
+  const [expanded, toggle] = useDisclosure(`thinking:${item.key}`, true)
 
   return (
     <div data-testid="terminal-clear-thinking-batch" className="my-1">
@@ -624,8 +606,7 @@ const ToolBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'tools' }> }> 
   // A conversation should lead with what the agent said, not implementation
   // detail. Even failures stay closed initially: the visible failed count is
   // the signal, and the user chooses when to inspect arguments/results.
-  const [expanded, setExpanded] = useState(false)
-  const toggle = useCallback(() => setExpanded(prev => !prev), [])
+  const [expanded, toggle] = useDisclosure(`batch:${item.key}`)
 
   return (
     <div data-testid="terminal-clear-tool-batch" className="my-1">
@@ -653,6 +634,8 @@ const ToolBatch: React.FC<{ item: Extract<TranscriptItem, { kind: 'tools' }> }> 
 }
 
 interface TerminalEventTranscriptProps {
+  /** Stable chat/terminal identity for restoring reading position. */
+  scrollKey?: string
   events: PollingEvent[] | undefined
   terminal: TerminalSnapshot | null | undefined
   // Full terminal list for the session. Required for a correct main-agent
@@ -684,7 +667,7 @@ interface TerminalEventTranscriptProps {
   assistantIcon?: React.ReactNode
 }
 
-const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
+const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps & { readingState: TranscriptReadingState }> = ({
   events,
   terminal,
   siblingTerminals,
@@ -701,8 +684,8 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   productRows,
   assistantLabel = 'Agent',
   assistantIcon,
+  readingState,
 }) => {
-  const scrollerRef = useRef<HTMLElement | Window | null>(null)
   const virtuosoRef = useRef<VirtuosoHandle | null>(null)
   const keptKinds = productRows?.kinds.join('\u0000') ?? ''
   const keepInteractionKinds = useMemo(() => new Set(keptKinds ? keptKinds.split('\u0000') : []), [keptKinds])
@@ -715,29 +698,6 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
     () => removeAdjacentDuplicateAssistantResponses(collapseTurnFailures(buildTranscriptItems(scoped))),
     [scoped],
   )
-  const latestUserMessageKey = useMemo(() => {
-    for (let index = items.length - 1; index >= 0; index -= 1) {
-      const item = items[index]
-      if (item.kind === 'event' && item.event.type === 'user_message') return item.key
-    }
-    return ''
-  }, [items])
-  const transcriptTailRevision = useMemo(() => {
-    const tail = items[items.length - 1]
-    if (!tail) return `empty:${streamingStatus}:${streamingText.length}`
-    if (tail.kind === 'event') {
-      const payload = transcriptEventPayload(tail.event)
-      const body = typeof payload.content === 'string'
-        ? payload.content
-        : typeof payload.result === 'string'
-          ? payload.result
-          : ''
-      return `${tail.key}:${body.length}:${streamingStatus}:${streamingText.length}`
-    }
-    return `${tail.key}:${streamingStatus}:${streamingText.length}`
-  }, [items, streamingStatus, streamingText.length])
-  const followedUserMessageKeyRef = useRef(latestUserMessageKey)
-  const followCurrentTurnRef = useRef(true)
   // Do not reserve a permanent header for history. The user reaches this
   // control at the oldest currently-loaded item; it only exists when another
   // page can actually be fetched from the backend. A short restored transcript
@@ -746,15 +706,10 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   // otherwise a reader can see "Previous conversation" but has no way to load
   // the older durable page.
   const [isAtTranscriptStart, setIsAtTranscriptStart] = useState(false)
+  const [isAtTranscriptEnd, setIsAtTranscriptEnd] = useState(true)
   const showEarlierMessagesControl = Boolean(
     error || (isAtTranscriptStart && (hasOlder || loadingOlder) && onLoadOlder),
   )
-
-  const handleEarlierMessages = useCallback(() => {
-    if (!hasOlder) return
-    onLoadOlder?.()
-  }, [hasOlder, onLoadOlder])
-
   const listData = useMemo<TranscriptRenderItem[]>(
     () => (streamingText || streamingStatus
       ? [...items, { kind: 'live' as const, key: '__live-stream__', text: streamingText, status: streamingStatus }]
@@ -763,135 +718,45 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   )
   const turnSlots = useMemo(() => buildTurnSlots(listData), [listData])
 
-  // initialTopMostItemIndex is a mount-time prop: Virtuoso keeps the list
-  // invisible until it has scrolled there. Keep it fixed for the life of the
-  // list and settle a late first fill (history hydrating after an empty
-  // mount) with an explicit scroll to the end instead.
-  const [initialTopMostItemIndex] = useState(() => Math.max(0, items.length - 1))
-  // false even when items exist at mount: Virtuoso's initial scroll uses
-  // size estimates, so the first fill always needs the settle below.
-  const settledFirstFillRef = useRef(false)
+  const keys = useMemo(() => listData.map(item => item.key), [listData])
+  const [pagination, setPagination] = useState(() => ({ keys, first: 1_000_000 }))
+  // Adjust data and the inverse index in the same render so Virtuoso can
+  // preserve the visible row when older history is prepended.
+  let firstItemIndex = pagination.first
+  if (pagination.keys.length !== keys.length || pagination.keys.some((key, index) => key !== keys[index])) {
+    firstItemIndex = prependedIndex(pagination.keys, keys, pagination.first)
+    setPagination({ keys, first: firstItemIndex })
+  }
+  const scroll = useTranscriptScroll(keys, readingState, virtuosoRef)
+  const latestUserMessageKey = useMemo(() => {
+    for (let index = items.length - 1; index >= 0; index--) {
+      const item = items[index]
+      if (item.kind === 'event' && item.event.type === 'user_message'
+        && !isInternalTranscriptMessage(item.event) && !isExecutionPromptTranscriptMessage(item.event)) return item.key
+    }
+    return undefined
+  }, [items])
+  const previousUserMessageKey = useRef(latestUserMessageKey)
   useEffect(() => {
-    if (settledFirstFillRef.current || items.length === 0) return
-    settledFirstFillRef.current = true
-    const frame = window.requestAnimationFrame(() => {
-      virtuosoRef.current?.scrollToIndex({ index: items.length - 1, align: 'end', behavior: 'auto' })
-      const scroller = scrollerRef.current
-      if (scroller instanceof HTMLElement) settleToEnd(scroller, 12)
-    })
-    return () => window.cancelAnimationFrame(frame)
-  }, [items.length])
+    const previous = previousUserMessageKey.current
+    previousUserMessageKey.current = latestUserMessageKey
+    // Sending another message starts a new turn at the bottom. Hydrating or
+    // prepending history must not reset a restored reading position.
+    if (previous && latestUserMessageKey !== previous && keys.includes(previous)) scroll.jumpToLatest()
+  }, [keys, latestUserMessageKey, scroll.jumpToLatest])
+  const [initialPosition, setInitialPosition] = useState<{ index: number; align: 'start' | 'end'; offset?: number } | null>(null)
+  if (!initialPosition && keys.length > 0) {
+    const anchorIndex = readingState.anchor ? keys.indexOf(readingState.anchor.key) : -1
+    setInitialPosition(readingState.following || anchorIndex < 0
+      ? { index: keys.length - 1, align: 'end' }
+      : { index: anchorIndex, align: 'start', offset: readingState.anchor!.offset })
+  }
 
-  // Sending a message changes more than the transcript: the optimistic user
-  // row appears immediately, then delivery/status chrome can reduce the
-  // transcript viewport a frame later. Virtuoso's normal followOutput handles
-  // the first change but not a same-length live-to-final replacement. Follow
-  // the whole current turn through its final answer, and stop only when the
-  // reader deliberately scrolls upward.
-  useEffect(() => {
-    const isNewUserMessage = Boolean(
-      latestUserMessageKey && followedUserMessageKeyRef.current !== latestUserMessageKey,
-    )
-    if (isNewUserMessage) {
-      followedUserMessageKeyRef.current = latestUserMessageKey
-      followCurrentTurnRef.current = true
-    }
-    if (!followCurrentTurnRef.current) return
-
-    const scrollToLatest = () => {
-      virtuosoRef.current?.scrollToIndex({
-        index: Math.max(0, items.length - 1),
-        align: 'end',
-        behavior: 'auto',
-      })
-      // scrollToIndex positions by Virtuoso's size estimate; the real end is
-      // the scroller's own height once the item is measured.
-      const scroller = scrollerRef.current
-      if (scroller instanceof HTMLElement) settleToEnd(scroller)
-    }
-    const frame = window.requestAnimationFrame(scrollToLatest)
-    const settledLayoutTimer = window.setTimeout(scrollToLatest, 180)
-    return () => {
-      window.cancelAnimationFrame(frame)
-      window.clearTimeout(settledLayoutTimer)
-    }
-  }, [items.length, latestUserMessageKey, transcriptTailRevision])
-
-  // Stick to the end while a turn is being followed. Two things move the end
-  // without a new item: chrome outside the list (a working indicator, pills,
-  // delivery status) shrinks the viewport, and items get their real height
-  // only after Virtuoso's first estimate (a scroll issued on send landed
-  // short by that difference, and nothing corrected it until the next
-  // event). Observing both the viewport and the list content covers both.
-  //
-  // Two guards keep this from fighting the reader: it only acts when the
-  // reader was already at the end before the change (a list that grows while
-  // they are scrolled up must not yank them down, which showed as a flicker
-  // on every scroll), and it scrolls on the next frame, after Virtuoso's own
-  // scroll compensation for re-measured items, then checks its work for a
-  // few frames because measurements settle in more than one.
-  const nearEndRef = useRef(true)
-  useEffect(() => {
-    const scroller = scrollerRef.current
-    if (!(scroller instanceof HTMLElement) || typeof ResizeObserver === 'undefined') return
-    const onScroll = () => {
-      nearEndRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48
-      // Scrolling back to the end resumes following the turn.
-      if (nearEndRef.current) followCurrentTurnRef.current = true
-    }
-    scroller.addEventListener('scroll', onScroll, { passive: true })
-    const stick = () => {
-      if (!followCurrentTurnRef.current || !nearEndRef.current) return
-      settleToEnd(scroller)
-    }
-    const observer = new ResizeObserver(stick)
-    observer.observe(scroller)
-    const list = scroller.querySelector('[data-testid="virtuoso-item-list"]')
-    if (list) observer.observe(list)
-    return () => { observer.disconnect(); scroller.removeEventListener('scroll', onScroll) }
-  }, [])
-
-  // Electron occasionally fails to route a physical wheel/trackpad gesture to
-  // Virtuoso's internal scroller even though accessibility scroll actions work.
-  // Forward the gesture explicitly. Nested scroll regions (expanded tool output)
-  // keep first refusal while they can still move in the requested direction.
-  // A native listener, not React's onWheelCapture: React registers wheel
-  // handlers as passive, so the preventDefault below was a no-op that logged
-  // "Unable to preventDefault inside passive event listener" on every
-  // trackpad tick in the desktop app while the scroll still went nowhere.
-  const wheelHostRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    const host = wheelHostRef.current
-    if (!host) return
-    const handleWheelCapture = (event: WheelEvent) => {
-    const scroller = scrollerRef.current
-    if (!(scroller instanceof HTMLElement) || event.deltaY === 0) return
-    if (event.deltaY < 0) {
-      followCurrentTurnRef.current = false
-    }
-    // A browser scrolls natively, with the trackpad's own inertia and
-    // smoothing. Applying the wheel delta by hand there replaced that with
-    // one hard step per event, which read as jitter. Only Electron needs the
-    // manual forwarding below.
-    if (!IS_ELECTRON) return
-
-    let target = event.target instanceof HTMLElement ? event.target : null
-    while (target && target !== event.currentTarget) {
-      if (target !== scroller && elementCanConsumeVerticalWheel(target, event.deltaY)) return
-      target = target.parentElement
-    }
-
-    if (!elementCanConsumeVerticalWheel(scroller, event.deltaY)) return
-    event.preventDefault()
-    event.stopPropagation()
-    scroller.scrollTop += wheelDeltaPixels(event.deltaY, event.deltaMode, scroller.clientHeight)
-    if (event.deltaY > 0 && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 32) {
-      followCurrentTurnRef.current = true
-    }
-    }
-    host.addEventListener('wheel', handleWheelCapture, { capture: true, passive: false })
-    return () => host.removeEventListener('wheel', handleWheelCapture, { capture: true })
-  }, [])
+  const handleEarlierMessages = useCallback(() => {
+    if (!hasOlder) return
+    scroll.preserveReadingPosition()
+    onLoadOlder?.()
+  }, [hasOlder, onLoadOlder, scroll])
 
   if (items.length === 0 && !streamingText && !streamingStatus) {
     const state = (terminal?.state || '').trim().toLowerCase()
@@ -948,8 +813,8 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
   return (
     <div
       data-testid="terminal-clear-view"
-      className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${surfaceClassName ?? 'bg-[#0d100f]'}`}
-      ref={wheelHostRef}
+      className={`relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${surfaceClassName ?? 'bg-[#0d100f]'}`}
+      onClickCapture={scroll.preserveDisclosure}
     >
       {showEarlierMessagesControl && (
         <div className={`flex shrink-0 items-center border-b px-3 py-1.5 text-[11px] ${
@@ -984,18 +849,25 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
         ref={virtuosoRef}
         data={listData}
         className="custom-scrollbar min-h-0 flex-1"
-        scrollerRef={ref => { scrollerRef.current = ref }}
-        rangeChanged={({ startIndex }) => {
-          setIsAtTranscriptStart(startIndex === 0)
-        }}
-        followOutput="auto"
+        scrollerRef={scroll.scrollerRef}
+        atTopStateChange={setIsAtTranscriptStart}
+        atBottomStateChange={setIsAtTranscriptEnd}
+        atBottomThreshold={24}
+        firstItemIndex={firstItemIndex}
+        followOutput={false}
+        totalListHeightChanged={scroll.layoutChanged}
+        tabIndex={0}
+        aria-label="Conversation messages"
         // Render well beyond the viewport so scrolling reveals rows that are
         // already there instead of rows popping in as they mount.
         increaseViewportBy={{ top: 1200, bottom: 600 }}
-        initialTopMostItemIndex={initialTopMostItemIndex}
+        initialTopMostItemIndex={initialPosition ?? 0}
         computeItemKey={(_, item) => item.key}
-        itemContent={(index, item) => {
-          if (item.kind === 'live') return <LiveAssistantTranscript text={item.text} status={item.status} />
+        itemContent={(absoluteIndex, item) => {
+          const index = absoluteIndex - firstItemIndex
+          // Contain message margins inside the measured row. Collapsed margins
+          // otherwise leave unmeasured space at the end of the virtual list.
+          if (item.kind === 'live') return <div className="flow-root" data-transcript-key={item.key}><LiveAssistantTranscript text={item.text} status={item.status} /></div>
           const slot = turnSlots[index]
           const testId = item.kind === 'event' ? `terminal-clear-event-${item.event.id || item.key}` : undefined
           const body = item.kind === 'tools'
@@ -1015,12 +887,12 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
                 />
               )
           if (!slot?.agent) {
-            return <div data-testid={testId} className="px-3 py-0.5">{body}</div>
+            return <div data-transcript-key={item.key} data-testid={testId} className="flow-root px-3 py-0.5">{body}</div>
           }
           // One block per agent turn: the header once at the top, then every
           // tool batch, thought and reply of that turn on the same rail.
           return (
-            <div data-testid={testId} className="px-3">
+            <div data-transcript-key={item.key} data-testid={testId} className="flow-root px-3">
               <div className={`${AGENT_BLOCK_CLASS} ${slot.first ? 'mt-4' : ''} ${slot.last ? 'mb-2' : ''}`}>
                 {slot.first && slot.header && <AssistantTurnHeader event={slot.header} timestamp={slot.showTime ? transcriptTimestamp(slot.header) : ''} label={assistantLabel} icon={assistantIcon} />}
                 {body}
@@ -1029,6 +901,13 @@ const TerminalEventTranscriptInner: React.FC<TerminalEventTranscriptProps> = ({
           )
         }}
       />
+      {!scroll.following && !isAtTranscriptEnd && (
+        <div className="absolute inset-x-0 bottom-3 z-10 flex justify-center pointer-events-none">
+          <button type="button" onClick={scroll.jumpToLatest} className="pointer-events-auto flex items-center gap-1 rounded-full border border-border bg-background px-3 py-1.5 text-xs text-foreground shadow-md hover:bg-muted">
+            <ChevronDown className="h-3.5 w-3.5" /> Jump to latest
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -1053,4 +932,10 @@ const LiveAssistantTranscript: React.FC<{ text: string; status: string }> = ({ t
 
 // Memoized: the parent re-renders on every terminal poll, and re-rendering the
 // whole transcript each time would defeat EventDispatcher's own memoization.
-export const TerminalEventTranscript = memo(TerminalEventTranscriptInner)
+export const TerminalEventTranscript = memo(function TerminalEventTranscript(props: TerminalEventTranscriptProps) {
+  const key = props.scrollKey ?? props.terminal?.terminal_id ?? props.events?.find(event => event.session_id)?.session_id
+  const readingState = useMemo(() => key ? transcriptReadingState(key) : { following: true, disclosures: new Map<string, boolean>() }, [key])
+  return <DisclosureContext.Provider value={readingState.disclosures}>
+    <TerminalEventTranscriptInner key={key ?? 'unscoped'} {...props} readingState={readingState} />
+  </DisclosureContext.Provider>
+})

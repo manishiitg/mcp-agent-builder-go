@@ -879,7 +879,8 @@ func TestUpdateScheduleClearsMessagesOnlyWhenExplicitlySet(t *testing.T) {
 			Label:         "Social Media",
 			Schedules: []WorkflowSchedule{
 				{
-					ID:             "run-schedule",
+					ID:        "run-schedule",
+					PulseMode: "basic", PulseModeReason: "Routine scheduled processing",
 					Name:           "Daily publish",
 					CronExpression: "0 9 * * *",
 					Timezone:       "Asia/Kolkata",
@@ -1022,7 +1023,7 @@ func TestCreateAndUpdatePulseReviewOnlyScheduleSkipsGroupNamesRequirement(t *tes
 	}
 
 	if _, err := callbacks.CreateSchedule(context.Background(), workspacePath, "Periodic Pulse Review", "0 3 * * *", "Asia/Kolkata",
-		nil, nil, "workshop", nil, "", "run", nil, true, todo_creation_human.ScheduleRuntimePolicy{}); err != nil {
+		nil, nil, "workshop", nil, "", "run", nil, true, todo_creation_human.ScheduleRuntimePolicy{PulseMode: "full", PulseModeReason: "Legacy compatibility review fixture"}); err != nil {
 		t.Fatalf("CreateSchedule(pulseReviewOnly=true) error = %v, want success without group_names", err)
 	}
 	current := readManifest()
@@ -2075,11 +2076,9 @@ func TestPostRunMonitorFinalStepsIncludesSplitNotificationRouting(t *testing.T) 
 	}
 }
 
-// A Pulse lifecycle turn is tagged for the workshop and otherwise carries the
-// same Builder llm_config as the run turn: the scheduler's conversation keeps
-// one retained coding CLI across upgrade -> run -> Pulse, so a per-turn model
-// override there could never take effect. pulse_llm is applied by the workshop
-// to the background review agents the tagged turn launches.
+// A Pulse lifecycle turn is tagged and elevated to Workshop while retaining the
+// workflow's Builder llm_config. pulse_llm is applied by the workshop to the
+// background review agents the tagged turn launches.
 func TestPulseLifecycleTurnKeepsBuilderLLMAndTagsTheTurn(t *testing.T) {
 	builder := &workflowtypes.AgentLLMConfig{Provider: "claude-code", ModelID: "claude-sonnet-5", Options: map[string]interface{}{"reasoning_effort": "high"}}
 	sctx := &ScheduleContext{
@@ -2107,6 +2106,10 @@ func TestPulseLifecycleTurnKeepsBuilderLLMAndTagsTheTurn(t *testing.T) {
 
 	if got := reqMap["pulse_lifecycle_turn"]; got != true {
 		t.Fatalf("pulse_lifecycle_turn = %#v, want true", got)
+	}
+	execOpts, ok := reqMap["execution_options"].(map[string]interface{})
+	if !ok || execOpts["workshop_mode"] != "workshop" {
+		t.Fatalf("Pulse execution_options = %#v, want workshop mode", reqMap["execution_options"])
 	}
 	if _, set := reqMap["llm_config_source"]; set {
 		t.Fatalf("a Pulse turn must not override the manifest LLM, got llm_config_source=%#v", reqMap["llm_config_source"])
@@ -2143,6 +2146,62 @@ func TestBuildWorkshopRequestDisablesLiveInputDeliveryForSchedulerTurns(t *testi
 	}
 	if got := reqMap["session_title"]; got != "Daily" {
 		t.Fatalf("session_title = %#v, want Daily", got)
+	}
+	execOpts, ok := reqMap["execution_options"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("execution_options missing or wrong type: %#v", reqMap["execution_options"])
+	}
+	if got := execOpts["workshop_mode"]; got != "run" {
+		t.Fatalf("workshop_mode = %#v, want run for normal scheduled work", got)
+	}
+}
+
+func TestScheduledTurnsUseLeastPrivilegedWorkshopMode(t *testing.T) {
+	cases := []struct {
+		name string
+		turn scheduledWorkshopTurn
+		want string
+	}{
+		{name: "normal schedule message", turn: scheduledWorkshopTurn{label: "schedule-message-1"}, want: "run"},
+		{name: "contract upgrade", turn: scheduledWorkshopTurn{upgradeTarget: "1.2.3"}, want: "workshop"},
+		{name: "decision drain", turn: scheduledWorkshopTurn{decisionDrain: true}, want: "workshop"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.turn.workshopMode(); got != tc.want {
+				t.Fatalf("workshopMode() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequestWithWorkshopModeDoesNotLeakElevationAcrossTurns(t *testing.T) {
+	base := map[string]interface{}{
+		"execution_options": map[string]interface{}{
+			"workshop_mode":      "run",
+			"execution_strategy": "start_from_beginning_no_human",
+		},
+	}
+
+	maintenance := requestWithWorkshopMode(base, "workshop")
+	normal := requestWithWorkshopMode(base, "run")
+
+	if got := maintenance["execution_options"].(map[string]interface{})["workshop_mode"]; got != "workshop" {
+		t.Fatalf("maintenance mode = %#v, want workshop", got)
+	}
+	if got := normal["execution_options"].(map[string]interface{})["workshop_mode"]; got != "run" {
+		t.Fatalf("normal mode = %#v, want run", got)
+	}
+	if got := base["execution_options"].(map[string]interface{})["workshop_mode"]; got != "run" {
+		t.Fatalf("base mode was mutated to %#v", got)
+	}
+
+	markPulseLifecycleTurn(normal)
+	if got := normal["execution_options"].(map[string]interface{})["workshop_mode"]; got != "workshop" {
+		t.Fatalf("Pulse mode = %#v, want workshop", got)
+	}
+	if got := base["execution_options"].(map[string]interface{})["workshop_mode"]; got != "run" {
+		t.Fatalf("Pulse elevation leaked into base request: %#v", got)
 	}
 }
 

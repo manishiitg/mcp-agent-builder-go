@@ -29,6 +29,18 @@ func TestScopeForScheduledLLMRoleNamesPulse(t *testing.T) {
 	}
 }
 
+func TestScopeForScheduledTurnUsesLifecycleFlagWithoutModelOverride(t *testing.T) {
+	if got := ScopeForScheduledTurn(true, ""); got != ScopePulse {
+		t.Fatalf("Pulse lifecycle turn scope = %q, want %q", got, ScopePulse)
+	}
+	if got := ScopeForScheduledTurn(false, "scheduled_pulse"); got != ScopePulse {
+		t.Fatalf("legacy scheduled_pulse scope = %q, want %q", got, ScopePulse)
+	}
+	if got := ScopeForScheduledTurn(false, ""); got != "" {
+		t.Fatalf("normal schedule override scope = %q, want empty for normal inference", got)
+	}
+}
+
 // TestInferScopeStillChargesWorkflowPhaseToBuilder documents the second half
 // of PLAT-088: handleQuery rewrites req.AgentMode to "multi-agent" purely to
 // route workflow_phase requests down the standard agent path, and the cost

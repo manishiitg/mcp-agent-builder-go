@@ -14,6 +14,7 @@ import (
 	internalevents "github.com/manishiitg/coding-agent-loop/agent_go/internal/events"
 	"github.com/manishiitg/coding-agent-loop/agent_go/internal/terminals"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/common"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator"
 
 	mcpagent "github.com/manishiitg/mcpagent/agent"
 	agentevents "github.com/manishiitg/mcpagent/events"
@@ -488,6 +489,125 @@ func TestMergeNativeContinuationChatHistoryRetainsPriorTurnsAndReplacesSystemPro
 	}
 	if got := chatHistoryPartText(merged[0].Parts[0]); got != "new runtime prompt" {
 		t.Fatalf("system prompt = %q, want newest prompt", got)
+	}
+}
+
+func TestMergeModeChangedChatHistoryRetainsTurnsAndDropsTransportPointer(t *testing.T) {
+	message := func(role llmtypes.ChatMessageType, text string) llmtypes.MessageContent {
+		return llmtypes.MessageContent{
+			Role:  role,
+			Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: text}},
+		}
+	}
+	previous := []llmtypes.MessageContent{
+		message(llmtypes.ChatMessageTypeSystem, "Run prompt"),
+		message(llmtypes.ChatMessageTypeHuman, "run the workflow"),
+		message(llmtypes.ChatMessageTypeAI, "run complete"),
+	}
+	current := []llmtypes.MessageContent{
+		message(llmtypes.ChatMessageTypeHuman, "synthetic conversation-file pointer"),
+		message(llmtypes.ChatMessageTypeHuman, "start Pulse"),
+		message(llmtypes.ChatMessageTypeAI, "Pulse complete"),
+	}
+
+	merged := mergeModeChangedChatHistory(previous, current)
+	if len(merged) != 5 {
+		t.Fatalf("merged history length = %d, want 5", len(merged))
+	}
+	for _, msg := range merged {
+		for _, part := range msg.Parts {
+			if strings.Contains(chatHistoryPartText(part), "synthetic conversation-file pointer") {
+				t.Fatal("transport-only conversation pointer leaked into durable history")
+			}
+		}
+	}
+	if got := chatHistoryPartText(merged[3].Parts[0]); got != "start Pulse" {
+		t.Fatalf("first post-switch user turn = %q, want start Pulse", got)
+	}
+	if got := mergeModeChangedChatHistory(previous, nil); len(got) != len(previous) {
+		t.Fatalf("empty current history discarded prior turns: got %d want %d", len(got), len(previous))
+	}
+}
+
+func TestPhaseUsageCumulativeKeySeparatesNativeRuntimeEpochs(t *testing.T) {
+	first := &ChatHistoryAgentRuntime{Provider: "codex-cli", ExternalSessionID: "native-run"}
+	second := &ChatHistoryAgentRuntime{Provider: "codex-cli", ExternalSessionID: "native-pulse"}
+	firstKey := phaseUsageCumulativeKey("schedule-1", "turn-1", first)
+	if firstKey == phaseUsageCumulativeKey("schedule-1", "turn-2", second) {
+		t.Fatal("different native runtime epochs share one cumulative usage key")
+	}
+	if firstKey != phaseUsageCumulativeKey("schedule-1", "turn-2", first) {
+		t.Fatal("same native runtime did not keep a stable cumulative usage key")
+	}
+	if got := phaseUsageCumulativeKey("schedule-1", "turn-1", nil); got != "schedule-1|turn:turn-1" {
+		t.Fatalf("non-native turn key = %q, want schedule-1|turn:turn-1", got)
+	}
+	if got := phaseUsageCumulativeKey("schedule-1", "", nil); got != "schedule-1" {
+		t.Fatalf("empty-turn fallback key = %q, want schedule-1", got)
+	}
+}
+
+func TestPhaseUsageCountsFullFirstSnapshotAfterModeRelaunch(t *testing.T) {
+	file := &orchestrator.PhaseTokenUsageFile{}
+	now := time.Now()
+	runRuntime := &ChatHistoryAgentRuntime{Provider: "codex-cli", ExternalSessionID: "native-run"}
+	pulseRuntime := &ChatHistoryAgentRuntime{Provider: "codex-cli", ExternalSessionID: "native-pulse"}
+
+	orchestrator.ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(
+		file,
+		phaseUsageCumulativeKey("schedule-1", "run-turn", runRuntime),
+		"workflow-builder",
+		"gpt-test",
+		&orchestrator.ModelTokenUsage{InputTokens: 1000, OutputTokens: 100, LLMCallCount: 1},
+		now,
+	)
+	pulseDelta := orchestrator.ApplyCumulativeSessionModelUsageToPhaseTokenUsageFile(
+		file,
+		phaseUsageCumulativeKey("schedule-1", "pulse-turn", pulseRuntime),
+		"workflow-builder",
+		"gpt-test",
+		&orchestrator.ModelTokenUsage{InputTokens: 1500, OutputTokens: 150, LLMCallCount: 1},
+		now,
+	)
+
+	if pulseDelta.InputTokens != 1500 || pulseDelta.OutputTokens != 150 {
+		t.Fatalf("first Pulse snapshot after relaunch was reduced to %+v", pulseDelta)
+	}
+	total := file.ByModel["gpt-test"]
+	if total.InputTokens != 2500 || total.OutputTokens != 250 || total.LLMCallCount != 2 {
+		t.Fatalf("combined Run+Pulse usage = %+v, want 2500 input / 250 output / 2 calls", total)
+	}
+}
+
+func TestModeChangeHistorySnapshotFallsBackToCanonicalConversationJSON(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WORKSPACE_DOCS_PATH", root)
+	conversationPath := filepath.Join("Workflow", "testing", "builder", "conversation", "2026-09-06", "session-schedule-1-conversation.json")
+	absPath := filepath.Join(root, conversationPath)
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	want := []llmtypes.MessageContent{
+		{Role: llmtypes.ChatMessageTypeHuman, Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: "scheduled run"}}},
+		{Role: llmtypes.ChatMessageTypeAI, Parts: []llmtypes.ContentPart{llmtypes.TextContent{Text: "run complete"}}},
+	}
+	data, err := json.Marshal(map[string]interface{}{
+		"session_id":           "schedule-1",
+		"conversation_history": want,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(absPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := modeChangeHistorySnapshot("default", filepath.ToSlash(conversationPath), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) || chatHistoryPartText(got[0].Parts[0]) != "scheduled run" || chatHistoryPartText(got[1].Parts[0]) != "run complete" {
+		t.Fatalf("disk fallback history = %#v, want both prior turns", got)
 	}
 }
 

@@ -2844,6 +2844,8 @@ export interface WorkflowNotificationInfoResponse {
 
 // Scheduled Jobs
 export interface ScheduledJob {
+  pulse_mode?: 'off' | 'basic' | 'full'
+  pulse_mode_reason?: string
   id: string
   name: string
   description: string
@@ -2901,6 +2903,8 @@ export interface ScheduledJob {
 }
 
 export interface CreateScheduledJobRequest {
+  pulse_mode?: 'off' | 'basic' | 'full'
+  pulse_mode_reason?: string
   name: string
   description?: string
   entity_type: 'workflow' | 'chat' | 'multi-agent'
@@ -2929,6 +2933,8 @@ export interface CreateScheduledJobRequest {
 }
 
 export interface UpdateScheduledJobRequest {
+  pulse_mode?: 'off' | 'basic' | 'full'
+  pulse_mode_reason?: string
   name?: string
   description?: string
   trigger_payload?: Record<string, unknown>

@@ -4017,6 +4017,11 @@ func clearDriftReviewAfterPlanUpdateRetried(ctx context.Context, workspacePath, 
 	return cleared, err
 }
 
+// Editing records stale review state for Pulse; it does not launch an audit.
+// Keep interactive checks scoped to the combined change, including when several
+// typed tools are called to implement one repair.
+const planEditImpactGuidance = "After related edits are complete, do one combined compatibility check in the current agent before the targeted test. For small internal edits with unchanged outputs, DB writes, routing, and behavior, confirm compatibility briefly and test. For output, DB, routing, or behavior changes, inspect and reconcile only affected dependencies before testing. Stop once affected consumers are compatible; unrelated backlog and missing audit receipts must not delay the test. Read builder-reference/references/plan-change-impact.md for the procedure. Do not launch a separate drift reviewer for each edit or test retry; reserve the full review-artifact-drift audit for scheduled Pulse or an explicit user request."
+
 func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []PlanFieldChange, descriptionReviewCleared, driftReviewCleared, driftReviewFlagFailed bool) string {
 	if !planStepUpdateRequiresDependentArtifactReview(fieldChanges) {
 		return ""
@@ -4033,7 +4038,7 @@ func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []Pl
 	}
 
 	var b strings.Builder
-	b.WriteString("\n\nDependent artifact review required")
+	b.WriteString("\n\nPlan change recorded")
 	if len(changed) > 0 {
 		b.WriteString(" for changed fields: ")
 		b.WriteString(strings.Join(changed, ", "))
@@ -4048,16 +4053,7 @@ func buildPlanStepDependentArtifactReviewNotice(stepID string, fieldChanges []Pl
 	if driftReviewFlagFailed {
 		b.WriteString("- ⚠️ FAILED to flag drift_review.needs_review after two attempts — plan_drift_review may NOT notice this step changed until it happens to be re-edited later. Report this failure explicitly in your final response rather than treating the edit as fully clean; do not attempt to write drift_review yourself (it is not an update_step_config field — only record_plan_drift_review may set it).\n")
 	}
-	if seen["description"] || seen["validation_schema"] {
-		b.WriteString("- Description & schema quality: this edit touched description or validation_schema — call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/step-description.md\"}]) and apply it before finalizing.\n")
-	}
-	b.WriteString("- Pre-validation: confirm validation_schema still matches the new output files/fields; update plan validation_schema or step_config validation_schema if needed.\n")
-	b.WriteString("- Learnings: review learning_objective, learnings_access, and any learnings/_global or learnings/" + stepID + " content for stale execution know-how. Use learnings_access=\"read\" when the step should consume guidance without writing it.\n")
-	b.WriteString("- DB: if output/state shape changed, update db/README.md, the db/db.sqlite table schema/writers/upsert rules, and any report widgets (sql) that read those columns.\n")
-	b.WriteString("- KB: if business context or notes consumed/produced changed, update knowledgebase_access, knowledgebase_contribution, and description references.\n")
-	b.WriteString("- Scripted code: if this step uses scripted/code execution or learnings/" + stepID + "/main.py exists, patch or regenerate main.py, or delete stale script state when returning to agentic execution.\n")
-	b.WriteString("- Downstream wiring: if semantics changed, review db/reports/index.html, evaluation/evaluation_plan.json, routes, and downstream context_dependencies.\n")
-	b.WriteString("- Before marking the plan done, run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"" + stepID + "\").")
+	b.WriteString("- " + planEditImpactGuidance)
 	return b.String()
 }
 
@@ -4090,7 +4086,7 @@ func buildAddedStepArtifactSetupNotice(stepID, stepType string) string {
 	b.WriteString("- Scripted code: if " + stepType + " step " + stepID + " should run code, create or review learnings/" + stepID + "/main.py and set code execution config; otherwise make sure no stale script is implied.\n")
 	b.WriteString("- Downstream wiring: connect routes/next_step_id/context_dependencies, and update db/reports/index.html or evaluation/evaluation_plan.json if this step affects outputs.\n")
 	b.WriteString("- Description & schema quality: before finalizing this step's description and validation_schema, call read_skill(skills=[{\"name\":\"builder-reference\",\"path\":\"references/step-description.md\"}]) and apply it.\n")
-	b.WriteString("- Before marking the plan done, run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"" + stepID + "\").")
+	b.WriteString("- " + planEditImpactGuidance)
 	return b.String()
 }
 
@@ -4108,14 +4104,14 @@ func buildDeletedStepArtifactCleanupNotice(deletedIDs []string, prunedConfigIDs 
 		b.WriteString("- Step config: confirm no stale planning/step_config.json entries remain for the deleted IDs.\n")
 	}
 	if driftReviewFlagFailed {
-		b.WriteString("- ⚠️ FAILED to flag the workflow-level drift review record (" + WorkflowDriftReviewStepID + ") after two attempts — plan_drift_review has no other way to learn this deletion happened, since the deleted step's own drift_review record is already gone. Report this failure explicitly in your final response; do not treat the deletion's dependent-artifact fallout as tracked. Manually run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"" + strings.Join(deletedIDs, ", ") + "\") to cover the gap this pass.\n")
+		b.WriteString("- ⚠️ FAILED to flag the workflow-level drift review record (" + WorkflowDriftReviewStepID + ") after two attempts — plan_drift_review has no other way to learn this deletion happened, since the deleted step's own drift_review record is already gone. Report this failure explicitly in your final response; do not treat the deletion's dependent-artifact fallout as tracked. Record a durable finding for this tracking failure and inspect the deleted steps' affected dependencies in the current agent before testing.\n")
 	}
 	b.WriteString("- Plan wiring: remove or reroute next_step_id, routes, predefined_routes, and downstream context_dependencies that referenced deleted steps.\n")
 	b.WriteString("- Pre-validation: remove validation schemas that validate deleted-step outputs and update schemas that depended on them.\n")
 	b.WriteString("- Learnings/code: remove or archive stale learnings/<step-id>/ content and main.py scripts, unless intentionally kept as reusable docs.\n")
 	b.WriteString("- DB/KB: remove stale db writers/readers, db/README.md mentions, knowledgebase references, and contribution rules tied to deleted steps.\n")
 	b.WriteString("- Reports/evals/docs: update db/reports/index.html, evaluation/evaluation_plan.json, and docs that referenced deleted outputs.\n")
-	b.WriteString("- Before marking the plan done, run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"deleted steps\").")
+	b.WriteString("- " + planEditImpactGuidance)
 	return b.String()
 }
 
@@ -4145,7 +4141,7 @@ func buildOrchestratorRouteArtifactReviewNotice(parentStepID, routeID, action st
 	default:
 		b.WriteString("- Route update: review route condition, sub-agent description, declared context_dependencies, prevalidation, learnings, DB, KB, scripts, reports/evals, and downstream dependencies.\n")
 	}
-	b.WriteString("- Before marking the plan done, run get_workflow_command_guidance(kind=\"review-artifact-drift\", focus=\"" + parentStepID + "\").")
+	b.WriteString("- " + planEditImpactGuidance)
 	return b.String()
 }
 
@@ -5951,7 +5947,7 @@ func registerPlanModificationTools(
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"update_scripted_step",
-		"Update an existing deterministic scripted step. The internal plan type remains regular, but this tool only edits a checked-in script boundary implemented by learnings/<step-id>/main.py. Provide existing_step_id and only the contract fields to change. Use next_step_id to chain scripted steps inside a selected route and make the final script converge on a shared downstream step. Do not use it for conversational or judgment-heavy work; those steps must be message_sequence. A message_sequence step is rejected: convert it first with change_step_type(target_type=\"scripted\"), or edit it as a sequence with update_message_sequence_step. A regular step is scripted by its plan type alone (PLAT-287); a regular step still carrying the retired declared_execution_mode=\"agentic\" runs as a sequence until the v1.0.38 migration converts it, and is likewise rejected here. The plan is updated immediately. After a substantive change, update and test main.py and review whether validation, learnings, and downstream consumers still match the contract; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
+		"Update an existing deterministic scripted step. The internal plan type remains regular, but this tool only edits a checked-in script boundary implemented by learnings/<step-id>/main.py. Provide existing_step_id and only the contract fields to change. Use next_step_id to chain scripted steps inside a selected route and make the final script converge on a shared downstream step. Do not use it for conversational or judgment-heavy work; those steps must be message_sequence. A message_sequence step is rejected: convert it first with change_step_type(target_type=\"scripted\"), or edit it as a sequence with update_message_sequence_step. A regular step is scripted by its plan type alone (PLAT-287); a regular step still carrying the retired declared_execution_mode=\"agentic\" runs as a sequence until the v1.0.38 migration converts it, and is likewise rejected here. The plan is updated immediately. After related edits, update and test main.py and check affected validation, learnings, and downstream consumers once in the current agent; follow builder-reference/references/plan-change-impact.md. A full drift audit is reserved for Pulse or an explicit user request.",
 		regularUpdateParams,
 		createUpdateRegularStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
@@ -5984,7 +5980,7 @@ func registerPlanModificationTools(
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"update_human_input_step",
-		"Update a human input step in the plan. Provide existing_step_id (required) to identify which human input step to update, and only include the fields you want to change (question, response_type, options, variable_name, context_output, next_step_id, if_yes_next_step_id/if_no_next_step_id, option_routes). The plan.json file is updated immediately when this tool is called. After a substantive change, review whether the step's saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
+		"Update a human input step in the plan. Provide existing_step_id (required) to identify which human input step to update, and only include the fields you want to change (question, response_type, options, variable_name, context_output, next_step_id, if_yes_next_step_id/if_no_next_step_id, option_routes). The plan.json file is updated immediately when this tool is called. After related edits, follow builder-reference/references/plan-change-impact.md: do one combined compatibility check of affected dependencies in the current agent before the targeted test. A full drift audit is reserved for Pulse or an explicit user request.",
 		humanInputUpdateParams,
 		createUpdateHumanInputStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
@@ -6135,7 +6131,7 @@ func registerPlanModificationTools(
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"update_routing_step",
-		"Update a deterministic routing step in the plan. Provide existing_step_id (required) and only include fields you want to change: title, routing_question, routes, default_route_id, route_source_file, context_dependencies, or clear_description=true for legacy migration. Do not set description or context_output; routing never executes an agent and never LLM-evaluates routing_question. The selected route must come from caller route_selections, route_selection.json, route_source_file, context_dependencies, or default_route_id. The plan.json file is updated immediately when this tool is called. After a substantive change, review whether saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
+		"Update a deterministic routing step in the plan. Provide existing_step_id (required) and only include fields you want to change: title, routing_question, routes, default_route_id, route_source_file, context_dependencies, or clear_description=true for legacy migration. Do not set description or context_output; routing never executes an agent and never LLM-evaluates routing_question. The selected route must come from caller route_selections, route_selection.json, route_source_file, context_dependencies, or default_route_id. The plan.json file is updated immediately when this tool is called. After related edits, follow builder-reference/references/plan-change-impact.md: do one combined compatibility check of affected dependencies in the current agent before the targeted test. A full drift audit is reserved for Pulse or an explicit user request.",
 		routingUpdateParams,
 		createUpdateRoutingStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
@@ -6165,7 +6161,7 @@ func registerPlanModificationTools(
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"update_branch_step",
-		"Update a deterministic branch step in the plan. Provide existing_step_id (required) and only include fields you want to change: title, branch_question, routes, default_route_id, route_source_file, context_dependencies, or clear_description=true for legacy migration. Do not set description or context_output; branch never executes an agent and never LLM-evaluates branch_question. The selected route must come from caller route_selections, route_selection.json, route_source_file, context_dependencies, or default_route_id. The plan.json file is updated immediately when this tool is called. After a substantive change, review whether saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
+		"Update a deterministic branch step in the plan. Provide existing_step_id (required) and only include fields you want to change: title, branch_question, routes, default_route_id, route_source_file, context_dependencies, or clear_description=true for legacy migration. Do not set description or context_output; branch never executes an agent and never LLM-evaluates branch_question. The selected route must come from caller route_selections, route_selection.json, route_source_file, context_dependencies, or default_route_id. The plan.json file is updated immediately when this tool is called. After related edits, follow builder-reference/references/plan-change-impact.md: do one combined compatibility check of affected dependencies in the current agent before the targeted test. A full drift audit is reserved for Pulse or an explicit user request.",
 		branchUpdateParams,
 		createUpdateBranchStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
@@ -6195,7 +6191,7 @@ func registerPlanModificationTools(
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"update_message_sequence_step",
-		"Update a message_sequence step in the plan. This also accepts a persisted legacy non-scripted regular step and atomically upgrades it to message_sequence, matching the compatibility runtime agents already see; declared scripted regular steps still require update_scripted_step. Provide existing_step_id and only the fields to change. Replacing items changes the configured queue; an existing runtime session will still resume unless explicitly restarted by execution controls. After a substantive change, review whether the step's saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
+		"Update a message_sequence step in the plan. This also accepts a persisted legacy non-scripted regular step and atomically upgrades it to message_sequence, matching the compatibility runtime agents already see; declared scripted regular steps still require update_scripted_step. Provide existing_step_id and only the fields to change. Replacing items changes the configured queue; an existing runtime session will still resume unless explicitly restarted by execution controls. After related edits, follow builder-reference/references/plan-change-impact.md: do one combined compatibility check of affected dependencies in the current agent before the targeted test. A full drift audit is reserved for Pulse or an explicit user request.",
 		messageSequenceUpdateParams,
 		createUpdateMessageSequenceStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",
@@ -6213,7 +6209,7 @@ func registerPlanModificationTools(
 	}
 	if err := mcpAgent.RegisterCustomTool(
 		"update_orchestrator_step",
-		"Update an Orchestrator step (orchestrator type; todo_task is the legacy alias) in the plan. Provide existing_step_id (required) to identify which step to update, and only include the fields you want to change (title, todo_task_step, predefined_routes, next_step_id). The plan.json file is updated immediately when this tool is called. After a substantive change, review whether the step's saved artifacts still match the new plan — they can drift out of sync; run get_workflow_command_guidance(kind=\"review-artifact-drift\").",
+		"Update an Orchestrator step (orchestrator type; todo_task is the legacy alias) in the plan. Provide existing_step_id (required) to identify which step to update, and only include the fields you want to change (title, todo_task_step, predefined_routes, next_step_id). The plan.json file is updated immediately when this tool is called. After related edits, follow builder-reference/references/plan-change-impact.md: do one combined compatibility check of affected dependencies in the current agent before the targeted test. A full drift audit is reserved for Pulse or an explicit user request.",
 		orchestratorUpdateParams,
 		createUpdateOrchestratorStepExecutor(workspacePath, logger, readFile, writeFile),
 		"workflow",

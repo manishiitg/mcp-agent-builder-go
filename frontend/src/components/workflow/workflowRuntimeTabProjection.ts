@@ -18,6 +18,9 @@ export function workflowTabDisplayName(
   tab: Pick<ChatTab, 'name' | 'metadata' | 'sessionId'>,
   isBlank?: boolean,
 ): string {
+  if (tab.metadata?.workshopMode === 'run') {
+    return 'Run chat'
+  }
   // Finished schedule tabs are persisted until the user closes them and no
   // longer pass through live runtime reconciliation. Normalize an older
   // one-off Pulse lane from its durable session identity too.

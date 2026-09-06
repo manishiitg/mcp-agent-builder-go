@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useShallow } from 'zustand/react/shallow'
 
 const DBG = '[skill-popup]'
-import { Send, Wand2, Loader2, Globe, Layers, X, History, Bot, Server, Download, Paperclip, CalendarClock, MessageSquare, Terminal, Plus } from 'lucide-react'
+import { Send, Wand2, Loader2, Globe, Layers, X, History, Bot, Server, Download, Paperclip, CalendarClock, MessageSquare, Terminal, Plus, Play } from 'lucide-react'
 import { Button } from './ui/Button'
 import { Textarea } from './ui/Textarea'
 import FileContextDisplay from './FileContextDisplay'
@@ -38,6 +38,8 @@ import { shouldClearAcceptedChatDraft } from '../utils/chatSubmissionDraft'
 import { liveTerminalControlKey } from '../utils/liveTerminalKeys'
 import { effectiveLLMUnderLock, effectiveProviderUnderLock } from '../utils/effectiveLLM'
 import { normalizeEventViewMode } from '../stores/useChatStore'
+import { activateTab } from '../utils/activateTab'
+import { isBlankWorkflowBuilderTab } from '../utils/workflowTabResolution'
 
 const removePasteMarkersFromText = (text: string, markers: string[]) => {
   return markers.reduce((next, marker) => {
@@ -519,12 +521,16 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   })))
   const selectedModeCategory = useModeStore(state => state.selectedModeCategory)
   const storeActiveTabId = useChatStore(state => state.activeTabId)
+  const createChatTab = useChatStore(state => state.createChatTab)
   const activeTabId = scopedTabId === null ? null : (scopedTabId ?? storeActiveTabId)
   // Use the scoped tab as the mode source when ChatInput is embedded. The global
   // mode category can lag behind WorkflowLayout, which would otherwise make a
   // workflow builder input behave like product-profile chat.
   const activeTab = useChatStore(state =>
     activeTabId ? state.chatTabs[activeTabId] : undefined
+  )
+  const activeTabEvents = useChatStore(state =>
+    activeTab?.sessionId ? state.tabEvents[activeTab.sessionId] : undefined
   )
   // Main tmux is a first-class alternate view of this chat. Child-terminal
   // inspection is still developer-only, but opening the main pane must not
@@ -542,6 +548,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   })
   const isWorkflowPhaseChat = !!workflowPhaseId
   const workflowPhasePreset = useGlobalPresetStore(state => state.getActivePreset('workflow'))
+  const activeWorkflowPresetId = useGlobalPresetStore(state => state.activePresetIds.workflow)
   // Read Builder LLM from workflow manifest (source of truth), not the global preset.
   // Subscribe to the manifest store so the provider/model badge updates without reopening the chat.
   const workflowPhaseWorkspacePath = isWorkflowPhaseChat ? workflowPhasePreset?.selectedFolder?.filepath : undefined
@@ -552,6 +559,31 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   })
   // Hide extras (servers, skills, agent mode, etc.) in workflow mode but show in multi-agent
   const hideExtras = isWorkflowMode
+
+  const runChatPresetId = activeTab?.metadata?.presetQueryId || activeWorkflowPresetId
+  const showRunChatAction = !!(
+    activeTab &&
+    runChatPresetId &&
+    isBlankWorkflowBuilderTab(
+      activeTab,
+      runChatPresetId,
+      activeTab.sessionId && activeTabEvents
+        ? { [activeTab.sessionId]: activeTabEvents }
+        : {},
+    )
+  )
+  const handleStartRunChat = useCallback(async () => {
+    if (!runChatPresetId) return
+    const newTabId = await createChatTab('Run chat', {
+      mode: 'workflow',
+      phaseId: 'workflow-builder',
+      phaseName: 'Automation Run',
+      presetQueryId: runChatPresetId,
+      workshopMode: 'run',
+    })
+    activateTab(newTabId)
+    useWorkflowStore.getState().setShowChatArea(true)
+  }, [createChatTab, runChatPresetId])
 
   // Use selectors to subscribe only to specific values, reducing re-renders
   const setTabConfig = useChatStore(state => state.setTabConfig)
@@ -2380,13 +2412,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const getEffectiveWorkflowModes = useCallback(() => {
     const workflowState = useWorkflowStore.getState()
     const presetId = useGlobalPresetStore.getState().activePresetIds.workflow
-    const effectiveWorkshopMode = (presetId && workflowState.workshopModeByPreset[presetId]) || workflowState.workshopMode
+    const effectiveWorkshopMode = activeTab?.metadata?.workshopMode
+      || (presetId && workflowState.workshopModeByPreset[presetId])
+      || workflowState.workshopMode
 
     return {
       workflowMode: workflowState.workflowMode,
       workshopMode: effectiveWorkshopMode,
     }
-  }, [])
+  }, [activeTab?.metadata?.workshopMode])
 
   const applyWorkflowCommandRequirements = useCallback((cmd: CommandDefinition) => {
     if (selectedModeCategory !== 'workflow') return
@@ -4153,6 +4187,26 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     </div>
                   ) : (
                     <div data-tour="chat-send-controls" data-testid="tour-chat-send-controls" className="flex items-center gap-1">
+                      {!isProductSurface && showRunChatAction && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => { void handleStartRunChat() }}
+                              className="h-7 shrink-0 gap-1.5 px-2 text-[11px] text-muted-foreground"
+                              data-testid="chat-start-run-mode-button"
+                              aria-label="Start chat in Run mode"
+                            >
+                              <Play className="h-3.5 w-3.5" />
+                              Run chat
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Start a separate chat with the Run-mode prompt and permissions</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button

@@ -417,6 +417,16 @@ func ScopeForScheduledLLMRole(llmConfigSource string) string {
 	return ""
 }
 
+// ScopeForScheduledTurn classifies the parent scheduler turn itself. The
+// explicit lifecycle flag is authoritative because Pulse can intentionally use
+// the workflow's Builder model and therefore has no llm_config_source marker.
+func ScopeForScheduledTurn(pulseLifecycleTurn bool, llmConfigSource string) string {
+	if pulseLifecycleTurn {
+		return ScopePulse
+	}
+	return ScopeForScheduledLLMRole(llmConfigSource)
+}
+
 // InferScope names the scope for a chat-session agent — the chat/query path
 // and delegate() sub-agents. Anything not otherwise identified is chat.
 func InferScope(agentMode, phaseID string) string {

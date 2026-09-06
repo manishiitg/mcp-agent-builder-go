@@ -103,6 +103,7 @@ export function isBlankWorkflowBuilderTab(
   const meta = tab.metadata
   if (!meta || meta.mode !== 'workflow') return false
   if (meta.phaseId !== 'workflow-builder') return false
+  if (meta.workshopMode === 'run') return false
   if (meta.isViewOnly === true) return false
   if (meta.presetQueryId !== presetQueryId) return false
   if (tab.name !== WORKFLOW_BUILDER_TAB_NAME && tab.name !== 'Workflow Builder') return false

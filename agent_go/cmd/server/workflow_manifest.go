@@ -14,6 +14,7 @@ import (
 	"time"
 
 	step_based_workflow "github.com/manishiitg/coding-agent-loop/agent_go/pkg/orchestrator/agents/workflow/step_based_workflow"
+	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/schedulepolicy"
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/workflowtypes"
 
 	"github.com/google/uuid"
@@ -26,7 +27,9 @@ const WorkflowManifestSchemaVersion = 1
 // contract version. Unlike schema_version, this gates agent-run workflow
 // upgrades: Pulse can add version-specific messages and stamp this value only
 // after the workflow has been checked or migrated.
-const WorkflowContractCurrentVersion = "1.0.40"
+const WorkflowContractCurrentVersion = schedulepolicy.ExplicitPulseContractVersion
+
+const workflowContractExplicitSchedulePulseVersion = schedulepolicy.ExplicitPulseContractVersion
 
 const workflowContractRouteSummariesVersion = "1.0.40"
 
@@ -453,18 +456,19 @@ type WorkflowSchedule struct {
 	// DirectMessagesReason records why a schedule-local conversation is preferable
 	// to a canonical route despite its weaker step-level lifecycle.
 	DirectMessagesReason string `json:"direct_messages_reason,omitempty"`
-	WorkshopMode         string `json:"workshop_mode,omitempty"`   // Vestigial. Schedules always run in workshop mode; nothing branches on this value any more. Retained so existing workflow.json files still parse.
+	WorkshopMode         string `json:"workshop_mode,omitempty"`   // Normal scheduled work runs with the constrained "run" prompt/tool/skill surface. New schedules require "run"; legacy values remain parseable for migration.
 	Query                string `json:"query,omitempty"`           // Message to execute (multi-agent mode)
 	ResumePrevious       *bool  `json:"resume_previous,omitempty"` // Coding-agent CLI only: resume the latest prior thread (same provider) instead of a fresh session each run. nil = default (fresh session); explicit true opts in.
 	// PulseReviewOnly is a legacy compatibility field. On read, an enabled
 	// legacy entry enables workflow-level pulse.enabled; migration removes the
 	// obsolete schedule. The scheduler never registers it as an independent cron.
 	PulseReviewOnly bool `json:"pulse_review_only,omitempty"`
-	// PulseMode optionally overrides this schedule's post-run stewardship.
+	// PulseMode explicitly selects this schedule's post-run stewardship.
 	// "off" runs no Pulse actions; "basic" runs only backup, report publish,
 	// and the run-summary notification; "full" additionally runs Gate, drift
-	// review, review+fix, and Pulse finalization. Empty inherits pulse.enabled.
-	PulseMode string `json:"pulse_mode,omitempty"`
+	// review, review+fix, and Pulse finalization. Empty is legacy-only.
+	PulseMode       string `json:"pulse_mode,omitempty"`
+	PulseModeReason string `json:"pulse_mode_reason,omitempty"`
 	// ExecutionMode is a typed, runtime-enforced operating mode for a scheduled
 	// invocation. It is deliberately separate from Messages: safety must not
 	// depend on an agent interpreting prose or on the wall clock happening to be
@@ -732,6 +736,11 @@ func ValidateManifest(m *WorkflowManifest) error {
 		}
 		if mode := strings.ToLower(strings.TrimSpace(sched.PulseMode)); mode != "" && mode != schedulePulseModeOff && mode != schedulePulseModeBasic && mode != schedulePulseModeFull {
 			return fmt.Errorf("schedules[%d].pulse_mode must be off, basic, or full", i)
+		}
+		if schedulepolicy.RequiresExplicitPulse(m.Version) {
+			if err := schedulepolicy.ValidatePulse(sched.PulseMode, sched.PulseModeReason); err != nil {
+				return fmt.Errorf("schedules[%d]: %w", i, err)
+			}
 		}
 		if dependencyID := strings.TrimSpace(sched.AfterScheduleID); dependencyID != "" {
 			if _, ok := scheduleIDs[dependencyID]; !ok {

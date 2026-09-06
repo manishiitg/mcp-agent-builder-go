@@ -171,7 +171,7 @@ func TestProviderManifestMarksDeprecatedCodingAgents(t *testing.T) {
 	}
 }
 
-func TestProviderManifestPublishesCodexGPT56Defaults(t *testing.T) {
+func TestProviderManifestPublishesCodexTierDefaults(t *testing.T) {
 	t.Setenv("WORKSPACE_DOCS_PATH", t.TempDir())
 	t.Setenv("SUPPORTED_LLM_PROVIDERS", "codex-cli")
 	t.Setenv("PATH", t.TempDir())
@@ -220,7 +220,7 @@ func TestProviderManifestPublishesCodexGPT56Defaults(t *testing.T) {
 			"high":   {model: "gpt-5.6-terra", effort: "medium"},
 			"medium": {model: "gpt-5.6-luna", effort: "high"},
 			"low":    {model: "gpt-5.6-luna", effort: "medium"},
-			"pulse":  {model: "gpt-5.6-terra", effort: "high"},
+			"pulse":  {model: "gpt-6-astra", effort: "medium"},
 		} {
 			got := provider.DefaultTierModels[tier]
 			if got.ModelID != want.model || got.Options["reasoning_effort"] != want.effort {

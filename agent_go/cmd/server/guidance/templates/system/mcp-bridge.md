@@ -115,6 +115,26 @@ jq '.' <<<"$result"
 For a large result, save or filter the already-decoded `result` variable. Never
 repeat the same read merely to apply a different local `jq` expression.
 
+When passing returned guidance to a background task, extract it from the decoded
+result, not the HTTP envelope. A missing `.guidance` produces `null`; even `jq -e`
+does not stop a shell script unless its failure is handled. Stop before launching
+the task if any read or validation fails:
+
+```bash
+set -euo pipefail
+response="$(curl --fail-with-body -sS --json "$guide_payload" -H "$MCP_AUTH" "$MCP_CUSTOM/get_workflow_command_guidance")"
+instruction="$(jq -er '
+  if .success != true then error("guidance request failed") else .result end
+  | if type == "string" then fromjson else . end
+  | .guidance
+  | if type != "string" then error("missing guidance")
+    elif test("\\S") and (ascii_downcase != "null") then .
+    else error("empty guidance") end
+' <<<"$response")"
+payload="$(jq -cn --arg name "$task_name" --arg instruction "$instruction" '{name:$name,instruction:$instruction}')"
+curl --fail-with-body -sS --json "$payload" -H "$MCP_AUTH" "$MCP_CUSTOM/run_in_background"
+```
+
 For retries, backoff, or structured logging, write a small helper in the
 language of your choice. For reusable helpers saved to `main.py`
 (`scripted` mode only), see the `code-authoring` reference doc.

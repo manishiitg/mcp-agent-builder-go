@@ -52,3 +52,7 @@ Run the documentation link check before merging documentation changes:
 ```bash
 node scripts/check-doc-links.js
 ```
+
+## Isolated workflow testing
+
+Use the [standard isolated workflow testing process](getting-started/isolated-workflow-testing.md) to reproduce platform issues with a disposable copy of `Workflow/testing` while the local AgentWorks app keeps running.

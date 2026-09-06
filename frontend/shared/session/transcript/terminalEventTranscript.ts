@@ -721,6 +721,17 @@ function isOwnTerminalLifecycleStart(event: PollingEvent, terminal: TerminalSnap
   return true
 }
 
+function compareConversationEvents(a: PollingEvent, b: PollingEvent): number {
+  // The main chat survives server restarts; EventStore's per-session sequence
+  // counter does not. Comparing those counters across restored and live events
+  // placed yesterday's replies below today's work. Prefer the event timestamp
+  // here, retaining sequence as a tie-breaker for same-time messages.
+  const aTime = Date.parse(a.timestamp || '')
+  const bTime = Date.parse(b.timestamp || '')
+  if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) return aTime - bTime
+  return compareTerminalEvents(a, b)
+}
+
 export function selectTerminalEvents(
   events: PollingEvent[] | undefined,
   terminal: TerminalSnapshot | null | undefined,
@@ -739,7 +750,7 @@ export function selectTerminalEvents(
       .filter(event => isProductMainConversationEvent(event) || isKeptInteraction(event, keepInteractionKinds))
       .map((event, index) => ({ event, index }))
       .sort((a, b) => {
-        const compared = compareTerminalEvents(a.event, b.event)
+        const compared = compareConversationEvents(a.event, b.event)
         return compared !== 0 ? compared : a.index - b.index
       })
       .map(entry => entry.event)
@@ -789,7 +800,7 @@ export function selectTerminalEvents(
     })
   }
 
-  // Use the same durable ordering as the retained terminal-event loader.
+  // Within an owned execution, use the retained terminal-event loader's order.
   // Lifecycle events can be flushed in a batch with timestamps that do not
   // reflect their persisted sequence; sorting those timestamp-first made a
   // completion appear above the task work it completed.
@@ -798,7 +809,9 @@ export function selectTerminalEvents(
     .filter(event => !isOwnTerminalLifecycleStart(event, terminal))
     .map((event, index) => ({ event, index }))
     .sort((a, b) => {
-      const compared = compareTerminalEvents(a.event, b.event)
+      const compared = isMainAgentTerminal(terminal)
+        ? compareConversationEvents(a.event, b.event)
+        : compareTerminalEvents(a.event, b.event)
       if (compared !== 0) return compared
       return a.index - b.index // stable for equal/unparseable timestamps
     })
