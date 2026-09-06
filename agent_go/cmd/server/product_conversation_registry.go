@@ -469,6 +469,29 @@ func resolveProductProjectBindingWithStore(
 	return *matched, nil
 }
 
+// resolveIsolatedScheduleBinding is resolveProductConversationBinding's
+// singleton case with a fixed "pulse" key instead of "main" — a second,
+// independent registry entry (its own session, workspace binding otherwise
+// identical) for a schedule that declared Isolated. Not reachable from the
+// client-facing conversation_key parameter: that boundary's job is to reject
+// exactly this kind of caller-chosen key on a singleton profile, so this is
+// a distinct, server-internal path for the scheduler alone, not a relaxation
+// of that check.
+func resolveIsolatedScheduleBinding(ctx context.Context, userID string, profile agentprofiles.Profile) (productConversationBinding, error) {
+	if mode := strings.ToLower(strings.TrimSpace(profile.Runtime.Conversation.Mode)); mode != agentprofiles.ConversationModeSingleton {
+		return productConversationBinding{}, fmt.Errorf("isolated schedules are only supported for singleton-conversation profiles, got %q", mode)
+	}
+	workspacePath, err := cleanAgentProfileWorkspace(profile.Runtime.Workspace.Root, userID)
+	if err != nil {
+		return productConversationBinding{}, fmt.Errorf("invalid product workspace root: %w", err)
+	}
+	return productConversationBinding{
+		ConversationKey: "pulse",
+		WorkspacePath:   workspacePath,
+		Title:           profile.Name + " (check-in)",
+	}, nil
+}
+
 func resolveProductConversationBinding(ctx context.Context, userID string, profile agentprofiles.Profile, requestedKey string) (productConversationBinding, error) {
 	mode := strings.ToLower(strings.TrimSpace(profile.Runtime.Conversation.Mode))
 	switch mode {

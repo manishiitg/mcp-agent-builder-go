@@ -132,7 +132,7 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
 
   // ---- check-in (the product schedule) --------------------------------------
   const CHECKIN_JOB_ID = `product:${PARENT_PROFILE}:pulse`
-  type ScheduleJob = { enabled?: boolean; last_run_at?: string | null }
+  type ScheduleJob = { enabled?: boolean; last_run_at?: string | null; last_session_id?: string | null }
   type ProfileSchedules = { schedules?: { id?: string; enabled?: boolean; cadence_hours?: number }[] }
   async function checkinConfig(): Promise<PulseConfig> {
     const [job, family, profile] = await Promise.all([
@@ -145,10 +145,14 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
       enabled: job?.enabled ?? declared?.enabled ?? false,
       cadence_hours: declared?.cadence_hours ?? 24,
       last_run_at: job?.last_run_at ?? undefined,
+      last_session_id: job?.last_session_id ?? undefined,
       watch_sites: family.watch_sites ?? [],
       preferred_hour: 8,
       preferred_hour_set: false,
     }
+  }
+  async function resetCheckinHistory(): Promise<void> {
+    await request('POST', `/api/scheduler/jobs/${encodeURIComponent(CHECKIN_JOB_ID)}/reset-history`, {})
   }
   const readFile = (path: string) => ws.readFile(path)
 
@@ -325,6 +329,7 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     // The parent can switch it on or off and run it now; the cadence is the
     // product's. Watched websites are family state the prompt reads.
     pulseConfig: checkinConfig,
+    resetCheckinHistory,
     savePulseConfig: async (patch) => {
       if (patch.enabled !== undefined) {
         await request('POST', `/api/scheduler/jobs/${encodeURIComponent(CHECKIN_JOB_ID)}/${patch.enabled ? 'enable' : 'disable'}`, {})

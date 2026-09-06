@@ -53,6 +53,7 @@ import {
   type VoiceStatus,
 } from './stores'
 import PlatformChat, { PARENT_PROFILE_ID, applyFamilyEngineToOpenTabs, startNewParentConversation, type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
+import PulseHistoryViewer from './platform/PulseHistoryViewer'
 import type { ProductNotification } from '../../platform/notifications/useProductNotifications'
 import ChildPlatformChat, { forgetChildChat, submitToChildChat, type ChildKickoff } from './platform/ChildPlatformChat'
 import { api } from './api'
@@ -1039,13 +1040,25 @@ export default function LearningApp() {
   const [unpairingJid, setUnpairingJid] = useState<string | null>(null)
   const [browserStatus, setBrowserStatus] = useState<{ cli_installed: boolean } | null>(null)
   const [browserCopied, setBrowserCopied] = useState(false)
-  const [pulseConfig, setPulseConfig] = useState<{ enabled: boolean; cadence_hours: number; last_run_at?: string; watch_sites?: string[]; preferred_hour: number; preferred_hour_set: boolean } | null>(null)
+  const [pulseConfig, setPulseConfig] = useState<{ enabled: boolean; cadence_hours: number; last_run_at?: string; last_session_id?: string; watch_sites?: string[]; preferred_hour: number; preferred_hour_set: boolean } | null>(null)
   const [savingPulse, setSavingPulse] = useState(false)
   const [watchSitesDraft, setWatchSitesDraft] = useState('')
   const [pulseSaved, setPulseSaved] = useState(false)
   const [pulsePopoverOpen, setPulsePopoverOpen] = useState(false)
   const [pulseRunning, setPulseRunning] = useState(false)
   const [pulseRunError, setPulseRunError] = useState<string | null>(null)
+  const [pulseHistoryOpen, setPulseHistoryOpen] = useState(false)
+  const [clearingPulseHistory, setClearingPulseHistory] = useState(false)
+  const [clearPulseHistoryError, setClearPulseHistoryError] = useState<string | null>(null)
+  const clearPulseHistory = () => {
+    if (!window.confirm('Clear the check-in history? This starts the next check-in with no memory of past ones.')) return
+    setClearingPulseHistory(true)
+    setClearPulseHistoryError(null)
+    api.resetCheckinHistory()
+      .then(() => { setPulseConfig((c) => (c ? { ...c, last_session_id: undefined } : c)); setPulseHistoryOpen(false) })
+      .catch((err) => setClearPulseHistoryError(err instanceof Error ? err.message : 'Could not clear the history.'))
+      .finally(() => setClearingPulseHistory(false))
+  }
   const wsFiles = useSparkQuillWorkspaceStore((s) => s.wsFiles)
   const setWsFiles = useSparkQuillWorkspaceStore((s) => s.setWsFiles)
   const allFiles = useSparkQuillWorkspaceStore((s) => s.allFiles)
@@ -2066,6 +2079,25 @@ export default function LearningApp() {
                             {pulseRunning ? 'Running… (a few minutes)' : 'Run now (test it)'}
                           </button>
                           {pulseRunError && <p className="fl-pulse-run-error">{pulseRunError}</p>}
+                          <div className="fl-pulse-history-actions">
+                            <button
+                              type="button"
+                              className="fl-pulse-history-link"
+                              disabled={!pulseConfig?.last_session_id}
+                              onClick={() => setPulseHistoryOpen(true)}
+                            >
+                              View check-in history
+                            </button>
+                            <button
+                              type="button"
+                              className="fl-pulse-history-link is-danger"
+                              disabled={!pulseConfig?.last_session_id || clearingPulseHistory}
+                              onClick={clearPulseHistory}
+                            >
+                              {clearingPulseHistory ? 'Clearing…' : 'Clear history'}
+                            </button>
+                          </div>
+                          {clearPulseHistoryError && <p className="fl-pulse-run-error">{clearPulseHistoryError}</p>}
                         </div>
 
                         <div className="fl-pulse-col">
@@ -2811,6 +2843,10 @@ export default function LearningApp() {
                 </div>
               </div>
             </div>
+          )}
+
+          {pulseHistoryOpen && pulseConfig?.last_session_id && (
+            <PulseHistoryViewer sessionId={pulseConfig.last_session_id} onClose={() => setPulseHistoryOpen(false)} />
           )}
 
           {settingsOpen && (

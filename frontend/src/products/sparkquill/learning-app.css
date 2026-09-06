@@ -783,6 +783,15 @@ audio.fl-viewer-media { background: var(--surface); }
 .fl-pulse-run-now:hover { background: #f0f6fd; }
 .fl-pulse-run-now:disabled { opacity: .7; cursor: default; }
 .fl-pulse-run-error { margin: 6px 14px 0; font-size: var(--text-caption); color: #b23b3b; }
+.fl-pulse-history-actions { display: flex; gap: 12px; margin-top: 8px; }
+.fl-pulse-history-link { padding: 0; border: 0; background: transparent; color: #3d567a; font: inherit; font-size: var(--text-caption); font-weight: 650; text-decoration: underline; cursor: pointer; }
+.fl-pulse-history-link:disabled { color: #a8b3c4; cursor: default; text-decoration: none; }
+.fl-pulse-history-link.is-danger { color: #b23b3b; }
+.fl-pulse-history-overlay { position: fixed; inset: 0; z-index: 61; display: grid; place-items: center; padding: 24px; background: rgba(11, 29, 66, .5); backdrop-filter: blur(3px); }
+.fl-pulse-history-panel { width: min(560px, 100%); height: min(680px, 86vh); display: flex; flex-direction: column; border-radius: 18px; overflow: hidden; background: var(--surface); box-shadow: 0 28px 70px rgba(11, 29, 66, .35); }
+.fl-pulse-history-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; background: var(--navy); color: #fff; font-weight: 800; font-size: var(--text-body); }
+.fl-pulse-history-body { flex: 1; min-height: 0; overflow: hidden; }
+.fl-pulse-history-body .fl-note { padding: 18px; }
 .fl-msg-avatar.is-pulse { background: linear-gradient(135deg, #17306b, #3a5bbf); color: #fff; }
 .fl-bubble.is-pulse { background: #eef3ff; border: 1px solid #d5e0f7; }
 

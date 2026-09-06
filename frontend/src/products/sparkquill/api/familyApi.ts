@@ -31,7 +31,18 @@ export type WhatsAppStatus = {
   voice_transcription?: WhatsAppVoiceTranscription
 }
 
-export type PulseConfig = { enabled: boolean; cadence_hours: number; last_run_at?: string; watch_sites?: string[]; preferred_hour: number; preferred_hour_set: boolean }
+export type PulseConfig = {
+  enabled: boolean
+  cadence_hours: number
+  last_run_at?: string
+  watch_sites?: string[]
+  preferred_hour: number
+  preferred_hour_set: boolean
+  // The isolated check-in conversation's session id (product.yaml
+  // schedules[].isolated) — its own conversation, never the parent's own
+  // chat. Absent until the first check-in has actually run once.
+  last_session_id?: string
+}
 export type PulseConfigPatch = Partial<Pick<PulseConfig, 'enabled' | 'cadence_hours' | 'watch_sites' | 'preferred_hour' | 'preferred_hour_set'>>
 
 export type StoredConversation = { messages?: StoredMsg[] }
@@ -92,5 +103,7 @@ export interface FamilyApi {
   whatsappVoice(enabled: boolean): Promise<WhatsAppVoiceTranscription>
   pulseConfig(): Promise<PulseConfig>
   savePulseConfig(patch: PulseConfigPatch): Promise<PulseConfig>
+  /** Clears the isolated check-in conversation; the next check-in opens a fresh one. */
+  resetCheckinHistory(): Promise<void>
   runPulse(): Promise<{ ok: boolean; error?: string }>
 }

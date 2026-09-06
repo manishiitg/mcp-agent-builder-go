@@ -312,6 +312,7 @@ func SchedulerRoutes(router *mux.Router, svc *SchedulerService) {
 	apiRouter.HandleFunc("/jobs/{id}/trigger", triggerScheduledJobHandler(svc)).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/workflows/pulse-run", requireWorkflowWriteAccess(triggerWorkflowPulseHandler(svc))).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/jobs/{id}/stop", stopScheduledJobHandler(svc)).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/jobs/{id}/reset-history", resetHistoryScheduledJobHandler(svc)).Methods("POST", "OPTIONS")
 	apiRouter.HandleFunc("/jobs/{id}/runs", getScheduledJobRunsHandler(svc)).Methods("GET", "OPTIONS")
 }
 
@@ -947,6 +948,23 @@ func triggerScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 	}
 }
 
+// resetHistoryScheduledJobHandler clears an isolated product schedule's own
+// conversation (see ProductScheduleService.ResetHistory) — a workflow
+// schedule has no equivalent, so this is product-only.
+func resetHistoryScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		id := mux.Vars(r)["id"]
+		if handleProductScheduleJob(w, r, svc, id, "reset_history") {
+			return
+		}
+		http.Error(w, "not found", http.StatusNotFound)
+	}
+}
+
 func stopScheduledJobHandler(svc *SchedulerService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "OPTIONS" {
@@ -1172,6 +1190,16 @@ func handleProductScheduleJob(w http.ResponseWriter, r *http.Request, svc *Sched
 			return true
 		}
 		respond(job)
+	case "reset_history":
+		if err := ps.ResetHistory(ctx, userID, id); err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, productschedule.ErrAlreadyRunning) {
+				status = http.StatusConflict
+			}
+			http.Error(w, err.Error(), status)
+			return true
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	case "runs":
 		limit, offset := 50, 0
 		if v := r.URL.Query().Get("limit"); v != "" {

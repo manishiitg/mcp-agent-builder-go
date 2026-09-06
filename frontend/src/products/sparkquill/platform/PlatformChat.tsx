@@ -79,7 +79,7 @@ type Props = {
   onNotifications?: (n: ProductNotification[]) => void
 }
 
-const queryClient = new QueryClient()
+export const queryClient = new QueryClient()
 // The one tab this page opened for the parent conversation (module-level so a
 // remount finds it).
 let openedTab: Promise<{ tabId: string; sessionId: string }> | null = null
@@ -88,7 +88,7 @@ let openedTab: Promise<{ tabId: string; sessionId: string }> | null = null
 // `interaction: { kind, render: chat.suggestions }`), if any.
 let suggestionsKind: string | null = null
 
-function SparkQuillConversation({ events, isStreaming, isRestoring, streamingText, streamingStatus, hasOlder, loadingOlder, historyError, onLoadOlder, landingContent, onSubmitQuery }: ChatContentRendererProps) {
+export function SparkQuillConversation({ events, isStreaming, isRestoring, streamingText, streamingStatus, hasOlder, loadingOlder, historyError, onLoadOlder, landingContent, onSubmitQuery }: ChatContentRendererProps) {
   if (!isRestoring && events.length === 0 && !streamingText) return <>{landingContent}</>
   return (
     <div className="fl-platform-transcript">

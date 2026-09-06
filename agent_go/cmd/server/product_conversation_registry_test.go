@@ -226,3 +226,65 @@ func TestProductProjectBindingRejectsDuplicateProjectIDs(t *testing.T) {
 		t.Fatalf("duplicate project id was not rejected: %v", err)
 	}
 }
+
+// An isolated schedule's binding resolves to a distinct registry entry (own
+// session id, own conversation) from the profile's own singleton
+// conversation, on the same workspace — this is what stops a scheduled run
+// from ever sharing the tmux-backed CLI process the person's own live chat
+// uses. A caller cannot reach this path through the client-facing
+// conversation_key parameter (TestResolveProductConversationBindingEnforcesDeclaredMode
+// already covers that it is refused there); this is the server-internal
+// path the scheduler alone uses.
+func TestIsolatedScheduleBindingIsASeparateConversationFromTheProfilesOwn(t *testing.T) {
+	store, _ := memoryProductConversationStore()
+	profile := singletonConversationProfile()
+
+	ownBinding, err := resolveProductConversationBinding(context.Background(), "user-1", profile, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := store.resolveOrCreate(context.Background(), "user-1", profile, ownBinding, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	isolatedBinding, err := resolveIsolatedScheduleBinding(context.Background(), "user-1", profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isolatedBinding.ConversationKey == ownBinding.ConversationKey {
+		t.Fatalf("isolated binding key %q collides with the profile's own %q", isolatedBinding.ConversationKey, ownBinding.ConversationKey)
+	}
+	if isolatedBinding.WorkspacePath != ownBinding.WorkspacePath {
+		t.Fatalf("isolated binding workspace = %q, want the same family workspace %q", isolatedBinding.WorkspacePath, ownBinding.WorkspacePath)
+	}
+	isolated, err := store.resolveOrCreate(context.Background(), "user-1", profile, isolatedBinding, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isolated.SessionID == own.SessionID {
+		t.Fatalf("isolated schedule got the same session id %q as the profile's own conversation", own.SessionID)
+	}
+
+	// Calling resolveIsolatedScheduleBinding again and reopening must return
+	// the SAME session — successive runs of the schedule stay continuous
+	// with each other, just never with the profile's own conversation.
+	again, err := store.resolveOrCreate(context.Background(), "user-1", profile, isolatedBinding, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.SessionID != isolated.SessionID {
+		t.Fatalf("a second isolated run got a different session (%q vs %q); should persist across runs", again.SessionID, isolated.SessionID)
+	}
+}
+
+// A non-singleton profile has no well-defined "isolated" variant yet
+// (keyed/project conversations already have per-resource identity); the
+// helper should say so clearly rather than silently doing something wrong.
+func TestIsolatedScheduleBindingRejectsNonSingletonProfiles(t *testing.T) {
+	profile := singletonConversationProfile()
+	profile.Runtime.Conversation = agentprofiles.ConversationPolicy{Mode: agentprofiles.ConversationModeKeyed, KeyType: agentprofiles.ConversationKeyTypeProject}
+	if _, err := resolveIsolatedScheduleBinding(context.Background(), "user-1", profile); err == nil || !strings.Contains(err.Error(), "singleton") {
+		t.Fatalf("expected a singleton-only error, got %v", err)
+	}
+}
