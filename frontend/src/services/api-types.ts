@@ -226,6 +226,9 @@ export interface AgentQueryResponse {
 export interface AgentProfileChatRequest {
   message: string
   conversation_key?: string
+  // One of the profile's declared runtime.provider_options[].id; the server
+  // resolves it to that option's (provider, model_id) and rejects any other.
+  engine?: string
 }
 
 export interface AgentProfileConversationRequest {

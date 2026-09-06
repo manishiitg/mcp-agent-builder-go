@@ -48,6 +48,11 @@ func TestDecideCadence(t *testing.T) {
 		{"active but way overdue → run", s, Inputs{Now: now, LastRun: now.Add(-30 * time.Hour), SinceInteractive: time.Minute}, true, false},
 		{"preferred hour not reached", Schedule{ID: "a", Name: "a", Enabled: true, CadenceHours: 24, PreferredHour: &hour}, Inputs{Now: now.Add(-5 * time.Hour), SinceInteractive: time.Hour}, false, false},
 		{"preferred hour reached", Schedule{ID: "a", Name: "a", Enabled: true, CadenceHours: 24, PreferredHour: &hour}, Inputs{Now: now, SinceInteractive: time.Hour}, true, false},
+		// A failed run must not re-fire on the next tick: it backs off.
+		{"failed 10m ago → wait", s, Inputs{Now: now, LastRun: now.Add(-25 * time.Hour), SinceInteractive: time.Hour, LastAttempt: now.Add(-10 * time.Minute), ConsecutiveFailures: 1}, false, false},
+		{"failed 31m ago → retry", s, Inputs{Now: now, LastRun: now.Add(-25 * time.Hour), SinceInteractive: time.Hour, LastAttempt: now.Add(-31 * time.Minute), ConsecutiveFailures: 1}, true, false},
+		{"3 failures, 1h ago → still waiting (2h backoff)", s, Inputs{Now: now, LastRun: now.Add(-25 * time.Hour), SinceInteractive: time.Hour, LastAttempt: now.Add(-time.Hour), ConsecutiveFailures: 3}, false, false},
+		{"attempt without failure does not back off", s, Inputs{Now: now, LastRun: now.Add(-25 * time.Hour), SinceInteractive: time.Hour, LastAttempt: now.Add(-time.Minute), ConsecutiveFailures: 0}, true, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -56,6 +61,26 @@ func TestDecideCadence(t *testing.T) {
 				t.Fatalf("Decide = %+v, want run=%v deferred=%v", d, c.run, c.def)
 			}
 		})
+	}
+}
+
+func TestRetryBackoffDoublesAndCaps(t *testing.T) {
+	cases := []struct {
+		failures int
+		cadence  time.Duration
+		want     time.Duration
+	}{
+		{0, 24 * time.Hour, 0},
+		{1, 24 * time.Hour, 30 * time.Minute},
+		{2, 24 * time.Hour, time.Hour},
+		{4, 24 * time.Hour, 4 * time.Hour},
+		{10, 24 * time.Hour, 6 * time.Hour},
+		{10, 2 * time.Hour, 2 * time.Hour}, // never longer than the cadence
+	}
+	for _, c := range cases {
+		if got := RetryBackoff(c.failures, c.cadence); got != c.want {
+			t.Fatalf("RetryBackoff(%d, %s) = %s, want %s", c.failures, c.cadence, got, c.want)
+		}
 	}
 }
 

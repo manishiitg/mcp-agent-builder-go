@@ -28,6 +28,19 @@ func withMemoryUserDirectory(t *testing.T, initial string) *string {
 	return &content
 }
 
+func TestRegisteredProductIDsIncludesSparkQuill(t *testing.T) {
+	t.Setenv("AGENT_PRODUCTS", "")
+	found := false
+	for _, id := range registeredProductIDs() {
+		if id == "sparkquill" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("registeredProductIDs() = %v, want it to include sparkquill", registeredProductIDs())
+	}
+}
+
 func TestPasswordHashRoundTrip(t *testing.T) {
 	h, err := hashPassword("correct horse battery")
 	if err != nil {

@@ -48,6 +48,9 @@ type ScheduledJobResponse struct {
 	LastDurationMs       *int64                 `json:"last_duration_ms,omitempty"`
 	RunCount             int                    `json:"run_count"`
 	ConsecutiveFailures  int                    `json:"consecutive_failures"`
+	// DeferredReason is set while a due product schedule is held back by its
+	// quiet rule (the user is active); empty otherwise.
+	DeferredReason string `json:"deferred_reason,omitempty"`
 	ExecutionMode        string                 `json:"execution_mode,omitempty"`
 	CollisionPolicy      string                 `json:"collision_policy,omitempty"`
 	MaxStartDelayMinutes int                    `json:"max_start_delay_minutes,omitempty"`

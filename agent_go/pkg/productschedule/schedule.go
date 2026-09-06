@@ -138,6 +138,38 @@ type Inputs struct {
 	LastRun time.Time
 	// SinceInteractive is how long ago the user last used the product.
 	SinceInteractive time.Duration
+	// LastAttempt is when the schedule last started a run, successful or not
+	// (zero = never). With ConsecutiveFailures it drives the retry backoff:
+	// without it a broken check-in re-fires on every tick, because only a
+	// success moves LastRun.
+	LastAttempt         time.Time
+	ConsecutiveFailures int
+}
+
+// Retry backoff after a failed run: 30 minutes, doubling per consecutive
+// failure, capped at retryBackoffMax (and never longer than the cadence).
+const (
+	retryBackoffBase = 30 * time.Minute
+	retryBackoffMax  = 6 * time.Hour
+)
+
+// RetryBackoff is how long a schedule waits after its n-th consecutive
+// failure before it may try again.
+func RetryBackoff(consecutiveFailures int, cadence time.Duration) time.Duration {
+	if consecutiveFailures <= 0 {
+		return 0
+	}
+	backoff := retryBackoffBase
+	for i := 1; i < consecutiveFailures && backoff < retryBackoffMax; i++ {
+		backoff *= 2
+	}
+	if backoff > retryBackoffMax {
+		backoff = retryBackoffMax
+	}
+	if cadence > 0 && backoff > cadence {
+		backoff = cadence
+	}
+	return backoff
 }
 
 // Decision is Decide's answer.
@@ -188,6 +220,11 @@ func Decide(s Schedule, in Inputs) Decision {
 		}
 		if s.PreferredHour != nil && in.Now.Hour() < *s.PreferredHour {
 			return Decision{Reason: fmt.Sprintf("waiting for %02d:00", *s.PreferredHour)}
+		}
+	}
+	if backoff := RetryBackoff(in.ConsecutiveFailures, s.Cadence()); backoff > 0 && !in.LastAttempt.IsZero() {
+		if wait := backoff - in.Now.Sub(in.LastAttempt); wait > 0 {
+			return Decision{Reason: fmt.Sprintf("last run failed (%d in a row); retrying in %s", in.ConsecutiveFailures, wait.Round(time.Minute))}
 		}
 	}
 	quiet, maxDeferral := s.Quiet()

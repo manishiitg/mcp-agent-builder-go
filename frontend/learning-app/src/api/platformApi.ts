@@ -166,9 +166,18 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
       }
       stop = follow(conv, onBatch, (err) => { if (err) finish(err) })
       Promise.race([anchor, new Promise<void>((r) => setTimeout(r, 3000))])
-        .then(() => {
+        .then(async () => {
           if (!anchored) { anchored = true; baseline = conv.cursor }
-          return request<{ session_id?: string; status?: string; error?: string }>('POST', `/api/agent-profiles/${profile}/query`, key ? { message: text, conversation_key: key } : { message: text })
+          // The family's chosen learning helper (onboarding's engine step,
+          // persisted in family.json) rides on every turn as `engine`, one of
+          // the profile's declared provider_options ids; the server resolves
+          // it to that option's (provider, model_id) and rejects anything
+          // undeclared. Absent, the profile's own default applies.
+          const family = await ws.readFamily().catch(() => ({} as { engine?: string }))
+          const body: { message: string; conversation_key?: string; engine?: string } = { message: text }
+          if (key) body.conversation_key = key
+          if (family.engine) body.engine = family.engine
+          return request<{ session_id?: string; status?: string; error?: string }>('POST', `/api/agent-profiles/${profile}/query`, body)
         })
         .then((resp) => {
           if (resp.session_id && resp.session_id !== conv.sessionID) {
@@ -253,15 +262,16 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
 
   async function setup(): Promise<SetupState> {
     const state = await ws.readFamily()
+    const engineSet = !!state.engine
     const childDone = !!(state.child && state.child.name)
     const pinSet = !!state.pin_hash
     return {
-      engine: 'platform',
+      engine: state.engine,
       child: state.child ?? null,
       parent_label: state.parent_label,
       pin_set: pinSet,
-      setup_complete: childDone && pinSet,
-      next_step: !childDone ? 'child' : !pinSet ? 'pin' : 'done',
+      setup_complete: engineSet && childDone && pinSet,
+      next_step: !engineSet ? 'engine' : !childDone ? 'child' : !pinSet ? 'pin' : 'done',
     }
   }
 
@@ -273,9 +283,57 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     return { parent: quickCommandsFromProfile(parent), child: quickCommandsFromProfile(child) }
   }
 
+  type ProviderOption = { id: string; label: string; provider: string; model_id: string; default?: boolean }
+  async function declaredProviderOptions(): Promise<ProviderOption[]> {
+    const profile = await request<{ runtime?: { provider_options?: ProviderOption[] } }>('GET', `/api/agent-profiles/${PARENT_PROFILE}`)
+    return profile.runtime?.provider_options ?? []
+  }
+
+  type ProviderManifestEntry = {
+    id: string
+    runtime_command?: string
+    runtime_available?: boolean
+    auth_configured: boolean
+    usable: boolean
+    setup_hint?: string
+    deprecated?: boolean
+  }
+
+  // Only the profile's own curated provider_options are offered — never the
+  // full AgentWorks provider catalog — but their real readiness (installed?
+  // logged in?) comes from the platform's own provider manifest, the same one
+  // AgentWorks' own model picker reads.
   async function engines(): Promise<ApiEngine[]> {
-    const profile = await request<{ runtime?: { provider_options?: { id: string; label: string; default?: boolean }[] } }>('GET', `/api/agent-profiles/${PARENT_PROFILE}`)
-    return (profile.runtime?.provider_options ?? []).map((o) => ({ id: o.id, name: o.label, runtime_command: '', runtime_available: true, auth_configured: true, usable: true } as ApiEngine))
+    const [options, manifest] = await Promise.all([
+      declaredProviderOptions(),
+      request<{ providers?: ProviderManifestEntry[] }>('GET', '/api/llm-config/providers').catch(() => ({ providers: [] })),
+    ])
+    const byID = new Map((manifest.providers ?? []).map((p) => [p.id, p]))
+    return options.map((o) => {
+      const entry = byID.get(o.provider)
+      return {
+        id: o.id,
+        name: o.label,
+        runtime_command: entry?.runtime_command ?? '',
+        runtime_available: entry?.runtime_available ?? false,
+        auth_configured: entry?.auth_configured ?? false,
+        usable: entry?.usable ?? false,
+        setup_hint: entry?.setup_hint,
+        deprecated: entry?.deprecated,
+      } as ApiEngine
+    })
+  }
+
+  async function validateEngine(engineID: string): Promise<{ valid: boolean; message?: string }> {
+    const options = await declaredProviderOptions()
+    const option = options.find((o) => o.id === engineID)
+    if (!option) return { valid: false, message: 'Unknown learning helper.' }
+    const res = await request<{ valid: boolean; message?: string; error?: string }>('POST', '/api/llm-config/validate-key', { provider: option.provider })
+    return { valid: res.valid, message: res.message ?? res.error }
+  }
+
+  async function selectEngine(engineID: string): Promise<void> {
+    await ws.saveEngine(engineID)
   }
 
   const api: FamilyApi = {
@@ -287,8 +345,8 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     // Re-store even an existing token so every place that mirrors it (the
     // shared chat's own auth key) sees it, not only a fresh login.
     ensureSession: async () => { store.set(await token()) },
-    validateEngine: async () => ({ valid: true, message: 'The platform manages the model.' }),
-    selectEngine: async () => {},
+    validateEngine,
+    selectEngine,
     saveChild: (child) => ws.saveChild(child),
     setPin: (pin) => ws.setPin(pin),
     verifyPin: (pin) => ws.verifyPin(pin),

@@ -60,7 +60,7 @@ import {
   type Activity,
   type VoiceStatus,
 } from './stores'
-import PlatformChat, { type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
+import PlatformChat, { applyFamilyEngineToOpenTabs, type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
 import ChildPlatformChat, { forgetChildChat, submitToChildChat, type ChildKickoff } from './platform/ChildPlatformChat'
 import { BuildUpdateNotice } from './platform/BuildUpdateNotice'
 import { api, backend } from './api'
@@ -2173,10 +2173,23 @@ export default function LearningApp() {
       .catch(() => setGateError('Could not check the PIN.'))
   }
 
+  // After the engine is saved, ask setup() where onboarding really stands:
+  // a fresh family goes on to the child step, but a family that already has
+  // a child and PIN (set up before the engine step existed) lands straight
+  // in the chat instead of re-entering both.
   const persistEngineAndContinue = () => {
     if (!selectedEngine) return
     setSaving(true)
-    api.selectEngine(selectedEngine.id).finally(() => { setSaving(false); move('child') })
+    api.selectEngine(selectedEngine.id)
+      .then(() => api.setup())
+      .then((state) => {
+        applyFamilyEngineToOpenTabs(selectedEngine.id)
+        if (state.next_step === 'done') move(readHandoffSide() === 'tutor' ? 'tutor' : 'parent')
+        else if (state.next_step === 'pin') move('pin')
+        else move('child')
+      })
+      .catch(() => move('child'))
+      .finally(() => setSaving(false))
   }
 
   const createChildAndContinue = () => {
@@ -3898,7 +3911,7 @@ export default function LearningApp() {
                             onClick={() => {
                               setEngine(item.id)
                               setSavingEngine(true)
-                              api.selectEngine(item.id).finally(() => setSavingEngine(false))
+                              api.selectEngine(item.id).finally(() => { applyFamilyEngineToOpenTabs(item.id); setSavingEngine(false) })
                             }}
                           >
                             <span className="fl-settings-engine-col">

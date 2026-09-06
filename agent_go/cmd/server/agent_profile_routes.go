@@ -21,10 +21,15 @@ const maxAgentProfileRequestBytes = 2 << 20
 
 // AgentProfileChatRequest is the intentionally small public contract for a
 // product-owned chat. Prompt, model, tools, skills, permissions and workspace
-// all come from the registered profile rather than the browser.
+// all come from the registered profile rather than the browser. Engine is the
+// one exception, and only within the profile's own declared bounds: it may
+// name one of profile.Runtime.ProviderOptions[].ID, letting the client choose
+// among a product-curated set of coding-agent runtimes (see ProviderOption's
+// doc comment) — never an arbitrary provider or model.
 type AgentProfileChatRequest struct {
 	Message         string `json:"message"`
 	ConversationKey string `json:"conversation_key,omitempty"`
+	Engine          string `json:"engine,omitempty"`
 }
 
 type AgentProfileConversationRequest struct {
@@ -51,7 +56,7 @@ func queryRequestForAgentProfileChat(profile agentprofiles.Profile, input AgentP
 	if strings.TrimSpace(conversation.SessionID) == "" || strings.TrimSpace(conversation.WorkspacePath) == "" {
 		return QueryRequest{}, fmt.Errorf("product conversation has no runtime binding")
 	}
-	return QueryRequest{
+	req := QueryRequest{
 		Query:               input.Message,
 		SessionTitle:        firstNonEmptyTrimmed(conversation.Title, profile.Name),
 		AgentMode:           "multi-agent",
@@ -63,7 +68,25 @@ func queryRequestForAgentProfileChat(profile agentprofiles.Profile, input AgentP
 		},
 		SelectedFolder:           conversation.WorkspacePath,
 		DisableLiveInputDelivery: true,
-	}, nil
+	}
+	if engine := strings.TrimSpace(input.Engine); engine != "" {
+		option, ok := findProviderOptionByID(profile.Runtime.ProviderOptions, engine)
+		if !ok {
+			return QueryRequest{}, fmt.Errorf("engine %q is not offered by this profile", engine)
+		}
+		req.Provider = option.Provider
+		req.ModelID = option.ModelID
+	}
+	return req, nil
+}
+
+func findProviderOptionByID(options []agentprofiles.ProviderOption, id string) (agentprofiles.ProviderOption, bool) {
+	for _, option := range options {
+		if strings.EqualFold(strings.TrimSpace(option.ID), id) {
+			return option, true
+		}
+	}
+	return agentprofiles.ProviderOption{}, false
 }
 
 func AgentProfileRoutes(router *mux.Router, registry *agentprofiles.Registry) {
@@ -238,6 +261,10 @@ func (api *StreamingAPI) handleAgentProfileChatQuery(w http.ResponseWriter, r *h
 		writeAgentProfileError(w, http.StatusNotFound, "agent profile not found")
 		return
 	}
+	// A person is using the product right now: the quiet rule must hold any
+	// due schedule back. Scheduled runs enter through Run, never here, so a
+	// check-in's own turns are not mistaken for family activity.
+	productInteractions.Note(r.Context(), GetUserIDFromContext(r.Context()), profile.Product)
 	conversation, err := api.resolveAgentProfileConversation(r, profile, input.ConversationKey)
 	if err != nil {
 		writeAgentProfileError(w, http.StatusUnprocessableEntity, err.Error())
@@ -298,6 +325,9 @@ func (api *StreamingAPI) handleResolveAgentProfileConversation(w http.ResponseWr
 		writeAgentProfileError(w, http.StatusNotFound, "agent profile not found")
 		return
 	}
+	// Opening the product's conversation is what the app does on launch: the
+	// family is here, so a due check-in waits for a quiet moment.
+	productInteractions.Note(r.Context(), GetUserIDFromContext(r.Context()), profile.Product)
 	conversation, err := api.resolveAgentProfileConversation(r, profile, input.ConversationKey)
 	if err != nil {
 		writeAgentProfileError(w, http.StatusUnprocessableEntity, err.Error())

@@ -22,6 +22,22 @@ func TestVoicePermittedWithoutProfileFollowsBuild(t *testing.T) {
 	}
 }
 
+// Unload is gated exactly like warm: a product that never declared voice
+// cannot poke the engine, and without a registry no profile is admitted.
+func TestVoiceUnloadRefusedForUndeclaredProfile(t *testing.T) {
+	api := &StreamingAPI{}
+	req := httptest.NewRequest(http.MethodPost, "/api/voice/unload?profile_id=video-studio", nil)
+	rec := httptest.NewRecorder()
+	api.handleVoiceUnload(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["error"] == "" {
+		t.Fatalf("expected a JSON error body, got %q (%v)", rec.Body.String(), err)
+	}
+}
+
 // The composer decides whether to mount a mic from this one field, so it must
 // always be present and must never claim availability a stub build cannot
 // honor.

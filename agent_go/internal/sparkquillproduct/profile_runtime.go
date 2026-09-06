@@ -27,6 +27,11 @@ type Child struct {
 
 // FamilyState is family.json.
 type FamilyState struct {
+	// Engine is the family's chosen coding-agent runtime: one of the parent
+	// profile's provider_options ids, written by onboarding/Settings and sent
+	// as `engine` on every turn. It must round-trip through every Go-side
+	// rewrite of family.json (set_child_profile etc.) or the choice is lost.
+	Engine      string   `json:"engine,omitempty"`
 	Child       *Child   `json:"child,omitempty"`
 	ParentLabel string   `json:"parent_label,omitempty"`
 	PinHash     string   `json:"pin_hash,omitempty"`

@@ -8,6 +8,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "setup": "./dev-setup.sh",
+    "test": "node --test lib/*.test.js",
     "start": "npx electron .",
     "build": "electron-builder --mac --arm64 --dir",
     "dist": "electron-builder --mac --arm64 --publish always"
@@ -36,16 +37,24 @@
     },
     "extraResources": [
       {
-        "from": "resources/family-server",
-        "to": "family-server"
+        "from": "resources/agent-server",
+        "to": "agent-server"
+      },
+      {
+        "from": "resources/workspace-server",
+        "to": "workspace-server"
       },
       {
         "from": "resources/lib",
         "to": "lib"
       },
       {
-        "from": "resources/web",
-        "to": "web"
+        "from": "resources/static",
+        "to": "static"
+      },
+      {
+        "from": "resources/configs",
+        "to": "configs"
       },
       {
         "from": "resources/icons",

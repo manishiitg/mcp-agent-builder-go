@@ -39,8 +39,12 @@ const productScheduleStateFile = "product-schedules.json"
 // productScheduleUserState is one user's bookkeeping for one schedule.
 type productScheduleUserState struct {
 	// Enabled overrides the product's default when set.
-	Enabled             *bool  `json:"enabled,omitempty"`
-	LastRunAt           string `json:"last_run_at,omitempty"`
+	Enabled   *bool  `json:"enabled,omitempty"`
+	LastRunAt string `json:"last_run_at,omitempty"`
+	// LastAttemptAt is when a run last started, successful or not; with
+	// ConsecutiveFailures it feeds the retry backoff (a failed check-in must
+	// not re-fire on every tick because only success moves LastRunAt).
+	LastAttemptAt       string `json:"last_attempt_at,omitempty"`
 	LastStatus          string `json:"last_status,omitempty"`
 	LastError           string `json:"last_error,omitempty"`
 	LastSessionID       string `json:"last_session_id,omitempty"`
@@ -69,11 +73,14 @@ func (j productScheduleJob) Effective() productschedule.Schedule {
 	return s
 }
 
-func (j productScheduleJob) lastRun() time.Time {
-	if j.State.LastRunAt == "" {
+func (j productScheduleJob) lastRun() time.Time     { return parseRFC3339OrZero(j.State.LastRunAt) }
+func (j productScheduleJob) lastAttempt() time.Time { return parseRFC3339OrZero(j.State.LastAttemptAt) }
+
+func parseRFC3339OrZero(s string) time.Time {
+	if s == "" {
 		return time.Time{}
 	}
-	t, err := time.Parse(time.RFC3339, j.State.LastRunAt)
+	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
 		return time.Time{}
 	}
@@ -121,8 +128,15 @@ type ProductScheduleService struct {
 
 	mu      sync.Mutex
 	running map[string]*productScheduleRun // key: userID + "\x1f" + job id
-	stateMu sync.Mutex
+	// deferred holds the quiet-rule reason for jobs currently held back, so
+	// the UI can say "waiting for a quiet moment" instead of showing nothing.
+	deferred map[string]string
+	stateMu  sync.Mutex
 }
+
+// productInteractions is the shared record of who last used which product;
+// the product chat handlers stamp it and the quiet rule reads it.
+var productInteractions = newProductInteractionTracker()
 
 type productScheduleRun struct {
 	SessionID string
@@ -132,11 +146,34 @@ type productScheduleRun struct {
 
 // NewProductScheduleService wires the service to the live profile registry.
 func NewProductScheduleService(api *StreamingAPI, registry *agentprofiles.Registry) *ProductScheduleService {
-	svc := &ProductScheduleService{api: api, registry: registry, running: map[string]*productScheduleRun{}}
+	svc := &ProductScheduleService{api: api, registry: registry, running: map[string]*productScheduleRun{}, deferred: map[string]string{}}
 	svc.users = usersWithProduct
 	svc.readFile = readFileFromWorkspace
 	svc.writeFile = writeFileToWorkspace
+	svc.sinceInteractive = func(userID string, profile agentprofiles.Profile) time.Duration {
+		return productInteractions.SinceInteractive(context.Background(), userID, profile.Product)
+	}
 	return svc
+}
+
+func (s *ProductScheduleService) setDeferred(userID, jobID, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.deferred == nil {
+		s.deferred = map[string]string{}
+	}
+	key := userID + "\x1f" + jobID
+	if reason == "" {
+		delete(s.deferred, key)
+		return
+	}
+	s.deferred[key] = reason
+}
+
+func (s *ProductScheduleService) deferredReason(userID, jobID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deferred[userID+"\x1f"+jobID]
 }
 
 // usersWithProduct lists the users a product's schedules run for: every
@@ -321,11 +358,22 @@ func (s *ProductScheduleService) tick(ctx context.Context, now time.Time) {
 			}
 			for _, sched := range profile.Schedules {
 				job := productScheduleJob{UserID: userID, Profile: profile, Schedule: sched, State: states[productScheduleStateKey(profile.ID, sched.ID)]}
-				in := productschedule.Inputs{Now: now, LastRun: job.lastRun(), SinceInteractive: 365 * 24 * time.Hour}
+				in := productschedule.Inputs{
+					Now:                 now,
+					LastRun:             job.lastRun(),
+					LastAttempt:         job.lastAttempt(),
+					ConsecutiveFailures: job.State.ConsecutiveFailures,
+					SinceInteractive:    productInteractionNever,
+				}
 				if s.sinceInteractive != nil {
 					in.SinceInteractive = s.sinceInteractive(userID, profile)
 				}
 				d := productschedule.Decide(job.Effective(), in)
+				if d.Deferred {
+					s.setDeferred(userID, job.ID(), d.Reason)
+				} else {
+					s.setDeferred(userID, job.ID(), "")
+				}
 				if !d.Run {
 					if d.Deferred {
 						scheduleLogf("[PRODUCT-SCHEDULE] %s deferring for %s: %s", job.ID(), userID, d.Reason)
@@ -453,6 +501,7 @@ func (s *ProductScheduleService) Run(ctx context.Context, job productScheduleJob
 		st.LastStatus = "running"
 		st.LastSessionID = sessionID
 		st.LastError = ""
+		st.LastAttemptAt = startedAt.Format(time.RFC3339)
 	})
 
 	scheduleLogf("[PRODUCT-SCHEDULE] 🚀 %s (%s) for user %s: %d message(s), session %s", job.ID(), job.Schedule.Name, job.UserID, len(job.Schedule.Messages), sessionID)
@@ -556,6 +605,7 @@ func (s *ProductScheduleService) jobResponse(job productScheduleJob, runsWorkspa
 		LastDurationMs:      job.State.LastDurationMs,
 		RunCount:            job.State.RunCount,
 		ConsecutiveFailures: job.State.ConsecutiveFailures,
+		DeferredReason:      s.deferredReason(job.UserID, job.ID()),
 	}
 	if sched.CronExpression == "" && sched.CadenceHours > 0 {
 		// The cadence form has no cron line; describe it so the UI shows something.

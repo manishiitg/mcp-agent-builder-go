@@ -10,6 +10,27 @@ import (
 	"github.com/manishiitg/multi-llm-provider-go/llmtypes"
 )
 
+func TestDefaultRootHonorsOverrideEnv(t *testing.T) {
+	t.Setenv("AGENTWORKS_CLI_SECURITY_DIR", "")
+	unset, err := DefaultRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(unset, filepath.Join("AgentWorks", "cli-security")) {
+		t.Fatalf("unset override must fall back to the shared AgentWorks root, got %q", unset)
+	}
+
+	override := filepath.Join(t.TempDir(), "sparkquill-dev-instance", "cli-security")
+	t.Setenv("AGENTWORKS_CLI_SECURITY_DIR", override)
+	got, err := DefaultRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != filepath.Clean(override) {
+		t.Fatalf("DefaultRoot() = %q, want the override %q", got, override)
+	}
+}
+
 func TestStoreDefaultsToCompatibilityAndPersistsOutsideWorkspace(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "operator-state")
 	store, err := NewStore(root)

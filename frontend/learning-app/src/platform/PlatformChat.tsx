@@ -26,6 +26,27 @@ import { toProductCommandDefinitions } from './productCommands'
 export const PARENT_PROFILE_ID = 'sparkquill'
 export const PARENT_PROFILE_VERSION = 1
 export const FAMILY_WORKSPACE = 'Chats/SparkQuill'
+const CHILD_PROFILE_ID = 'sparkquill-child'
+
+/** The family's chosen learning helper (family.json `engine`), or undefined before onboarding picks one. */
+export async function familyEngine(): Promise<string | undefined> {
+  const state = await api.setup().catch(() => null)
+  return state?.engine || undefined
+}
+
+/**
+ * Keeps already-open SparkQuill tabs on the engine the parent just chose in
+ * Settings, so the next turn uses it without a relaunch. Tabs are opened
+ * once per page load and carry the engine in their metadata (ChatArea sends
+ * it as `engine` on every profile query).
+ */
+export function applyFamilyEngineToOpenTabs(engine: string): void {
+  const store = useChatStore.getState()
+  for (const tab of Object.values(store.chatTabs)) {
+    const id = tab.metadata?.agentProfileId
+    if (id === PARENT_PROFILE_ID || id === CHILD_PROFILE_ID) store.setTabMetadata(tab.tabId, { agentProfileEngine: engine })
+  }
+}
 
 export type ProductInteraction = { kind: string; payload: Record<string, unknown> }
 export type ProductPresentation = { kind: string; payload: Record<string, unknown> }
@@ -132,13 +153,17 @@ export default function PlatformChat({ title, childName, theme, commands, landin
       const suggestionBinding = (profile?.tools ?? []).find((t) => t.interaction?.render === 'chat.suggestions')
       suggestionsKind = suggestionBinding ? (suggestionBinding.interaction?.kind || 'suggestions') : null
       setPresentationKinds((profile?.tools ?? []).map((t) => t.presentation?.kind).filter((k): k is string => typeof k === 'string' && k.length > 0))
-      const conversation = await agentApi.resolveAgentProfileConversation(PARENT_PROFILE_ID, {}, existing?.sessionId ?? undefined)
+      const [conversation, engine] = await Promise.all([
+        agentApi.resolveAgentProfileConversation(PARENT_PROFILE_ID, {}, existing?.sessionId ?? undefined),
+        familyEngine(),
+      ])
       const createdTabId = await chatStore.createChatTab(title, {
         mode: 'multi-agent',
         agentProfileId: PARENT_PROFILE_ID,
         agentProfileVersion: PARENT_PROFILE_VERSION,
         agentProfileWorkspace: FAMILY_WORKSPACE,
         agentProfileChatContract: 'profile-v1',
+        agentProfileEngine: engine,
         agentProfileConversationKey: conversation.conversation_key,
         agentProfileConversationId: conversation.conversation_id,
       }, conversation.session_id)

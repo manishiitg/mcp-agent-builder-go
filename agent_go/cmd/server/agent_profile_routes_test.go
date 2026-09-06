@@ -75,6 +75,51 @@ func TestQueryRequestForAgentProfileChatRequiresServerOwnedWorkspace(t *testing.
 	}
 }
 
+func sparkQuillTestProfile() agentprofiles.Profile {
+	profile := routeTestProfile("sparkquill", true, "")
+	profile.Name = "SparkQuill"
+	profile.Runtime.ProviderOptions = []agentprofiles.ProviderOption{
+		{ID: "claude-code", Label: "Claude Code", Provider: "claude-code", ModelID: "claude-sonnet-5", Default: true},
+		{ID: "codex-cli", Label: "Codex", Provider: "codex-cli", ModelID: "gpt-5.4"},
+	}
+	return profile
+}
+
+func TestQueryRequestForAgentProfileChatWithNoEngineLeavesProviderUnset(t *testing.T) {
+	query, err := queryRequestForAgentProfileChat(sparkQuillTestProfile(), AgentProfileChatRequest{
+		Message: "hello",
+	}, ProductConversationRecord{SessionID: "session-1", WorkspacePath: "Chats/SparkQuill"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if query.Provider != "" || query.ModelID != "" {
+		t.Fatalf("no engine requested must leave provider/model unset (the profile's own default applies), got provider=%q model=%q", query.Provider, query.ModelID)
+	}
+}
+
+func TestQueryRequestForAgentProfileChatResolvesDeclaredEngine(t *testing.T) {
+	query, err := queryRequestForAgentProfileChat(sparkQuillTestProfile(), AgentProfileChatRequest{
+		Message: "hello",
+		Engine:  "codex-cli",
+	}, ProductConversationRecord{SessionID: "session-1", WorkspacePath: "Chats/SparkQuill"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if query.Provider != "codex-cli" || query.ModelID != "gpt-5.4" {
+		t.Fatalf("engine %q must resolve to its declared (provider, model_id), got provider=%q model=%q", "codex-cli", query.Provider, query.ModelID)
+	}
+}
+
+func TestQueryRequestForAgentProfileChatRejectsUndeclaredEngine(t *testing.T) {
+	_, err := queryRequestForAgentProfileChat(sparkQuillTestProfile(), AgentProfileChatRequest{
+		Message: "hello",
+		Engine:  "gemini-anything-goes",
+	}, ProductConversationRecord{SessionID: "session-1", WorkspacePath: "Chats/SparkQuill"})
+	if err == nil {
+		t.Fatal("an engine id not declared in the profile's provider_options must be rejected, never silently ignored or passed through")
+	}
+}
+
 func TestAgentProfileChatEndpointRejectsBroadAgentWorksFields(t *testing.T) {
 	api := &StreamingAPI{}
 	req := profileRouteRequest(

@@ -205,10 +205,11 @@ export function applyAgentProfileBinding(payload: AgentQueryRequest, tab: ChatTa
   }
 }
 
-export function buildAgentProfileChatRequest(payload: AgentQueryRequest, conversationKey?: string): AgentProfileChatRequest {
+export function buildAgentProfileChatRequest(payload: AgentQueryRequest, conversationKey?: string, engine?: string): AgentProfileChatRequest {
   return {
     message: payload.query,
     ...(conversationKey ? { conversation_key: conversationKey } : {}),
+    ...(engine ? { engine } : {}),
   }
 }
 

@@ -1,7 +1,9 @@
 node_modules/
 dist/
-resources/family-server
-resources/web/
+resources/agent-server
+resources/workspace-server
+resources/static/
+resources/configs/
 *.log
 resources/voice-helper
 resources/lib/

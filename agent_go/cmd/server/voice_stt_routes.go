@@ -136,6 +136,23 @@ func (api *StreamingAPI) handleVoiceWarm(w http.ResponseWriter, r *http.Request)
 	writeVoiceJSON(w, http.StatusAccepted, after)
 }
 
+// handleVoiceUnload is POST /api/voice/unload?profile_id=... — releases the
+// loaded speech model (~1 GB resident) without touching the downloaded files,
+// so a desktop shell can free it when its window is hidden and warm it again
+// on show. Gated like warm; a no-op when nothing is loaded.
+func (api *StreamingAPI) handleVoiceUnload(w http.ResponseWriter, r *http.Request) {
+	profileID := r.URL.Query().Get("profile_id")
+	userID := GetUserIDFromContext(r.Context())
+	if !api.voicePermitted(profileID, userID) {
+		log.Printf("[VOICE] unload refused: user=%s profile=%q has not declared the voice capability", userID, profileID)
+		writeVoiceJSON(w, http.StatusForbidden, map[string]string{"error": "voice capability not enabled for this profile"})
+		return
+	}
+	released := voiceManager.Unload()
+	log.Printf("[VOICE] unload requested: user=%s profile=%q released=%v", userID, profileID, released)
+	writeVoiceJSON(w, http.StatusOK, voiceManager.Status())
+}
+
 func writeVoiceJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

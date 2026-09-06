@@ -408,6 +408,54 @@ harmless 404 in M1 (~1 GB stays resident while hidden); add `/api/voice/unload` 
   relaunch restores history; AgentWorks + SparkQuill simultaneously (distinct ports/userData/docs roots, no browser
   kill cross-fire, tmux intact); hide → `/api/voice/unload`, show → `/warm`.
 
+### Implementation status (2026-09-06, uncommitted branch work)
+
+Executed in the order **M1 → P0 → P3 → P5** (not the P2-first chain above): the engine onboarding and the data
+migration do not depend on the learning-app move, and running them first puts a real family on the platform
+before the CSS/consolidation work. P1, P2a/b, P4 (beyond the notes below) and P6 remain.
+
+- **M1 done, live-verified.** `desktop-sparkquill/main.js` spawns `workspace-server` (45779) + `agent-server`
+  (45778), persists a generated `AUTH_SECRET` in `<userData>/config.json`, serves `frontend/learning-app/dist` as
+  `Resources/static`, never sets `AGENT_PRODUCTS` (`lib/agentEnv.js` + `node --test`). `preload.js` reports
+  `backend: 'platform'`. Onboarding, PIN, a parent turn (Claude Code, tool rows) and relaunch-with-history all
+  observed in the real Electron window.
+- **P0 done.** `runtime_frontend_config.go` (`AGENTWORKS_ENABLED_PRODUCT_SURFACES` / `_DEFAULT_PRODUCT_SURFACE` /
+  `_APP_NAME` / `_FAVICON_URL`, omitted when unset), `STATIC_DIR`, `registeredProductIDs()` + `sparkquill`,
+  `AGENTWORKS_CLI_SECURITY_DIR`, voice-model download lock (`pkg/voicestt` `acquireModelDownloadLock`).
+- **P3 done, live-verified — with one contract change the plan missed.** The product-chat route
+  (`AgentProfileChatRequest`, strict decode) had *no* field through which a client could pick a provider, so
+  "turn wiring A" could never have worked: `queryRequestForAgentProfileChat` always left `Provider/ModelID` empty
+  and `resolveProfileRuntimeModel` always fell through to the `default: true` option. Added `engine` (one of the
+  profile's `provider_options[].id`; undeclared → 422; raw `provider` still → 400) and threaded it
+  `family.json.engine` → tab metadata `agentProfileEngine` → `buildAgentProfileChatRequest` → `/query`.
+  `platformApi.ts` now really implements `setup()` (engine step first), `engines()` (`/api/llm-config/providers`
+  ∩ `provider_options`), `validateEngine()` (`/api/llm-config/validate-key`), `selectEngine()`. `FamilyState` gained
+  `Engine` so Go-side rewrites of `family.json` keep it. Settings changes propagate to open tabs
+  (`applyFamilyEngineToOpenTabs`).
+- **P5 done, verified against the real `~/.sunlit-learning`** (into a scratch docs dir: 16 live activities all
+  with synthesized `product.json`, 91 archived, 68 keys relocated to `keys/` with none left in reach, 0 session
+  handles, 0 secrets, pointer rewritten, `engine: codex-cli` carried, check-in seeded as just-run; source
+  byte-count unchanged). `internal/sparkquillproduct/migrate.go` + `cmd/server/sparkquill_migration.go`
+  (startup hook gated on `NATIVE_WORKSPACE=true` + single-user; CLI `agent-server server migrate-sparkquill
+  --from --docs-dir --user --dry-run --allow-existing`). Deviations from A9/P5 as written: **no `cp -a` backup
+  step** — the migration is copy-only and never touches the source, which is the safety property (a 3.3 GB home
+  full of voice models is not worth duplicating); `_legacy/` receives unplaceables verbatim; the startup hook
+  refuses a non-empty unmarked target and points at `--allow-existing`, which merges never-overwriting and lets
+  existing `family.json` choices win.
+- **P4 ship-first done, live-verified.** The quiet rule was not just switched off on the platform; it had two
+  further defects fixed here: (1) only a *successful* run moved `last_run_at`, so a failing check-in re-fired on
+  every 60 s tick — `productschedule.Inputs` gained `LastAttempt`/`ConsecutiveFailures` and `Decide` applies an
+  exponential retry backoff (30 min doubling, capped at 6 h / the cadence); (2) nothing survived a restart, so
+  every due check-in fired on the first tick after launch — `cmd/server/product_interactions.go` keeps a per-user
+  `chat_history/product-interactions.json` (stamped by the product chat and conversation-open handlers only, never
+  by scheduled runs, so a check-in's own turns cannot defer it) and feeds `ProductScheduleService.sinceInteractive`.
+  Deferral is surfaced as `deferred_reason` on the job response. Observed live: overdue check-in + app just opened
+  → `schedule.log`: "deferring … user active 59s ago (overdue by 1h1m, forcing after 4h)". `/api/voice/unload` added
+  (gated like warm); the shell now sends a `window-visibility` IPC and `learning-app/src/platform/voiceLifecycle.ts`
+  calls unload on hide / warm-if-installed on show — observed live: `released=true` on hide, `loading=true` on show.
+  Note for P1: the scheduler writes `logs/schedule.log` relative to the server's cwd (= `Resources/`), the same cwd
+  coupling `STATIC_DIR` was added to remove; the shell should pass a `LOG_DIR`/cwd under `userData` once it moves.
+
 ## A11. Migration worst cases, multi-instance verdict, top risks
 
 **Migration worst cases (always against `cp -a ~/.sunlit-learning <fixture>`; source flag → the copy, `--docs-dir` → a

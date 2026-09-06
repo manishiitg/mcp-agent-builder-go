@@ -48,4 +48,10 @@ describe('agent profile query binding', () => {
       conversation_key: 'project-123',
     })
   })
+
+  it('carries the product user\'s chosen engine, and nothing else from the broad payload', () => {
+    const payload = { query: 'hello', provider: 'codex-cli', model_id: 'gpt-5.4' } as unknown as AgentQueryRequest
+    expect(buildAgentProfileChatRequest(payload, undefined, 'codex-cli')).toEqual({ message: 'hello', engine: 'codex-cli' })
+    expect(buildAgentProfileChatRequest(payload, 'key', '')).toEqual({ message: 'hello', conversation_key: 'key' })
+  })
 })

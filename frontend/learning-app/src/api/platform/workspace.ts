@@ -10,7 +10,7 @@ export const ACTIVITIES = 'activities'
 
 export type Requester = <T>(method: string, path: string, body?: unknown) => Promise<T>
 
-export type FamilyFile = { child?: { name?: string; grade?: string; board?: string } | null; parent_label?: string; pin_hash?: string; watch_sites?: string[] }
+export type FamilyFile = { engine?: string; child?: { name?: string; grade?: string; board?: string } | null; parent_label?: string; pin_hash?: string; watch_sites?: string[] }
 
 export async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
@@ -134,6 +134,11 @@ export class FamilyWorkspace {
 
   async readFamily(): Promise<FamilyFile> {
     return (await this.readJSON<FamilyFile>('family.json')) ?? {}
+  }
+
+  async saveEngine(engine: string): Promise<void> {
+    const current = await this.readFamily()
+    await this.writeJSON('family.json', { ...current, engine: engine.trim() })
   }
 
   async saveChild(child: { name: string; grade: string; board: string }): Promise<void> {

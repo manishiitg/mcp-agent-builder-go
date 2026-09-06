@@ -427,6 +427,9 @@ export interface ChatTab {
     // Opts a product into the narrow /agent-profiles/{id}/query contract.
     // Kept on the product-owned tab so ChatArea remains product-agnostic.
     agentProfileChatContract?: 'profile-v1'
+    // The product user's chosen coding-agent runtime, as one of the profile's
+    // declared provider_options ids. Sent as `engine` on every profile query.
+    agentProfileEngine?: string
     userInteractiveContinuation?: boolean // Observed run promoted to an interactive chat without changing session ID
   }
 }

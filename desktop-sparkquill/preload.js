@@ -1,11 +1,24 @@
-const { contextBridge } = require('electron')
+const { contextBridge, ipcRenderer } = require('electron')
 
 // The packaged app serves the frontend from the same origin as the API, so the
 // web app should talk to its own origin rather than the hardcoded dev default
-// (http://127.0.0.1:8010) — which would be wrong whenever the port shifted
-// because 8010 was taken. In the browser this bridge simply isn't there and
-// the app falls back to VITE_FAMILY_API, so dev is unaffected.
+// — which would be wrong whenever the port shifted.
+//
+// backend() reports 'platform': M1 of
+// docs/design/sparkquill_desktop_on_platform_plan.md moved the shell off the
+// standalone family-server onto the AgentWorks platform binaries
+// (workspace-server + agent-server), which is what the learning app's
+// existing platform-mode client (api/index.ts, platform/runtimeConfig.ts)
+// already targets.
+//
+// onWindowVisibility lets the app free the speech model when the window is
+// hidden and warm it again on show (main.js sends the event; the app holds
+// the login token the platform's /api/voice/* routes need).
 contextBridge.exposeInMainWorld('sparkquill', {
   isDesktop: true,
   apiBaseUrl: () => window.location.origin,
+  backend: () => 'platform',
+  onWindowVisibility: (callback) => {
+    ipcRenderer.on('window-visibility', (_event, payload) => callback(!!(payload && payload.visible)))
+  },
 })

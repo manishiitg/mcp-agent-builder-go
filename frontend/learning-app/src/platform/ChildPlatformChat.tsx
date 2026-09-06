@@ -22,7 +22,7 @@ import type { ProductInteraction as TranscriptInteraction } from '../../../share
 import type { QuickCommand } from '../stores/types'
 import { api } from '../api'
 import { toProductCommandDefinitions } from './productCommands'
-import { FAMILY_WORKSPACE, type ProductPresentation } from './PlatformChat'
+import { FAMILY_WORKSPACE, familyEngine, type ProductPresentation } from './PlatformChat'
 
 export const CHILD_PROFILE_ID = 'sparkquill-child'
 const CHILD_PROFILE_VERSION = 1
@@ -171,13 +171,17 @@ export default function ChildPlatformChat({ activityDir, title, childName, theme
       const profile = await agentApi.getAgentProfile(CHILD_PROFILE_ID).catch(() => null) as ProfileDeclaration | null
       renders = readRenders(profile)
       setPresentationKinds((profile?.tools ?? []).map((t) => t.presentation?.kind).filter((k): k is string => typeof k === 'string' && k.length > 0))
-      const conversation = await agentApi.resolveAgentProfileConversation(CHILD_PROFILE_ID, { conversation_key: slug }, existing?.sessionId ?? undefined)
+      const [conversation, engine] = await Promise.all([
+        agentApi.resolveAgentProfileConversation(CHILD_PROFILE_ID, { conversation_key: slug }, existing?.sessionId ?? undefined),
+        familyEngine(),
+      ])
       const createdTabId = await chatStore.createChatTab(title, {
         mode: 'multi-agent',
         agentProfileId: CHILD_PROFILE_ID,
         agentProfileVersion: CHILD_PROFILE_VERSION,
         agentProfileWorkspace: `${FAMILY_WORKSPACE}/${activityDir.replace(/^\/+|\/+$/g, '')}`,
         agentProfileChatContract: 'profile-v1',
+        agentProfileEngine: engine,
         agentProfileConversationKey: conversation.conversation_key,
         agentProfileConversationId: conversation.conversation_id,
       }, conversation.session_id)

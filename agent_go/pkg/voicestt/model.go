@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -97,21 +98,64 @@ func EnsureModelFiles(dir string, progress func(DownloadProgress)) error {
 	return EnsureModelFilesContext(context.Background(), dir, progress)
 }
 
-// EnsureModelFilesContext is EnsureModelFiles with cancellation.
-func EnsureModelFilesContext(ctx context.Context, dir string, progress func(DownloadProgress)) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	type pending struct{ name, url, path string }
-	var todo []pending
+type pendingModel struct{ name, url, path string }
+
+// pendingModelDownloads reports what EnsureModelFilesContext still needs to
+// fetch into dir. Called twice (before and after acquiring the download
+// lock) since a second process may finish the download while this one waits.
+func pendingModelDownloads(dir string) (todo []pendingModel, needPunct bool) {
 	for name, url := range DefaultModelURLs {
 		path := filepath.Join(dir, name)
 		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
 			continue
 		}
-		todo = append(todo, pending{name, url, path})
+		todo = append(todo, pendingModel{name, url, path})
 	}
-	needPunct := !punctuationInstalled(dir)
+	return todo, !punctuationInstalled(dir)
+}
+
+// acquireModelDownloadLock serializes first-time model downloads across
+// processes sharing dir (e.g. the AgentWorks and SparkQuill desktops running
+// side by side both warm the voice engine on launch): an O_EXCL lock file
+// beside dir means the second process waits for the first to finish instead
+// of writing the same partial files concurrently.
+func acquireModelDownloadLock(ctx context.Context, dir string) (func(), error) {
+	lockPath := dir + ".lock"
+	for {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644) //nolint:gosec // G304: lockPath is derived from an internal model dir, not user input.
+		if err == nil {
+			_, _ = f.WriteString(strconv.Itoa(os.Getpid()))
+			_ = f.Close()
+			return func() { _ = os.Remove(lockPath) }, nil
+		}
+		if !os.IsExist(err) {
+			return nil, fmt.Errorf("acquire model download lock: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// EnsureModelFilesContext is EnsureModelFiles with cancellation.
+func EnsureModelFilesContext(ctx context.Context, dir string, progress func(DownloadProgress)) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	todo, needPunct := pendingModelDownloads(dir)
+	if len(todo) == 0 && !needPunct {
+		return nil
+	}
+	release, err := acquireModelDownloadLock(ctx, dir)
+	if err != nil {
+		return err
+	}
+	defer release()
+	// Re-check: another process may have completed the download while this
+	// one was waiting for the lock.
+	todo, needPunct = pendingModelDownloads(dir)
 	if len(todo) == 0 && !needPunct {
 		return nil
 	}

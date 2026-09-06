@@ -1445,6 +1445,7 @@ func init() {
 	viper.BindPFlags(ServerCmd.Flags())
 
 	ServerCmd.AddCommand(rotateProviderKeysCmd)
+	ServerCmd.AddCommand(migrateSparkQuillCmd)
 }
 
 func runServer(cmd *cobra.Command, args []string) {
@@ -1768,6 +1769,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		if err := sparkquillproduct.RegisterAgentProfileRuntime(profileRegistry, getWorkspaceAPIURL()); err != nil {
 			log.Fatalf("Failed to register SparkQuill agent profile runtime: %v", err)
 		}
+		runSparkQuillLegacyMigrationIfNeeded()
 	}
 	if productEnabled("dominion") {
 		if err := dominionproduct.RegisterProductSkills(); err != nil {
@@ -2194,6 +2196,7 @@ func runServer(cmd *cobra.Command, args []string) {
 	// silently waiting on it. status is what the progress bar polls.
 	apiRouter.HandleFunc("/voice/status", api.handleVoiceStatus).Methods("GET", "OPTIONS")
 	apiRouter.HandleFunc("/voice/warm", api.handleVoiceWarm).Methods("POST", "OPTIONS")
+	apiRouter.HandleFunc("/voice/unload", api.handleVoiceUnload).Methods("POST", "OPTIONS")
 	// Load the engine at server startup, not on the first mic click: loading
 	// takes ~1-2s, and a user clicking before it finished used to sit looking
 	// at a silent button. Only when the model is already on disk, though — a
@@ -2518,7 +2521,7 @@ func runServer(cmd *cobra.Command, args []string) {
 		}
 		w.Header().Set("Content-Type", "application/javascript")
 		w.Header().Set("Cache-Control", "no-store")
-		fmt.Fprintf(w, "window.__APP_RUNTIME_CONFIG__ = {\n  apiBaseUrl: \"http://localhost:%d\",\n  workspaceApiBaseUrl: %q\n};\n", actualPort, workspaceURL)
+		fmt.Fprint(w, runtimeFrontendConfigJS(actualPort, workspaceURL))
 	}).Methods("GET")
 
 	// Headless report preview page (preview_report tool): embedded in the
@@ -2529,8 +2532,9 @@ func runServer(cmd *cobra.Command, args []string) {
 
 	// Static file serving (for frontend). Unknown GET/HEAD routes fall back to
 	// index.html so dedicated SPA URLs like /report, /file, and /folder work
-	// when opened directly in a browser.
-	router.PathPrefix("/").Handler(spaStaticFileHandler("./static/"))
+	// when opened directly in a browser. Defaults to cwd-relative "./static/"
+	// (unchanged); STATIC_DIR overrides it, see staticFrontendDir.
+	router.PathPrefix("/").Handler(spaStaticFileHandler(staticFrontendDir()))
 
 	// Create HTTP server
 	srv := &http.Server{
