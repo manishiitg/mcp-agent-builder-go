@@ -455,6 +455,16 @@ before the CSS/consolidation work. P1, P2a/b, P4 (beyond the notes below) and P6
   calls unload on hide / warm-if-installed on show — observed live: `released=true` on hide, `loading=true` on show.
   Note for P1: the scheduler writes `logs/schedule.log` relative to the server's cwd (= `Resources/`), the same cwd
   coupling `STATIC_DIR` was added to remove; the shell should pass a `LOG_DIR`/cwd under `userData` once it moves.
+- **Found by the first real family turn on Codex (2026-09-06):** `product.yaml` pinned the Codex option to
+  `gpt-5.4`, which Codex 0.147 rejects for a ChatGPT-account login ("not supported when using Codex with a ChatGPT
+  account"); the family's own choice was `gpt-5.6-sol`, and that pin is now `gpt-5.6-sol` for both profiles. Worse,
+  the failure was invisible: Codex records a failed turn as `task_complete` with `last_agent_message: null` and the
+  API error in `error`, then shows the ready prompt again, so the interactive adapter returned an empty reply that
+  `provider_runtime.go` accepted as a launch-only response (a session handle was attached) and the UI showed a bare
+  "LLM Generation End · No content generated" card. `multi-llm-provider-go` now reads `task_complete.error`
+  (`readCodexRolloutTurnError`) and fails the turn with the unwrapped API message when there is no final answer.
+  Open (P4 trail / model picker): the option is still a hardcoded pin; the catalog exposes tier aliases
+  (`high`/`medium`/`low`) that would track the provider's defaults instead.
 - **P2a done.** The standalone bubble chat is gone: every `backend !== 'platform'` branch, the parent/child bubble
   renderers and composers, the `sendParentText`/`sendChildText`/kickoff handlers, the 20 s pollers and SSE watchers,
   queue drains, auto-scroll, upload/paste/mic composer plumbing, `useParentChatStore`, the message fields of
