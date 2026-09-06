@@ -14,8 +14,6 @@ export type ApiEngine = {
   deprecated?: boolean
 }
 
-export type ConvMeta = { id: string; title: string; when: string; scope: 'parent' | 'child'; updated: string }
-
 // Mirrors mcpagent/events.ToolCallRecord. Tool calls are execution receipts,
 // not a SparkQuill-only debug format, so every coding CLI has the same shape.
 export type ToolCallRecord = {
@@ -57,7 +55,6 @@ export type VoiceStatus = {
   hardware: { arch: string; is_apple_silicon: boolean; total_ram_bytes: number }
   stt_tiers: VoiceTier[]
 }
-export type ParentMsg = { role: 'user' | 'assistant' | 'tool'; text?: string; tool?: string; name?: string; grade?: string; board?: string; stars?: number; reason?: string; source?: string; html?: string; path?: string; toolCalls?: ToolCallRecord[] }
 export type StoredMsg = { role: string; text?: string; tool?: string; stars?: number; reason?: string; source?: string; html?: string; path?: string }
 
 export type TreeNode = { name: string; path: string; type: 'dir' | 'file'; children?: TreeNode[]; size?: number }
@@ -81,13 +78,6 @@ export type Activity = {
   persona?: string
   created_at?: string
   attempts?: ActivityItem[]
-}
-
-// toParentMsg reconstructs a persisted transcript entry (incl. a celebrate
-// event) into what the UI renders — so reloading a conversation replays star
-// moments exactly where they happened, not just the surrounding text.
-export function toParentMsg(m: StoredMsg): ParentMsg {
-  return { role: m.role as ParentMsg['role'], text: m.text, tool: m.tool, stars: m.stars, reason: m.reason, source: m.source, html: m.html, path: m.path }
 }
 
 /** One entry of the composer's quick menu: the label shown, the message sent as if typed. */

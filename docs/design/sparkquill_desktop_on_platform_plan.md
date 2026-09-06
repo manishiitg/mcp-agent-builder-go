@@ -455,6 +455,19 @@ before the CSS/consolidation work. P1, P2a/b, P4 (beyond the notes below) and P6
   calls unload on hide / warm-if-installed on show — observed live: `released=true` on hide, `loading=true` on show.
   Note for P1: the scheduler writes `logs/schedule.log` relative to the server's cwd (= `Resources/`), the same cwd
   coupling `STATIC_DIR` was added to remove; the shell should pass a `LOG_DIR`/cwd under `userData` once it moves.
+- **P2a done.** The standalone bubble chat is gone: every `backend !== 'platform'` branch, the parent/child bubble
+  renderers and composers, the `sendParentText`/`sendChildText`/kickoff handlers, the 20 s pollers and SSE watchers,
+  queue drains, auto-scroll, upload/paste/mic composer plumbing, `useParentChatStore`, the message fields of
+  `useChildChatStore`, `standaloneApi.ts` (+test), `MicButton.tsx`, `TurnCollector` and the turn-transport types
+  (`TurnStreamEvent`/`TurnResult`/`TurnMessage`/`ToolEvent`), `FamilyApi`'s chat methods (only `loadChildConversation`
+  survives, for the continue-or-fresh question), and 100 CSS rules that only styled those. `api/index.ts`,
+  `runtimeConfig.ts` and `apiBase.ts` are platform-only (same-origin by default, `VITE_PLATFORM_API` for a browser dev
+  session). `LearningApp.tsx` 4,637 → ~3,220 lines; 2,673 lines deleted overall. Guarded by `tsc` (the file was never
+  type-checked before; only the two pre-existing `TerminalEventTranscript` prop errors remain), the Vite build and the
+  learning-app vitest suite. Found on the way: importing the shared `src/api/secrets` client from a bare test hits a
+  pre-existing circular import in `src/services` (`api.ts` ↔ `mcpConfigApi.ts` ↔ `useMCPStore`); the adapter now loads
+  it lazily. Not done here (P2b/P4 trail): the voice Settings section still talks to family-server-only routes
+  (`/api/voice/model/*`, unauthenticated `/api/voice/stream` in `useMicDictation`).
 
 ## A11. Migration worst cases, multi-instance verdict, top risks
 

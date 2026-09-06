@@ -1,12 +1,9 @@
 // The one seam between the SparkQuill UI and whatever serves it.
 //
-// Every backend call the app makes goes through this interface. Today the
-// only implementation is the standalone family server (standaloneApi.ts);
-// the AgentWorks platform implementation slots in behind the same shape,
-// so the 4,900-line component never has to know which one it is talking to.
-//
-// Shapes mirror the family server's JSON exactly (see cmd/family-server).
-import type { ApiEngine, Activity, QuickCommand, StoredMsg, ToolCallRecord, TreeNode, VoiceStatus } from '../stores/types'
+// Every backend call the app makes goes through this interface; the one
+// implementation is the AgentWorks platform (platformApi.ts). Turns themselves
+// run through the shared ChatArea, so there is no chat transport here.
+import type { ApiEngine, Activity, QuickCommand, StoredMsg, TreeNode, VoiceStatus } from '../stores/types'
 
 export type SetupState = {
   engine?: string
@@ -17,41 +14,6 @@ export type SetupState = {
   parent_label?: string
 }
 
-/**
- * `replace` carries the whole live preview so far (the platform joins chunks
- * per provider: verbatim for fragment streams, block-wise for claude-code);
- * `delta` is only used by the standalone backend which streams raw text.
- */
-export type TurnStreamEvent = { type?: 'delta' | 'replace' | 'status' | 'tool_call' | string; text?: string; tool_call?: ToolCallRecord }
-
-/** Side-effect signals a turn produced; the same struct for parent and child. */
-export type ToolEvent = {
-  tool: string
-  name?: string
-  grade?: string
-  board?: string
-  path?: string
-  focus?: string
-  package?: string
-  stars?: number
-  total?: number
-  reason?: string
-  parent_label?: string
-}
-
-export type Suggestion = { label: string; message: string }
-
-export type TurnResult = {
-  reply?: string
-  error?: string
-  suggestions?: Suggestion[]
-  tool_events?: ToolEvent[]
-  tool_calls?: ToolCallRecord[]
-  /** child turns only: a transient HTML scene to show inline */
-  scene?: string
-}
-
-export type TurnMessage = { role: string; text: string; source?: string }
 
 export type FileContent = { path?: string; is_text?: boolean; content?: string; size?: number }
 export type TreeResponse = TreeNode[] | { nodes?: TreeNode[]; total_size?: number }
@@ -86,25 +48,11 @@ export interface FamilyApi {
   setPin(pin: string): Promise<{ error?: string }>
   verifyPin(pin: string): Promise<{ ok?: boolean }>
 
-  // ---- parent conversation -------------------------------------------------
-  /**
-   * Runs one parent turn: onEvent receives the live preview (delta / status /
-   * tool_call) while the promise resolves with the authoritative result.
-   */
-  sendParentTurn(req: { messages: TurnMessage[]; conversationId: string; viewerPath?: string }, onEvent: (e: TurnStreamEvent) => void): Promise<TurnResult>
-  steerParent(conversationId: string, message: string): Promise<{ steered?: boolean }>
-  /** Watches a conversation for turns started elsewhere (WhatsApp, Pulse). Returns unsubscribe. */
-  watchParent(conversationId: string, onEvent: (e: TurnStreamEvent) => void): () => void
-  loadParentConversation(): Promise<StoredConversation | null>
-
   // ---- child conversation --------------------------------------------------
   childActivity(): Promise<Activity | null>
   handoff(dir: string, resume: boolean): Promise<{ new_session?: boolean; dir?: string; goal?: string }>
   /** Forgets the child's conversation for an activity, so the next turn starts a new one ("Start fresh"). */
   resetChildConversation(activityDir: string): Promise<void>
-  sendChildTurn(req: { messages: TurnMessage[]; conversationId: string }, onEvent: (e: TurnStreamEvent) => void): Promise<TurnResult>
-  steerChild(conversationId: string, message: string): Promise<{ steered?: boolean }>
-  watchChild(activityDir: string, onEvent: (e: TurnStreamEvent) => void): () => void
   loadChildConversation(activityDir: string): Promise<StoredConversation | null>
 
   // ---- workspace -----------------------------------------------------------

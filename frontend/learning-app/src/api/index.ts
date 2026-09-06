@@ -1,17 +1,13 @@
-// The API the app uses. The backend is chosen once, at load: the standalone
-// family server (default) or the AgentWorks platform, selected by the
-// desktop shell (window.sparkquill.backend) or VITE_SPARKQUILL_BACKEND.
+// The API the app uses: the AgentWorks platform, reached through the
+// SparkQuill product profiles. The standalone family server is gone
+// (docs/design/sparkquill_desktop_on_platform_plan.md, P2a); the desktop
+// shell serves this app from the platform server's own origin, and a
+// browser dev session points VITE_PLATFORM_API at one.
 import { FAMILY_API } from '../apiBase'
 import type { FamilyApi } from './familyApi'
 import { createPlatformApi } from './platformApi'
-import { standaloneApi } from './standaloneApi'
 
-type Shell = { sparkquill?: { backend?(): string; apiBaseUrl(): string } }
 const env = (import.meta as { env?: Record<string, string | undefined> }).env ?? {}
-export const backend =
-  (typeof window !== 'undefined' ? (window as Shell).sparkquill?.backend?.() : undefined)
-  ?? env.VITE_SPARKQUILL_BACKEND
-  ?? 'standalone'
 
 export const platformBaseUrl = env.VITE_PLATFORM_API ?? FAMILY_API
 
@@ -29,7 +25,5 @@ const platformTokenStore = {
   },
 }
 
-export const api: FamilyApi = backend === 'platform'
-  ? createPlatformApi({ baseUrl: platformBaseUrl, tokenStore: platformTokenStore })
-  : standaloneApi
+export const api: FamilyApi = createPlatformApi({ baseUrl: platformBaseUrl, tokenStore: platformTokenStore })
 export type { FamilyApi } from './familyApi'

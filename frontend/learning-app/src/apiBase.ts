@@ -1,13 +1,15 @@
-// The family-server base URL, shared by every module that talks to it.
+// The platform server's base URL, shared by every module that talks to it
+// directly (the voice settings and dictation modules; the FamilyApi goes
+// through api/index.ts).
 //
-// In the packaged desktop app the Electron preload exposes the real port the
-// server actually bound to (it may differ from the dev default if 8010 was
-// taken — see desktop-sparkquill/main.js). The bridge only exists inside
-// Electron; in a browser this falls through to the dev default unchanged.
+// In the desktop app the page is served by the platform server itself, so
+// this is the page's own origin (the Electron preload exposes it, and the
+// window's origin is the same value). VITE_PLATFORM_API points a browser dev
+// session at a separately running server.
 //
 // Lives in its own module (rather than inside LearningApp.tsx) so extracted
 // components can import it without pulling in the whole app file.
 export const FAMILY_API =
-  (typeof window !== 'undefined' ? (window as { sparkquill?: { apiBaseUrl(): string } }).sparkquill?.apiBaseUrl() : undefined)
-  ?? (import.meta as { env?: { VITE_FAMILY_API?: string } }).env?.VITE_FAMILY_API
-  ?? 'http://127.0.0.1:8010'
+  (import.meta as { env?: { VITE_PLATFORM_API?: string } }).env?.VITE_PLATFORM_API
+  ?? (typeof window !== 'undefined' ? (window as { sparkquill?: { apiBaseUrl(): string } }).sparkquill?.apiBaseUrl() : undefined)
+  ?? (typeof window !== 'undefined' ? window.location.origin : '')

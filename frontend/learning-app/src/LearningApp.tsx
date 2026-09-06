@@ -1,9 +1,8 @@
-import { useState, useEffect, useRef, useCallback, useMemo, type FormEvent, type ChangeEvent } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   Activity as PulseIcon,
   ArrowLeft,
   ArrowRight,
-  Bell,
   BookOpen,
   Check,
   CheckCircle2,
@@ -23,19 +22,15 @@ import {
   Info,
   LockKeyhole,
   Maximize2,
-  Mic,
   Minimize2,
   Music,
   Presentation,
-  Paperclip,
   Printer,
   RefreshCw,
-  Send,
   Settings as SettingsIcon,
   Sparkles,
   Star,
   Sun,
-  Zap,
   Pin,
   PinOff,
 } from 'lucide-react'
@@ -43,18 +38,14 @@ import './learning-app.css'
 import {
   useSetupStore,
   useFamilyStore,
-  useParentChatStore,
   useWorkspaceStore,
   useChildChatStore,
   useWhatsAppStore,
   usePinGateStore,
-  toParentMsg,
   type Screen,
   type ApiEngine,
-  type ParentMsg,
   type PinnedPage,
   type QuickCommand,
-  type ToolCallRecord,
   type TreeNode,
   type WsFile,
   type Activity,
@@ -63,48 +54,9 @@ import {
 import PlatformChat, { applyFamilyEngineToOpenTabs, type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
 import ChildPlatformChat, { forgetChildChat, submitToChildChat, type ChildKickoff } from './platform/ChildPlatformChat'
 import { BuildUpdateNotice } from './platform/BuildUpdateNotice'
-import { api, backend } from './api'
+import { api } from './api'
 import { VoiceSettings } from './voice/VoiceSettings'
-import { readReminderSoundPref, persistReminderSoundPref, playReminderChime } from './notifySound'
-import { MicButton, type MicButtonHandle } from './voice/MicButton'
-import type { MicState } from './voice/useMicDictation'
-import { ChatMarkdown as SharedChatMarkdown, ToolCallSummary as SharedToolCallSummary, stabilizeStreamingMarkdown as stabilizeSharedStreamingMarkdown } from '../../shared/chat/ChatRenderer'
-
-// autoGrowTextarea lets a composer grow with a long message instead of
-// staying a single row — resets to natural height first so it can shrink
-// back down too (e.g. after deleting text), then grows to fit content up to
-// a cap, beyond which the textarea's own CSS overflow-y:auto takes over.
-const COMPOSER_MAX_HEIGHT = 160
-// How many of the parent's most recent messages render by default — see the
-// parentVisibleCount comment further down for why.
-const PARENT_HISTORY_PAGE_SIZE = 40
-function autoGrowTextarea(el: HTMLTextAreaElement) {
-  el.style.height = 'auto'
-  el.style.height = Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT) + 'px'
-}
-
-// Several WhatsApp photos sent together arrive as consecutive 'photo' tool
-// messages — grouped here into one row so they render side by side (a
-// horizontal strip) instead of one full-width block per photo stacked
-// vertically. indexOffset carries visibleParentMessages' windowing offset
-// (see hiddenParentCount) through to the original message's stable index.
-type PhotoRenderGroup<T> = { kind: 'photos'; paths: string[] } | { kind: 'msg'; msg: T; index: number }
-function groupConsecutivePhotos<T extends { role: string; tool?: string; path?: string }>(messages: T[], indexOffset = 0): PhotoRenderGroup<T>[] {
-  const groups: PhotoRenderGroup<T>[] = []
-  messages.forEach((m, idx) => {
-    if (m.role === 'tool' && m.tool === 'photo' && m.path) {
-      const last = groups[groups.length - 1]
-      if (last && last.kind === 'photos') {
-        last.paths.push(m.path)
-      } else {
-        groups.push({ kind: 'photos', paths: [m.path] })
-      }
-      return
-    }
-    groups.push({ kind: 'msg', msg: m, index: indexOffset + idx })
-  })
-  return groups
-}
+import { ChatMarkdown as SharedChatMarkdown } from '../../shared/chat/ChatRenderer'
 
 // The child/file viewer iframe is deliberately sandbox="allow-scripts" with
 // NO allow-same-origin (adding that would let a srcDoc page's script escape
@@ -511,36 +463,6 @@ function StartBurst({ onDone }: { onDone: () => void }) {
       <Sparkles className="fl-start-burst-core" size={54} />
     </div>
   )
-}
-
-// ToolCallSummary shows what the agent actually called this turn — collapsed
-// to "N tools" by default so a busy turn doesn't clutter the thread; expand to
-// see each call, then click one to see its actual response. Used for BOTH the
-// live in-flight indicator (calls have no result/err yet — still streaming)
-// and the final persisted summary (result/err filled in once the turn
-// completes) — same shape, so nothing has to change when it switches over.
-// Renders through the shared chat renderer rather than a second inline
-// implementation. main kept the local copy while this branch extracted the
-// shared one; the surrounding file is on main's ToolCallRecord, so the record
-// is adapted to SharedToolCall here instead of reviving a parallel widget.
-function ToolCallSummary({ calls }: { calls: ToolCallRecord[] }) {
-  return <SharedToolCallSummary calls={calls.map((call, index) => ({
-    id: call.tool_call_id ?? `${call.tool_name}-${index}`,
-    tool: call.tool_name,
-    args: call.arguments,
-    result: call.result,
-    error: call.error,
-    status: call.status,
-    durationMs: call.duration,
-  }))} />
-}
-
-function upsertToolCall(calls: ToolCallRecord[], incoming: ToolCallRecord): ToolCallRecord[] {
-  const i = incoming.tool_call_id ? calls.findIndex((call) => call.tool_call_id === incoming.tool_call_id) : -1
-  if (i < 0) return [...calls, incoming]
-  const next = [...calls]
-  next[i] = { ...next[i], ...incoming, arguments: incoming.arguments || next[i].arguments }
-  return next
 }
 
 // SceneFrame renders one show_scene snippet, auto-sized to its actual content
@@ -959,33 +881,6 @@ export default function LearningApp() {
   const setGrade = useFamilyStore((s) => s.setGrade)
   const board = useFamilyStore((s) => s.board)
   const setBoard = useFamilyStore((s) => s.setBoard)
-  const focusInput = useParentChatStore((s) => s.focusInput)
-  const setFocusInput = useParentChatStore((s) => s.setFocusInput)
-  const parentMessages = useParentChatStore((s) => s.parentMessages)
-  const setParentMessages = useParentChatStore((s) => s.setParentMessages)
-  const sending = useParentChatStore((s) => s.sending)
-  const setSending = useParentChatStore((s) => s.setSending)
-  const liveStatus = useParentChatStore((s) => s.liveStatus)
-  const setLiveStatus = useParentChatStore((s) => s.setLiveStatus)
-  const streamingReply = useParentChatStore((s) => s.streamingReply)
-  const setStreamingReply = useParentChatStore((s) => s.setStreamingReply)
-  const suggestions = useParentChatStore((s) => s.suggestions)
-  const setSuggestions = useParentChatStore((s) => s.setSuggestions)
-  // Rendering the WHOLE parent↔Quill history (one long-running thread, can
-  // grow to hundreds of messages over months) made every keystroke in the
-  // composer reconcile every bubble in the DOM — visibly laggy typing, and a
-  // heavy initial paint. Show only the most recent PARENT_HISTORY_PAGE_SIZE by
-  // default; "Load earlier messages" reveals more in the same-size chunks.
-  // Growing this only ever reveals OLDER messages — new ones arriving still
-  // show immediately since the window is always "last N", not "first N".
-  const [parentVisibleCount, setParentVisibleCount] = useState(PARENT_HISTORY_PAGE_SIZE)
-  const visibleParentMessages = parentMessages.length > parentVisibleCount ? parentMessages.slice(-parentVisibleCount) : parentMessages
-  // Absolute offset of the visible window's first item within the FULL
-  // history — used as the React key base so a bubble's identity stays stable
-  // across "load more" clicks (which shift every relative index) instead of
-  // remounting everything already on screen.
-  const hiddenParentCount = parentMessages.length - visibleParentMessages.length
-  const parentRenderGroups = groupConsecutivePhotos(visibleParentMessages, hiddenParentCount)
   // Before actually switching into Child Mode, ask the parent whether to
   // continue Myra's existing conversation or start a brand-new one — handing
   // off an activity often means "just carry on the same chat", not a fresh
@@ -1004,27 +899,6 @@ export default function LearningApp() {
   // what the listing hides (see workspaceTreeResponse), so the number in the
   // Files tab is the one worth watching for growth.
   const [treeTotalSize, setTreeTotalSize] = useState(0)
-  // The current turn's tool calls, live — no result yet (still running), shown
-  // as a collapsible "N tools" chip next to the thinking indicator. Reset at
-  // turn start; replaced by a persisted debug_summary message (WITH results,
-  // from the final response) once the turn completes — see sendChildMessage.
-  const [childLiveToolCalls, setChildLiveToolCalls] = useState<ToolCallRecord[]>([])
-  // Live status/tool calls for a turn on THIS activity that this tab did NOT
-  // start itself (e.g. WhatsApp's @child routing running runChildTurn) — the
-  // ambient subscription effect below is what actually populates these; see
-  // its own comment for why a second, separate stream/state pair is needed
-  // rather than reusing childLiveStatus/childLiveToolCalls.
-  const [childRemoteStatus, setChildRemoteStatus] = useState('')
-  const [childRemoteToolCalls, setChildRemoteToolCalls] = useState<ToolCallRecord[]>([])
-  const [liveToolCalls, setLiveToolCalls] = useState<ToolCallRecord[]>([])
-  // Live status/tool calls for a parent-conversation turn THIS tab did NOT
-  // start (e.g. a real WhatsApp message running w.runTurn) — see the ambient
-  // subscription effect below, mirroring Child Mode's own childRemoteStatus/
-  // childRemoteToolCalls.
-  const [remoteStatus, setRemoteStatus] = useState('')
-  const [remoteToolCalls, setRemoteToolCalls] = useState<ToolCallRecord[]>([])
-  const menuOpen = useParentChatStore((s) => s.menuOpen)
-  const setMenuOpen = useParentChatStore((s) => s.setMenuOpen)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [savingEngine, setSavingEngine] = useState(false)
   // Voice settings — the tier catalog is computed server-side against THIS
@@ -1057,46 +931,18 @@ export default function LearningApp() {
   const [watchSitesDraft, setWatchSitesDraft] = useState('')
   const [pulseSaved, setPulseSaved] = useState(false)
   const [pulsePopoverOpen, setPulsePopoverOpen] = useState(false)
-  // Parent messages now apply as they arrive (WhatsApp, Pulse) instead of
-  // waiting behind a refresh banner — see the poller below. Two pieces make
-  // that safe: atBottomRef, so an ambient update never yanks the view out from
-  // under someone reading history, and newBelow, which tells them something
-  // landed off-screen instead of appending silently.
-  const atBottomRef = useRef(true)
-  const [newBelow, setNewBelow] = useState(false)
-  // Messages the parent typed while a turn was still processing — sent one at
-  // a time as the current turn finishes (see the drain effect). Shown as
-  // "queued" bubbles so they know it's coming.
-  const [queue, setQueue] = useState<string[]>([])
-  const [childQueue, setChildQueue] = useState<string[]>([])
   const [pulseRunning, setPulseRunning] = useState(false)
   const [pulseRunError, setPulseRunError] = useState<string | null>(null)
   const wsFiles = useWorkspaceStore((s) => s.wsFiles)
   const setWsFiles = useWorkspaceStore((s) => s.setWsFiles)
   const allFiles = useWorkspaceStore((s) => s.allFiles)
   const setAllFiles = useWorkspaceStore((s) => s.setAllFiles)
-  // The parent has ONE ongoing conversation with Quill — web, WhatsApp, and
-  // Pulse all share this single "parent" thread (matching the backend's
-  // parentConversationID). No multi-conversation list, so the id is fixed.
-  const conversationId = 'parent'
-  const resumedRef = useRef(false)
   // Which activity's conversation is currently loaded into childMessages.
   // Keyed by dir rather than a plain "have we resumed once" flag: the bound
   // activity CHANGES underneath the child whenever the parent runs
   // open_activity, and a once-ever guard left the previous activity's chat on
   // screen under the new activity's name.
   const loadedActivityDirRef = useRef<string | null>(null)
-  const childMessages = useChildChatStore((s) => s.childMessages)
-  const childRenderGroups = groupConsecutivePhotos(childMessages)
-  const setChildMessages = useChildChatStore((s) => s.setChildMessages)
-  const childSending = useChildChatStore((s) => s.childSending)
-  const setChildSending = useChildChatStore((s) => s.setChildSending)
-  const childInput = useChildChatStore((s) => s.childInput)
-  const setChildInput = useChildChatStore((s) => s.setChildInput)
-  const childLiveStatus = useChildChatStore((s) => s.childLiveStatus)
-  const setChildLiveStatus = useChildChatStore((s) => s.setChildLiveStatus)
-  const childStreamingReply = useChildChatStore((s) => s.childStreamingReply)
-  const setChildStreamingReply = useChildChatStore((s) => s.setChildStreamingReply)
   const parentLabel = useFamilyStore((s) => s.parentLabel)
   const setParentLabel = useFamilyStore((s) => s.setParentLabel)
 
@@ -1136,28 +982,11 @@ export default function LearningApp() {
           })
         setWsFiles(mats)
         setAllFiles(files.map((f) => f.path))
-        // Resume the single parent conversation (once) so the parent continues
-        // where they left off — including anything that arrived via WhatsApp or
-        // Pulse, since it's all the same thread now.
-        if (!resumedRef.current && parentMessages.length === 0) {
-          resumedRef.current = true
-          api.loadParentConversation()
-            .then((c) => {
-              if (!c) return
-              const loaded = (c.messages || []).map(toParentMsg)
-              setParentMessages(loaded)
-            })
-            .catch(() => {})
-        }
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [parentMessages.length, screen, setAllFiles, setParentMessages, setTreeNodes, setWsFiles, wsRefreshKey])
+  }, [screen, setAllFiles, setTreeNodes, setWsFiles, wsRefreshKey])
   const drawerOpen = true // right side always open
-  const threadEndRef = useRef<HTMLDivElement>(null)
-  const childThreadEndRef = useRef<HTMLDivElement>(null)
-  const threadScrollRef = useRef<HTMLDivElement>(null)
-  const childThreadScrollRef = useRef<HTMLDivElement>(null)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const childIframeRef = useRef<HTMLIFrameElement>(null)
 
@@ -1291,7 +1120,6 @@ export default function LearningApp() {
   // (open_file's `focus`). Empty = let the viewer pick the first unanswered question.
   const [childViewerFocus, setChildViewerFocus] = useState('')
   const [startBurst, setStartBurst] = useState(false)
-  const [childQuickMenuOpen, setChildQuickMenuOpen] = useState(false)
   // Last known scroll offset per file, reported out of the sandboxed iframe (see
   // withViewerPositionScript). A ref, not state: it updates on every scroll frame
   // and must never trigger a re-render, which would reload the iframe and destroy
@@ -1533,18 +1361,6 @@ export default function LearningApp() {
     return () => { cancelled = true }
   }, [screen, settingsOpen, pulsePopoverOpen])
 
-  // Fast Mode — whether every turn (parent, child, WhatsApp, Pulse) uses the
-  // provider's cheap/fast low tier instead of the normal tuned model (see
-  // model_tier.go's selectedModelID). Same load-on-Settings-open pattern as
-  // Pulse config above.
-  const [fastMode, setFastMode] = useState(false)
-  const [savingFastMode, setSavingFastMode] = useState(false)
-  // Child Mode's own Fast Mode, defaulting ON (see familyState.ChildFastMode's
-  // comment on why: a child waiting reads as breakage, not thinking). True
-  // until the server says otherwise, so Settings doesn't flash "off" for the
-  // instant before the real value loads.
-  const [childFastMode, setChildFastMode] = useState(true)
-
   // Which model the chosen coding agent should use. The list comes from the
   // server (which reads the provider's real catalog) rather than being written
   // here, so the picker cannot offer a model the agent would reject.
@@ -1573,48 +1389,6 @@ export default function LearningApp() {
       .finally(() => setSavingModel(false))
   }
 
-  // Child Mode reminder sound — off by default, opt-in from Settings. Quill
-  // can take anywhere from a few seconds to several minutes to reply (real
-  // turns logged tonight ran 30s-5min); a child who's wandered off while
-  // waiting has no other signal that a reply actually arrived. Persisted to
-  // localStorage (not familyState) since it's a per-device UI preference, not
-  // a family policy — same reasoning the old read-aloud toggle used.
-  const [childReminderSound, setChildReminderSound] = useState(() => readReminderSoundPref())
-  const toggleChildReminderSound = (on: boolean) => {
-    setChildReminderSound(on)
-    persistReminderSoundPref(on)
-  }
-  useEffect(() => {
-    if (screen !== 'parent' && screen !== 'tutor' && !settingsOpen) return
-    let cancelled = false
-    api.fastMode()
-      .then((d) => {
-        if (cancelled) return
-        setFastMode(!!d.enabled)
-        setChildFastMode(!!d.child_enabled)
-      })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [screen, settingsOpen])
-
-  const toggleFastMode = (enabled: boolean) => {
-    setFastMode(enabled)
-    setSavingFastMode(true)
-    api.saveFastMode({ enabled })
-      .catch(() => {})
-      .finally(() => setSavingFastMode(false))
-  }
-
-  // Separate request from toggleFastMode: this must NOT touch the parent's
-  // own `enabled` value, or turning off Child Fast Mode would silently also
-  // turn off the parent's.
-  const toggleChildFastModeSetting = (enabled: boolean) => {
-    setChildFastMode(enabled)
-    setSavingFastMode(true)
-    api.saveFastMode({ enabled: fastMode, child_enabled: enabled })
-      .catch(() => {})
-      .finally(() => setSavingFastMode(false))
-  }
 
   // Voice tier catalog — loaded whenever Settings opens. Cheap (a sysctl read
   // plus two LookPath calls), so it's refetched each time rather than cached:
@@ -1671,207 +1445,6 @@ export default function LearningApp() {
       .finally(() => setDeletingSecret(null))
   }
 
-  // Pick up async updates to the open conversation — Pulse (or a WhatsApp
-  // reply, if this same conversation is the real WhatsApp thread) can append
-  // a new message to this exact conversation file from the background, with
-  // nothing else telling this open tab to know. Poll lightly and, if the
-  // file has grown since we last rendered it, surface a small "new update"
-  // banner rather than silently rewriting the screen under the parent —
-  // they choose when to pull it in. Skip while a send is in flight.
-  useEffect(() => {
-    if (screen !== 'parent' || !conversationId) return
-    const id = window.setInterval(() => {
-      if (sending) return
-      api.loadParentConversation()
-        .then((c) => {
-          if (!c) return
-          const fresh = c.messages || []
-          // Only ever grows here: a shorter file means our optimistic local
-          // copy is ahead (the parent just sent something), never that
-          // messages vanished.
-          if (fresh.length > parentMessages.length) {
-            setParentMessages(fresh.map(toParentMsg))
-            // Whatever remote turn produced this has clearly finished and
-            // persisted — drop its live indicator rather than let it linger.
-            setRemoteStatus('')
-            setRemoteToolCalls([])
-            if (!atBottomRef.current) setNewBelow(true)
-          }
-        })
-        .catch(() => {})
-    }, 20000)
-    return () => window.clearInterval(id)
-  }, [screen, conversationId, sending, parentMessages.length])
-
-  // Switching conversations resets the reading position, so any "new message
-  // below" marker refers to a thread that is no longer on screen.
-  useEffect(() => { setNewBelow(false); atBottomRef.current = true }, [conversationId])
-
-  // sendingRef mirrors `sending` for the ambient effect below without being
-  // in its dependency array — see childSendingRef's own comment for why.
-  const sendingRef = useRef(sending)
-  useEffect(() => { sendingRef.current = sending }, [sending])
-
-  // Ambient live-status subscription for the parent conversation — mirrors
-  // Child Mode's own ambient effect (see its comment for the full
-  // rationale): sendParentText already opens its OWN /api/parent/status
-  // stream around this tab's own fetch, but a turn started elsewhere (a real
-  // WhatsApp message running w.runTurn, or Pulse) publishes to the exact
-  // same per-conversation-id topic with nobody here subscribed to catch it.
-  // This stays open for as long as the parent screen is showing, not just
-  // around this tab's own send.
-  useEffect(() => {
-    if (screen !== 'parent' || !conversationId) return
-    let idleTimer: number | undefined
-    const armIdleReset = () => {
-      if (idleTimer) window.clearTimeout(idleTimer)
-      idleTimer = window.setTimeout(() => {
-        setRemoteStatus('')
-        setRemoteToolCalls([])
-      }, 45000)
-    }
-    const stopWatching = api.watchParent(conversationId, (parsed) => {
-      if (sendingRef.current) return
-      try {
-        if (parsed.type === 'status') {
-          setRemoteStatus(parsed.text ?? '')
-          armIdleReset()
-        } else if (parsed.type === 'tool_call' && parsed.tool_call) {
-          setRemoteToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
-          armIdleReset()
-        }
-      } catch { /* ignore malformed event */ }
-    })
-    return () => {
-      stopWatching()
-      if (idleTimer) window.clearTimeout(idleTimer)
-    }
-  }, [screen, conversationId])
-
-  // The browser's own send supersedes any stale remote indicator.
-  useEffect(() => {
-    if (sending) {
-      setRemoteStatus('')
-      setRemoteToolCalls([])
-    }
-  }, [sending])
-
-  // Child Mode's own version of the polling above — watches the CURRENT
-  // activity's own conversation.json instead of conversations/parent.json,
-  // gated on being in the tutor screen with a bound activity rather than
-  // 'parent'. Unlike the parent side, this applies new messages directly
-  // rather than surfacing a "tap to refresh" banner first — a child waiting
-  // on a WhatsApp-routed reply shouldn't have to notice and tap a banner to
-  // see it; the auto-scroll effect above already brings it into view.
-  useEffect(() => {
-    const dir = childActivity?.dir
-    if (backend === 'platform' || screen !== 'tutor' || !dir) return
-    const id = window.setInterval(() => {
-      if (childSending) return
-      api.loadChildConversation(dir)
-        .then((c) => {
-          if (!c) return
-          const fresh = c.messages || []
-          if (fresh.length > childMessages.length) {
-            setChildMessages(fresh.map(toParentMsg))
-            // Whatever remote turn was running (see the ambient live-status
-            // effect below) has now clearly finished and persisted — drop its
-            // indicator rather than let it linger until the idle timeout.
-            setChildRemoteStatus('')
-            setChildRemoteToolCalls([])
-            if (childReminderSound && fresh[fresh.length - 1]?.role === 'assistant') playReminderChime()
-          }
-        })
-        .catch(() => {})
-    }, 20000)
-    return () => window.clearInterval(id)
-  }, [screen, childActivity?.dir, childSending, childMessages.length])
-
-  // childSendingRef mirrors childSending for the ambient effect below without
-  // being in its dependency array — re-subscribing the SSE connection every
-  // time a send starts/stops would risk missing an event in the reconnect gap.
-  const childSendingRef = useRef(childSending)
-  useEffect(() => { childSendingRef.current = childSending }, [childSending])
-
-  // Ambient live-status subscription for Child Mode: sendChildText/
-  // sendChildKickoff already open their OWN /api/child/status stream around
-  // this tab's own fetch, so live tool calls show up when SHE sends a
-  // message. But the exact same SSE topic (see status_stream.go's
-  // withLiveStatus/statusHub — a plain per-conversation-id pub/sub with no
-  // concept of "who's listening") is published to by ANY turn on this
-  // activity, including one WhatsApp's @child routing runs via runChildTurn
-  // while nobody here is looking. Without a subscription open at THAT
-  // moment, those events are silently dropped (no listener), which is
-  // exactly why tool calls never showed up for a WhatsApp-triggered turn
-  // before this effect existed. This one stays open for as long as the tutor
-  // screen is showing this activity, not just around this tab's own send.
-  useEffect(() => {
-    const dir = childActivity?.dir
-    if (backend === 'platform' || screen !== 'tutor' || !dir) return
-    let idleTimer: number | undefined
-    const armIdleReset = () => {
-      if (idleTimer) window.clearTimeout(idleTimer)
-      // No event on the wire for a while — assume the remote turn finished
-      // and we simply missed (or there wasn't) a clean final signal, so this
-      // indicator never gets stuck showing forever.
-      idleTimer = window.setTimeout(() => {
-        setChildRemoteStatus('')
-        setChildRemoteToolCalls([])
-      }, 45000)
-    }
-    const stopWatching = api.watchChild(dir, (parsed) => {
-      // Events from THIS tab's own send are already shown via
-      // childLiveStatus/childLiveToolCalls (see sendChildText) — skip here so
-      // the same tool call never renders twice.
-      if (childSendingRef.current) return
-      try {
-        if (parsed.type === 'status') {
-          setChildRemoteStatus(parsed.text ?? '')
-          armIdleReset()
-        } else if (parsed.type === 'tool_call' && parsed.tool_call) {
-          setChildRemoteToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
-          armIdleReset()
-        }
-      } catch { /* ignore malformed event */ }
-    })
-    // The watcher stays up for as long as the screen does; the API layer
-    // owns reconnects.
-    return () => {
-      stopWatching()
-      if (idleTimer) window.clearTimeout(idleTimer)
-    }
-  }, [screen, childActivity?.dir])
-
-  // The browser's own send supersedes any stale remote indicator — clear it
-  // the moment a real send starts here, same reasoning as clearing it once
-  // fresh messages are polled in above.
-  useEffect(() => {
-    if (childSending) {
-      setChildRemoteStatus('')
-      setChildRemoteToolCalls([])
-    }
-  }, [childSending])
-
-  // Drain the send queue: once the current turn finishes, send the next queued
-  // message. One at a time, in order — so the transcript stays well-formed and
-  // each reply builds on the previous. sendParentText itself flips `sending`
-  // back on, which re-guards this until that turn also completes.
-  useEffect(() => {
-    if (sending || queue.length === 0) return
-    const [next, ...rest] = queue
-    setQueue(rest)
-    sendParentText(next)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sending, queue])
-
-  // Same drain, for the child's own queue.
-  useEffect(() => {
-    if (childSending || childQueue.length === 0) return
-    const [next, ...rest] = childQueue
-    setChildQueue(rest)
-    sendChildText(next)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [childSending, childQueue])
 
   const savePulseConfig = (patch: { enabled?: boolean; cadence_hours?: number; watch_sites?: string[]; preferred_hour?: number; preferred_hour_set?: boolean }) => {
     setSavingPulse(true)
@@ -1927,27 +1500,11 @@ export default function LearningApp() {
         // Skipped mid-turn: replacing the thread under an in-flight send would
         // drop the optimistic message and the reply being streamed into it.
         if (loadedActivityDirRef.current === act.dir) return
-        if (useChildChatStore.getState().childSending) return
         loadedActivityDirRef.current = act.dir
-        // The platform child chat keeps its own conversation per activity.
-        if (backend === 'platform') return
-        api.loadChildConversation(act.dir)
-          .then((c) => {
-            // A newer activity may have been bound while this was in flight;
-            // applying a stale one would recreate the bug this fixes.
-            if (loadedActivityDirRef.current !== act.dir) return
-            // Replaces rather than merges — a brand-new activity has no
-            // conversation file yet, and must start empty rather than
-            // inheriting whatever was on screen.
-            setChildMessages((c?.messages || []).map(toParentMsg))
-            setChildRemoteStatus('')
-            setChildRemoteToolCalls([])
-          })
-          .catch(() => { if (loadedActivityDirRef.current === act.dir) setChildMessages([]) })
       })
       .catch(() => { if (!cancelled) setChildActivity(null) })
     return () => { cancelled = true }
-  }, [childTreeRefreshKey, screen, setChildActivity, setChildMessages])
+  }, [childTreeRefreshKey, screen, setChildActivity])
 
   // The moment a distinct activity is bound (a fresh handoff, or resuming on
   // reload), show its first item — the same "don't wait on the model to
@@ -2032,54 +1589,6 @@ export default function LearningApp() {
     return () => window.removeEventListener('keydown', onKey)
   }, [setViewerPath, viewerImageList, viewerPath])
 
-  // Keep the conversation scrolled to the latest message / thinking indicator.
-  // Also re-scroll on `screen` itself: switching from child mode back to
-  // parent mode remounts this thread at its default (top) scroll position —
-  // without screen in the deps, that remount doesn't trigger a re-scroll
-  // since parentMessages/sending haven't changed, leaving the parent stuck
-  // scrolled to the top until they scroll down manually. streamingReply is
-  // ALSO a dep: the live-streamed reply bubble grows character-by-character
-  // while parentMessages/sending stay unchanged for the whole turn, so
-  // without it the view never follows the growing text — it only ever
-  // jumped at the start and end of a turn, not while streaming.
-  useEffect(() => {
-    if (screen !== 'parent') return
-    // While actively streaming, a fresh 'smooth' animation starts on every
-    // delta chunk (many times a second) and each one cuts off the previous
-    // one before it finishes — that competing-animation restart is what
-    // makes the scroll stutter/lag behind instead of following the text.
-    // 'auto' (instant) during streaming avoids that; 'smooth' is still nicer
-    // for the normal, much-less-frequent case (a whole new message, a screen
-    // switch). A turn that made MANY tool calls (each its own live debug
-    // bubble, see the SSE 'tool_call' handling below) can append a large
-    // batch of new DOM content in one go right as the turn finishes —
-    // scrolling in the SAME frame can measure
-    // a scrollHeight from before the browser has laid all of it out, landing
-    // short of the real bottom. rAF-deferring one frame lets layout settle
-    // first so the target position is measured against the final height.
-    // `sending` forces the jump: the parent just hit send, so they mean to be
-    // at the bottom even if they had scrolled away. Otherwise follow only if
-    // they were already following — an arriving WhatsApp reply must not drag
-    // someone out of the history they are reading.
-    if (!atBottomRef.current && !sending) return
-    const id = requestAnimationFrame(() => {
-      threadEndRef.current?.scrollIntoView({ behavior: streamingReply ? 'auto' : 'smooth', block: 'end' })
-    })
-    return () => cancelAnimationFrame(id)
-  }, [parentMessages, sending, screen, streamingReply, queue, remoteStatus, remoteToolCalls])
-
-  // Same, for the child's own thread — this had no auto-scroll at all before,
-  // so new replies (and the "thinking" indicator) could land below the fold
-  // with no automatic scroll to reveal them.
-  useEffect(() => {
-    if (screen !== 'tutor') return
-    // See the parent effect above for why this is rAF-deferred — a turn with
-    // many tool calls can append a large batch of content in one go.
-    const id = requestAnimationFrame(() => {
-      childThreadEndRef.current?.scrollIntoView({ behavior: childStreamingReply ? 'auto' : 'smooth', block: 'end' })
-    })
-    return () => cancelAnimationFrame(id)
-  }, [childMessages, childSending, screen, childStreamingReply, childQueue, childRemoteStatus, childRemoteToolCalls])
 
   // Bridge for interactive HTML: the sandboxed viewer iframe posts SQ.save/load
   // messages; the app persists them to a workspace file (child/attempts) so the
@@ -2099,7 +1608,7 @@ export default function LearningApp() {
           .then((data) => iframeRef.current?.contentWindow?.postMessage({ __sq: 1, op: 'loaded', id: msg.id, data: data ?? null }, '*'))
           .catch(() => iframeRef.current?.contentWindow?.postMessage({ __sq: 1, op: 'loaded', id: msg.id, data: null }, '*'))
       } else if (msg.op === 'choose' && typeof msg.text === 'string') {
-        if (backend !== 'platform' || !submitToChildChat(msg.text)) sendChildTextRef.current(msg.text)
+        submitToChildChat(msg.text)
       }
     }
     window.addEventListener('message', onMsg)
@@ -2209,91 +1718,6 @@ export default function LearningApp() {
       .finally(() => setSaving(false))
   }
 
-  const sendParentText = (raw: string) => {
-    const text = raw.trim()
-    if (!text) return
-    // A turn is already running — STEER is the primary path: try to inject
-    // it into the live turn right now (see steer.go). If that lands, show it
-    // as a normal message immediately (it's genuinely part of the
-    // conversation now, not a separate future turn) — only fall back to the
-    // "queued" bubble (sent as its own turn once this one finishes) when
-    // steering explicitly isn't possible (no turn actually in flight
-    // server-side, a non-tmux provider, or the request itself failed).
-    if (sending) {
-      setFocusInput('')
-      api.steerParent(conversationId, text)
-        .then((data) => {
-          if (data.steered) setParentMessages((cur) => [...cur, { role: 'user', text }])
-          else setQueue((q) => [...q, text])
-        })
-        .catch(() => setQueue((q) => [...q, text])) // couldn't even reach the server — fall back to queued
-      return
-    }
-    const next: ParentMsg[] = [...parentMessages, { role: 'user', text }]
-    setParentMessages(next)
-    setFocusInput('')
-    setSuggestions([])
-    // Sending means the parent is at the live end of the thread by intent, so
-    // any "new message below" marker is stale and the view should follow again.
-    setNewBelow(false)
-    atBottomRef.current = true
-    setSending(true)
-    setLiveStatus('')
-    setStreamingReply('')
-    setLiveToolCalls([])
-    // Live status labels AND real streamed reply content share one SSE
-    // connection (see status_stream.go's sseEvent) — "status" replaces the
-    // cosmetic "Quill is: …" line, "delta" appends to the live reply preview
-    // shown while sending (see the streamingReply render block below). Both
-    // are best-effort UX: a stream error is silently ignored, and the final
-    // persisted reply (from the blocking fetch below) is always the source
-    // of truth regardless of what streamed in.
-    const onStream = (parsed: { type?: string; text?: string; tool_call?: ToolCallRecord }) => {
-      if (parsed.type === 'delta') setStreamingReply((cur) => cur + (parsed.text ?? ''))
-      else if (parsed.type === 'replace') setStreamingReply(parsed.text ?? '')
-      else if (parsed.type === 'status') setLiveStatus(parsed.text ?? '')
-      // Live tool-call visibility as each call happens (not batched at the
-      // end). No result yet; the final response
-      // replaces this with the same calls, results filled in.
-      else if (parsed.type === 'tool_call' && parsed.tool_call) {
-        setLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
-      }
-    }
-    // Keep source on each message so Pulse/etc. tags survive the round-trip and
-    // don't get flattened to plain replies when this turn re-persists history.
-    const history = next.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, text: m.text ?? '', source: m.source }))
-    // Only pass viewer_path while the right-side panel is actually showing a
-    // file (same condition the viewer JSX itself uses) — otherwise nothing is
-    // really "on screen" to reference.
-    const currentViewerPath = (drawerTab === 'files' || drawerTab === 'allfiles' || drawerTab === 'uploaded') ? viewerPath : ''
-    api.sendParentTurn({ messages: history, conversationId, viewerPath: currentViewerPath || undefined }, onStream)
-      .then((data) => {
-        const events = data.tool_events ?? []
-        const toolMsgs: ParentMsg[] = events.filter((e) => e.tool === 'set_child_profile').map((e) => ({ role: 'tool', tool: e.tool, name: e.name, grade: e.grade, board: e.board }))
-        const cp = events.find((e) => e.tool === 'set_child_profile')
-        if (cp) { if (cp.name) setChildName(cp.name); if (cp.grade) setGrade(cp.grade); if (cp.board) setBoard(cp.board) }
-        const pl = events.find((e) => e.tool === 'set_parent_label' && e.parent_label)
-        if (events.some((e) => e.tool === 'pins_updated')) loadPins()
-        if (pl?.parent_label) setParentLabel(pl.parent_label)
-        const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
-        if (of?.path) { setDrawerTab('files'); setViewerImageList([]); setViewerActivityDir(null); setViewerPath(of.path); setViewerRefreshKey((k) => k + 1) }
-        const op = events.find((e) => e.tool === 'open_activity' && e.path)
-        // Auto-expand so its actual content previews are visible right away —
-        // otherwise an activity with multiple items shows only its title/note
-        // until the parent notices and clicks the (easy-to-miss) chevron.
-        if (op?.path) { setDrawerTab('files'); setViewerPath(null); setViewerActivityDir(op.path); setExpandedActivity(op.path) }
-        setSuggestions(data.suggestions ?? [])
-        if (data.tool_calls?.length) toolMsgs.push({ role: 'tool', tool: 'tool_summary', toolCalls: data.tool_calls })
-        setParentMessages((cur) => [...cur, ...toolMsgs, { role: 'assistant', text: data.error ? `Sorry — ${data.error}` : (data.reply || '(no response)') }])
-      })
-      .catch(() => setParentMessages((cur) => [...cur, { role: 'assistant', text: 'Sorry — I couldn’t reach the learning engine.' }]))
-      .finally(() => { setSending(false); setLiveStatus(''); setStreamingReply(''); setLiveToolCalls([]); setMapRefreshKey((k) => k + 1) })
-  }
-
-  const sendParentMessage = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    sendParentText(focusInput)
-  }
 
   // Real WhatsApp connection (whatsmeow QR pairing) — see whatsapp_bot.go.
   // Once paired, incoming messages in the linked account's own "Message
@@ -2327,144 +1751,7 @@ export default function LearningApp() {
       .finally(() => setVoiceToggling(false))
   }
 
-  // Child Mode tutor — talks to /api/child/message (sandboxed child agent).
-  // The conversation id is the CURRENT activity's own dir (the backend now
-  // derives its session/live-status key from currentActivityDir() itself, not
-  // a client-generated id) — so there is exactly one child conversation per
-  // activity, matching activity.json's own conversation.json.
-  // modelExtra is appended to what the MODEL sees for this one message, but
-  // never shown to the child or persisted in their transcript.
-  const sendChildText = (raw: string, base?: ParentMsg[], modelExtra?: string) => {
-    const text = raw.trim()
-    if (!text) return
-    const convId = childActivity?.dir ?? ''
-    // A turn is already running — STEER is the primary path (mirrors
-    // sendParentText above): try to inject it into the live turn right now.
-    // Only fall back to the "queued" bubble when steering genuinely isn't
-    // possible.
-    if (childSending) {
-      setChildInput('')
-      api.steerChild(convId, text)
-        .then((data) => {
-          if (data.steered) setChildMessages((cur) => [...cur, { role: 'user', text }])
-          else setChildQueue((q) => [...q, text])
-        })
-        .catch(() => setChildQueue((q) => [...q, text]))
-      return
-    }
-    const next: ParentMsg[] = [...(base ?? childMessages), { role: 'user', text }]
-    setChildMessages(next)
-    setChildInput('')
-    setChildSending(true)
-    setChildLiveStatus('')
-    setChildStreamingReply('')
-    setChildLiveToolCalls([])
-    // Same JSON envelope as the parent stream ({type:"status"|"delta"|"tool_call",text,tool,args}).
-    const onStream = (parsed: { type?: string; text?: string; tool_call?: ToolCallRecord }) => {
-      if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
-      else if (parsed.type === 'replace') setChildStreamingReply(parsed.text ?? '')
-      else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
-      else if (parsed.type === 'tool_call' && parsed.tool_call) {
-        setChildLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
-      }
-    }
-    const history = next.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, text: m.text ?? '' }))
-    if (modelExtra && history.length > 0) {
-      history[history.length - 1] = { ...history[history.length - 1], text: history[history.length - 1].text + '\n\n' + modelExtra }
-    }
-    api.sendChildTurn({ messages: history, conversationId: convId }, onStream)
-      .then((data) => {
-        const events = data.tool_events ?? []
-        const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
-        if (of?.path) { setChildViewerFocus(of.focus ?? ''); setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
-        const cel = events.find((e) => e.tool === 'celebrate')
-        // Snap the still-visible streaming bubble to the FINAL reply text
-        // before swapping it for the real message. The live stream tails a
-        // raw tmux pane (hard-wrapped, markdown stripped); the final reply is
-        // the reconciled, properly-formatted version (see ReconcileFinalAnswer
-        // in multi-llm-provider-go) — without this, the words she was
-        // reading visibly change the instant the turn finishes, which reads
-        // as the tutor's "thinking" being deleted and replaced. Setting this
-        // first means the streaming bubble already shows the exact final
-        // text by the time it's swapped for the real message, so nothing
-        // visibly changes — only the bubble's own styling settles.
-        if (data.reply) setChildStreamingReply(data.reply)
-        setChildMessages((cur) => {
-          const next: ParentMsg[] = [...cur]
-          if (data.tool_calls?.length) next.push({ role: 'tool', tool: 'tool_summary', toolCalls: data.tool_calls })
-          next.push({ role: 'assistant', text: data.error ? `Hmm, something went wrong — ${data.error}` : (data.reply || '(no response)') })
-          if (cel) next.push({ role: 'tool', tool: 'celebrate', stars: cel.stars ?? 1, reason: cel.reason ?? '' })
-          if (data.scene) next.push({ role: 'tool', tool: 'scene', html: data.scene })
-          return next
-        })
-        if (childReminderSound) playReminderChime()
-      })
-      .catch(() => setChildMessages((cur) => [...cur, { role: 'assistant', text: 'I couldn’t reach the tutor just now — try again in a moment.' }]))
-      .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); setChildLiveToolCalls([]); setChildTreeRefreshKey((k) => k + 1) })
-  }
 
-  // sendChildKickoff silently starts a turn after a handoff WITHOUT showing a
-  // fake "child said this" bubble — the greeting text (naming the real
-  // activity) is still sent to the model, since it needs some message to
-  // respond to, but only Quill's own real reply is added to the visible
-  // thread. base is the message list to keep showing beforehand (empty for a
-  // fresh session, the resumed history when continuing).
-  const sendChildKickoff = (greeting: string, base: ParentMsg[], modelExtra?: string) => {
-    const text = greeting.trim()
-    if (!text || childSending) return
-    const convId = childActivity?.dir ?? ''
-    const hidden: ParentMsg[] = [...base, { role: 'user', text }]
-    setChildInput('')
-    setChildSending(true)
-    setChildLiveStatus('')
-    setChildStreamingReply('')
-    setChildLiveToolCalls([])
-    const onStream = (parsed: { type?: string; text?: string; tool_call?: ToolCallRecord }) => {
-      if (parsed.type === 'delta') setChildStreamingReply((cur) => cur + (parsed.text ?? ''))
-      else if (parsed.type === 'replace') setChildStreamingReply(parsed.text ?? '')
-      else if (parsed.type === 'status') setChildLiveStatus(parsed.text ?? '')
-      else if (parsed.type === 'tool_call' && parsed.tool_call) {
-        setChildLiveToolCalls((cur) => upsertToolCall(cur, parsed.tool_call as ToolCallRecord))
-      }
-    }
-    const history = hidden.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, text: m.text ?? '' }))
-    if (modelExtra && history.length > 0) {
-      history[history.length - 1] = { ...history[history.length - 1], text: history[history.length - 1].text + '\n\n' + modelExtra }
-    }
-    api.sendChildTurn({ messages: history, conversationId: convId }, onStream)
-      .then((data) => {
-        const events = data.tool_events ?? []
-        const of = [...events].reverse().find((e) => e.tool === 'open_file' && e.path)
-        if (of?.path) { setChildViewerFocus(of.focus ?? ''); setChildViewerPath(of.path); setChildViewerRefreshKey((k) => k + 1) }
-        const cel = events.find((e) => e.tool === 'celebrate')
-        // Snap the still-visible streaming bubble to the FINAL reply text
-        // before swapping it for the real message — see sendChildMessage's
-        // identical comment above for why.
-        if (data.reply) setChildStreamingReply(data.reply)
-        // Append to base (not hidden) — the synthetic kickoff message never
-        // joins the visible thread, only Quill's real reply (and any debug
-        // tool-call bubbles / scene) do.
-        setChildMessages((cur) => {
-          const next: ParentMsg[] = [...cur]
-          if (data.tool_calls?.length) next.push({ role: 'tool', tool: 'tool_summary', toolCalls: data.tool_calls })
-          next.push({ role: 'assistant', text: data.error ? `Hmm, something went wrong — ${data.error}` : (data.reply || '(no response)') })
-          if (cel) next.push({ role: 'tool', tool: 'celebrate', stars: cel.stars ?? 1, reason: cel.reason ?? '' })
-          if (data.scene) next.push({ role: 'tool', tool: 'scene', html: data.scene })
-          return next
-        })
-        if (childReminderSound) playReminderChime()
-      })
-      .catch(() => setChildMessages((cur) => [...cur, { role: 'assistant', text: 'I couldn’t reach the tutor just now — try again in a moment.' }]))
-      .finally(() => { setChildSending(false); setChildLiveStatus(''); setChildStreamingReply(''); setChildLiveToolCalls([]); setChildTreeRefreshKey((k) => k + 1) })
-  }
-
-  // The SQ postMessage bridge (below) is registered once on mount, so it
-  // would otherwise always call the FIRST render's sendChildText — a stale
-  // closure over that render's childActivity/childMessages/etc. Routing
-  // through a ref kept current every render avoids that without having to
-  // tear down and re-add the window listener on every render instead.
-  const sendChildTextRef = useRef(sendChildText)
-  useEffect(() => { sendChildTextRef.current = sendChildText })
 
   // Enter Child Mode after a handoff response. new_session decides whether the
   // child continues their existing conversation (still the same activity) or
@@ -2473,38 +1760,18 @@ export default function LearningApp() {
   // (if any) is opened automatically by the auto-open effect above once
   // childActivity reflects this handoff — no need to thread a file path
   // through the handoff call itself.
-  const enterChildModeAfterHandoff = (newSession: boolean, greeting: string, goal: string | undefined, dir: string) => {
+  const enterChildModeAfterHandoff = (newSession: boolean, greeting: string, dir: string) => {
     persistHandoffSide('tutor')
     setScreen('tutor')
     setChildTreeRefreshKey((k) => k + 1)
     // Resume (newSession === false) only ever targets the activity already
-    // open in this session — childMessages already holds its real
-    // conversation, so there's nothing to send here: just the screen switch
+    // open in this session: the child chat keeps its own conversation per
+    // activity, so there's nothing to send here — just the screen switch
     // above, and the child sees exactly where they left off.
-    //
-    // goal is passed through so Quill reliably has it from her very first
-    // reply, rather than it being contingent on her remembering to go read
-    // activity.json before answering. The explicit "do NOT recite it" wording
-    // matters: an earlier version force-fed the (then separate) guide_note
-    // here WITH an instruction to open by stating the plan verbatim, which
-    // locked a specific framing in at the moment of handoff that the parent
-    // could no longer revise once the child was partway through. Handing over
-    // the standing target is useful; scripting the opening line is not.
-    const modelExtra = goal
-      ? `(For you, Quill — not from ${childName || 'the child'}: this activity's goal is: ${goal}. Keep this in mind ` +
-        `and steer back toward it over the whole conversation — do NOT recite it or turn your opening reply into a ` +
-        `stated plan; just start naturally, the same as always.)`
-      : undefined
-    if (newSession) {
-      if (backend === 'platform') {
-        // Shown in the chat like any message, so only the greeting goes: the
-        // goal is already in activity.json, which the tutor reads first.
-        setChildKickoff({ id: Date.now(), dir, text: greeting })
-      } else {
-        setChildMessages([])
-        sendChildKickoff(greeting, [], modelExtra)
-      }
-    }
+    // A fresh session is kicked off with the greeting, shown in the chat like
+    // any message; the activity's goal is already in activity.json, which the
+    // tutor reads first, so only the greeting goes.
+    if (newSession) setChildKickoff({ id: Date.now(), dir, text: greeting })
   }
 
   // handoffGreeting is what the child's chat "says" to kick off a handoff — it
@@ -2523,7 +1790,7 @@ export default function LearningApp() {
       // "Start fresh" on the platform means a new conversation for the
       // activity, not a kickoff appended to the old one. Rotate it before
       // the child screen opens, so the screen opens the new session.
-      .then((data) => (data.new_session && backend === 'platform' ? api.resetChildConversation(dir).then(() => { forgetChildChat(dir); return data }) : data))
+      .then((data) => (data.new_session ? api.resetChildConversation(dir).then(() => { forgetChildChat(dir); return data }) : data))
       .then((data) => {
         if (!data.dir) return
         // A newer handoff has started since this one was fired (a different
@@ -2531,7 +1798,7 @@ export default function LearningApp() {
         // will apply instead, so bail out here rather than starting a chat
         // for an activity the parent already navigated away from.
         if (myGeneration !== handoffGenerationRef.current) return
-        enterChildModeAfterHandoff(!!data.new_session, handoffGreeting(greetingText), data.goal, data.dir)
+        enterChildModeAfterHandoff(!!data.new_session, handoffGreeting(greetingText), data.dir)
       })
       .catch(() => {})
   }
@@ -2551,16 +1818,12 @@ export default function LearningApp() {
       setPendingChildEntry({ dir, greetingText })
       return
     }
-    if (backend === 'platform') {
-      // On the platform every activity keeps its own conversation, so an
-      // activity she worked on before deserves the same continue-or-fresh
-      // question as the current one; only a never-opened one is silently fresh.
-      api.loadChildConversation(dir)
-        .then((c) => { if ((c?.messages?.length ?? 0) > 0) setPendingChildEntry({ dir, greetingText }); else performHandoff(dir, greetingText, false) })
-        .catch(() => performHandoff(dir, greetingText, false))
-      return
-    }
-    performHandoff(dir, greetingText, false)
+    // Every activity keeps its own conversation, so an activity she worked
+    // on before deserves the same continue-or-fresh question as the current
+    // one; only a never-opened one is silently fresh.
+    api.loadChildConversation(dir)
+      .then((c) => { if ((c?.messages?.length ?? 0) > 0) setPendingChildEntry({ dir, greetingText }); else performHandoff(dir, greetingText, false) })
+      .catch(() => performHandoff(dir, greetingText, false))
   }
 
   // Runs the actual handoff once the parent has answered continue-vs-fresh.
@@ -2571,189 +1834,7 @@ export default function LearningApp() {
     performHandoff(entry.dir, entry.greetingText, resume)
   }
 
-  const sendChildMessage = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    sendChildText(childInput)
-  }
 
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [uploading, setUploading] = useState(false)
-
-  // Re-measure the composer's height on every value change, not just typing.
-  // The textarea's own onChange handler already calls autoGrowTextarea, but
-  // voice dictation (MicButton's onText) sets the value directly via
-  // setFocusInput/setChildInput — a React state update, not a DOM change
-  // event — so a long transcribed message never grew the box: it landed with
-  // the value already in place but the height untouched. This effect covers
-  // BOTH directions (grows for a long value, shrinks back for an empty one)
-  // regardless of how the value got there.
-  const focusTextareaRef = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => {
-    if (focusTextareaRef.current) autoGrowTextarea(focusTextareaRef.current)
-  }, [focusInput])
-  const childTextareaRef = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => {
-    if (childTextareaRef.current) autoGrowTextarea(childTextareaRef.current)
-  }, [childInput])
-  // Lets each composer's Enter handler tell, synchronously, whether the mic
-  // is currently recording — if so Enter should stop+submit the dictation
-  // instead of sending whatever (unrelated, likely stale) text already sits
-  // in the box. Refs rather than state: read at keydown time, no re-render
-  // wiring needed for something this transient.
-  const parentMicRef = useRef<MicButtonHandle>(null)
-  const parentMicStateRef = useRef<MicState>('idle')
-  const childMicRef = useRef<MicButtonHandle>(null)
-  const childMicStateRef = useRef<MicState>('idle')
-  // Reactive (unlike the refs above) so the auto-scroll effects below can
-  // depend on it — the live listening banner appears the instant recording
-  // starts and needs the thread to scroll down for it right then, not on
-  // the next unrelated re-render.
-  const [parentMicRecording, setParentMicRecording] = useState(false)
-  const [childMicRecording, setChildMicRecording] = useState(false)
-  // Tracks 'preparing' as well as 'recording': the banner appears at the start
-  // of preparation, so space must be reserved from that moment or it covers
-  // the last message during the whole cold-start wait.
-  // The listening banner's reserved space (see .fl-thread:has(...) in
-  // learning-app.css) only grows how far the thread CAN scroll — nothing
-  // scrolls it there on its own. scrollIntoView on the end marker (used
-  // elsewhere for new messages) stops at the marker itself, before that
-  // trailing padding, so it doesn't reach far enough here; scrollTop =
-  // scrollHeight always reaches the true bottom, padding included.
-  // "Near" rather than exactly at the bottom: a couple of pixels of rounding,
-  // or a part-rendered final bubble, should still count as following along.
-  useEffect(() => {
-    const el = threadScrollRef.current
-    if (!el) return
-    const onScroll = () => {
-      const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120
-      atBottomRef.current = near
-      if (near) setNewBelow(false)
-    }
-    onScroll()
-    el.addEventListener('scroll', onScroll, { passive: true })
-    return () => el.removeEventListener('scroll', onScroll)
-  }, [screen])
-
-  useEffect(() => {
-    if (!parentMicRecording) return
-    const el = threadScrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [parentMicRecording])
-  useEffect(() => {
-    if (!childMicRecording) return
-    const el = childThreadScrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [childMicRecording])
-  // The mic's onText callback can be a render or two stale by the time it
-  // actually fires (see MicButton's comment on why) — a ref mirror gives the
-  // auto-submit path the true latest value without stashing a side effect
-  // inside a setState updater (StrictMode double-invokes those).
-  const focusInputRef = useRef(focusInput)
-  useEffect(() => { focusInputRef.current = focusInput })
-  const childInputRef = useRef(childInput)
-  useEffect(() => { childInputRef.current = childInput })
-
-  const onPickFiles = () => fileInputRef.current?.click()
-
-  // Shared by the file picker (onFilesSelected) AND pasting an image directly
-  // into the composer (onParentComposerPaste) — same upload, same tool-card
-  // result, just two different ways of getting File objects.
-  const uploadParentFiles = (files: File[]) => {
-    if (files.length === 0) return Promise.resolve()
-    setUploading(true)
-    const jobs = files.map((f) => {
-      return api.upload(f, 'parent')
-        .then((data) => ({ name: data.name || f.name, error: data.error }))
-        .catch(() => ({ name: f.name, error: 'upload failed' }))
-    })
-    return Promise.all(jobs)
-      .then((results) => {
-        const cards: ParentMsg[] = results.map((r) => ({ role: 'tool', tool: r.error ? 'upload_error' : 'upload', name: r.name }))
-        setParentMessages((cur) => [...cur, ...cards])
-      })
-      .finally(() => setUploading(false))
-  }
-
-  const onFilesSelected = (event: ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files
-    if (!files || files.length === 0) return
-    uploadParentFiles(Array.from(files)).finally(() => {
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    })
-  }
-
-  // A screenshot or copied image pasted straight into the composer (Cmd/Ctrl+V)
-  // uploads immediately, same as picking it via the attach button — only
-  // intercepts the paste when the clipboard actually holds image data, so a
-  // normal text paste is completely unaffected.
-  const onParentComposerPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const items = event.clipboardData?.items
-    if (!items) return
-    const imageFiles: File[] = []
-    for (const item of items) {
-      if (item.kind === 'file' && item.type.startsWith('image/')) {
-        const f = item.getAsFile()
-        if (f) imageFiles.push(f)
-      }
-    }
-    if (imageFiles.length === 0) return
-    event.preventDefault()
-    uploadParentFiles(imageFiles)
-  }
-
-  const childFileInputRef = useRef<HTMLInputElement>(null)
-  const [childUploading, setChildUploading] = useState(false)
-
-  const onPickChildFiles = () => childFileInputRef.current?.click()
-
-  // Shared by the file picker (onChildFilesSelected) AND pasting an image
-  // directly into the composer (onChildComposerPaste). A photo of the
-  // child's own work — lands directly in their current activity folder
-  // (their own sandbox) so Quill can see it immediately with no parent
-  // approval step. Auto-triggers a turn afterward (as if the child said so)
-  // since a kid won't reliably know to say "look at this" right after
-  // picking/pasting a photo.
-  const uploadChildFiles = (files: File[]) => {
-    if (files.length === 0) return Promise.resolve()
-    setChildUploading(true)
-    const jobs = files.map((f) => {
-      return api.upload(f, 'child')
-        .then((data) => ({ name: data.name || f.name, error: data.error }))
-        .catch(() => ({ name: f.name, error: 'upload failed' }))
-    })
-    return Promise.all(jobs)
-      .then((results) => {
-        const cards: ParentMsg[] = results.map((r) => ({ role: 'tool', tool: r.error ? 'upload_error' : 'upload', name: r.name }))
-        const ok = results.some((r) => !r.error)
-        const next = [...childMessages, ...cards]
-        setChildMessages(next)
-        if (ok) sendChildText('I just uploaded a photo of my work — can you take a look?', next)
-      })
-      .finally(() => setChildUploading(false))
-  }
-
-  const onChildFilesSelected = (event: ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files
-    if (!files || files.length === 0) return
-    uploadChildFiles(Array.from(files)).finally(() => {
-      if (childFileInputRef.current) childFileInputRef.current.value = ''
-    })
-  }
-
-  const onChildComposerPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const items = event.clipboardData?.items
-    if (!items) return
-    const imageFiles: File[] = []
-    for (const item of items) {
-      if (item.kind === 'file' && item.type.startsWith('image/')) {
-        const f = item.getAsFile()
-        if (f) imageFiles.push(f)
-      }
-    }
-    if (imageFiles.length === 0) return
-    event.preventDefault()
-    uploadChildFiles(imageFiles)
-  }
 
   if (booting) {
     return (
@@ -2833,48 +1914,10 @@ export default function LearningApp() {
                             </span>
                             {pulseConfig?.enabled ? 'Turn off' : 'Turn on'}
                           </button>
-                          {backend === 'platform' && (
                             <div className="fl-pulse-popover-meta">
                               <span>Checks every</span>
                               <span>{pulseConfig ? `${pulseConfig.cadence_hours} hours` : '…'}</span>
                             </div>
-                          )}
-                          {backend !== 'platform' && (<>
-                          <label className="fl-pulse-config-row">
-                            <span>Check every</span>
-                            <select
-                              value={pulseConfig?.cadence_hours ?? 24}
-                              disabled={savingPulse || !pulseConfig}
-                              onChange={(e) => savePulseConfig({ cadence_hours: Number(e.target.value) })}
-                            >
-                              <option value={6}>6 hours</option>
-                              <option value={12}>12 hours</option>
-                              <option value={24}>24 hours (daily)</option>
-                              <option value={72}>3 days</option>
-                              <option value={168}>weekly</option>
-                            </select>
-                          </label>
-                          <label className="fl-pulse-config-row">
-                            <input
-                              type="checkbox"
-                              checked={pulseConfig?.preferred_hour_set ?? false}
-                              disabled={savingPulse || !pulseConfig}
-                              onChange={(e) => savePulseConfig({ preferred_hour_set: e.target.checked })}
-                            />
-                            <span>Around a specific time</span>
-                            <select
-                              value={pulseConfig?.preferred_hour ?? 8}
-                              disabled={savingPulse || !pulseConfig || !pulseConfig?.preferred_hour_set}
-                              onChange={(e) => savePulseConfig({ preferred_hour: Number(e.target.value), preferred_hour_set: true })}
-                            >
-                              {Array.from({ length: 24 }, (_, h) => (
-                                <option key={h} value={h}>
-                                  {h === 0 ? '12:00 AM' : h < 12 ? `${h}:00 AM` : h === 12 ? '12:00 PM' : `${h - 12}:00 PM`}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          </>)}
                           <div className="fl-pulse-popover-meta">
                             <span>Last check-in</span>
                             <span>{pulseConfig?.last_run_at ? new Date(pulseConfig.last_run_at).toLocaleString() : 'Not yet'}</span>
@@ -2948,7 +1991,7 @@ export default function LearningApp() {
               </div>
             </div>
 
-            {backend === 'platform' ? (
+            {(
               <PlatformChat
                 title="SparkQuill"
                 childName={childName}
@@ -2965,266 +2008,6 @@ export default function LearningApp() {
                 onInteraction={onPlatformInteraction}
                 onPresentation={onPlatformPresentation}
               />
-            ) : (
-              <>
-            {newBelow && (
-              // The message is already applied — this only says it landed
-              // below the fold, so tapping scrolls rather than fetching.
-              <button
-                type="button"
-                className="fl-new-update-banner"
-                onClick={() => {
-                  setNewBelow(false)
-                  atBottomRef.current = true
-                  threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-                }}
-              >
-                <RefreshCw size={14} /> New message — tap to jump to it
-              </button>
-            )}
-            <div className="fl-thread" aria-label="Parent learning conversation" ref={threadScrollRef}>
-              <div className="fl-msg is-agent">
-                <span className="fl-msg-avatar is-sun"><Sun size={18} /></span>
-                <div className="fl-msg-col">
-                  <div className="fl-bubble">Hi! I’m Quill, {childName || 'your child'}’s learning guide. Tell me what {childName || 'your child'} is working on, or ask me to explain progress, make study material, or create a test.</div>
-                </div>
-              </div>
-
-              {hiddenParentCount > 0 && (
-                <button
-                  type="button"
-                  className="fl-load-earlier"
-                  onClick={() => setParentVisibleCount((c) => c + PARENT_HISTORY_PAGE_SIZE)}
-                >
-                  Load {Math.min(hiddenParentCount, PARENT_HISTORY_PAGE_SIZE)} earlier message{Math.min(hiddenParentCount, PARENT_HISTORY_PAGE_SIZE) === 1 ? '' : 's'}
-                </button>
-              )}
-              {parentRenderGroups.map((g, gi) => {
-                if (g.kind === 'photos') {
-                  return (
-                    <div key={`photos-${gi}`} className="fl-msg is-agent">
-                      <span className="fl-msg-avatar is-sun"><Paperclip size={16} /></span>
-                      <div className="fl-msg-col">
-                        <div className="fl-photo-row">
-                          {g.paths.map((p, pi) => {
-                            const rawUrl = api.rawUrl(p)
-                            return (
-                              <a key={pi} href={rawUrl} target="_blank" rel="noopener noreferrer" className="fl-photocard">
-                                <img src={rawUrl} alt="Photo received on WhatsApp" loading="lazy" />
-                              </a>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                  )
-                }
-                const { msg: m, index: i } = g
-                if (m.role === 'tool') {
-                  // 'tool_summary' is what turns persist today; 'debug_summary'
-                  // is the older name still present in saved conversations.
-                  if (m.tool === 'debug_summary' || m.tool === 'tool_summary') {
-                    return <ToolCallSummary key={i} calls={m.toolCalls ?? []} />
-                  }
-                  if (m.tool === 'video' && m.path) {
-                    const rawUrl = api.rawUrl(m.path)
-                    return (
-                      <div key={i} className="fl-msg is-agent">
-                        <span className="fl-msg-avatar is-sun"><Paperclip size={16} /></span>
-                        <div className="fl-msg-col">
-                          <video className="fl-videocard" src={rawUrl} controls preload="metadata" />
-                        </div>
-                      </div>
-                    )
-                  }
-                  if (m.tool === 'voice_failed' && m.path) {
-                    const rawUrl = api.rawUrl(m.path)
-                    return (
-                      <div key={i} className="fl-msg is-agent">
-                        <span className="fl-msg-avatar is-sun"><Mic size={16} /></span>
-                        <div className="fl-msg-col">
-                          <div className="fl-toolcard is-error"><Mic size={15} /> <span>Voice note received — couldn’t transcribe it</span></div>
-                          <audio className="fl-audiocard" src={rawUrl} controls preload="metadata" />
-                        </div>
-                      </div>
-                    )
-                  }
-                  if (m.tool === 'upload' || m.tool === 'upload_error') {
-                    const bad = m.tool === 'upload_error'
-                    return (
-                      <div key={i} className="fl-msg is-agent">
-                        <span className="fl-msg-avatar is-sun"><Paperclip size={16} /></span>
-                        <div className="fl-msg-col">
-                          <div className={`fl-toolcard ${bad ? 'is-error' : 'is-upload'}`}><Paperclip size={15} /> <span>{bad ? <>Couldn’t add <strong>{m.name}</strong></> : <>Added material — <strong>{m.name}</strong></>}</span></div>
-                        </div>
-                      </div>
-                    )
-                  }
-                  return (
-                    <div key={i} className="fl-msg is-agent">
-                      <span className="fl-msg-avatar is-sun"><Check size={18} strokeWidth={3} /></span>
-                      <div className="fl-msg-col">
-                        <div className="fl-toolcard"><Check size={15} strokeWidth={3} /> <span>Saved <strong>{m.name || 'child profile'}</strong>{m.grade ? ` · Grade ${m.grade}` : ''}{m.board ? ` · ${m.board}` : ''}</span></div>
-                      </div>
-                    </div>
-                  )
-                }
-                if (m.source === 'pulse' && m.role === 'user') {
-                  // The Pulse trigger — shown as a clear, centered "check-in
-                  // ran" divider rather than a fake parent bubble (it isn't
-                  // something the parent typed), so the whole automated turn
-                  // is visible: this divider, then Quill's reply below it.
-                  return (
-                    <div key={i} className="fl-pulse-divider">
-                      <PulseIcon size={13} /> <span>{m.text}</span>
-                    </div>
-                  )
-                }
-                return (
-                  <div key={i} className={`fl-msg ${m.role === 'user' ? 'is-parent' : 'is-agent'}`}>
-                    {m.role === 'user' ? (
-                      <>
-                        <div className="fl-msg-col"><div className="fl-bubble">{m.text}</div></div>
-                        <span className="fl-msg-avatar is-parent">{initial}</span>
-                      </>
-                    ) : (
-                      <>
-                        <span className={`fl-msg-avatar ${m.source === 'pulse' ? 'is-pulse' : 'is-sun'}`}>{m.source === 'pulse' ? <PulseIcon size={17} /> : <Sun size={18} />}</span>
-                        <div className="fl-msg-col">
-                          <div className={`fl-bubble ${m.source === 'pulse' ? 'is-pulse' : ''}`}>
-                            <Markdown text={m.text ?? ''} />
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )
-              })}
-
-              {!sending && (remoteStatus || remoteToolCalls.length > 0) && (
-                <div className="fl-msg is-agent">
-                  <span className="fl-msg-avatar is-sun"><Sun size={18} /></span>
-                  <div className="fl-msg-col">
-                    <div className="fl-thinking">
-                      <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />
-                      <span>{remoteStatus ? `Quill is: ${remoteStatus}… (from WhatsApp)` : 'Working on a message sent from WhatsApp…'}</span>
-                    </div>
-                    <ToolCallSummary calls={remoteToolCalls} />
-                  </div>
-                </div>
-              )}
-              {sending && (
-                <div className="fl-msg is-agent">
-                  <span className="fl-msg-avatar is-sun"><Sun size={18} /></span>
-                  <div className="fl-msg-col">
-                    {streamingReply && (
-                      // Rendered as thinking, NOT as a reply bubble. What
-                      // streams here is the model working out loud — "I'll
-                      // first check which notes this refers to…" — which is
-                      // not the answer and is often contradicted by it. In a
-                      // .fl-bubble it was indistinguishable from a finished
-                      // message, so a parent read the plan as the response.
-                      <div className="fl-stream-think">
-                        <span className="fl-stream-think-label">Thinking</span>
-                        <div className="fl-stream-think-body is-streaming">
-                          <Markdown text={stabilizeSharedStreamingMarkdown(streamingReply)} />
-                        </div>
-                      </div>
-                    )}
-                    <div className="fl-thinking">
-                      {!streamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
-                      <span>{liveStatus ? `Quill is: ${liveStatus}…` : 'Working on it…'}</span>
-                    </div>
-                    <ToolCallSummary calls={liveToolCalls} />
-                  </div>
-                </div>
-              )}
-
-              {queue.map((q, i) => (
-                <div key={`q-${i}`} className="fl-msg is-parent">
-                  <div className="fl-msg-col"><div className="fl-bubble is-queued">{q} <span className="fl-queued-tag">queued</span></div></div>
-                  <span className="fl-msg-avatar is-parent">{initial}</span>
-                </div>
-              ))}
-
-              {parentMessages.length === 0 && !sending && (
-                <div className="parent-quick-actions" aria-label="Suggested parent requests">
-                  <button type="button" onClick={() => setFocusInput(`How is ${childName || 'my child'} doing so far?`)}>Understand progress</button>
-                  <button type="button" onClick={() => setFocusInput('Make a short revision worksheet for my child')}>Create study material</button>
-                  <button type="button" onClick={() => setFocusInput('Create a short practice test for my child')}>Create a test</button>
-                </div>
-              )}
-              {suggestions.length > 0 && !sending && (
-                <div className="fl-suggestions" aria-label="Recommended next steps">
-                  {suggestions.map((s, i) => (
-                    <button key={i} type="button" className="fl-suggestion" onClick={() => sendParentText(s.message)}>{s.label}</button>
-                  ))}
-                </div>
-              )}
-              <div ref={threadEndRef} />
-            </div>
-
-            <form className="fl-composer" onSubmit={sendParentMessage}>
-              <input ref={fileInputRef} type="file" multiple accept="image/*,application/pdf" onChange={onFilesSelected} style={{ display: 'none' }} />
-              <button className="composer-icon" type="button" aria-label="Attach a photo or PDF" onClick={onPickFiles} disabled={uploading}><Paperclip size={19} /></button>
-              <textarea
-                ref={focusTextareaRef}
-                aria-label="Message the learning guide"
-                placeholder={sending ? 'Quill is replying — your next message will be queued…' : `Ask anything about ${childName || 'your child'}’s learning…`}
-                value={focusInput}
-                rows={1}
-                onChange={(event) => { setFocusInput(event.target.value); autoGrowTextarea(event.target) }}
-                onPaste={onParentComposerPaste}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault()
-                    if (parentMicStateRef.current === 'recording') parentMicRef.current?.stopAndSubmit()
-                    else sendParentText(focusInput)
-                  }
-                }}
-              />
-              <div className="fl-composer-menu">
-                {menuOpen && <div className="fl-menu-backdrop" onClick={() => setMenuOpen(false)} />}
-                <button type="button" className="composer-icon" aria-label="Quick actions" aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)}><Sparkles size={19} /></button>
-                {menuOpen && (
-                  <div className="fl-menu" role="menu">
-                    {quickCommands.parent.map((s) => (
-                      <button key={s.label} type="button" role="menuitem" onClick={() => { setMenuOpen(false); sendParentText(s.message) }}>{s.label}</button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <button
-                type="button"
-                className={`composer-icon ${fastMode ? 'is-active' : ''}`}
-                aria-label="Fast mode"
-                aria-pressed={fastMode}
-                title={fastMode ? 'Fast mode is on — quicker, lighter replies. Tap to turn off.' : 'Turn on fast mode for quicker (lighter) replies'}
-                onClick={() => toggleFastMode(!fastMode)}
-                disabled={savingFastMode}
-              >
-                <Zap size={19} />
-              </button>
-              <MicButton
-                ref={parentMicRef}
-                onStateChange={(s) => { parentMicStateRef.current = s; setParentMicRecording(s === 'recording' || s === 'preparing') }}
-                onText={(text, autoSubmit) => {
-                  if (autoSubmit) {
-                    const cur = focusInputRef.current
-                    sendParentText(cur ? `${cur} ${text}` : text)
-                    return
-                  }
-                  setFocusInput((cur) => (cur ? `${cur} ${text}` : text))
-                  // So Enter immediately sends — without this the composer
-                  // stays unfocused after dictation and Enter does nothing.
-                  focusTextareaRef.current?.focus()
-                }}
-                disabled={uploading}
-                shortcutEnabled={screen === 'parent'}
-              />
-              <button className="composer-send" type="submit" aria-label="Send message" disabled={!focusInput.trim()}><Send size={18} /></button>
-            </form>
-              </>
             )}
           </section>
           <div
@@ -3355,7 +2138,7 @@ export default function LearningApp() {
                     {viewerActivityDir && (() => {
                       const act = activities.find((a) => a.dir === viewerActivityDir)
                       return act ? (
-                        <button className="fl-give-to-child" type="button" disabled={sending} onClick={() => startActivityHandoff(act.dir, act.title)}>
+                        <button className="fl-give-to-child" type="button" onClick={() => startActivityHandoff(act.dir, act.title)}>
                           Give to {childName || 'child'}
                         </button>
                       ) : null
@@ -3461,7 +2244,7 @@ export default function LearningApp() {
                             </button>
                           )}
                           {(act.items.length === 0 || expanded) && (
-                            <button className="fl-give-to-child" type="button" disabled={sending} onClick={() => startActivityHandoff(act.dir, act.title)}>
+                            <button className="fl-give-to-child" type="button" onClick={() => startActivityHandoff(act.dir, act.title)}>
                               Give to {childName || 'child'}
                             </button>
                           )}
@@ -3557,7 +2340,6 @@ export default function LearningApp() {
                             <button
                               className="fl-give-to-child"
                               type="button"
-                              disabled={sending}
                               onClick={() => startActivityHandoff(act.dir, act.title)}
                             >
                               Give to {childName || 'child'}
@@ -3946,32 +2728,6 @@ export default function LearningApp() {
                     </>
                   )}
 
-                  {backend !== 'platform' && (<>
-                  <p className="fl-drawer-label" style={{ marginTop: '20px' }}>Fast mode</p>
-                  <p className="fl-note">Keeps the model you chose but lets it think less before answering — quicker replies, less depth, in your own chat, WhatsApp, and Pulse check-ins. Child Mode has its own setting below, so this does not affect {childName || 'your child'}'s tutor. Turn it off again for anything that needs careful judgment.</p>
-                  <label className="fl-pulse-config-row">
-                    <input
-                      type="checkbox"
-                      checked={fastMode}
-                      disabled={savingFastMode}
-                      onChange={(e) => toggleFastMode(e.target.checked)}
-                    />
-                    <span>Use fast mode for my own chat</span>
-                  </label>
-
-                  <p className="fl-note" style={{ marginTop: '10px' }}>
-                    Same idea for {childName || 'your child'}'s tutor. On by default — a child waiting for a reply reads as the app being broken, not as Quill thinking. Turn it off if she needs the more careful, slower version.
-                  </p>
-                  <label className="fl-pulse-config-row">
-                    <input
-                      type="checkbox"
-                      checked={childFastMode}
-                      disabled={savingFastMode}
-                      onChange={(e) => toggleChildFastModeSetting(e.target.checked)}
-                    />
-                    <span>Use fast mode for {childName || 'her'} chat</span>
-                  </label>
-                  </>)}
 
                   <VoiceSettings status={voiceStatus} childName={childName} onRefresh={refreshVoiceStatus} />
 
@@ -4088,7 +2844,7 @@ export default function LearningApp() {
                   <button className="fl-parent-return" type="button" title="Parent Mode" onClick={() => { setGateValue(''); setGateError(''); setPinGate(true) }}><LockKeyhole size={16} /><span>Parent Mode</span></button>
                 </div>
               </header>
-              {backend === 'platform' ? (
+              {(
                 childActivity?.dir ? (
                   <ChildPlatformChat
                     activityDir={childActivity.dir}
@@ -4104,191 +2860,6 @@ export default function LearningApp() {
                 ) : (
                   <p className="fl-note" style={{ padding: 24 }}>No activity yet — ask your {parentLabel || 'parent'} to give you one.</p>
                 )
-              ) : (
-              <>
-              <div className="fl-child-thread" aria-label="Tutor conversation" ref={childThreadScrollRef}>
-                {childRenderGroups.map((g, gi) => (
-                  g.kind === 'photos' ? (
-                    <div key={`photos-${gi}`} className="fl-tmsg is-tutor">
-                      <span className="fl-tmsg-avatar"><Paperclip size={16} /></span>
-                      <div className="fl-photo-row">
-                        {g.paths.map((p, pi) => (
-                          <a
-                            key={pi}
-                            href={api.rawUrl(p)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="fl-photocard"
-                          >
-                            <img src={api.rawUrl(p)} alt="Photo received on WhatsApp" loading="lazy" />
-                          </a>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (() => {
-                    const { msg: m, index: i } = g
-                    return m.role === 'tool' && (m.tool === 'debug_summary' || m.tool === 'tool_summary') ? (
-                    <ToolCallSummary key={i} calls={m.toolCalls ?? []} />
-                  ) : m.role === 'tool' && m.tool === 'video' && m.path ? (
-                    <div key={i} className="fl-tmsg is-tutor">
-                      <span className="fl-tmsg-avatar"><Paperclip size={16} /></span>
-                      <video className="fl-videocard" src={api.rawUrl(m.path)} controls preload="metadata" />
-                    </div>
-                  ) : m.role === 'tool' && m.tool === 'voice_failed' && m.path ? (
-                    <div key={i} className="fl-tmsg is-tutor">
-                      <span className="fl-tmsg-avatar"><Mic size={16} /></span>
-                      <div className="fl-msg-col">
-                        <div className="fl-toolcard is-error"><Mic size={15} /> <span>Voice note received — couldn’t transcribe it</span></div>
-                        <audio className="fl-audiocard" src={api.rawUrl(m.path)} controls preload="metadata" />
-                      </div>
-                    </div>
-                  ) : m.role === 'tool' && (m.tool === 'upload' || m.tool === 'upload_error') ? (
-                    <div key={i} className="fl-tmsg is-tutor">
-                      <span className="fl-tmsg-avatar"><Paperclip size={16} /></span>
-                      <div className={`fl-toolcard ${m.tool === 'upload_error' ? 'is-error' : 'is-upload'}`}>
-                        <Paperclip size={15} />
-                        <span>{m.tool === 'upload_error' ? <>Couldn’t add your photo</> : <>Added your photo</>}</span>
-                      </div>
-                    </div>
-                  ) : m.role === 'tool' && m.tool === 'celebrate' ? (
-                    <div key={i} className="fl-celebration" role="status">
-                      <span className="fl-celebration-stars">
-                        {Array.from({ length: m.stars ?? 1 }, (_, si) => (
-                          <Star key={si} className="fl-celebration-star" size={20} fill="currentColor" strokeWidth={1} style={{ animationDelay: `${si * 0.12}s` }} />
-                        ))}
-                      </span>
-                      <span className="fl-celebration-text">{m.reason}</span>
-                    </div>
-                  ) : m.role === 'tool' && m.tool === 'scene' ? (
-                    <div key={i} className="fl-tmsg is-tutor">
-                      <span className="fl-tmsg-avatar"><Sun size={20} /></span>
-                      <SceneFrame html={m.html ?? ''} activityDir={childActivity?.dir ?? ''} />
-                    </div>
-                  ) : m.role === 'assistant' ? (
-                    <div key={i} className="fl-tmsg is-tutor">
-                      <span className="fl-tmsg-avatar"><Sun size={20} /></span>
-                      <div className="fl-tbubble">
-                        <Markdown text={m.text ?? ''} />
-                        <label className="fl-reminder-row">
-                          <input
-                            type="checkbox"
-                            checked={childReminderSound}
-                            onChange={(e) => toggleChildReminderSound(e.target.checked)}
-                          />
-                          <Bell size={13} />
-                          <span>Remind me with a sound</span>
-                        </label>
-                      </div>
-                    </div>
-                  ) : (
-                    <div key={i} className="fl-tmsg is-child">
-                      <div className="fl-tbubble"><Markdown text={m.text ?? ''} /></div>
-                      <span className="fl-tmsg-avatar is-child">{initial}</span>
-                    </div>
-                  )
-                  })()
-                ))}
-                {!childSending && (childRemoteStatus || childRemoteToolCalls.length > 0) && (
-                  <div className="fl-tmsg is-tutor">
-                    <span className="fl-tmsg-avatar"><Sun size={20} /></span>
-                    <div className="fl-tbubble-col">
-                      <div className="fl-thinking">
-                        <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />
-                        <span>{childRemoteStatus ? `Quill is: ${childRemoteStatus}… (from WhatsApp)` : 'Working on a message sent from WhatsApp…'}</span>
-                      </div>
-                      <ToolCallSummary calls={childRemoteToolCalls} />
-                    </div>
-                  </div>
-                )}
-                {childSending && (
-                  <div className="fl-tmsg is-tutor">
-                    <span className="fl-tmsg-avatar"><Sun size={20} /></span>
-                    <div className="fl-tbubble-col">
-                      {childStreamingReply && (
-                        <div className="fl-stream-think">
-                          <span className="fl-stream-think-label">Thinking</span>
-                          <div className="fl-stream-think-body is-streaming">
-                            <Markdown text={stabilizeSharedStreamingMarkdown(childStreamingReply)} />
-                          </div>
-                        </div>
-                      )}
-                      <div className="fl-thinking">
-                        {!childStreamingReply && <img src="/sparkquill-loader.svg" alt="" width={38} height={38} />}
-                        <span>{childLiveStatus ? `Quill is: ${childLiveStatus}…` : 'Working on it…'}</span>
-                      </div>
-                      <ToolCallSummary calls={childLiveToolCalls} />
-                    </div>
-                  </div>
-                )}
-                {childQueue.map((q, i) => (
-                  <div key={`cq-${i}`} className="fl-tmsg is-child">
-                    <div className="fl-tbubble is-queued">{q} <span className="fl-queued-tag">queued</span></div>
-                    <span className="fl-tmsg-avatar is-child">{initial}</span>
-                  </div>
-                ))}
-                <div ref={childThreadEndRef} />
-              </div>
-              <form className="fl-child-composer" onSubmit={sendChildMessage}>
-                <input ref={childFileInputRef} type="file" multiple accept="image/*" onChange={onChildFilesSelected} style={{ display: 'none' }} />
-                <button className="composer-icon" type="button" aria-label="Attach a photo of your work" onClick={onPickChildFiles} disabled={childSending || childUploading}><Paperclip size={19} /></button>
-                <textarea
-                  ref={childTextareaRef}
-                  aria-label="Message your tutor"
-                  placeholder={childSending ? 'You can still type — Quill will hear you…' : 'Type your answer or ask for help…'}
-                  value={childInput}
-                  rows={1}
-                  onChange={(e) => { setChildInput(e.target.value); autoGrowTextarea(e.target) }}
-                  onPaste={onChildComposerPaste}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault()
-                      if (childMicStateRef.current === 'recording') childMicRef.current?.stopAndSubmit()
-                      else sendChildText(childInput)
-                    }
-                  }}
-                />
-                <div className="fl-composer-menu">
-                  {childQuickMenuOpen && <div className="fl-menu-backdrop" onClick={() => setChildQuickMenuOpen(false)} />}
-                  <button type="button" className="composer-icon" aria-label="Quick requests" aria-expanded={childQuickMenuOpen} onClick={() => setChildQuickMenuOpen((v) => !v)}><Sparkles size={19} /></button>
-                  {childQuickMenuOpen && (
-                    <div className="fl-menu" role="menu">
-                      {quickCommands.child.map((qa) => (
-                        <button key={qa.label} type="button" role="menuitem" onClick={() => { setChildQuickMenuOpen(false); sendChildText(qa.message) }}>{qa.label}</button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  className={`composer-icon ${childFastMode ? 'is-active' : ''}`}
-                  aria-label="Fast mode"
-                  aria-pressed={childFastMode}
-                  title={childFastMode ? 'Fast mode is on — quicker, lighter replies. Tap to turn off.' : 'Turn on fast mode for quicker (lighter) replies'}
-                  onClick={() => toggleChildFastModeSetting(!childFastMode)}
-                  disabled={savingFastMode}
-                >
-                  <Zap size={19} />
-                </button>
-                <MicButton
-                  ref={childMicRef}
-                  onStateChange={(s) => { childMicStateRef.current = s; setChildMicRecording(s === 'recording' || s === 'preparing') }}
-                  onText={(text, autoSubmit) => {
-                    if (autoSubmit) {
-                      const cur = childInputRef.current
-                      sendChildText(cur ? `${cur} ${text}` : text)
-                      return
-                    }
-                    setChildInput((cur) => (cur ? `${cur} ${text}` : text))
-                    // So Enter immediately sends — without this the composer
-                    // stays unfocused after dictation and Enter does nothing.
-                    childTextareaRef.current?.focus()
-                  }}
-                  disabled={childUploading}
-                  shortcutEnabled={screen === 'tutor'}
-                />
-                <button className="composer-send" type="submit" aria-label="Send message" disabled={!childInput.trim()}><Send size={18} /></button>
-              </form>
-              </>
               )}
             </section>
             <div
@@ -4435,7 +3006,7 @@ export default function LearningApp() {
                             <button type="button" className="fl-file-item is-package" onClick={() => {
                               if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) setStartBurst(true)
                               setChildViewerPath(null)
-                              sendChildText(`Let's start ${childActivity?.title || 'my activity'}!`)
+                              submitToChildChat(`Let's start ${childActivity?.title || 'my activity'}!`)
                             }}>
                               <BookOpen size={16} /><span>{childActivity?.title || 'Your activity'}<small>Adaptive practice{dateTimeLabel(childActivity?.created_at) ? ` · ${dateTimeLabel(childActivity?.created_at)}` : ''}</small></span>
                             </button>

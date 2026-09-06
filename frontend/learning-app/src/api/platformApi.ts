@@ -1,19 +1,25 @@
 // FamilyApi against the AgentWorks platform: the SparkQuill product profiles
 // (internal/sparkquillproduct) reached through the agent-profile chat routes,
 // with the session event stream mapped back into the preview and result
-// shapes the UI already understands. Slice 2 covers conversations; the
-// workspace, setup and connector methods land in the next slices and say so
-// loudly until then.
+// shapes the UI already understands. Turns themselves run through the shared
+// ChatArea (PlatformChat / ChildPlatformChat); this adapter covers setup,
+// workspace, history and connectors.
 import type { ApiEngine, QuickCommand, VoiceStatus } from '../stores/types'
-import { secretsApi } from '../../../src/api/secrets'
+// Loaded on first use, not at module evaluation: the shared secrets client
+// pulls in the whole shared services graph (src/services/api.ts,
+// mcpConfigApi.ts, useMCPStore), which has a circular import that only
+// resolves when entered from the AgentWorks app's own entry point. The
+// desktop app is fine either way; a bare test or node consumer of this
+// adapter is not.
+const secrets = () => import('../../../src/api/secrets').then((m) => m.secretsApi)
 import type {
-  FamilyApi, FastMode, ModelInfo, PulseConfig, PulseConfigPatch, SetupState,
-  StoredConversation, TurnMessage, TurnResult, TurnStreamEvent,
+  FamilyApi, FastMode, ModelInfo, PulseConfig, SetupState,
+  StoredConversation,
   WhatsAppStatus, WhatsAppVoiceTranscription,
 } from './familyApi'
-import { TurnCollector, type EventBatch, messagesFromEvents, type PlatformEvent } from './platform/events'
+import { messagesFromEvents, type PlatformEvent } from './platform/events'
 import { quickCommandsFromProfile } from './platform/commands'
-import { fetchSessionEvents, followSession, conversationToRestoredEvents, type RestorableConversation } from '../../../shared/session'
+import { fetchSessionEvents, conversationToRestoredEvents, type RestorableConversation } from '../../../shared/session'
 import { FamilyWorkspace, documentsURL } from './platform/workspace'
 
 export const PARENT_PROFILE = 'sparkquill'
@@ -26,8 +32,6 @@ export type PlatformApiOptions = {
   login?: { username: string; password: string }
   /** Overrides the token store (node tests). */
   tokenStore?: { get(): string | null; set(token: string | null): void }
-  /** Time without any event before a turn is given up on. */
-  turnInactivityMs?: number
 }
 
 type Conversation = { sessionID: string; cursor: number }
@@ -37,7 +41,6 @@ const notYet = (what: string) => () => Promise.reject(new Error(`${what} is not 
 export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
   const base = options.baseUrl.replace(/\/+$/, '')
   const store = options.tokenStore ?? browserTokenStore()
-  const inactivity = options.turnInactivityMs ?? 20 * 60 * 1000
   const conversations = new Map<string, Conversation>()
 
   // ---- auth ------------------------------------------------------------
@@ -104,117 +107,6 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     const conv = { sessionID: resolved.session_id, cursor }
     conversations.set(cacheKey, conv)
     return conv
-  }
-
-  /** Follows a session's stream from its cursor; the returned function stops it. */
-  function follow(conv: Conversation, onBatch: (batch: EventBatch, frameID: number) => void, onEnd?: (err?: Error) => void): () => void {
-    return followSession(sessionClient, conv.sessionID, conv.cursor, {
-      onBatch: (batch, frameIndex) => {
-        if (frameIndex >= 0) conv.cursor = Math.max(conv.cursor, frameIndex)
-        onBatch(batch, frameIndex)
-      },
-      onEnd,
-    })
-  }
-
-  async function sendTurn(profile: string, key: string, text: string, onEvent: (e: TurnStreamEvent) => void): Promise<TurnResult> {
-    const conv = await conversation(profile, key)
-    const collector = new TurnCollector(conv.sessionID, onEvent)
-    return new Promise<TurnResult>((resolve, reject) => {
-      let finished = false
-      let timer: ReturnType<typeof setTimeout> | undefined
-      let stop: () => void = () => {}
-      const finish = (err?: Error) => {
-        if (finished) return
-        finished = true
-        if (timer) clearTimeout(timer)
-        stop()
-        if (err) reject(err)
-        else resolve(collector.result())
-      }
-      const arm = () => {
-        if (timer) clearTimeout(timer)
-        timer = setTimeout(() => finish(new Error('the turn went quiet for too long')), inactivity)
-      }
-      arm()
-
-      // The stream replays history when the server's store is cold, and a
-      // replayed completion must never pass for this turn's reply. So: open
-      // the stream first, let its opening batch settle to learn where the
-      // conversation currently ends, and only then send the query; events
-      // at or before that mark belong to earlier turns.
-      // Frames carry the store's index as their SSE id (the per-event
-      // event_index field is not that index); the opening frame is the
-      // backfill and its id is where history ends.
-      let baseline = -1
-      let anchored = false
-      let resolveAnchor: () => void = () => {}
-      const anchor = new Promise<void>((r) => { resolveAnchor = r })
-      const onBatch = (batch: EventBatch, frameID: number) => {
-        if (!anchored) {
-          baseline = Math.max(frameID, typeof batch.last_processed_index === 'number' ? batch.last_processed_index : -1)
-          anchored = true
-          resolveAnchor()
-          return
-        }
-        if (frameID >= 0 && frameID <= baseline) return
-        for (const e of batch.events ?? []) {
-          collector.feed(e)
-          arm()
-          if (collector.done) { finish(); return }
-        }
-      }
-      stop = follow(conv, onBatch, (err) => { if (err) finish(err) })
-      Promise.race([anchor, new Promise<void>((r) => setTimeout(r, 3000))])
-        .then(async () => {
-          if (!anchored) { anchored = true; baseline = conv.cursor }
-          // The family's chosen learning helper (onboarding's engine step,
-          // persisted in family.json) rides on every turn as `engine`, one of
-          // the profile's declared provider_options ids; the server resolves
-          // it to that option's (provider, model_id) and rejects anything
-          // undeclared. Absent, the profile's own default applies.
-          const family = await ws.readFamily().catch(() => ({} as { engine?: string }))
-          const body: { message: string; conversation_key?: string; engine?: string } = { message: text }
-          if (key) body.conversation_key = key
-          if (family.engine) body.engine = family.engine
-          return request<{ session_id?: string; status?: string; error?: string }>('POST', `/api/agent-profiles/${profile}/query`, body)
-        })
-        .then((resp) => {
-          if (resp.session_id && resp.session_id !== conv.sessionID) {
-            // The server rebound the conversation; follow the session it chose.
-            stop()
-            conv.sessionID = resp.session_id
-            conv.cursor = 0
-            baseline = -1
-            stop = follow(conv, onBatch, (err) => { if (err) finish(err) })
-          }
-        })
-        .catch((err: Error) => finish(err))
-    })
-  }
-
-  async function steer(profile: string, key: string, message: string): Promise<{ steered?: boolean }> {
-    const conv = await conversation(profile, key)
-    const status = await request<{ can_steer?: boolean }>('GET', `/api/sessions/${encodeURIComponent(conv.sessionID)}/status`).catch(() => null)
-    if (!status?.can_steer) return { steered: false }
-    const res = await request<{ delivery_status?: string }>('POST', `/api/sessions/${encodeURIComponent(conv.sessionID)}/live-input`, { message })
-    return { steered: res.delivery_status === 'sent_to_cli' || res.delivery_status === 'queued_for_injection' }
-  }
-
-  function watch(profile: string, key: string, onEvent: (e: TurnStreamEvent) => void): () => void {
-    let stop: () => void = () => {}
-    let cancelled = false
-    conversation(profile, key).then((conv) => {
-      if (cancelled) return
-      const collector = new TurnCollector(conv.sessionID, onEvent)
-      stop = follow(conv, (batch) => {
-        for (const e of batch.events ?? []) {
-          collector.feed(e)
-          if (collector.done) { /* a turn ended elsewhere; keep watching */ }
-        }
-      })
-    }).catch(() => {})
-    return () => { cancelled = true; stop() }
   }
 
   /** Rebuilds a transcript from the session's event history. */
@@ -351,10 +243,6 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     setPin: (pin) => ws.setPin(pin),
     verifyPin: (pin) => ws.verifyPin(pin),
 
-    sendParentTurn: ({ messages, conversationId: _conversationId }, onEvent) => sendTurn(PARENT_PROFILE, '', lastUserText(messages), onEvent),
-    steerParent: (_conversationId, message) => steer(PARENT_PROFILE, '', message),
-    watchParent: (_conversationId, onEvent) => watch(PARENT_PROFILE, '', onEvent),
-    loadParentConversation: () => history(PARENT_PROFILE, ''),
 
     childActivity: () => ws.currentActivity(),
     handoff: (dir, resume) => ws.handoff(dir, resume),
@@ -363,9 +251,6 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
       await request('POST', `/api/agent-profiles/${CHILD_PROFILE}/conversation/new`, { conversation_key: key })
       conversations.delete(`${CHILD_PROFILE}/${key}`)
     },
-    sendChildTurn: ({ messages, conversationId }, onEvent) => sendTurn(CHILD_PROFILE, conversationKeyFor(CHILD_PROFILE, conversationId), lastUserText(messages), onEvent),
-    steerChild: (conversationId, message) => steer(CHILD_PROFILE, conversationKeyFor(CHILD_PROFILE, conversationId), message),
-    watchChild: (activityDir, onEvent) => watch(CHILD_PROFILE, conversationKeyFor(CHILD_PROFILE, activityDir), onEvent),
     loadChildConversation: (activityDir) => history(CHILD_PROFILE, conversationKeyFor(CHILD_PROFILE, activityDir)),
 
     tree: () => ws.tree(),
@@ -397,15 +282,15 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     // first, only the name is ever listed back. This is the same store the
     // agent's set_user_secret / list_secrets tools use, so Settings and chat
     // see one list.
-    secrets: async () => (await secretsApi.listStoredSecrets()).map((s) => s.name),
+    secrets: async () => (await (await secrets()).listStoredSecrets()).map((s) => s.name),
     saveSecret: async (name, value) => {
-      const { encrypted } = await secretsApi.encrypt(value)
-      await secretsApi.storeSecret(name, encrypted)
-      return (await secretsApi.listStoredSecrets()).map((s) => s.name)
+      const { encrypted } = await (await secrets()).encrypt(value)
+      await (await secrets()).storeSecret(name, encrypted)
+      return (await (await secrets()).listStoredSecrets()).map((s) => s.name)
     },
     deleteSecret: async (name) => {
-      await secretsApi.deleteStoredSecret(name)
-      return (await secretsApi.listStoredSecrets()).map((s) => s.name)
+      await (await secrets()).deleteStoredSecret(name)
+      return (await (await secrets()).listStoredSecrets()).map((s) => s.name)
     },
     // The platform runs one shared speech engine for every product; Settings
     // shows it as a single tier in the family server's catalog shape.
@@ -455,13 +340,6 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     },
   }
   return api
-}
-
-function lastUserText(messages: TurnMessage[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') return messages[i].text
-  }
-  return messages[messages.length - 1]?.text ?? ''
 }
 
 function browserTokenStore() {

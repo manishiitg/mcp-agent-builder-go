@@ -1,20 +1,13 @@
 import { create } from 'zustand'
-import type { Activity, ParentMsg } from './types'
+import type { Activity } from './types'
 import { resolveSetState, type SetStateAction } from './storeUtils'
 
+// Child Mode's workspace state. The conversation itself lives in the shared
+// chat store (ChildPlatformChat mounts AgentWorks' ChatArea); this keeps what
+// is SparkQuill's own: the bound activity and her inline viewer.
 interface ChildChatState {
-  childMessages: ParentMsg[]
-  setChildMessages: (v: SetStateAction<ParentMsg[]>) => void
-  childSending: boolean
-  setChildSending: (v: SetStateAction<boolean>) => void
-  childInput: string
-  setChildInput: (v: SetStateAction<string>) => void
-  childLiveStatus: string
-  setChildLiveStatus: (v: SetStateAction<string>) => void
-  childStreamingReply: string
-  setChildStreamingReply: (v: SetStateAction<string>) => void
-  // The ONE activity the child is currently bound to (/api/child/activity) —
-  // replaces the old scoped-tree scan + package-manifest lookup entirely.
+  // The ONE activity the child is currently bound to (current-activity.json)
+  // — the child workspace shows only this, not every activity ever created.
   childActivity: Activity | null
   setChildActivity: (v: SetStateAction<Activity | null>) => void
   childViewerPath: string | null
@@ -26,16 +19,6 @@ interface ChildChatState {
 }
 
 export const useChildChatStore = create<ChildChatState>()((set) => ({
-  childMessages: [],
-  setChildMessages: (v) => set((s) => ({ childMessages: resolveSetState(v, s.childMessages) })),
-  childSending: false,
-  setChildSending: (v) => set((s) => ({ childSending: resolveSetState(v, s.childSending) })),
-  childInput: '',
-  setChildInput: (v) => set((s) => ({ childInput: resolveSetState(v, s.childInput) })),
-  childLiveStatus: '',
-  setChildLiveStatus: (v) => set((s) => ({ childLiveStatus: resolveSetState(v, s.childLiveStatus) })),
-  childStreamingReply: '',
-  setChildStreamingReply: (v) => set((s) => ({ childStreamingReply: resolveSetState(v, s.childStreamingReply) })),
   childActivity: null,
   setChildActivity: (v) => set((s) => ({ childActivity: resolveSetState(v, s.childActivity) })),
   childViewerPath: null,

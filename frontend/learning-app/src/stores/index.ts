@@ -1,7 +1,6 @@
 export * from './types'
 export * from './useSetupStore'
 export * from './useFamilyStore'
-export * from './useParentChatStore'
 export * from './useWorkspaceStore'
 export * from './useChildChatStore'
 export * from './useWhatsAppStore'
