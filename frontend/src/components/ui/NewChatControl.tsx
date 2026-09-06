@@ -50,13 +50,19 @@ export default function NewChatControl({ engines, onStart, disabled }: NewChatCo
         <MessageSquarePlus className="w-3.5 h-3.5" />
       </Button>
       {open && (
-        <div className="new-chat-panel absolute bottom-full left-0 mb-2 w-48 rounded-xl border border-border bg-popover p-2 shadow-lg z-50">
-          <div className="text-[11px] font-medium text-muted-foreground px-1 pb-1">Start a new chat with</div>
+        // Explicit arbitrary colors, not the ambient bg-popover/text-foreground
+        // tokens: those follow <html>'s theme class, which a product surface's
+        // own chat area does not follow for its own elements (its CSS renders
+        // light regardless via its own variables), so a genuinely-dark <html>
+        // class produced a black panel with illegible hover text over an
+        // otherwise light chat. Same class of bug as MicButton's earlier fix.
+        <div className="new-chat-panel absolute bottom-full left-0 mb-2 w-48 rounded-xl border border-[#d7e0ec] dark:border-[#2a2d33] bg-white dark:bg-[#121418] p-2 shadow-lg z-50">
+          <div className="text-[11px] font-medium text-[#5f708d] dark:text-[#a2a7b0] px-1 pb-1">Start a new chat with</div>
           {engines.map((engine) => (
             <button
               key={engine.id}
               type="button"
-              className="w-full text-left rounded-md px-2 py-1.5 text-sm hover:bg-accent"
+              className="w-full text-left rounded-md px-2 py-1.5 text-sm text-[#1f2937] dark:text-[#e4e7ec] hover:bg-[#f3f6fb] dark:hover:bg-[#1c1f24]"
               onClick={() => { setOpen(false); onStart(engine.id) }}
             >
               {engine.label}
