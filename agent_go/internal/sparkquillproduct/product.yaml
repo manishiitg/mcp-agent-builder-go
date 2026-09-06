@@ -116,6 +116,9 @@ profile:
       warm_session: preferred
       browser: preferred
       voice: preferred
+      # The parent can start a fresh chat with Quill from the toolbar; the
+      # previous one stays in history.
+      new_conversation: preferred
     workspace:
       mode: fixed
       root: Chats/SparkQuill

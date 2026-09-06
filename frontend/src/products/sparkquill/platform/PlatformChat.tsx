@@ -47,6 +47,21 @@ export function applyFamilyEngineToOpenTabs(engine: string): void {
   }
 }
 
+/**
+ * Starts a fresh parent conversation: rotates the profile's conversation on
+ * the server (the old one stays in history), closes the tab this page opened
+ * for it, and forgets it so the next PlatformChat mount opens the new one.
+ * The caller remounts PlatformChat (a changed `key`) after this resolves.
+ */
+export async function startNewParentConversation(): Promise<void> {
+  const store = useChatStore.getState()
+  await agentApi.startNewAgentProfileConversation(PARENT_PROFILE_ID, {})
+  openedTab = null
+  for (const tab of Object.values(store.chatTabs)) {
+    if (tab.metadata?.agentProfileId === PARENT_PROFILE_ID) await store.closeTab(tab.tabId, true, false)
+  }
+}
+
 export type ProductInteraction = { kind: string; payload: Record<string, unknown> }
 export type ProductPresentation = { kind: string; payload: Record<string, unknown> }
 type ProfileDeclaration = { tools?: { presentation?: { kind?: string }; interaction?: { kind?: string; render?: string } }[] }

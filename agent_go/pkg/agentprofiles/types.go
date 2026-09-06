@@ -209,6 +209,13 @@ type RuntimeCapabilities struct {
 	// same pattern as Browser. A disabled/empty value hides the composer's mic
 	// control entirely rather than showing a button that would 404.
 	Voice CapabilityRequirement `json:"voice,omitempty" yaml:"voice,omitempty"`
+	// NewConversation lets the product's UI offer "start a new chat" for this
+	// profile's conversation (POST /api/agent-profiles/{id}/conversation/new).
+	// The previous conversation stays in history; only the live one rotates.
+	// Disabled/empty hides the control: a product whose conversation is bound
+	// to a resource (a video project, a child's activity) manages that
+	// lifecycle itself.
+	NewConversation CapabilityRequirement `json:"new_conversation,omitempty" yaml:"new_conversation,omitempty"`
 }
 
 type ToolBinding struct {

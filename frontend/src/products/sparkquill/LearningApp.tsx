@@ -33,6 +33,7 @@ import {
   Sun,
   Pin,
   PinOff,
+  MessageSquarePlus,
 } from 'lucide-react'
 import './learning-app.css'
 import {
@@ -51,7 +52,8 @@ import {
   type Activity,
   type VoiceStatus,
 } from './stores'
-import PlatformChat, { applyFamilyEngineToOpenTabs, type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
+import PlatformChat, { PARENT_PROFILE_ID, applyFamilyEngineToOpenTabs, startNewParentConversation, type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
+import { loadAgentProfileCapabilityEnabled } from '../../utils/agentProfileCapabilities'
 import ChildPlatformChat, { forgetChildChat, submitToChildChat, type ChildKickoff } from './platform/ChildPlatformChat'
 import { api } from './api'
 import { VoiceSettings } from './voice/VoiceSettings'
@@ -828,6 +830,24 @@ function parseMaterialPath(p: string): { subject?: string; topic?: string; date?
 }
 
 export default function LearningApp() {
+  // "New chat" for the parent conversation: offered only when the profile
+  // declares runtime.capabilities.new_conversation (product.yaml). The chat
+  // is remounted (key) after the server rotates the conversation.
+  const [newChatEnabled, setNewChatEnabled] = useState(false)
+  const [newChatBusy, setNewChatBusy] = useState(false)
+  const [parentChatEpoch, setParentChatEpoch] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    void loadAgentProfileCapabilityEnabled(PARENT_PROFILE_ID, 'new_conversation').then((enabled) => { if (!cancelled) setNewChatEnabled(enabled) })
+    return () => { cancelled = true }
+  }, [])
+  const startNewChat = () => {
+    if (newChatBusy) return
+    setNewChatBusy(true)
+    startNewParentConversation()
+      .catch(() => undefined)
+      .finally(() => { setParentChatEpoch((e) => e + 1); setNewChatBusy(false) })
+  }
   const [theme] = useState<Theme>(readTheme)
   // The main frontend forces the document to dark (ThemeProvider). While this
   // surface is mounted the family's choice wins, and the shared chat inside it
@@ -1899,6 +1919,18 @@ export default function LearningApp() {
                 </div>
               </div>
               <div className="fl-toolbar-right">
+                {newChatEnabled && (
+                  <button
+                    className="fl-icon-btn fl-newchat-btn"
+                    type="button"
+                    aria-label="New chat"
+                    title="Start a new chat — this one stays in history"
+                    disabled={newChatBusy}
+                    onClick={startNewChat}
+                  >
+                    <MessageSquarePlus size={16} />
+                  </button>
+                )}
                 <div className="fl-pulse-wrap">
                   <button
                     className="fl-pulse-pill"
@@ -2016,6 +2048,7 @@ export default function LearningApp() {
 
             {(
               <PlatformChat
+                key={parentChatEpoch}
                 title="SparkQuill"
                 childName={childName}
                 theme={theme === 'dark' ? 'dark' : 'light'}
