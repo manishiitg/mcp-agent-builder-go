@@ -529,8 +529,10 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 	// construction — this fires because the tool executed, not because a
 	// CLI's own transcript happened to narrate the call in a shape a
 	// consumer recognizes.
+	inAppShown := false
 	if emitter, ok := ctx.Value(SessionEventEmitterKey).(SessionEventEmitter); ok && emitter != nil {
 		emitter.EmitProductInteraction("notify", map[string]interface{}{"title": summary.Title, "message": summaryMessage})
+		inAppShown = true
 	}
 	messageForUser = appendNotificationRouteContent(messageForUser, summary.Routes, gc)
 	if dest.Content == nil {
@@ -578,6 +580,14 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 		accountExclusions = append(accountExclusions, "slack")
 	}
 	results := notificationManager.SendUserNotificationSync(ctx, messageForUser, "", dest, accountExclusions...)
+	if inAppShown {
+		// The session's own screen: not one of the configured external
+		// providers described to the agent above (like the always-on web UI
+		// connector, it is not framed as one), but a real delivered result —
+		// omitting it reported "failed" whenever nothing else was configured,
+		// even though the person at the screen had already seen the message.
+		results = append(results, services.ConnectorResult{Channel: "in_app", OK: true, MsgID: "shown"})
+	}
 	results = explainMissingGmail(results, expectedGmail, excludeChannels, services.GetGmailService())
 	webhookAllowed := !containsNotificationChannel(excludeChannels, "slack") &&
 		(len(routedChannels) == 0 || containsNotificationChannel(routedChannels, "slack"))
