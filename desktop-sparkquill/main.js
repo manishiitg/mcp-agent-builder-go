@@ -18,7 +18,7 @@
 // docs/design/sparkquill_desktop_on_platform_plan.md); the desktop case
 // falls back to the user's locally logged-in CLI, exactly like AgentWorks.
 
-const { app, BrowserWindow, shell, dialog, nativeTheme, Menu, Tray, nativeImage } = require('electron')
+const { app, BrowserWindow, shell, dialog, nativeTheme, Menu, Tray, nativeImage, ipcMain, Notification } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const crypto = require('crypto')
@@ -38,6 +38,20 @@ const { buildAgentServerEnv } = require('./lib/agentEnv')
 // check) without touching the family's real userData. Development only; a
 // packaged app never sets it. Must run before the app is ready.
 if (process.env.SPARKQUILL_USER_DATA_DIR) app.setPath('userData', process.env.SPARKQUILL_USER_DATA_DIR)
+
+// Native notification for a message Quill sent the parent (preload's
+// `notify`). Best effort: a machine that refuses notifications just keeps
+// the in-app copy, which stays until the parent dismisses it.
+ipcMain.on('sparkquill-notify', (_event, payload) => {
+  try {
+    if (!Notification.isSupported()) return
+    const title = String(payload?.title || 'SparkQuill').slice(0, 120)
+    const body = String(payload?.body || '').slice(0, 400)
+    const n = new Notification({ title, body, silent: false })
+    n.on('click', () => { if (mainWindow) { mainWindow.show(); mainWindow.focus() } })
+    n.show()
+  } catch { /* never let a notification take the app down */ }
+})
 
 const HEALTH_TIMEOUT_MS = 90000
 const HEALTH_POLL_MS = 500

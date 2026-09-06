@@ -8064,6 +8064,30 @@ func (e *sessionEventEmitter) EmitBlockingHumanFeedback(requestID, question, con
 	log.Printf("[HUMAN_FEEDBACK] Emitted blocking_human_feedback event (request_id: %s, session: %s)", requestID, e.sessionID)
 }
 
+// EmitProductInteraction publishes the identical event a product.yaml tool
+// binding's runtime.Emit produces (see emitAgentProfileEvent), for the human
+// tools that have no such binding to carry that callback. Product is left
+// blank: a session belongs to exactly one product already, so a UI reading
+// its own session's events has no need to filter by it.
+func (e *sessionEventEmitter) EmitProductInteraction(kind string, payload map[string]interface{}) {
+	now := time.Now()
+	data := &orchEvents.ProductInteractionEvent{Kind: kind, Payload: payload}
+	data.BaseEventData = unifiedevents.BaseEventData{Timestamp: now}
+	eventType := string(data.GetEventType())
+	e.eventStore.AddEvent(e.sessionID, events.Event{
+		ID:        fmt.Sprintf("%s_%s_%d", e.sessionID, strings.ReplaceAll(eventType, ".", "_"), now.UnixNano()),
+		Type:      eventType,
+		Timestamp: now,
+		SessionID: e.sessionID,
+		Data: &unifiedevents.AgentEvent{
+			Type:      unifiedevents.EventType(eventType),
+			Timestamp: now,
+			SessionID: e.sessionID,
+			Data:      data,
+		},
+	})
+}
+
 func sanitizeTierModel(model *virtualtools.TierModel) *virtualtools.TierModel {
 	if model == nil || model.Provider == "" || model.ModelID == "" {
 		return nil

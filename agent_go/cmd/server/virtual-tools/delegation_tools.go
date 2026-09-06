@@ -60,6 +60,16 @@ const (
 // SessionEventEmitter is the interface for emitting human-feedback events to the session event store
 type SessionEventEmitter interface {
 	EmitBlockingHumanFeedback(requestID, question, context string, yesNoOnly bool, yesLabel, noLabel string, options ...string)
+	// EmitProductInteraction publishes the same product_interaction event a
+	// product.yaml tool binding emits via agentprofiles.ToolRuntimeContext.Emit
+	// (pkg/orchestrator/events.ProductInteractionEvent) — the generic surface
+	// a session's own UI already reads (frontend/shared/session/interactions.ts).
+	// A platform-wide human tool has no product.yaml binding of its own to
+	// carry that Emit callback, so it reaches the same event bus through this
+	// context-scoped emitter instead: the identical shape either way,
+	// independent of which coding CLI is driving the turn or how it narrates
+	// its own tool use in the transcript.
+	EmitProductInteraction(kind string, payload map[string]interface{})
 }
 
 // GetChatsFolder returns the workspace-relative Chats folder for the current session.

@@ -17,6 +17,7 @@ import { hydrateTabEvents, restoreSession } from '../../../utils/sessionRestore'
 import { setProductCommands } from '../../../commands/registry'
 import { usePresentationEvents } from '../../../platform/presentations/usePresentationEvents'
 import { useProductInteractions } from '../../../platform/interactions/useProductInteractions'
+import { useProductNotifications, type ProductNotification } from '../../../platform/notifications/useProductNotifications'
 import { ProductSuggestions } from '../../../platform/chat/ProductSuggestions'
 import type { QuickCommand } from '../stores/types'
 import { api } from '../api'
@@ -74,6 +75,8 @@ type Props = {
   landing: ReactNode
   onInteraction: (e: ProductInteraction) => void
   onPresentation: (p: ProductPresentation) => void
+  /** Every notify_user message in the conversation so far (the app keeps them on screen until dismissed). */
+  onNotifications?: (n: ProductNotification[]) => void
 }
 
 const queryClient = new QueryClient()
@@ -112,7 +115,7 @@ function SparkQuillConversation({ events, isStreaming, isRestoring, streamingTex
   )
 }
 
-export default function PlatformChat({ title, childName, theme, commands, landing, onInteraction, onPresentation }: Props) {
+export default function PlatformChat({ title, childName, theme, commands, landing, onInteraction, onPresentation, onNotifications }: Props) {
   const [tabId, setTabId] = useState<string | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [presentationKinds, setPresentationKinds] = useState<string[]>([])
@@ -198,6 +201,8 @@ export default function PlatformChat({ title, childName, theme, commands, landin
   // presentations). Events already present when the tab opened are history,
   // not something to act on again.
   const interactions = useProductInteractions(sessionId ?? undefined)
+  const notifications = useProductNotifications(sessionId ?? undefined)
+  useEffect(() => { onNotifications?.(notifications) }, [notifications, onNotifications])
   const presentations = usePresentationEvents(sessionId ?? undefined, presentationKinds)
   // Both lists are in event order and only grow within a session, so what
   // is new is everything past the count already handed over.

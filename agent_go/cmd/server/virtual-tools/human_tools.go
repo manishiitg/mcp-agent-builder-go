@@ -522,6 +522,16 @@ func handleNotifyUser(ctx context.Context, args map[string]interface{}) (string,
 		summary.Route = notificationRouteFromSelections(dest.RouteSelections)
 	}
 	summaryMessage := messageForUser
+	// The in-app copy, independent of the external channels below: shown
+	// regardless of whether any of them are even configured, so the message
+	// still reaches the person in front of the screen when delivery
+	// elsewhere fails or nothing is set up. Engine-independent by
+	// construction — this fires because the tool executed, not because a
+	// CLI's own transcript happened to narrate the call in a shape a
+	// consumer recognizes.
+	if emitter, ok := ctx.Value(SessionEventEmitterKey).(SessionEventEmitter); ok && emitter != nil {
+		emitter.EmitProductInteraction("notify", map[string]interface{}{"title": summary.Title, "message": summaryMessage})
+	}
 	messageForUser = appendNotificationRouteContent(messageForUser, summary.Routes, gc)
 	if dest.Content == nil {
 		dest.Content = &services.NotificationContent{}

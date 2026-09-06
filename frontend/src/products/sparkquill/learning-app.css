@@ -1196,3 +1196,21 @@ audio.fl-viewer-media { background: var(--surface); }
 .learning-app[data-theme="dark"] .fl-child-chat { background: #101d38; }
 .learning-app[data-theme="dark"] .fl-platform-chat-child { --background: 222 44% 14%; }
 .fl-drawer-scroll:has(> .fl-map-frame) { padding: 0; gap: 0; }
+
+/* Pin an activity to the top of the Activities tab (state/pinned-activities.json). */
+.fl-act-pin { display: inline-grid; place-items: center; flex: 0 0 auto; width: 30px; height: 30px; border: 1px solid #d7e0ec; border-radius: 9px; background: var(--surface); color: #5f708d; cursor: pointer; }
+.fl-act-pin:hover { border-color: #9db2ca; color: var(--heading); }
+.fl-act-pin.is-on { background: var(--yellow); border-color: transparent; color: var(--heading); }
+.fl-ws-subject.is-pinned .fl-ws-subject-name { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Messages Quill sent the parent (notify_user): kept on screen until dismissed. */
+.fl-notices { display: flex; flex-direction: column; gap: 8px; padding: 10px 18px 0; }
+.fl-notice { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid #f2e2bd; border-radius: 12px; background: #fff7e6; color: var(--heading); }
+.fl-notice-icon { flex: 0 0 auto; margin-top: 2px; color: #8a6d1f; }
+.fl-notice-body { min-width: 0; flex: 1; }
+.fl-notice-body strong { display: block; font-size: var(--text-secondary); font-weight: 750; }
+.fl-notice-body p { margin: 2px 0 0; font-size: var(--text-secondary); line-height: 1.5; color: #3a5578; white-space: pre-wrap; }
+.fl-notice-close { flex: 0 0 auto; width: 26px; height: 26px; border: 0; border-radius: 8px; background: transparent; color: #8a6d1f; font: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
+.fl-notice-close:hover { background: #fdecc4; color: var(--heading); }
+.learning-app[data-theme="dark"] .fl-notice { background: #2a2416; border-color: #4a3d1c; }
+.learning-app[data-theme="dark"] .fl-notice-body p { color: #d5dcea; }

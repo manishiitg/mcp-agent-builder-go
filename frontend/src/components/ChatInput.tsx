@@ -23,7 +23,7 @@ import { useWorkflowStore } from '../stores/useWorkflowStore'
 import { useWorkflowManifestStore } from '../stores/useWorkflowManifestStore'
 import { chromeCdpInstallCommand, chromeCdpLaunchCommand, chromeCdpVerifyCommand, chromeCdpZipUrl } from '../utils/cdpSetup'
 import { CHAT_TOOL_COMMAND_EVENT, chatToolCommandFromEvent } from '../utils/chatToolEvents'
-import { loadAgentProfileCapabilityEnabled, loadAgentProfileRuntime } from '../utils/agentProfileCapabilities'
+import { loadAgentProfileCapabilityEnabled, loadAgentProfileProviderOptions, loadAgentProfileRuntime, type AgentProfileProviderOption } from '../utils/agentProfileCapabilities'
 import { MicButton, type MicButtonHandle, type MicState } from '../voice/MicButton'
 import { useCapabilitiesStore } from '../stores/useCapabilitiesStore'
 import { hasActiveSessionWork } from '../utils/activitySessions'
@@ -485,6 +485,33 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const platformVoiceAvailable = useCapabilitiesStore(state => state.capabilities?.voice?.available ?? false)
   const [profileVoiceEnabled, setProfileVoiceEnabled] = useState(false)
   const voiceCapabilityEnabled = isProductSurface ? profileVoiceEnabled : platformVoiceAvailable
+  // Model switcher for product surfaces: the (provider, model) bindings the
+  // profile declares in product.yaml (runtime.provider_options). One option
+  // or none means nothing to switch, so no control. A choice lands on the
+  // tab (ChatArea sends it as `engine` on every profile query) and is
+  // announced for the product to persist however it likes.
+  const [engineOptions, setEngineOptions] = useState<AgentProfileProviderOption[]>([])
+  useEffect(() => {
+    if (!isProductSurface || !agentProfileId) {
+      setEngineOptions([])
+      return
+    }
+    let cancelled = false
+    void loadAgentProfileProviderOptions(agentProfileId, agentProfileVersion).then((options) => {
+      if (!cancelled) setEngineOptions(options)
+    })
+    return () => { cancelled = true }
+  }, [isProductSurface, agentProfileId, agentProfileVersion])
+  const currentEngine = activeTab?.metadata?.agentProfileEngine
+    || engineOptions.find((o) => o.default)?.id
+    || engineOptions[0]?.id
+    || ''
+  const selectProductEngine = useCallback((engine: string) => {
+    if (!activeTabId || !agentProfileId) return
+    useChatStore.getState().setTabMetadata(activeTabId, { agentProfileEngine: engine })
+    window.dispatchEvent(new CustomEvent('agentworks:product-engine-selected', { detail: { profileId: agentProfileId, engine } }))
+  }, [activeTabId, agentProfileId])
+
   useEffect(() => {
     if (!isProductSurface || !agentProfileId) {
       setProfileVoiceEnabled(false)
@@ -3490,6 +3517,18 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                           shortcutEnabled={!scopedTabId}
                           disabled={isSummarizing}
                         />
+                      )}
+                      {isProductSurface && engineOptions.length > 1 && (
+                        <select
+                          className="h-7 max-w-[10rem] rounded-md border border-border bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground focus:outline-none"
+                          aria-label="Which AI answers this chat"
+                          title="Which AI answers this chat"
+                          value={currentEngine}
+                          disabled={isSummarizing}
+                          onChange={(e) => selectProductEngine(e.target.value)}
+                        >
+                          {engineOptions.map((o) => <option key={o.id} value={o.id}>{o.label || o.id}</option>)}
+                        </select>
                       )}
                       <>
                         {!hideExtras && !isMultiAgentMode && (

@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld('sparkquill', {
   isDesktop: true,
   apiBaseUrl: () => window.location.origin,
   backend: () => 'platform',
+  // A native macOS notification for a message Quill sent the parent
+  // (notify_user). main.js shows it; the renderer keeps its own copy on screen.
+  notify: (title, body) => ipcRenderer.send('sparkquill-notify', { title: String(title || ''), body: String(body || '') }),
   onWindowVisibility: (callback) => {
     ipcRenderer.on('window-visibility', (_event, payload) => callback(!!(payload && payload.visible)))
   },

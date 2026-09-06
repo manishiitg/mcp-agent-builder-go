@@ -41,6 +41,8 @@ func (e *testHumanFeedbackEmitter) EmitBlockingHumanFeedback(requestID, question
 	}
 }
 
+func (e *testHumanFeedbackEmitter) EmitProductInteraction(string, map[string]interface{}) {}
+
 func (c *testUserNotificationConnector) Name() string {
 	if c.name != "" {
 		return c.name
@@ -1090,5 +1092,39 @@ func TestNotificationRouteFromSelections(t *testing.T) {
 	got := notificationRouteFromSelections(map[string]string{"router-b": "email", "router-a": "slack"})
 	if got != "router-a=slack · router-b=email" {
 		t.Fatalf("multiple routes = %q", got)
+	}
+}
+
+type testProductInteractionEmitter struct {
+	testHumanFeedbackEmitter
+	kind    string
+	payload map[string]interface{}
+}
+
+func (e *testProductInteractionEmitter) EmitProductInteraction(kind string, payload map[string]interface{}) {
+	e.kind, e.payload = kind, payload
+}
+
+// The in-app copy of a notification rides the same product_interaction
+// event a product.yaml tool emits, and it fires because the tool ran — not
+// because any delivery channel is configured (here none is), and not
+// because a coding CLI narrated the call in some recognizable shape.
+func TestHandleNotifyUserEmitsInAppCopyRegardlessOfChannels(t *testing.T) {
+	emitter := &testProductInteractionEmitter{}
+	ctx := context.WithValue(context.Background(), common.UserIDKey, "user-1")
+	ctx = context.WithValue(ctx, SessionEventEmitterKey, emitter)
+
+	_, err := handleNotifyUser(ctx, map[string]interface{}{
+		"message_for_user": "Myra finished fractions today.",
+		"summary_title":    "Check-in",
+	})
+	if err != nil {
+		t.Fatalf("handleNotifyUser returned error: %v", err)
+	}
+	if emitter.kind != "notify" {
+		t.Fatalf("interaction kind = %q, want notify", emitter.kind)
+	}
+	if emitter.payload["title"] != "Check-in" || emitter.payload["message"] != "Myra finished fractions today." {
+		t.Fatalf("payload = %#v", emitter.payload)
 	}
 }

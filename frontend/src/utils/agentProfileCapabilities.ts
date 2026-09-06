@@ -7,11 +7,20 @@ import { getApiBaseUrl, getAuthToken } from '../services/api'
 // product.yaml, so the frontend must not hardcode which product has which
 // capability — that defeats the point of it being product.yaml-driven.
 
+export type AgentProfileProviderOption = {
+  id: string
+  label?: string
+  provider?: string
+  model_id?: string
+  default?: boolean
+}
+
 type AgentProfileResponse = {
   runtime?: {
     provider?: string
     model_id?: string
     capabilities?: Record<string, unknown>
+    provider_options?: AgentProfileProviderOption[]
   }
 }
 
@@ -79,4 +88,22 @@ export function loadAgentProfileCapabilityEnabled(profileId: string, capability:
 
   capabilityCache.set(cacheKey, promise)
   return promise
+}
+
+/**
+ * The client-selectable (provider, model) bindings a profile declares in
+ * product.yaml (runtime.provider_options). Empty when the profile declares
+ * none: the composer then shows no model switcher, and the server picks the
+ * profile's default binding. Same cache as the capability reads.
+ */
+export async function loadAgentProfileProviderOptions(profileId: string, version?: number): Promise<AgentProfileProviderOption[]> {
+  if (!profileId) return []
+  try {
+    const profile = await loadAgentProfile(profileId, version)
+    const options = profile.runtime?.provider_options
+    if (!Array.isArray(options)) return []
+    return options.filter((o): o is AgentProfileProviderOption => !!o && typeof o.id === 'string' && o.id.trim() !== '')
+  } catch {
+    return []
+  }
 }

@@ -34,6 +34,7 @@ import {
   Pin,
   PinOff,
   MessageSquarePlus,
+  Bell,
 } from 'lucide-react'
 import './learning-app.css'
 import {
@@ -53,6 +54,7 @@ import {
   type VoiceStatus,
 } from './stores'
 import PlatformChat, { PARENT_PROFILE_ID, applyFamilyEngineToOpenTabs, startNewParentConversation, type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
+import type { ProductNotification } from '../../platform/notifications/useProductNotifications'
 import { loadAgentProfileCapabilityEnabled } from '../../utils/agentProfileCapabilities'
 import ChildPlatformChat, { forgetChildChat, submitToChildChat, type ChildKickoff } from './platform/ChildPlatformChat'
 import { api } from './api'
@@ -848,6 +850,70 @@ export default function LearningApp() {
       .catch(() => undefined)
       .finally(() => { setParentChatEpoch((e) => e + 1); setNewChatBusy(false) })
   }
+  // Activities the parent pinned to the top of the Activities tab. Stored in
+  // the workspace (state/pinned-activities.json) so it follows the family,
+  // not the browser; pinned cards show in their own section above the groups.
+  const [pinnedActivityDirs, setPinnedActivityDirs] = useState<string[]>([])
+  useEffect(() => {
+    let cancelled = false
+    api.loadState('pinned-activities')
+      .then((d) => { const dirs = (d as { dirs?: unknown } | null)?.dirs; if (!cancelled && Array.isArray(dirs)) setPinnedActivityDirs(dirs.filter((x): x is string => typeof x === 'string')) })
+      .catch(() => undefined)
+    return () => { cancelled = true }
+  }, [])
+  const toggleActivityPin = (dir: string) => {
+    setPinnedActivityDirs((cur) => {
+      const next = cur.includes(dir) ? cur.filter((d) => d !== dir) : [dir, ...cur]
+      void api.saveState('pinned-activities', { dirs: next }).catch(() => undefined)
+      return next
+    })
+  }
+  // The composer's model switcher (ChatInput, product surfaces) announces a
+  // choice; SparkQuill keeps it as the family's engine (family.json) so it
+  // holds across relaunches and reaches the child's tab too.
+  useEffect(() => {
+    const onEngine = (e: Event) => {
+      const detail = (e as CustomEvent<{ profileId?: string; engine?: string }>).detail
+      if (!detail?.engine || (detail.profileId !== PARENT_PROFILE_ID && detail.profileId !== 'sparkquill-child')) return
+      api.selectEngine(detail.engine).catch(() => undefined).finally(() => applyFamilyEngineToOpenTabs(detail.engine!))
+    }
+    window.addEventListener('agentworks:product-engine-selected', onEngine)
+    return () => window.removeEventListener('agentworks:product-engine-selected', onEngine)
+  }, [])
+  // Messages Quill sent the parent (notify_user: a check-in's summary, a
+  // heads-up). They stay on screen until the parent dismisses them; the
+  // dismissals are remembered per event id so a relaunch does not bring a
+  // message back. A message that arrives while the app is open also goes to
+  // the desktop as a native notification (the shell's preload `notify`).
+  const NOTICE_DISMISSED_KEY = 'sparkquill.dismissed-notices'
+  const [notices, setNotices] = useState<ProductNotification[]>([])
+  const [dismissedNotices, setDismissedNotices] = useState<string[]>(() => {
+    try { const raw = localStorage.getItem(NOTICE_DISMISSED_KEY); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : [] } catch { return [] }
+  })
+  const seenNoticesRef = useRef<Set<string> | null>(null)
+  const onPlatformNotifications = useCallback((all: ProductNotification[]) => {
+    setNotices(all)
+    if (seenNoticesRef.current === null) {
+      // First batch is history (hydrated with the conversation), not news.
+      seenNoticesRef.current = new Set(all.map((n) => n.id))
+      return
+    }
+    const seen = seenNoticesRef.current
+    for (const n of all) {
+      if (seen.has(n.id)) continue
+      seen.add(n.id)
+      const shell = (window as Window & { sparkquill?: { notify?: (title: string, body: string) => void } }).sparkquill
+      shell?.notify?.(n.title || 'Quill', n.message)
+    }
+  }, [])
+  const dismissNotice = (id: string) => {
+    setDismissedNotices((cur) => {
+      const next = cur.includes(id) ? cur : [...cur, id].slice(-200)
+      try { localStorage.setItem(NOTICE_DISMISSED_KEY, JSON.stringify(next)) } catch { /* best-effort */ }
+      return next
+    })
+  }
+  const visibleNotices = notices.filter((n) => !dismissedNotices.includes(n.id))
   const [theme] = useState<Theme>(readTheme)
   // The main frontend forces the document to dark (ThemeProvider). While this
   // surface is mounted the family's choice wins, and the shared chat inside it
@@ -2046,6 +2112,21 @@ export default function LearningApp() {
               </div>
             </div>
 
+            {visibleNotices.length > 0 && (
+              <div className="fl-notices" role="region" aria-label="Messages from Quill">
+                {visibleNotices.map((n) => (
+                  <div key={n.id} className="fl-notice" role="status">
+                    <Bell size={16} className="fl-notice-icon" />
+                    <div className="fl-notice-body">
+                      <strong>{n.title || 'From Quill'}</strong>
+                      <p>{n.message}</p>
+                    </div>
+                    <button type="button" className="fl-notice-close" aria-label="Dismiss" title="Dismiss" onClick={() => dismissNotice(n.id)}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {(
               <PlatformChat
                 key={parentChatEpoch}
@@ -2063,6 +2144,7 @@ export default function LearningApp() {
                 )}
                 onInteraction={onPlatformInteraction}
                 onPresentation={onPlatformPresentation}
+                onNotifications={onPlatformNotifications}
               />
             )}
           </section>
@@ -2354,10 +2436,13 @@ export default function LearningApp() {
                     // duplicated here.
                     const subjectsList = Array.from(new Set(activities.filter((a) => a.subject).map((a) => a.subject!))).sort()
                     const relevant = activities.filter((a) => !filesSubjectFilter || a.subject === filesSubjectFilter)
+                    const pinnedSet = new Set(pinnedActivityDirs)
+                    const pinnedActs = pinnedActivityDirs.map((dir) => relevant.find((a) => a.dir === dir)).filter((a): a is Activity => !!a)
+                    const unpinned = relevant.filter((a) => !pinnedSet.has(a.dir))
 
                     const bySubject = new Map<string, Map<string, Activity[]>>()
                     const unplaced: Activity[] = []
-                    relevant.forEach((a) => {
+                    unpinned.forEach((a) => {
                       if (!a.subject) { if (!filesSubjectFilter) unplaced.push(a); return }
                       if (!bySubject.has(a.subject)) bySubject.set(a.subject, new Map())
                       const topics = bySubject.get(a.subject)!
@@ -2394,6 +2479,15 @@ export default function LearningApp() {
                               {dateTimeLabel(act.created_at) ? ` · ${dateTimeLabel(act.created_at)}` : ''}
                             </span>
                             <button
+                              className={`fl-act-pin${pinnedSet.has(act.dir) ? ' is-on' : ''}`}
+                              type="button"
+                              aria-label={pinnedSet.has(act.dir) ? 'Unpin this activity' : 'Pin this activity to the top'}
+                              title={pinnedSet.has(act.dir) ? 'Unpin from the top' : 'Pin to the top'}
+                              onClick={() => toggleActivityPin(act.dir)}
+                            >
+                              {pinnedSet.has(act.dir) ? <PinOff size={14} /> : <Pin size={14} />}
+                            </button>
+                            <button
                               className="fl-give-to-child"
                               type="button"
                               onClick={() => startActivityHandoff(act.dir, act.title)}
@@ -2423,7 +2517,7 @@ export default function LearningApp() {
                     // by calendar day instead of subject/topic — most-recent
                     // day first, activities within a day newest-first too.
                     const byDate = new Map<string, Activity[]>()
-                    relevant.forEach((a) => {
+                    unpinned.forEach((a) => {
                       const key = dateOnlyKey(a.created_at)
                       if (!byDate.has(key)) byDate.set(key, [])
                       byDate.get(key)!.push(a)
@@ -2458,6 +2552,12 @@ export default function LearningApp() {
                           <button type="button" className={filesGroupBy === 'subject' ? 'is-active' : ''} onClick={() => setFilesGroupBy('subject')}>By subject</button>
                           <button type="button" className={filesGroupBy === 'date' ? 'is-active' : ''} onClick={() => setFilesGroupBy('date')}>By date</button>
                         </div>
+                        {pinnedActs.length > 0 && (
+                          <section className="fl-ws-subject is-pinned">
+                            <h3 className="fl-ws-subject-name"><Pin size={13} /> Pinned<span>{pinnedActs.length}</span></h3>
+                            <div className="fl-ws-topic">{renderActivities(pinnedActs)}</div>
+                          </section>
+                        )}
                         {filesGroupBy === 'date' ? (
                           dateGroups.length === 0 ? (
                             <p className="fl-note">Nothing here yet. Ask Quill to make study material or a test.</p>
