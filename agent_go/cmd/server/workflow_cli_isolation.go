@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/manishiitg/coding-agent-loop/agent_go/pkg/cliruntime"
@@ -29,14 +30,43 @@ func workflowCLIMode(req *QueryRequest, readOnly bool) string {
 	return "workshop"
 }
 
+// workflowCLIStateRoot resolves the server-owned runtime root. Launchers may
+// pin it explicitly, but ordinary server and Desktop starts must still have a
+// durable location after a restart. Keep this outside workspace-docs: the
+// private projection contains generated CLI instructions and must never become
+// workflow data or be visible through workspace tools.
+func workflowCLIStateRoot() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("AGENTWORKS_STATE_ROOT")); configured != "" {
+		if !filepath.IsAbs(configured) {
+			return "", fmt.Errorf("AGENTWORKS_STATE_ROOT must be an absolute path")
+		}
+		return filepath.Clean(configured), nil
+	}
+	if userData := strings.TrimSpace(os.Getenv("RUNLOOP_USER_DATA_DIR")); userData != "" {
+		if !filepath.IsAbs(userData) {
+			return "", fmt.Errorf("RUNLOOP_USER_DATA_DIR must be an absolute path")
+		}
+		return filepath.Join(filepath.Clean(userData), "state"), nil
+	}
+	configRoot, err := os.UserConfigDir()
+	if err != nil || !filepath.IsAbs(configRoot) {
+		return "", fmt.Errorf("cannot resolve a durable AgentWorks state directory")
+	}
+	return filepath.Join(configRoot, "AgentWorks", "state"), nil
+}
+
 func workflowCLIWorkingDir(folder, user, session, provider, mode string) (string, error) {
 	shared := codingAgentWorkspaceWorkingDir(folder)
 	if !workflowCLIIsolationEnabled() || !isCodingAgentProvider(provider, "") {
 		return shared, nil
 	}
-	dir, err := cliruntime.Prepare(strings.TrimSpace(os.Getenv("AGENTWORKS_STATE_ROOT")), fsutil.WorkspaceDocsRoot(), user, shared, session, provider, mode)
+	stateRoot, err := workflowCLIStateRoot()
 	if err != nil {
-		return "", fmt.Errorf("cannot isolate workflow CLI session: %w (configure a private AGENTWORKS_STATE_ROOT)", err)
+		return "", fmt.Errorf("cannot isolate workflow CLI session: %w", err)
+	}
+	dir, err := cliruntime.Prepare(stateRoot, fsutil.WorkspaceDocsRoot(), user, shared, session, provider, mode)
+	if err != nil {
+		return "", fmt.Errorf("cannot isolate workflow CLI session: %w", err)
 	}
 	return dir, nil
 }
