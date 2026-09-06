@@ -237,9 +237,9 @@
 .fl-parent-resizer:hover .fl-parent-resizer-grip,
 .fl-parent-resizer:focus-visible .fl-parent-resizer-grip,
 .fl-shell.is-resizing .fl-parent-resizer-grip { opacity: 1; }
-@media (max-width: 1180px) {
-  .fl-parent-resizer { display: none; }
-}
+/* The handle stays at every width: it is the second grid item, so hiding it
+   (an earlier narrow-window rule) moved the drawer into the handle's `auto`
+   track and left the drawer's own track empty. */
 
 /* Left conversation/history rail */
 .fl-rail { display: flex; flex-direction: column; min-width: 0; overflow: hidden; background: var(--navy); color: #cddaf0; font-family: var(--font-ui); }
@@ -1001,10 +1001,11 @@ audio.fl-viewer-media { background: var(--surface); }
   .fl-child-resizer { display: none; }
 }
 
-@media (max-width: 1180px) {
-  .fl-shell, .fl-shell[data-drawer="open"] { grid-template-columns: 244px minmax(0, 1fr) 0; }
-  .fl-shell[data-rail="closed"], .fl-shell[data-rail="closed"][data-drawer="open"] { grid-template-columns: 0 minmax(0, 1fr) 0; }
-}
+/* No narrow-window override for .fl-shell: an earlier three-column layout
+   (rail | main | drawer) used to collapse here, and that rule outlived the
+   layout — on the current (chat | handle | drawer) grid it zeroed the chat and
+   let the drawer overflow the window. The drawer's width is already capped at
+   half the window (parentSideMax), which is the whole narrow-window story. */
 
 @media (max-width: 830px) {
   .learning-header { min-height: 74px; padding-inline: 20px; }

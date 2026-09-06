@@ -170,17 +170,23 @@ function persistChildSideWidth(px: number) {
 // (Progress/Files), not the primary thing being read, so the chat
 // should never be squeezed to a sliver the way the child's worksheet is
 // allowed to claim most of the screen.
-const PARENT_SIDE_WIDTH_KEY = 'sparkquill.parent-side-width'
+const PARENT_SIDE_WIDTH_KEY = 'sparkquill.parent-side-width.v2' // v2: the default became half the window
 const PARENT_SIDE_MIN = 320
-const PARENT_SIDE_DEFAULT = 592 // the previous fixed width
+// Half the window: the conversation and the drawer start as equals (the
+// previous fixed 592px favoured the chat on wide screens and crushed it on
+// narrow ones).
+function parentSideDefault(): number {
+  const width = typeof window !== 'undefined' ? window.innerWidth : 1200
+  return Math.max(PARENT_SIDE_MIN, Math.floor(width / 2))
+}
 function parentSideMax(windowWidth: number): number {
   return Math.max(PARENT_SIDE_MIN, Math.floor(windowWidth * 0.5))
 }
 function readParentSideWidth(): number {
   try {
     const n = Number(localStorage.getItem(PARENT_SIDE_WIDTH_KEY))
-    return Number.isFinite(n) && n >= PARENT_SIDE_MIN ? n : PARENT_SIDE_DEFAULT
-  } catch { return PARENT_SIDE_DEFAULT }
+    return Number.isFinite(n) && n >= PARENT_SIDE_MIN ? n : parentSideDefault()
+  } catch { return parentSideDefault() }
 }
 function persistParentSideWidth(px: number) {
   try { localStorage.setItem(PARENT_SIDE_WIDTH_KEY, String(Math.round(px))) } catch { /* best-effort */ }
@@ -2041,7 +2047,7 @@ export default function LearningApp() {
               const step = e.shiftKey ? 80 : 24
               if (e.key === 'ArrowLeft') { e.preventDefault(); commitParentSideWidth(parentSideWidth + step) }
               else if (e.key === 'ArrowRight') { e.preventDefault(); commitParentSideWidth(parentSideWidth - step) }
-              else if (e.key === 'Home') { e.preventDefault(); commitParentSideWidth(PARENT_SIDE_DEFAULT) }
+              else if (e.key === 'Home') { e.preventDefault(); commitParentSideWidth(parentSideDefault()) }
             }}
           >
             <span className="fl-parent-resizer-grip" aria-hidden="true" />
