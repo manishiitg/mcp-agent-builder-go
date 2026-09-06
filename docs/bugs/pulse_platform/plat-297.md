@@ -80,7 +80,7 @@ private runtime.
 
 | Repository | Main commits | Delivered behavior |
 |---|---|---|
-| `multi-llm-provider-go` | `2a2d796`, `cb578ff`, `aab045c`, `a7ba270`, `842b584` | typed failed turns, Codex 0.153 handling, pinned release routing, physical-path trust and semantic MCP rollout parsing |
+| `multi-llm-provider-go` | `2a2d796`, `cb578ff`, `aab045c`, `a7ba270`, `842b584`, `7276072` | typed failed turns, Codex 0.153 handling, pinned release routing, physical-path trust, semantic MCP rollout parsing and filesystem-identity cwd matching |
 | `mcpagent` | `17584c6` | one managed CLI release pinned for the retained agent session |
 | `mcp-agent-builder-go` | `fc3f51761`, `635109899`, `3f2971e9a` | mode-stable resume, updated provider/runtime dependencies, trusted workflow-step session propagation and stronger real P0 checks |
 
@@ -106,6 +106,28 @@ All listed commits were pushed to each repository's `main` branch on
 - The broad `mcpagent` suite reaches its existing manual generated-review gate.
   Four pre-existing generated JSON review records lack approval metadata; this
   is not a Codex session failure and is not counted as passing that manual gate.
+
+## 2026-09-06 — Remaining pane-text leak fixed
+
+A resumed Social Media builder turn reproduced the raw-text leak after the
+earlier semantic MCP parser shipped. The persisted response contained `Called
+└ api-bridge.execute_shell_command(...)`, its JSON `stdout`, and the final prose
+as one assistant string.
+
+The Codex rollout for that exact execution was healthy and contained a clean
+`final_answer` plus a later `task_complete`. The adapter nevertheless recorded
+`codex_final_extraction_source=tmux_pane`. Its expected private runtime used the
+configured spelling `Application Support/AgentWorks`, while Codex recorded the
+same macOS directory as `Application Support/agentworks`. Canonical string
+comparison treated those spellings as different, failed to bind the rollout,
+and eventually activated the terminal fallback.
+
+`sameCodexWorkingDir` now compares the underlying filesystem objects with
+`os.SameFile` before its normalized string fallback. A portable hard-link test
+locks the filesystem-identity behavior, and a pane fixture matching the leaked
+`execute_step` command verifies the compatibility sanitizer still excludes the
+tool replay. The full Codex adapter package passes. No server or workflow was
+started for this verification.
 
 ## Acceptance boundary
 

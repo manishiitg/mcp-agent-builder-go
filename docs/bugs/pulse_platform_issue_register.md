@@ -7,8 +7,9 @@ work across AgentWorks, `mcpagent` and `multi-llm-provider-go`. Codex rollout
 JSONL is now authoritative for completion, final responses, failures, usage and
 semantic MCP tool events; tmux remains the interactive control channel only.
 Resume preserves Builder/Run mode and the private absolute runtime, physical
-path trust prevents unattended startup prompts, and each retained agent pins
-one managed CLI release. Unit suites plus live retained-session and isolated
+path trust prevents unattended startup prompts, filesystem-identity matching
+binds JSONL even when macOS changes the directory's case spelling, and each
+retained agent pins one managed CLI release. Unit suites plus live retained-session and isolated
 two-step workflow P0 checks pass. All implementation commits are on `main`;
 cross-provider cleanup and two-user isolation remain tracked by PLAT-296.
 
