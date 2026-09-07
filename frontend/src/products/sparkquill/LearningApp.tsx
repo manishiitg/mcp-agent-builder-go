@@ -176,7 +176,12 @@ function persistChildSideWidth(px: number) {
 // should never be squeezed to a sliver the way the child's worksheet is
 // allowed to claim most of the screen.
 const PARENT_SIDE_WIDTH_KEY = 'sparkquill.parent-side-width.v2' // v2: the default became half the window
-const PARENT_SIDE_MIN = 320
+// 320 looked like a sane floor, but parentSideMax's own ceiling (half the
+// window) drops below it on anything narrower than ~640px — the two clamps
+// then collapse to the same point and the resizer can't move in either
+// direction, even though it visually still drags. Low enough to leave real
+// room at ordinary window widths, not just wide ones.
+const PARENT_SIDE_MIN = 200
 // Half the window: the conversation and the drawer start as equals (the
 // previous fixed 592px favoured the chat on wide screens and crushed it on
 // narrow ones).

@@ -70,6 +70,13 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     const form = typeof FormData !== 'undefined' && body instanceof FormData
     const res = await fetch(`${base}${path}`, {
       method,
+      // Every read here is against live, frequently-edited family data (an
+      // activity's page, family.json, a pinned page) at a stable URL with no
+      // cache-busting query param — the browser's default HTTP cache can and
+      // did serve a stale GET after Quill rewrote a file, with "Refresh"
+      // appearing to do nothing since the request fired again but the
+      // response came from cache. No read here should ever be stale.
+      cache: 'no-store',
       headers: { Authorization: `Bearer ${await token()}`, ...(body === undefined || form ? {} : { 'Content-Type': 'application/json' }) },
       body: body === undefined ? undefined : form ? (body as FormData) : JSON.stringify(body),
     })
