@@ -138,9 +138,10 @@ browser("open", ["tab", "t1", "https://x.com/home"])
 
 ` + "```python" + `
 snapshot = browser("snapshot", ["tab", "t1", "-i"])
+# Example only: use @e1 only if this snapshot identifies it as the intended control.
 browser("click", ["tab", "t1", "@e1"])
-browser("fill", ["tab", "t1", "@e2", "text"])
-browser("wait", ["tab", "t1", "3000"])
+snapshot = browser("snapshot", ["tab", "t1", "-i"])
+# Verify the expected state; resolve any next target from this fresh snapshot.
 browser("screenshot", ["tab", "t1", "proof.png"])
 ` + "```" + `
 
@@ -185,11 +186,49 @@ remains read-only to the agent.
 
 ## Selector Discipline
 
-Snapshot refs such as ` + "`@e1`" + ` are session-local. They are fine for immediate actions in the same run, but never persist them in ` + "`main.py`" + `, learnings, db, or KB.
+This is the shared selector contract for builder chats, workflow steps, saved
+scripts, and browser learnings.
 
-For saved code, use deterministic selectors: test ids, stable id/name, aria-label, role plus accessible name, label, placeholder, visible text, or structural CSS only as a last resort.
+1. **Snapshot first.** Start with an interactive snapshot, scoped to the relevant
+   region when useful. It provides roles, accessible names, state, and temporary
+   refs; it does not automatically provide durable CSS selectors. Identify the
+   intended control by its meaning and surrounding row/card/dialog, then act
+   through the managed browser tool using its current ref.
+2. **Fresh refs are valid for live actions.** A ref such as ` + "`@e1`" + ` identifies
+   an element in the snapshot that produced it. Do not reuse it across tabs,
+   runs, navigation, or DOM updates. Re-snapshot after page changes; if unsure
+   whether an action changed the page, refresh before another ref-based action.
+   A read-only command alone does not require another snapshot.
+3. **Save a locating recipe, never a literal snapshot ref as reusable config.**
+   Saved code may resolve a fresh ref from each current snapshot by role, name,
+   and context, or use a verified semantic locator or durable DOM attribute.
+   Both approaches are valid. Do not require CSS discovery for every step.
+   Runtime snapshots may be retained as evidence; their refs must not become
+   reusable values in ` + "`main.py`" + `, learnings, db configuration, or KB.
+4. **Use read-only eval only when the snapshot is insufficient.** Inspect the
+   relevant region for test attributes, semantic id/name, aria-label, labels,
+   or other identifying attributes. Eval can execute arbitrary page JavaScript;
+   selector discovery must not click, submit, mutate the DOM, or read entered
+   credentials. Avoid full-page DOM dumps. Use the installed core skill for
+   exact command syntax and keep CDP endpoint/tab arguments on managed calls.
+5. **Validate the target, not just the selector syntax.** Prefer meaningful
+   role/name or label locators and verified test attributes or semantic id/name.
+   Scope repeated buttons to the intended row/card and require one intended,
+   actionable match. A test ID or aria-label is not proof of stability: Like
+   may become Unlike after an action. Avoid generated IDs, hashed classes, and
+   positional CSS/XPath; use structural fallbacks only when necessary and
+   document their fragility. If the target is missing or ambiguous, inspect
+   again instead of choosing the first match.
+6. **Verify the outcome.** Check the expected page or business state after the
+   action. A successful click command alone is not a success receipt. For a
+   toggle, re-identify the same item through its stable surrounding context and
+   inspect its current state before considering any retry.
 
-After every navigation or major action, re-snapshot before the next action.
+For example, save "find the card for this action, then its Approve button;
+expect status Approved" rather than "click @e12" or "click the third button".
+In learnings, record the verified locator or fresh-snapshot resolution recipe,
+scope, precondition, expected postcondition, and known state changes. Mark
+unverified fallbacks as candidates; one successful run cannot prove permanence.
 
 ## Auth Checks
 
