@@ -7,6 +7,7 @@ import type { ApiEngine, Activity, QuickCommand, StoredMsg, TreeNode, VoiceStatu
 
 export type SetupState = {
   engine?: string
+  model?: string
   child?: { name?: string; grade?: string; board?: string } | null
   pin_set?: boolean
   setup_complete?: boolean
@@ -30,7 +31,18 @@ export type WhatsAppStatus = {
   voice_transcription?: WhatsAppVoiceTranscription
 }
 
-export type PulseConfig = { enabled: boolean; cadence_hours: number; last_run_at?: string; watch_sites?: string[]; preferred_hour: number; preferred_hour_set: boolean }
+export type PulseConfig = {
+  enabled: boolean
+  cadence_hours: number
+  last_run_at?: string
+  watch_sites?: string[]
+  preferred_hour: number
+  preferred_hour_set: boolean
+  // The isolated check-in conversation's session id (product.yaml
+  // schedules[].isolated) — its own conversation, never the parent's own
+  // chat. Absent until the first check-in has actually run once.
+  last_session_id?: string
+}
 export type PulseConfigPatch = Partial<Pick<PulseConfig, 'enabled' | 'cadence_hours' | 'watch_sites' | 'preferred_hour' | 'preferred_hour_set'>>
 
 export type StoredConversation = { messages?: StoredMsg[] }
@@ -43,7 +55,7 @@ export interface FamilyApi {
   setup(): Promise<SetupState>
   engines(): Promise<ApiEngine[]>
   validateEngine(provider: string): Promise<{ valid: boolean; message?: string }>
-  selectEngine(engine: string): Promise<void>
+  selectEngine(engine: string, model?: string): Promise<void>
   saveChild(child: { name: string; grade: string; board: string }): Promise<void>
   setPin(pin: string): Promise<{ error?: string }>
   verifyPin(pin: string): Promise<{ ok?: boolean }>
@@ -66,6 +78,8 @@ export interface FamilyApi {
   saveState(key: string, data: unknown): Promise<void>
   loadState(key: string): Promise<unknown>
   activities(): Promise<Activity[]>
+  /** Permanently removes these activities (folder, files, attempts). No undo. */
+  deleteActivities(dirs: string[]): Promise<void>
 
   /** Make sure this app is logged in (platform); a no-op on the standalone server. */
   ensureSession(): Promise<void>
@@ -91,5 +105,7 @@ export interface FamilyApi {
   whatsappVoice(enabled: boolean): Promise<WhatsAppVoiceTranscription>
   pulseConfig(): Promise<PulseConfig>
   savePulseConfig(patch: PulseConfigPatch): Promise<PulseConfig>
+  /** Clears the isolated check-in conversation; the next check-in opens a fresh one. */
+  resetCheckinHistory(): Promise<void>
   runPulse(): Promise<{ ok: boolean; error?: string }>
 }

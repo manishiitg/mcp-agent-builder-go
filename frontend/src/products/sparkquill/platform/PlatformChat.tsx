@@ -28,10 +28,10 @@ export const PARENT_PROFILE_VERSION = 1
 export const FAMILY_WORKSPACE = 'Chats/SparkQuill'
 const CHILD_PROFILE_ID = 'sparkquill-child'
 
-/** The family's chosen learning helper (family.json `engine`), or undefined before onboarding picks one. */
-export async function familyEngine(): Promise<string | undefined> {
+/** The family's chosen learning helper and model (family.json `engine`/`model`), undefined before onboarding picks one. */
+export async function familyRuntime(): Promise<{ engine?: string; model?: string }> {
   const state = await api.setup().catch(() => null)
-  return state?.engine || undefined
+  return { engine: state?.engine || undefined, model: state?.model || undefined }
 }
 
 /**
@@ -40,11 +40,11 @@ export async function familyEngine(): Promise<string | undefined> {
  * once per page load and carry the engine in their metadata (ChatArea sends
  * it as `engine` on every profile query).
  */
-export function applyFamilyEngineToOpenTabs(engine: string): void {
+export function applyFamilyEngineToOpenTabs(engine: string, model?: string): void {
   const store = useChatStore.getState()
   for (const tab of Object.values(store.chatTabs)) {
     const id = tab.metadata?.agentProfileId
-    if (id === PARENT_PROFILE_ID || id === CHILD_PROFILE_ID) store.setTabMetadata(tab.tabId, { agentProfileEngine: engine })
+    if (id === PARENT_PROFILE_ID || id === CHILD_PROFILE_ID) store.setTabMetadata(tab.tabId, { agentProfileEngine: engine, agentProfileModelID: model ?? '' })
   }
 }
 
@@ -79,7 +79,7 @@ type Props = {
   onNotifications?: (n: ProductNotification[]) => void
 }
 
-const queryClient = new QueryClient()
+export const queryClient = new QueryClient()
 // The one tab this page opened for the parent conversation (module-level so a
 // remount finds it).
 let openedTab: Promise<{ tabId: string; sessionId: string }> | null = null
@@ -88,7 +88,7 @@ let openedTab: Promise<{ tabId: string; sessionId: string }> | null = null
 // `interaction: { kind, render: chat.suggestions }`), if any.
 let suggestionsKind: string | null = null
 
-function SparkQuillConversation({ events, isStreaming, isRestoring, streamingText, streamingStatus, hasOlder, loadingOlder, historyError, onLoadOlder, landingContent, onSubmitQuery }: ChatContentRendererProps) {
+export function SparkQuillConversation({ events, isStreaming, isRestoring, streamingText, streamingStatus, hasOlder, loadingOlder, historyError, onLoadOlder, landingContent, onSubmitQuery }: ChatContentRendererProps) {
   if (!isRestoring && events.length === 0 && !streamingText) return <>{landingContent}</>
   return (
     <div className="fl-platform-transcript">
@@ -169,9 +169,9 @@ export default function PlatformChat({ title, childName, theme, commands, landin
       const suggestionBinding = (profile?.tools ?? []).find((t) => t.interaction?.render === 'chat.suggestions')
       suggestionsKind = suggestionBinding ? (suggestionBinding.interaction?.kind || 'suggestions') : null
       setPresentationKinds((profile?.tools ?? []).map((t) => t.presentation?.kind).filter((k): k is string => typeof k === 'string' && k.length > 0))
-      const [conversation, engine] = await Promise.all([
+      const [conversation, runtime] = await Promise.all([
         agentApi.resolveAgentProfileConversation(PARENT_PROFILE_ID, {}, existing?.sessionId ?? undefined),
-        familyEngine(),
+        familyRuntime(),
       ])
       const createdTabId = await chatStore.createChatTab(title, {
         mode: 'multi-agent',
@@ -179,7 +179,8 @@ export default function PlatformChat({ title, childName, theme, commands, landin
         agentProfileVersion: PARENT_PROFILE_VERSION,
         agentProfileWorkspace: FAMILY_WORKSPACE,
         agentProfileChatContract: 'profile-v1',
-        agentProfileEngine: engine,
+        agentProfileEngine: runtime.engine,
+        agentProfileModelID: runtime.model,
         agentProfileConversationKey: conversation.conversation_key,
         agentProfileConversationId: conversation.conversation_id,
       }, conversation.session_id)

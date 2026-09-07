@@ -1715,7 +1715,16 @@ func CopyFolder(c *gin.Context) {
 
 // DeleteFolder handles DELETE /api/folders/*folderpath
 func DeleteFolder(c *gin.Context) {
-	folderPathParam := c.Param("folderpath")
+	// Gin's wildcard route capture always includes the leading slash
+	// ("/Chats/SparkQuill/..." for a request to /api/folders/Chats/...) —
+	// HandleDocumentRequest strips this same leading slash from its own
+	// *filepath wildcard param before resolving a path. Without it here,
+	// SanitizeInputPath sees an absolute-looking path, IsPerUserPath's
+	// prefix match ("Chats", not "/Chats") never fires, and resolution
+	// silently skips the _users/<id>/ prefix — landing on a path that was
+	// never going to exist and reporting "Folder not found" for a folder
+	// that is actually there.
+	folderPathParam := strings.TrimPrefix(c.Param("folderpath"), "/")
 	confirm := c.Query("confirm") == "true"
 
 	// Check if this is a request to delete all files in folder

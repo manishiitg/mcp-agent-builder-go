@@ -166,18 +166,26 @@ workflow must replace it.
 Browser session tracking lives in `agent_go/pkg/browser`. MCP subprocess
 connection pooling in `mcpagent` is independent of browser state.
 
-### `file://` URLs are restricted to approved folders
+### `file://` URLs are not path-restricted (deliberate, not an oversight)
 
 In CDP mode the browser is the user's **own** Chrome — a host process this app
-neither owns nor sandboxes — so without a guard `agent_browser` can read any
-file on the machine, including files the shell tool is explicitly denied.
-SparkQuill's standalone server rejected any `file://` URL resolving outside the
-workspace or host Downloads (`validateBrowserFileURLs` in its `browser_tool.go`).
-That server was deleted on 2026-09-06 and the platform's `agent_browser` has **no
-equivalent guard today**: a product's browser access is all-or-nothing
-(`runtime.browser` in its `product.yaml`; SparkQuill's child profile sets it to
-`disabled`, the parent profile to `preferred`). Restoring a path guard for
-`file://` navigation on the platform is an open item.
+neither owns nor sandboxes — so `agent_browser` can read any file on the
+machine via a `file://` URL, including files the shell tool is explicitly
+denied. SparkQuill's standalone server rejected any `file://` URL resolving
+outside the workspace or host Downloads (`validateBrowserFileURLs` in its
+`browser_tool.go`), verified against a real exploit: the shell tool refused a
+decoy file outside the workspace while the browser read the same path's
+contents straight back.
+
+That server was deleted on 2026-09-06 and the platform's `agent_browser` has
+no equivalent guard: a product's browser access is all-or-nothing
+(`runtime.browser` in its `product.yaml`; SparkQuill's child profile sets it
+to `disabled`, the parent profile to `preferred`). This gap was raised with
+SparkQuill's owner on 2026-09-06 and left unrestored by their explicit choice
+— they'd rather the model use its own judgment about which files to read than
+have a hard path guard. Not a platform default recommendation for other
+products; a single-user deployment's owner deciding what their own AI may
+read on their own machine.
 
 **Canonical reference:** [`docs/agent-execution-architecture.html`](../agent-execution-architecture.html)
 §4 — the measured before/after, the full list of rejected spellings, and how

@@ -39,6 +39,22 @@ type ProductConversationRecord struct {
 	ResourceID      string `json:"resource_id,omitempty"`
 	Title           string `json:"title,omitempty"`
 	Description     string `json:"description,omitempty"`
+	// Provider is the coding-agent runtime the conversation runs on, bound by
+	// its first turn. A Codex thread and a Claude Code session are separate
+	// CLI state, so the other runtime would start blank: the model can change
+	// mid-chat, the provider cannot — a new conversation starts unbound.
+	Provider        string `json:"provider,omitempty"`
+	// ModelID and ReasoningEffort are the runtime options the conversation's
+	// already-running tmux-backed CLI process was last launched with. Unlike
+	// Provider these may change mid-chat, but the running process does not
+	// notice on its own — the interactive adapter only builds its CLI flags
+	// (--model, -c model_reasoning_effort) once, at first acquire, and every
+	// later turn against the same owner session id silently reuses that
+	// process. bindRuntime compares against these to know when the caller
+	// must close the tmux session so the next turn relaunches with the new
+	// flags (see closeAllCodingCLIInteractiveSessionsForOwner).
+	ModelID         string `json:"model_id,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	CreatedAt       string `json:"created_at"`
 	UpdatedAt       string `json:"updated_at"`
 }
@@ -245,6 +261,70 @@ func (store productConversationRegistryStore) rotate(
 	return record, nil
 }
 
+// bindRuntime records the runtime a conversation runs on the first time a
+// turn names one. A different provider on an already-bound conversation is
+// refused (boundProvider names what it is bound to; the caller starts a new
+// chat to switch). A different model or reasoning effort is accepted and
+// recorded, but restartNeeded reports that the tmux-backed CLI process this
+// conversation's session already has running was launched with the old
+// values — the caller must close it (closeAllCodingCLIInteractiveSessionsForOwner)
+// before this turn runs, or the process silently keeps using them.
+func (store productConversationRegistryStore) bindRuntime(
+	ctx context.Context,
+	userID string,
+	profile agentprofiles.Profile,
+	conversationKey string,
+	provider, modelID, reasoningEffort string,
+) (boundProvider string, restartNeeded bool, err error) {
+	provider = strings.TrimSpace(provider)
+	modelID = strings.TrimSpace(modelID)
+	reasoningEffort = strings.TrimSpace(reasoningEffort)
+	path := productConversationRegistryPath(userID)
+	mutex := productConversationRegistryMutex(path)
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	document := productConversationRegistryDocument{Version: productConversationRegistryVersion, Entries: map[string]ProductConversationRecord{}}
+	raw, exists, readErr := store.read(ctx, path)
+	if readErr != nil {
+		return "", false, fmt.Errorf("read product conversation registry: %w", readErr)
+	}
+	if exists && strings.TrimSpace(raw) != "" {
+		if decodeErr := json.Unmarshal([]byte(raw), &document); decodeErr != nil {
+			return "", false, fmt.Errorf("decode product conversation registry: %w", decodeErr)
+		}
+		if document.Entries == nil {
+			document.Entries = map[string]ProductConversationRecord{}
+		}
+	}
+	entryKey := productConversationRegistryEntryKey(profile.ID, conversationKey)
+	record, ok := document.Entries[entryKey]
+	if !ok {
+		return "", false, fmt.Errorf("product conversation %q is not registered", entryKey)
+	}
+	if bound := strings.TrimSpace(record.Provider); bound != "" {
+		if !strings.EqualFold(bound, provider) {
+			return bound, false, nil
+		}
+		restartNeeded = (modelID != "" && !strings.EqualFold(strings.TrimSpace(record.ModelID), modelID)) ||
+			(reasoningEffort != "" && !strings.EqualFold(strings.TrimSpace(record.ReasoningEffort), reasoningEffort))
+	}
+	record.Provider = provider
+	if modelID != "" {
+		record.ModelID = modelID
+	}
+	if reasoningEffort != "" {
+		record.ReasoningEffort = reasoningEffort
+	}
+	record.UpdatedAt = store.now().UTC().Format(time.RFC3339Nano)
+	document.Version = productConversationRegistryVersion
+	document.Entries[entryKey] = record
+	if writeErr := store.writeDocument(ctx, path, document); writeErr != nil {
+		return "", false, writeErr
+	}
+	return provider, restartNeeded, nil
+}
+
 func (store productConversationRegistryStore) writeManifestSessionID(ctx context.Context, manifestPath, sessionID string) error {
 	raw, exists, err := store.read(ctx, manifestPath)
 	if err != nil {
@@ -387,6 +467,29 @@ func resolveProductProjectBindingWithStore(
 		return productConversationBinding{}, fmt.Errorf("project %q was not found", projectID)
 	}
 	return *matched, nil
+}
+
+// resolveIsolatedScheduleBinding is resolveProductConversationBinding's
+// singleton case with a fixed "pulse" key instead of "main" — a second,
+// independent registry entry (its own session, workspace binding otherwise
+// identical) for a schedule that declared Isolated. Not reachable from the
+// client-facing conversation_key parameter: that boundary's job is to reject
+// exactly this kind of caller-chosen key on a singleton profile, so this is
+// a distinct, server-internal path for the scheduler alone, not a relaxation
+// of that check.
+func resolveIsolatedScheduleBinding(ctx context.Context, userID string, profile agentprofiles.Profile) (productConversationBinding, error) {
+	if mode := strings.ToLower(strings.TrimSpace(profile.Runtime.Conversation.Mode)); mode != agentprofiles.ConversationModeSingleton {
+		return productConversationBinding{}, fmt.Errorf("isolated schedules are only supported for singleton-conversation profiles, got %q", mode)
+	}
+	workspacePath, err := cleanAgentProfileWorkspace(profile.Runtime.Workspace.Root, userID)
+	if err != nil {
+		return productConversationBinding{}, fmt.Errorf("invalid product workspace root: %w", err)
+	}
+	return productConversationBinding{
+		ConversationKey: "pulse",
+		WorkspacePath:   workspacePath,
+		Title:           profile.Name + " (check-in)",
+	}, nil
 }
 
 func resolveProductConversationBinding(ctx context.Context, userID string, profile agentprofiles.Profile, requestedKey string) (productConversationBinding, error) {

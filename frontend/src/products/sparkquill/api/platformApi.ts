@@ -70,6 +70,13 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     const form = typeof FormData !== 'undefined' && body instanceof FormData
     const res = await fetch(`${base}${path}`, {
       method,
+      // Every read here is against live, frequently-edited family data (an
+      // activity's page, family.json, a pinned page) at a stable URL with no
+      // cache-busting query param — the browser's default HTTP cache can and
+      // did serve a stale GET after Quill rewrote a file, with "Refresh"
+      // appearing to do nothing since the request fired again but the
+      // response came from cache. No read here should ever be stale.
+      cache: 'no-store',
       headers: { Authorization: `Bearer ${await token()}`, ...(body === undefined || form ? {} : { 'Content-Type': 'application/json' }) },
       body: body === undefined ? undefined : form ? (body as FormData) : JSON.stringify(body),
     })
@@ -132,7 +139,7 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
 
   // ---- check-in (the product schedule) --------------------------------------
   const CHECKIN_JOB_ID = `product:${PARENT_PROFILE}:pulse`
-  type ScheduleJob = { enabled?: boolean; last_run_at?: string | null }
+  type ScheduleJob = { enabled?: boolean; last_run_at?: string | null; last_session_id?: string | null }
   type ProfileSchedules = { schedules?: { id?: string; enabled?: boolean; cadence_hours?: number }[] }
   async function checkinConfig(): Promise<PulseConfig> {
     const [job, family, profile] = await Promise.all([
@@ -145,10 +152,14 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
       enabled: job?.enabled ?? declared?.enabled ?? false,
       cadence_hours: declared?.cadence_hours ?? 24,
       last_run_at: job?.last_run_at ?? undefined,
+      last_session_id: job?.last_session_id ?? undefined,
       watch_sites: family.watch_sites ?? [],
       preferred_hour: 8,
       preferred_hour_set: false,
     }
+  }
+  async function resetCheckinHistory(): Promise<void> {
+    await request('POST', `/api/scheduler/jobs/${encodeURIComponent(CHECKIN_JOB_ID)}/reset-history`, {})
   }
   const readFile = (path: string) => ws.readFile(path)
 
@@ -159,6 +170,7 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     const pinSet = !!state.pin_hash
     return {
       engine: state.engine,
+      model: state.model,
       child: state.child ?? null,
       parent_label: state.parent_label,
       pin_set: pinSet,
@@ -224,8 +236,8 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     return { valid: res.valid, message: res.message ?? res.error }
   }
 
-  async function selectEngine(engineID: string): Promise<void> {
-    await ws.saveEngine(engineID)
+  async function selectEngine(engineID: string, model?: string): Promise<void> {
+    await ws.saveEngine(engineID, model)
   }
 
   const api: FamilyApi = {
@@ -273,6 +285,9 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     saveState: (key, data) => ws.writeJSON(ws.stateFile(key), { key, data }),
     loadState: async (key) => (await ws.readJSON<{ data?: unknown }>(ws.stateFile(key)))?.data ?? null,
     activities: () => ws.activities(),
+    deleteActivities: async (dirs) => {
+      for (const dir of dirs) await ws.deleteFolder(dir).catch(() => undefined)
+    },
 
     models: async () => null as ModelInfo | null,
     saveModel: async () => {},
@@ -324,6 +339,7 @@ export function createPlatformApi(options: PlatformApiOptions): FamilyApi {
     // The parent can switch it on or off and run it now; the cadence is the
     // product's. Watched websites are family state the prompt reads.
     pulseConfig: checkinConfig,
+    resetCheckinHistory,
     savePulseConfig: async (patch) => {
       if (patch.enabled !== undefined) {
         await request('POST', `/api/scheduler/jobs/${encodeURIComponent(CHECKIN_JOB_ID)}/${patch.enabled ? 'enable' : 'disable'}`, {})

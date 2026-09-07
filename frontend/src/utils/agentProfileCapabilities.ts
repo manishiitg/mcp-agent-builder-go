@@ -13,6 +13,11 @@ export type AgentProfileProviderOption = {
   provider?: string
   model_id?: string
   default?: boolean
+  options?: Record<string, unknown>
+  /** Curates the composer's model list to exactly these ids; empty offers every catalog model for `provider`. */
+  models?: string[]
+  /** Offers a reasoning-effort control (low → high) for this engine; empty offers none. */
+  reasoning_efforts?: string[]
 }
 
 type AgentProfileResponse = {

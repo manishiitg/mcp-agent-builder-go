@@ -2,10 +2,14 @@ package sparkquillproduct
 
 import "testing"
 
-// Every SparkQuill binding runs at medium reasoning effort: a family chat
-// wants quick, steady replies, not the builder-grade deliberation the
-// provider defaults to for coding work.
-func TestEveryProviderOptionDeclaresMediumReasoningEffort(t *testing.T) {
+// Every provider option must declare a reasoning_effort — deliberate, not
+// left to whatever a provider defaults to — and one of its own declared
+// reasoning_efforts choices, so the composer's picker always starts on a
+// value it can actually select. The specific defaults are chosen per
+// profile and provider (the parent gets more deliberation than the child on
+// Codex; Claude Code runs the child on a stronger model at a lower effort
+// than the parent), not a single fixed value across the board.
+func TestEveryProviderOptionDeclaresAnOwnReasoningEffort(t *testing.T) {
 	profiles := BuiltinAgentProfiles()
 	if len(profiles) == 0 {
 		t.Fatal("no built-in profiles")
@@ -15,9 +19,57 @@ func TestEveryProviderOptionDeclaresMediumReasoningEffort(t *testing.T) {
 			t.Fatalf("profile %s declares no provider options", p.ID)
 		}
 		for _, o := range p.Runtime.ProviderOptions {
-			if o.Options["reasoning_effort"] != "medium" {
-				t.Fatalf("profile %s option %s: reasoning_effort = %v, want medium", p.ID, o.ID, o.Options["reasoning_effort"])
+			effort, _ := o.Options["reasoning_effort"].(string)
+			if effort == "" {
+				t.Fatalf("profile %s option %s: no reasoning_effort declared", p.ID, o.ID)
 			}
+			found := false
+			for _, allowed := range o.ReasoningEfforts {
+				if allowed == effort {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("profile %s option %s: reasoning_effort %q is not one of its own declared reasoning_efforts %v", p.ID, o.ID, effort, o.ReasoningEfforts)
+			}
+		}
+	}
+}
+
+// The specific defaults the family relies on: Claude Code runs both the
+// parent (Fable 5.1) and the child (Sonnet 5) at medium; Codex runs the
+// parent on the steadier model at medium and the child on a newer one at
+// high.
+func TestSparkQuillDefaultModelsAndReasoningEfforts(t *testing.T) {
+	profiles := BuiltinAgentProfiles()
+	find := func(profileID, optionID string) (modelID, effort string) {
+		for _, p := range profiles {
+			if p.ID != profileID {
+				continue
+			}
+			for _, o := range p.Runtime.ProviderOptions {
+				if o.ID == optionID {
+					e, _ := o.Options["reasoning_effort"].(string)
+					return o.ModelID, e
+				}
+			}
+		}
+		t.Fatalf("no provider option %q on profile %q", optionID, profileID)
+		return "", ""
+	}
+	cases := []struct {
+		profileID, optionID, wantModel, wantEffort string
+	}{
+		{"sparkquill", "claude-code", "claude-fable-5-1", "medium"},
+		{"sparkquill", "codex-cli", "gpt-6-astra", "medium"},
+		{"sparkquill-child", "claude-code", "claude-sonnet-5", "medium"},
+		{"sparkquill-child", "codex-cli", "gpt-5.6-luna", "high"},
+	}
+	for _, c := range cases {
+		gotModel, gotEffort := find(c.profileID, c.optionID)
+		if gotModel != c.wantModel || gotEffort != c.wantEffort {
+			t.Fatalf("%s/%s: model=%q effort=%q, want model=%q effort=%q", c.profileID, c.optionID, gotModel, gotEffort, c.wantModel, c.wantEffort)
 		}
 	}
 }

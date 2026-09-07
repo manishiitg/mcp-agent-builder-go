@@ -48,6 +48,20 @@ type Schedule struct {
 	// Messages are sent into the product conversation one at a time; each is
 	// a full agent turn and the next waits for the previous reply.
 	Messages []string `json:"messages" yaml:"messages"`
+
+	// Isolated runs this schedule on its own dedicated conversation (session,
+	// coding-CLI process, transcript) instead of the profile's normal
+	// conversation — for a singleton-mode profile this is the only way a
+	// scheduled run avoids sharing the same tmux-backed CLI process as the
+	// person's own live chat, which a same-session run otherwise silently
+	// does today (they'd collide on the same pane if the person is chatting
+	// when the schedule fires). The isolated conversation persists across
+	// runs (so successive runs of this schedule stay continuous with each
+	// other) but never touches the profile's own conversation. Its turns are
+	// invisible in that conversation's transcript, so a schedule declaring
+	// this must reach the person entirely through its own tools (e.g.
+	// notify_user) rather than assuming anyone is reading its replies.
+	Isolated bool `json:"isolated,omitempty" yaml:"isolated,omitempty"`
 }
 
 // Validate checks a definition is runnable.

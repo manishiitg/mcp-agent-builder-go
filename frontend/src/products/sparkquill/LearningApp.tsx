@@ -33,8 +33,9 @@ import {
   Sun,
   Pin,
   PinOff,
-  MessageSquarePlus,
   Bell,
+  MessagesSquare,
+  Trash2,
 } from 'lucide-react'
 import './learning-app.css'
 import {
@@ -54,8 +55,8 @@ import {
   type VoiceStatus,
 } from './stores'
 import PlatformChat, { PARENT_PROFILE_ID, applyFamilyEngineToOpenTabs, startNewParentConversation, type ProductInteraction, type ProductPresentation } from './platform/PlatformChat'
+import PulseHistoryViewer from './platform/PulseHistoryViewer'
 import type { ProductNotification } from '../../platform/notifications/useProductNotifications'
-import { loadAgentProfileCapabilityEnabled } from '../../utils/agentProfileCapabilities'
 import ChildPlatformChat, { forgetChildChat, submitToChildChat, type ChildKickoff } from './platform/ChildPlatformChat'
 import { api } from './api'
 import { VoiceSettings } from './voice/VoiceSettings'
@@ -175,7 +176,12 @@ function persistChildSideWidth(px: number) {
 // should never be squeezed to a sliver the way the child's worksheet is
 // allowed to claim most of the screen.
 const PARENT_SIDE_WIDTH_KEY = 'sparkquill.parent-side-width.v2' // v2: the default became half the window
-const PARENT_SIDE_MIN = 320
+// 320 looked like a sane floor, but parentSideMax's own ceiling (half the
+// window) drops below it on anything narrower than ~640px — the two clamps
+// then collapse to the same point and the resizer can't move in either
+// direction, even though it visually still drags. Low enough to leave real
+// room at ordinary window widths, not just wide ones.
+const PARENT_SIDE_MIN = 200
 // Half the window: the conversation and the drawer start as equals (the
 // previous fixed 592px favoured the chat on wide screens and crushed it on
 // narrow ones).
@@ -832,24 +838,29 @@ function parseMaterialPath(p: string): { subject?: string; topic?: string; date?
 }
 
 export default function LearningApp() {
-  // "New chat" for the parent conversation: offered only when the profile
-  // declares runtime.capabilities.new_conversation (product.yaml). The chat
-  // is remounted (key) after the server rotates the conversation.
-  const [newChatEnabled, setNewChatEnabled] = useState(false)
-  const [newChatBusy, setNewChatBusy] = useState(false)
+  // "New chat" for the parent conversation lives in the composer (ChatInput
+  // offers it when the profile declares runtime.capabilities.new_conversation)
+  // and announces it; the chat is remounted (key) after the server rotates
+  // the conversation.
+  const newChatBusyRef = useRef(false)
   const [parentChatEpoch, setParentChatEpoch] = useState(0)
   useEffect(() => {
-    let cancelled = false
-    void loadAgentProfileCapabilityEnabled(PARENT_PROFILE_ID, 'new_conversation').then((enabled) => { if (!cancelled) setNewChatEnabled(enabled) })
-    return () => { cancelled = true }
+    const onNewChat = (e: Event) => {
+      const detail = (e as CustomEvent<{ profileId?: string; engine?: string }>).detail
+      if (detail?.profileId !== PARENT_PROFILE_ID || newChatBusyRef.current) return
+      newChatBusyRef.current = true
+      // The engine is chosen once, here, for the fresh conversation; no
+      // model yet, so it starts on that engine's own default. selectEngine
+      // drops any leftover model from the old engine along with it.
+      const engineChoice = detail.engine ? api.selectEngine(detail.engine).catch(() => undefined) : Promise.resolve()
+      engineChoice
+        .then(() => startNewParentConversation())
+        .catch(() => undefined)
+        .finally(() => { if (detail.engine) applyFamilyEngineToOpenTabs(detail.engine); setParentChatEpoch((n) => n + 1); newChatBusyRef.current = false })
+    }
+    window.addEventListener('agentworks:product-new-conversation', onNewChat)
+    return () => window.removeEventListener('agentworks:product-new-conversation', onNewChat)
   }, [])
-  const startNewChat = () => {
-    if (newChatBusy) return
-    setNewChatBusy(true)
-    startNewParentConversation()
-      .catch(() => undefined)
-      .finally(() => { setParentChatEpoch((e) => e + 1); setNewChatBusy(false) })
-  }
   // Activities the parent pinned to the top of the Activities tab. Stored in
   // the workspace (state/pinned-activities.json) so it follows the family,
   // not the browser; pinned cards show in their own section above the groups.
@@ -873,9 +884,10 @@ export default function LearningApp() {
   // holds across relaunches and reaches the child's tab too.
   useEffect(() => {
     const onEngine = (e: Event) => {
-      const detail = (e as CustomEvent<{ profileId?: string; engine?: string }>).detail
+      const detail = (e as CustomEvent<{ profileId?: string; engine?: string; modelId?: string }>).detail
       if (!detail?.engine || (detail.profileId !== PARENT_PROFILE_ID && detail.profileId !== 'sparkquill-child')) return
-      api.selectEngine(detail.engine).catch(() => undefined).finally(() => applyFamilyEngineToOpenTabs(detail.engine!))
+      const { engine, modelId } = detail
+      api.selectEngine(engine, modelId).catch(() => undefined).finally(() => applyFamilyEngineToOpenTabs(engine, modelId))
     }
     window.addEventListener('agentworks:product-engine-selected', onEngine)
     return () => window.removeEventListener('agentworks:product-engine-selected', onEngine)
@@ -1035,13 +1047,34 @@ export default function LearningApp() {
   const [unpairingJid, setUnpairingJid] = useState<string | null>(null)
   const [browserStatus, setBrowserStatus] = useState<{ cli_installed: boolean } | null>(null)
   const [browserCopied, setBrowserCopied] = useState(false)
-  const [pulseConfig, setPulseConfig] = useState<{ enabled: boolean; cadence_hours: number; last_run_at?: string; watch_sites?: string[]; preferred_hour: number; preferred_hour_set: boolean } | null>(null)
+  const [pulseConfig, setPulseConfig] = useState<{ enabled: boolean; cadence_hours: number; last_run_at?: string; last_session_id?: string; watch_sites?: string[]; preferred_hour: number; preferred_hour_set: boolean } | null>(null)
   const [savingPulse, setSavingPulse] = useState(false)
   const [watchSitesDraft, setWatchSitesDraft] = useState('')
   const [pulseSaved, setPulseSaved] = useState(false)
   const [pulsePopoverOpen, setPulsePopoverOpen] = useState(false)
   const [pulseRunning, setPulseRunning] = useState(false)
   const [pulseRunError, setPulseRunError] = useState<string | null>(null)
+  const [pulseHistoryOpen, setPulseHistoryOpen] = useState(false)
+  const [clearingPulseHistory, setClearingPulseHistory] = useState(false)
+  const [clearPulseHistoryError, setClearPulseHistoryError] = useState<string | null>(null)
+  const clearPulseHistory = () => {
+    if (!window.confirm('Clear the check-in history? This starts the next check-in with no memory of past ones.')) return
+    setClearingPulseHistory(true)
+    setClearPulseHistoryError(null)
+    api.resetCheckinHistory()
+      .then(() => { setPulseConfig((c) => (c ? { ...c, last_session_id: undefined } : c)); setPulseHistoryOpen(false) })
+      .catch((err) => setClearPulseHistoryError(err instanceof Error ? err.message : 'Could not clear the history.'))
+      .finally(() => setClearingPulseHistory(false))
+  }
+  // "Chats" toolbar popover: every activity (each is one child conversation),
+  // newest first, with per-item delete and a bulk "older than N days" sweep —
+  // the missing cleanup mechanism for old activities. Independent of which
+  // drawer tab is open (the Activities tab's own fetch is gated on that).
+  const [chatsPopoverOpen, setChatsPopoverOpen] = useState(false)
+  const [loadingChats, setLoadingChats] = useState(false)
+  const [deleteOlderDays, setDeleteOlderDays] = useState('30')
+  const [deletingChatDirs, setDeletingChatDirs] = useState<string[]>([])
+  const [deleteChatsError, setDeleteChatsError] = useState<string | null>(null)
   const wsFiles = useSparkQuillWorkspaceStore((s) => s.wsFiles)
   const setWsFiles = useSparkQuillWorkspaceStore((s) => s.setWsFiles)
   const allFiles = useSparkQuillWorkspaceStore((s) => s.allFiles)
@@ -1272,6 +1305,33 @@ export default function LearningApp() {
   const setFilesGroupBy = useSparkQuillWorkspaceStore((s) => s.setFilesGroupBy)
   const activities = useSparkQuillWorkspaceStore((s) => s.activities)
   const setActivities = useSparkQuillWorkspaceStore((s) => s.setActivities)
+  useEffect(() => {
+    if (!chatsPopoverOpen) return
+    let cancelled = false
+    setLoadingChats(true)
+    api.activities()
+      .then((d) => { if (!cancelled) setActivities(d ?? []) })
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setLoadingChats(false) })
+    return () => { cancelled = true }
+  }, [chatsPopoverOpen, setActivities])
+  const deleteChats = (dirs: string[], confirmMessage: string) => {
+    if (dirs.length === 0 || !window.confirm(confirmMessage)) return
+    setDeleteChatsError(null)
+    setDeletingChatDirs((cur) => [...cur, ...dirs])
+    api.deleteActivities(dirs)
+      .then(() => setActivities((cur) => cur.filter((a) => !dirs.includes(a.dir))))
+      .catch((err) => setDeleteChatsError(err instanceof Error ? err.message : 'Could not delete.'))
+      .finally(() => setDeletingChatDirs((cur) => cur.filter((d) => !dirs.includes(d))))
+  }
+  const deleteOldChats = () => {
+    const days = Number(deleteOlderDays)
+    if (!Number.isFinite(days) || days <= 0) { setDeleteChatsError('Enter a positive number of days.'); return }
+    const cutoff = Date.now() - days * 86_400_000
+    const dirs = activities.filter((a) => a.created_at && new Date(a.created_at).getTime() < cutoff).map((a) => a.dir)
+    if (dirs.length === 0) { setDeleteChatsError(`No chats older than ${days} days.`); return }
+    deleteChats(dirs, `Permanently delete ${dirs.length} chat${dirs.length === 1 ? '' : 's'} older than ${days} days? This cannot be undone.`)
+  }
   const viewerPath = useSparkQuillWorkspaceStore((s) => s.viewerPath)
   const setViewerPath = useSparkQuillWorkspaceStore((s) => s.setViewerPath)
   const viewerRefreshKey = useSparkQuillWorkspaceStore((s) => s.viewerRefreshKey)
@@ -1985,18 +2045,69 @@ export default function LearningApp() {
                 </div>
               </div>
               <div className="fl-toolbar-right">
-                {newChatEnabled && (
+                <div className="fl-pulse-wrap">
                   <button
-                    className="fl-icon-btn fl-newchat-btn"
+                    className="fl-pulse-pill"
                     type="button"
-                    aria-label="New chat"
-                    title="Start a new chat — this one stays in history"
-                    disabled={newChatBusy}
-                    onClick={startNewChat}
+                    aria-label="Chats"
+                    title="Chats"
+                    onClick={() => setChatsPopoverOpen((v) => !v)}
                   >
-                    <MessageSquarePlus size={16} />
+                    <MessagesSquare size={14} />
+                    <span>Chats</span>
                   </button>
-                )}
+                  {chatsPopoverOpen && (
+                    <>
+                      <div className="fl-pulse-backdrop" onClick={() => setChatsPopoverOpen(false)} />
+                      <div className="fl-pulse-popover fl-chats-popover" role="dialog">
+                        <div className="fl-pulse-popover-head">
+                          <MessagesSquare size={15} />
+                          <span>Chats</span>
+                          <button type="button" className="fl-pulse-popover-close" onClick={() => setChatsPopoverOpen(false)} aria-label="Close">×</button>
+                        </div>
+                        <div className="fl-chats-cleanup">
+                          <span>Delete chats older than</span>
+                          <input
+                            type="number"
+                            min={1}
+                            className="fl-chats-days-input"
+                            value={deleteOlderDays}
+                            onChange={(e) => setDeleteOlderDays(e.target.value)}
+                          />
+                          <span>days</span>
+                          <button type="button" className="fl-chats-delete-old" onClick={deleteOldChats}>Delete</button>
+                        </div>
+                        {deleteChatsError && <p className="fl-pulse-run-error">{deleteChatsError}</p>}
+                        <div className="fl-chats-list">
+                          {loadingChats && activities.length === 0 ? (
+                            <p className="fl-note">Loading…</p>
+                          ) : activities.length === 0 ? (
+                            <p className="fl-note">No chats yet.</p>
+                          ) : (
+                            activities.map((act) => (
+                              <div key={act.dir} className="fl-chats-row">
+                                <div className="fl-chats-row-info">
+                                  <span className="fl-chats-row-title">{act.title}</span>
+                                  <span className="fl-chats-row-date">{dateTimeLabel(act.created_at) || 'Undated'}</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="fl-chats-row-delete"
+                                  aria-label={`Delete ${act.title}`}
+                                  title="Delete this chat"
+                                  disabled={deletingChatDirs.includes(act.dir)}
+                                  onClick={() => deleteChats([act.dir], `Permanently delete "${act.title}"? This cannot be undone.`)}
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
                 <div className="fl-pulse-wrap">
                   <button
                     className="fl-pulse-pill"
@@ -2074,6 +2185,25 @@ export default function LearningApp() {
                             {pulseRunning ? 'Running… (a few minutes)' : 'Run now (test it)'}
                           </button>
                           {pulseRunError && <p className="fl-pulse-run-error">{pulseRunError}</p>}
+                          <div className="fl-pulse-history-actions">
+                            <button
+                              type="button"
+                              className="fl-pulse-history-link"
+                              disabled={!pulseConfig?.last_session_id}
+                              onClick={() => setPulseHistoryOpen(true)}
+                            >
+                              View check-in history
+                            </button>
+                            <button
+                              type="button"
+                              className="fl-pulse-history-link is-danger"
+                              disabled={!pulseConfig?.last_session_id || clearingPulseHistory}
+                              onClick={clearPulseHistory}
+                            >
+                              {clearingPulseHistory ? 'Clearing…' : 'Clear history'}
+                            </button>
+                          </div>
+                          {clearPulseHistoryError && <p className="fl-pulse-run-error">{clearPulseHistoryError}</p>}
                         </div>
 
                         <div className="fl-pulse-col">
@@ -2821,6 +2951,10 @@ export default function LearningApp() {
             </div>
           )}
 
+          {pulseHistoryOpen && pulseConfig?.last_session_id && (
+            <PulseHistoryViewer sessionId={pulseConfig.last_session_id} onClose={() => setPulseHistoryOpen(false)} />
+          )}
+
           {settingsOpen && (
             <div className="fl-settings-backdrop" role="dialog" aria-modal="true" onClick={() => setSettingsOpen(false)}>
               <div className="fl-settings" onClick={(e) => e.stopPropagation()}>
@@ -2957,7 +3091,7 @@ export default function LearningApp() {
               <header className="fl-child-top">
                 <div className="fl-child-top-row">
                   <div className="fl-child-id">
-                    <img className="fl-header-logo" src="/sparkquill-mark.svg" alt="" width={30} height={30} />
+                    <img className="fl-header-logo" src="/sparkquill-mark.svg" alt="" width={22} height={22} />
                     {/* The subtitle is a welcome line for an empty header; once an
                         assignment pill is showing, the room it took is worth more
                         than the greeting, and the pill already says what's next. */}

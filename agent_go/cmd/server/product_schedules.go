@@ -414,6 +414,35 @@ func (s *ProductScheduleService) Trigger(ctx context.Context, userID, jobID stri
 	return r.sessionID, r.err
 }
 
+// ResetHistory clears an isolated schedule's own conversation: the next run
+// opens a fresh session, and the transcript a "view check-in history" reader
+// was showing is gone. Refused on a schedule that isn't Isolated (there is
+// no separate conversation to clear — resetting would touch the profile's
+// own chat) and while a run is in progress (rotating the session out from
+// under a live turn).
+func (s *ProductScheduleService) ResetHistory(ctx context.Context, userID, jobID string) error {
+	job, err := s.Job(ctx, userID, jobID)
+	if err != nil {
+		return err
+	}
+	if !job.Schedule.Isolated {
+		return fmt.Errorf("schedule %q does not run its own conversation", jobID)
+	}
+	key := userID + "\x1f" + jobID
+	s.mu.Lock()
+	_, busy := s.running[key]
+	s.mu.Unlock()
+	if busy {
+		return productschedule.ErrAlreadyRunning
+	}
+	binding, err := resolveIsolatedScheduleBinding(ctx, userID, job.Profile)
+	if err != nil {
+		return err
+	}
+	_, err = defaultProductConversationRegistryStore().rotate(ctx, userID, job.Profile, binding)
+	return err
+}
+
 // Running reports the live run for a job, if any.
 func (s *ProductScheduleService) Running(userID, jobID string) (productScheduleRun, bool) {
 	s.mu.Lock()
@@ -462,9 +491,15 @@ func (s *ProductScheduleService) Run(ctx context.Context, job productScheduleJob
 		cancel()
 	}()
 
-	binding, err := resolveProductConversationBinding(runCtx, job.UserID, job.Profile, "")
-	if err != nil {
-		return "", fmt.Errorf("resolve product conversation: %w", err)
+	var binding productConversationBinding
+	var bindErr error
+	if job.Schedule.Isolated {
+		binding, bindErr = resolveIsolatedScheduleBinding(runCtx, job.UserID, job.Profile)
+	} else {
+		binding, bindErr = resolveProductConversationBinding(runCtx, job.UserID, job.Profile, "")
+	}
+	if bindErr != nil {
+		return "", fmt.Errorf("resolve product conversation: %w", bindErr)
 	}
 	conversation, err := defaultProductConversationRegistryStore().resolveOrCreate(runCtx, job.UserID, job.Profile, binding, "")
 	if err != nil {

@@ -1114,7 +1114,7 @@ func TestHandleNotifyUserEmitsInAppCopyRegardlessOfChannels(t *testing.T) {
 	ctx := context.WithValue(context.Background(), common.UserIDKey, "user-1")
 	ctx = context.WithValue(ctx, SessionEventEmitterKey, emitter)
 
-	_, err := handleNotifyUser(ctx, map[string]interface{}{
+	raw, err := handleNotifyUser(ctx, map[string]interface{}{
 		"message_for_user": "Myra finished fractions today.",
 		"summary_title":    "Check-in",
 	})
@@ -1126,5 +1126,22 @@ func TestHandleNotifyUserEmitsInAppCopyRegardlessOfChannels(t *testing.T) {
 	}
 	if emitter.payload["title"] != "Check-in" || emitter.payload["message"] != "Myra finished fractions today." {
 		t.Fatalf("payload = %#v", emitter.payload)
+	}
+	// No Gmail/Slack/WhatsApp/dashboard is configured in this test — before
+	// the in-app copy counted toward delivery, the agent was told this
+	// notification failed even though the person at the screen had already
+	// seen it.
+	var result struct {
+		Status    string   `json:"status"`
+		Delivered []string `json:"delivered"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if result.Status != "delivered" {
+		t.Fatalf("status = %q, want delivered (in-app should count): %s", result.Status, raw)
+	}
+	if len(result.Delivered) != 1 || result.Delivered[0] != "in_app" {
+		t.Fatalf("delivered = %#v, want [in_app]", result.Delivered)
 	}
 }

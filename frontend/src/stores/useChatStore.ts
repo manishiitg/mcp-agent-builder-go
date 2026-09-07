@@ -431,6 +431,13 @@ export interface ChatTab {
     // The product user's chosen coding-agent runtime, as one of the profile's
     // declared provider_options ids. Sent as `engine` on every profile query.
     agentProfileEngine?: string
+    // A model within that engine's provider (the composer's switcher). Sent as
+    // `model_id` on every profile query; empty keeps the option's own model.
+    agentProfileModelID?: string
+    // A reasoning level from the engine's declared reasoning_efforts (the
+    // composer's ReasoningEffortControl). Sent as `reasoning_effort` on every
+    // profile query; empty keeps the engine's own default.
+    agentProfileReasoningEffort?: string
     userInteractiveContinuation?: boolean // Observed run promoted to an interactive chat without changing session ID
   }
 }

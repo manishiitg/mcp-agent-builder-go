@@ -126,6 +126,18 @@ jobs:
         working-directory: desktop-sparkquill
         run: npm ci
 
+      # The unit-test step below also runs ../desktop's own suite directly
+      # (`cd ../desktop && npm test`) to check the shared desktop/lib code
+      # from both consumers — but desktop-sparkquill's npm ci only populates
+      # desktop-sparkquill/node_modules, never desktop/node_modules. A fresh
+      # CI checkout of desktop/ has no node_modules at all, so its own
+      # dependencies (detect-port, required by desktop/lib/servers.js) were
+      # never installed and the test failed with MODULE_NOT_FOUND on every
+      # run — this step was simply missing.
+      - name: Install AgentWorks desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
       - name: Run the shell's unit tests
         working-directory: desktop-sparkquill
         run: |

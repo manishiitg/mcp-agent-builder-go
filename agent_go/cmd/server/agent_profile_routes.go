@@ -30,6 +30,13 @@ type AgentProfileChatRequest struct {
 	Message         string `json:"message"`
 	ConversationKey string `json:"conversation_key,omitempty"`
 	Engine          string `json:"engine,omitempty"`
+	// ModelID picks a model within the engine's provider: one the platform's
+	// model catalog lists for that provider (or, when the engine declares its
+	// own Models list, one of those). Empty keeps the option's own model.
+	ModelID         string `json:"model_id,omitempty"`
+	// ReasoningEffort picks a level from the engine's declared
+	// ReasoningEfforts. Empty keeps whatever the engine's own Options declare.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 type AgentProfileConversationRequest struct {
@@ -76,8 +83,78 @@ func queryRequestForAgentProfileChat(profile agentprofiles.Profile, input AgentP
 		}
 		req.Provider = option.Provider
 		req.ModelID = option.ModelID
+		if modelID := strings.TrimSpace(input.ModelID); modelID != "" {
+			if !providerOptionOffersModel(option, modelID) {
+				return QueryRequest{}, fmt.Errorf("model %q is not offered for engine %q", modelID, engine)
+			}
+			req.ModelID = modelID
+		}
+		if effort := strings.TrimSpace(input.ReasoningEffort); effort != "" {
+			if !reasoningEffortOffered(option, effort) {
+				return QueryRequest{}, fmt.Errorf("reasoning effort %q is not offered for engine %q", effort, engine)
+			}
+			req.ReasoningEffort = effort
+		}
 	}
 	return req, nil
+}
+
+// providerOptionOffersModel reports whether modelID may be chosen for this
+// engine: one of its own curated Models when it declares any, otherwise one
+// the platform's model catalog lists for its provider (the same catalog the
+// composer's switcher is filled from when the engine declares no curation).
+func providerOptionOffersModel(option agentprofiles.ProviderOption, modelID string) bool {
+	if len(option.Models) > 0 {
+		for _, id := range option.Models {
+			if strings.EqualFold(strings.TrimSpace(id), modelID) {
+				return true
+			}
+		}
+		return false
+	}
+	return providerOffersModel(option.Provider, modelID)
+}
+
+// reasoningEffortOffered reports whether effort is one of the engine's
+// declared ReasoningEfforts. An engine that declares none offers no control
+// at all — nothing to compare against, so nothing is accepted.
+func reasoningEffortOffered(option agentprofiles.ProviderOption, effort string) bool {
+	for _, level := range option.ReasoningEfforts {
+		if strings.EqualFold(strings.TrimSpace(level), effort) {
+			return true
+		}
+	}
+	return false
+}
+
+// providerOffersModel reports whether the platform's model catalog lists
+// modelID under provider — the same catalog the composer's switcher is
+// filled from, so a client can only send back what it was offered. A
+// provider the catalog does not know at all accepts any id: nothing to
+// check against.
+func providerOffersModel(provider, modelID string) bool {
+	known := false
+	for _, model := range allProviderModelMetadata() {
+		if model == nil || !strings.EqualFold(strings.TrimSpace(model.Provider), strings.TrimSpace(provider)) {
+			continue
+		}
+		known = true
+		if strings.EqualFold(strings.TrimSpace(model.ModelID), modelID) {
+			return true
+		}
+	}
+	return !known
+}
+
+// providerOptionLabelForProvider names a provider the way the profile
+// labels it (product.yaml provider_options[].label), or by the provider id.
+func providerOptionLabelForProvider(options []agentprofiles.ProviderOption, provider string) string {
+	for _, option := range options {
+		if strings.EqualFold(strings.TrimSpace(option.Provider), strings.TrimSpace(provider)) {
+			return firstNonEmptyTrimmed(option.Label, option.ID)
+		}
+	}
+	return provider
 }
 
 func findProviderOptionByID(options []agentprofiles.ProviderOption, id string) (agentprofiles.ProviderOption, bool) {
@@ -274,6 +351,28 @@ func (api *StreamingAPI) handleAgentProfileChatQuery(w http.ResponseWriter, r *h
 	if err != nil {
 		writeAgentProfileError(w, http.StatusUnprocessableEntity, err.Error())
 		return
+	}
+	// The provider is bound by the conversation's first turn: a Codex thread
+	// and a Claude Code session are separate CLI state, so switching would
+	// start the other runtime blank. The model and reasoning effort may
+	// change any turn — but the tmux-backed CLI process this conversation's
+	// session already has running only picks up its launch flags once, so a
+	// change to either must close that process before this turn runs, or it
+	// silently keeps generating with the old ones.
+	if strings.TrimSpace(query.Provider) != "" {
+		bound, restartNeeded, err := defaultProductConversationRegistryStore().bindRuntime(r.Context(), productWorkspaceUserID(r.Context()), profile, conversation.ConversationKey, query.Provider, query.ModelID, query.ReasoningEffort)
+		if err != nil {
+			writeAgentProfileError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		if !strings.EqualFold(bound, query.Provider) {
+			option, _ := findProviderOptionByID(profile.Runtime.ProviderOptions, strings.TrimSpace(input.Engine))
+			writeAgentProfileError(w, http.StatusConflict, fmt.Sprintf("this chat runs on %s; start a new chat to switch to %s", providerOptionLabelForProvider(profile.Runtime.ProviderOptions, bound), firstNonEmptyTrimmed(option.Label, option.ID)))
+			return
+		}
+		if restartNeeded {
+			closeAllCodingCLIInteractiveSessionsForOwner(conversation.SessionID, "product chat: model or reasoning effort changed")
+		}
 	}
 	encoded, err := json.Marshal(query)
 	if err != nil {
