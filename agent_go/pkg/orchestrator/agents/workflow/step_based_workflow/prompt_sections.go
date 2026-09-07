@@ -183,61 +183,15 @@ func BuildMainPyAuthoringRules() string {
 
 // BuildBrowserAuthoringRules returns the browser-automation-specific main.py rules.
 // Append to BuildMainPyAuthoringRules() ONLY when the step has agent-browser available.
-// Non-browser steps get no benefit from
-// these ~60 lines and paying the token tax on every step prompt is wasteful.
+// Keep selector mechanics in the attached agent-browser skill. Non-browser
+// steps do not need this authoring pointer.
 //
 // Callers: gate with templateVars["HasBrowserAccess"] == "true" or equivalent signal.
 func BuildBrowserAuthoringRules() string {
 	var sb strings.Builder
 	sb.WriteString("## Browser automation rules (this step has agent_browser)\n\n")
-	sb.WriteString("**The ONE rule that matters: selectors persisted to main.py must be DETERMINISTIC across future runs.**\n")
-	sb.WriteString("A deterministic selector resolves to the same element on every replay — across browser restarts, page rebuilds, deploys that rename auto-generated classes, React key changes, re-hydration. **Refs (`@e1`, `e68`, `\"ref\": \"abc123\"`) are session-local identifiers** the browser tools generate per snapshot; they're reassigned on the next run, so hardcoded refs are the opposite of deterministic. **NEVER write a ref-based selector into main.py, learnings, or any other saved artifact** — the replay will silently click the wrong thing.\n\n")
-	sb.WriteString("**Finding deterministic selectors — two paths, both valid:**\n")
-	sb.WriteString("- **Path A — `agent_browser` snapshot then act.** Snapshot gives you role + accessible name + state. Parse a live ref from each run's snapshot or choose a deterministic selector (see priority list below), then use `agent_browser` commands such as `click`, `fill`, `select`, and `open`.\n")
-	sb.WriteString("- **Path B — DOM probe via `agent_browser` `eval`.** Run the canonical read-only probe (below) to get a structured inventory of the DOM, including pre-filtered deterministic `cssPath` entries (auto-generated ids are filtered out). Use the probe when the accessibility snapshot misses elements (custom `<div>` buttons, portal/popover children, form inputs the tree skips). Eval for discovery is allowed; an action persisted to a saved script must still use a deterministic selector. `document.querySelector('.css-8xy3zb')` is not deterministic.\n\n")
-	sb.WriteString("**Deterministic-selector priority for main.py** (pick the highest that uniquely identifies the element and will resolve to the same element on every future run):\n")
-	sb.WriteString("  1. `data-testid` / `data-test` / `data-cy` / `data-qa`  (ideal — rare on production sites)\n")
-	sb.WriteString("  2. Hand-written, semantic `id` or `name` attribute  (e.g. `#panAdhaarUserId`, `#loginPasswordField`). **Skip auto-generated ids**: `radix-_rN_`, `mat-mdc-*`, `:rNN:`, any UUID-shaped id — these rotate across rebuilds.\n")
-	sb.WriteString("  3. `aria-label`  (very durable when present)\n")
-	sb.WriteString("  4. Role + accessible name from a fresh snapshot, resolving its live ref at runtime\n")
-	sb.WriteString("  5. Label, placeholder, or visible text that is unique and stable\n")
-	sb.WriteString("  6. Structural CSS / XPath with nth-child chains  (last resort; flag in learnings)\n")
-	sb.WriteString("- **Discovery when the accessibility snapshot is insufficient**: custom `<div>` buttons, dropdowns inside portals, autocomplete options, form inputs missing from the tree. Run a READ-ONLY DOM probe that returns a JSON inventory of the page (role, id, aria-label, data-testid, visible text, stable `cssPath`). One probe tells you the site's hook strategy (e.g. \"38 aria-labels, 0 testids → use aria-label + role+name\"). Then act through `agent_browser` using a live ref or durable selector.\n")
-	sb.WriteString("- **Probe invocation**: call `agent_browser` with `command='eval'` and the JavaScript below as its argument. In CDP mode include the configured endpoint and tab arguments required by the browser instructions. Never invoke the CLI through the shell.\n")
-	sb.WriteString("- **Canonical DOM probe** — copy this verbatim. Do NOT reinvent it per step; one source of truth keeps results comparable across runs, and the auto-id filtering (radix/mat-mdc/React-useId/UUID) is already tuned:\n")
-	sb.WriteString("```javascript\n")
-	sb.WriteString("(() => {\n")
-	sb.WriteString("  const FLOATING = '[role=\"listbox\"],[role=\"menu\"],[role=\"dialog\"],[role=\"tooltip\"],[data-radix-popper-content-wrapper],[data-floating-ui-portal],[data-headlessui-portal],[data-state=\"open\"]';\n")
-	sb.WriteString("  const STABLE = ['data-testid','data-test','data-cy','data-qa','id','name','aria-label','aria-labelledby','placeholder','href','type','role','for'];\n")
-	sb.WriteString("  const vis = e => { const r=e.getBoundingClientRect(); if(r.width===0||r.height===0) return false; const s=getComputedStyle(e); return s.visibility!=='hidden'&&s.display!=='none'&&s.opacity!=='0'; };\n")
-	sb.WriteString("  const interactive = e => {\n")
-	sb.WriteString("    if (['INPUT','TEXTAREA','SELECT','BUTTON','A'].includes(e.tagName)) return true;\n")
-	sb.WriteString("    const s=getComputedStyle(e); if(s.cursor==='pointer') return true;\n")
-	sb.WriteString("    if(e.onclick||e.getAttribute('onclick')) return true;\n")
-	sb.WriteString("    const r=e.getAttribute('role'); return r && ['button','option','menuitem','tab','link','checkbox','radio','switch'].includes(r);\n")
-	sb.WriteString("  };\n")
-	sb.WriteString("  const autoId = v => v && (/^radix-_r[a-z0-9]+_/.test(v) || /^:r[a-z0-9]+:$/.test(v) || /^mat-mdc-/.test(v) || /[a-f0-9]{8}-[a-f0-9]{4}-/.test(v));\n")
-	sb.WriteString("  const describe = e => {\n")
-	sb.WriteString("    const a={}; for(const k of STABLE){ const v=e.getAttribute(k); if(v) a[k]=v; }\n")
-	sb.WriteString("    const text=(e.innerText||e.value||e.textContent||'').trim().replace(/\\s+/g,' ').slice(0,80);\n")
-	sb.WriteString("    let css=null;\n")
-	sb.WriteString("    if(a['data-testid']) css=`[data-testid=\"${a['data-testid']}\"]`;\n")
-	sb.WriteString("    else if(a['data-test']) css=`[data-test=\"${a['data-test']}\"]`;\n")
-	sb.WriteString("    else if(a['data-cy']) css=`[data-cy=\"${a['data-cy']}\"]`;\n")
-	sb.WriteString("    else if(a.id && !autoId(a.id) && a.id.length<40) css=`#${CSS.escape(a.id)}`;\n")
-	sb.WriteString("    else if(a.name && !autoId(a.name)) css=`[name=\"${a.name}\"]`;\n")
-	sb.WriteString("    else if(a['aria-label']) css=`[aria-label=\"${a['aria-label']}\"]`;\n")
-	sb.WriteString("    return { tag:e.tagName.toLowerCase(), text, attrs:a, role:e.getAttribute('role')||null, cssPath:css };\n")
-	sb.WriteString("  };\n")
-	sb.WriteString("  const inv={}; for(const k of STABLE) inv[k]=document.querySelectorAll(`[${k}]`).length;\n")
-	sb.WriteString("  const framework = document.querySelector('[data-radix-popper-content-wrapper],[data-state]')?'radix':document.querySelector('mat-icon,mat-select,[class*=\"mat-mdc\"]')?'angular-material':document.querySelector('[data-headlessui-portal]')?'headlessui':(window.React||document.querySelector('[data-reactroot]'))?'react':'unknown';\n")
-	sb.WriteString("  const popover=[]; document.querySelectorAll(FLOATING).forEach(c=>{ if(!vis(c)) return; c.querySelectorAll('*').forEach(el=>{ if(!vis(el)||!el.innerText?.trim()) return; popover.push({source:'popover',...describe(el)}); }); });\n")
-	sb.WriteString("  const seen=new Set(popover.map(i=>i.cssPath).filter(Boolean));\n")
-	sb.WriteString("  const actionable=[]; document.querySelectorAll('body *').forEach(el=>{ if(!vis(el)||!interactive(el)) return; const d=describe(el); if(d.cssPath&&seen.has(d.cssPath)) return; if(!d.text&&!Object.keys(d.attrs).length) return; actionable.push({source:'actionable',...d}); });\n")
-	sb.WriteString("  return { url:location.href, framework, stableHookInventory:inv, popoverItems:popover.slice(0,50), actionableItems:actionable.slice(0,120), counts:{popover:popover.length,actionable:actionable.length} };\n")
-	sb.WriteString("})()\n")
-	sb.WriteString("```\n")
-	sb.WriteString("  Returns `{url, framework, stableHookInventory, popoverItems, actionableItems}`. Save `stableHookInventory` + `framework` to learnings as the site profile. Use `actionableItems[i].cssPath` directly in main.py when it's non-null (filtered against auto-generated ids). If `cssPath` is null, fall back to role+name from the a11y snapshot.\n")
+	sb.WriteString("Read the attached `agent-browser` skill's **Selector Discipline** section before browser authoring. It is the shared contract for builder chats, steps, scripts, and learnings.\n\n")
+	sb.WriteString("Start with a snapshot and use current refs for live actions. Saved main.py may resolve fresh refs at runtime or use verified durable locators; never hardcode a previous snapshot's ref. Use a scoped read-only eval only when the snapshot is insufficient. Verify the intended target and the action's outcome.\n\n")
 	sb.WriteString("- **Site-access resilience**: if a headless `open` returns \"Permission Denied\", a blank page, or a native-alert freeze, switch the workflow to CDP mode against an existing Chrome and document the precondition in learnings. Register a dialog handler before interacting if the page shows native alerts.\n")
 	sb.WriteString("- Wait by polling snapshots in a loop checking for expected content / expected widget state (e.g. disabled→enabled). NOT `time.sleep(N)` for UI state (use short sleeps 1-2s only between polls).\n")
 	sb.WriteString("- On failure (element missing, navigation stuck), print **both** the current snapshot AND the last probe result (if any) so the fix loop sees both views.\n")
@@ -248,16 +202,16 @@ func BuildBrowserAuthoringRules() string {
 
 // BuildBrowserLearningRules is the single selector-persistence contract used by
 // both the active direct-learning continuation and the legacy learning agent.
-// Keep execution mechanics in BuildBrowserAuthoringRules; this block only
+// Keep selector mechanics in the attached agent-browser skill; this block only
 // describes the durable HOW knowledge that may be saved across runs.
 func BuildBrowserLearningRules() string {
 	var sb strings.Builder
 	sb.WriteString("## Browser automation learnings (required when this step used agent_browser)\n\n")
 	sb.WriteString("Save reusable browser HOW under `references/site-profile.md`, `references/selectors.md`, or another linked topic file. A snapshot is runtime evidence, not reusable configuration.\n\n")
-	sb.WriteString("1. **Never persist snapshot refs.** Values such as `@e1`, `e68`, or a tool-generated `ref` are valid only for the snapshot/session that produced them. Re-snapshot and resolve a fresh ref for each interaction.\n")
-	sb.WriteString("2. **Record the stable-hook inventory once per site.** Include the framework if known and whether the site exposes `data-testid`/`data-test`, hand-written `id` or `name`, `aria-label`, labels/placeholders, and stable roles/names. Explicitly list generated ID/class patterns to avoid.\n")
-	sb.WriteString("3. **Record semantic action recipes, not a raw selector dump.** For each important action save, in a compact form, the action name and purpose, page/state precondition, primary durable locator, one or two fallbacks, expected postcondition, and timing/auth/modal quirks (e.g. `login.fill_user_id` → primary `{by: id, value: panAdhaarUserId}`, fallback `{by: placeholder, value: User ID}`, postcondition Continue enabled).\n")
-	sb.WriteString("4. **Use this locator priority:** test attributes (`data-testid`, `data-test`, `data-cy`, `data-qa`) > hand-written semantic `id`/`name` > `aria-label` > role + accessible name > label/placeholder/stable visible text > structural CSS/XPath. Store classes only when verified hand-written and stable across runs; never store generated framework/build classes or long class chains.\n")
+	sb.WriteString("1. **Never persist snapshot refs.** Do not store values such as `@e1`, `e68`, or a tool-generated `ref` as reusable configuration. Runtime snapshots are evidence. Save the semantic recipe that resolves a fresh ref from current page state; refresh after navigation, DOM updates, tab changes, or when freshness is uncertain.\n")
+	sb.WriteString("2. **Record the observed stable-hook inventory when useful.** Do not run a full DOM probe merely to complete learnings. Include the framework only if known and whether the inspected region exposes `data-testid`/`data-test`, hand-written `id` or `name`, `aria-label`, labels/placeholders, and stable roles/names. Explicitly list generated ID/class patterns to avoid.\n")
+	sb.WriteString("3. **Record semantic action recipes, not a raw selector dump.** For each important action save, in a compact form, the action name and purpose, page/state precondition, primary verified locator or fresh-snapshot resolution recipe, enclosing row/card scope, one or two fallbacks, expected postcondition, and timing/auth/modal quirks (e.g. `login.fill_user_id` → primary `{by: id, value: panAdhaarUserId}`, fallback `{by: placeholder, value: User ID}`, postcondition Continue enabled).\n")
+	sb.WriteString("4. **Follow the agent-browser skill selector contract:** role + accessible name or label, verified test attributes, hand-written semantic `id`/`name`, and `aria-label` are locator candidates, not guarantees of stability. Record state changes such as Like becoming Unlike. Structural CSS/XPath is a fragile last resort. Store classes only when verified hand-written and stable across runs; never store generated framework/build classes or long class chains.\n")
 	sb.WriteString("5. **Capture behavior that DOM inspection cannot explain.** Preserve login/CDP requirements, redirects, disabled-until-valid controls, portal/popover behavior, confirmation dialogs, OTP/captcha branches, polling conditions, and known false controls.\n")
 	sb.WriteString("6. **Keep confidence honest.** Save only locators actually used or verified in this run. Mark unverified fallbacks as candidates. If a saved locator failed, replace or qualify it and retain the failure signature in the known-bad section.\n")
 	sb.WriteString("7. **Do not save sensitive values.** Selector recipes may describe field identity, but never persist entered credentials, account identifiers, tokens, cookies, or user data.\n")

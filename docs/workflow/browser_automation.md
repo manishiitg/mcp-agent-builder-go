@@ -10,26 +10,33 @@ Browser workflows use the `agent-browser` skill and the managed
    `agent_browser(command="skills", args=["get", "core"])`.
 2. Open or select the workflow's labeled tab.
 3. Take an interactive snapshot.
-4. Act with a live ref or a durable selector.
-5. Re-snapshot and verify the expected state.
+4. Identify the intended control and act with its current ref or a verified locator.
+5. Verify the expected state; re-snapshot after navigation or DOM updates,
+   switching tabs, or when ref freshness is uncertain.
 6. Save stable site knowledge to the workflow's learnings.
 
 ## Persisted scripts
 
 Snapshot refs such as `@e1` are valid only for the current page state. A saved
-script must either parse a fresh ref from a new snapshot or use a stable hook.
-Prefer selectors in this order:
+script may resolve a fresh ref from the current snapshot by role, accessible
+name, and surrounding context, or use a verified semantic locator or DOM hook.
+Save this locating recipe, never a snapshot's literal ref as reusable config.
+Runtime snapshots can remain as evidence. CSS discovery is not required for
+every browser step.
 
-1. `data-testid`, `data-test`, `data-cy`, or `data-qa`;
-2. a hand-written semantic `id` or `name`;
-3. `aria-label`;
-4. role plus accessible name resolved from a fresh snapshot;
-5. stable label, placeholder, or visible text;
-6. structural CSS or XPath only as a documented last resort.
+Candidates include role plus accessible name, labels, test attributes,
+hand-written semantic `id`/`name`, and `aria-label`. None guarantees stability:
+a Like button may become Unlike. Scope repeated controls to their intended
+row/card and require one intended actionable match; do not choose the first
+match when the target is ambiguous. Verify the resulting page/business state
+before recording success or retrying.
 
 Avoid generated framework IDs, hashed class names, and `nth-child` chains.
-When the accessibility snapshot is incomplete, use a read-only `eval` probe to
-inventory stable DOM attributes before choosing a selector.
+When the accessibility snapshot is insufficient, use a scoped read-only `eval`
+to inspect relevant DOM attributes. Do not dump the full page, read credentials,
+or click/submit through a discovery probe. Treat any discovered locator as a
+candidate to verify. The attached `agent-browser` skill's **Selector Discipline**
+section is the shared authoring and learning contract.
 
 ## CDP workflows
 

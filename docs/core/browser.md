@@ -312,9 +312,12 @@ There are two CDP download paths:
 
 ## Operational rules
 
-- Re-snapshot after interactions because snapshot refs are ephemeral.
+- Use snapshots and current refs for live actions. Re-snapshot after navigation,
+  DOM updates, tab changes, or when ref freshness is uncertain.
 - Persist durable selectors or parse fresh refs at runtime; never save a literal
-  `@e1`-style ref in a workflow script.
+  `@e1`-style ref as reusable configuration in a workflow script. Scoped read-only
+  `eval` is a discovery fallback when snapshots are insufficient, not a required
+  step. Verify locator uniqueness, intended context, and the action's outcome.
 - Poll for page state instead of relying on long fixed sleeps.
 - Never connect to the CDP WebSocket directly for normal actions; that bypasses
   tab locking and can race other workflows.

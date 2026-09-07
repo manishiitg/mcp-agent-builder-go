@@ -37,6 +37,12 @@ Use `core --full` only when the overview lacks an exact command or flag.
 Upstream skill examples use shell syntax; translate them into managed
 `agent_browser` tool calls. Never execute browser actions through shell.
 
+For selector discovery and persistence, read the **Selector Discipline** section
+of the attached `agent-browser` skill. Start with a snapshot and use fresh refs
+for live actions. Saved automation may resolve fresh refs at runtime or use
+verified durable locators; read-only `eval` is a fallback when the snapshot is
+insufficient. Do not force CSS discovery for every step.
+
 ## `agent_browser` (CDP and headless)
 
 Call via HTTP API. CDP sessions need an exact
@@ -68,10 +74,10 @@ def browser(command, args=None, session="default"):
 # Standard flow
 browser("open", ["https://example.com"])
 snap = browser("snapshot", ["-i"])      # interactive elements as @e1, @e2, ...
+# Example only: choose the intended control from the actual snapshot.
 browser("click", ["@e1"])
-browser("fill", ["@e2", "search query"])
-browser("press", ["Enter"])
-snap = browser("snapshot", ["-i"])      # re-snapshot after every interaction
+snap = browser("snapshot", ["-i"])      # refresh after page changes
+# Verify the expected result; resolve the next target from this fresh snapshot.
 browser("screenshot", ["page.png"])
 ```
 
@@ -216,21 +222,21 @@ on:
 1. Dispatch the click.
 2. Wait for the settle delay, then take a *fresh* scoped read of the same
    control — a new `snapshot`/`get` of the surrounding region, not a
-   reused `@eN` reference from before the click. Refs go stale after every
-   interaction (see "Common mistakes" below); reusing one here would read
-   pre-click state and look like a false pass. On these controls,
+   reused `@eN` reference from before the click. DOM updates can invalidate
+   refs; an old ref does not establish the current state of the intended
+   control. On these controls,
    `data-testid` is itself part of the state — X swaps a like button's
    `data-testid` between `"like"` and `"unlike"` as the component re-renders
    — so it cannot double as the stable selector used to re-find the
-   element; locate it in the fresh snapshot by its stable characteristics
-   (position/role/surrounding text), then read both its current
+   element; locate the intended item by stable surrounding identity/context
+   and its control by role/name, avoiding position alone, then read both its current
    `aria-label` and `data-testid` and check they now hold the expected
    post-action values.
-3. If unchanged, retry once with a scoped DOM click targeting that same
-   located element directly (not a fresh top-level click, and not a
-   selector built from the pre-click `data-testid`, which may no longer
-   identify anything if the action partially landed), then verify again
-   with another fresh read.
+3. If fresh evidence confirms the action did not land and a retry remains
+   authorized and appropriate, retry at most once through the managed click
+   command using the newly resolved target, then verify again. Do not blindly
+   repeat a toggle or submit when its outcome is uncertain; do not treat a
+   read-only discovery probe as permission to click through JavaScript.
 4. If still unchanged, do not record success. Persist the attempt as failed
    with the observed before/after state — do not fabricate a landed action
    from a command-success response alone. A concurrent rate limit (HTTP 429
@@ -248,8 +254,8 @@ verify/recover recipe is the available mitigation.
 
 - Calling `open` with `["tab", "t1", url]` in CDP — `open` is URL-only.
 - Calling top-level `close` in CDP mode, or manually closing a pre-existing user tab. Workflow-created labeled tabs are cleaned up automatically after the one-hour review window.
-- Forgetting to re-snapshot after every interaction in headless/CDP — refs
-  go stale.
+- Reusing snapshot refs after navigation, DOM updates, or switching tabs.
+  Refresh after page changes, and before a ref-based action when freshness is uncertain.
 - Connecting directly to CDP WebSocket for click/fill/navigate — bypasses
   the shared tab lock and races with other workflows.
 - Omitting the configured `--cdp` prefix or inventing another port — the
