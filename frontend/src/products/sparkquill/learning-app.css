@@ -396,6 +396,11 @@
 .fl-meta-summary { margin: 0; color: var(--heading); font-size: var(--text-secondary); line-height: 1.55; }
 .fl-meta-concepts { display: flex; flex-wrap: wrap; gap: 6px; }
 .fl-meta-concept { padding: 2px 9px; border-radius: 8px; background: var(--surface); border: 1px solid #e6ddf5; color: #6a5a8f; font-size: var(--text-caption); }
+.fl-meta-extracted { border-top: 1px solid #e6ddf5; padding-top: 8px; }
+.fl-meta-extracted > summary { cursor: pointer; font-size: var(--text-caption); font-weight: 650; color: #6a4bc0; }
+.fl-meta-extracted-text { margin: 8px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--surface); border: 1px solid #e6ddf5; color: var(--heading); font-size: var(--text-secondary); line-height: 1.5; white-space: pre-wrap; max-height: 260px; overflow-y: auto; }
+.fl-asset-subgroup { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.fl-drawer-sublabel { margin: 4px 2px 0; color: var(--muted, #8a8478); font-size: 11px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
 /* Non-previewable file card: metadata + download (Word/PowerPoint/spreadsheets/…). */
 .fl-nopreview { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
 .fl-nopreview-head { display: flex; align-items: center; gap: 10px; }

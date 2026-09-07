@@ -759,8 +759,9 @@ function FileMetaPanel({ meta }: { meta: Record<string, unknown> }) {
   const subject = str('subject')
   const topic = str('topic')
   const type = str('type')
+  const extractedText = str('extracted_text')
   const chips = [subject, topic, type].filter(Boolean)
-  if (!summary && chips.length === 0 && concepts.length === 0) return null
+  if (!summary && chips.length === 0 && concepts.length === 0 && !extractedText) return null
   return (
     <div className="fl-meta-panel">
       <p className="fl-meta-title"><Info size={13} /> What Quill knows about this file</p>
@@ -774,6 +775,12 @@ function FileMetaPanel({ meta }: { meta: Record<string, unknown> }) {
         <div className="fl-meta-concepts">
           {concepts.map((c, i) => <span key={i} className="fl-meta-concept">{c}</span>)}
         </div>
+      )}
+      {extractedText && (
+        <details className="fl-meta-extracted">
+          <summary>See exactly what Quill read from this file</summary>
+          <pre className="fl-meta-extracted-text">{extractedText}</pre>
+        </details>
       )}
     </div>
   )
@@ -2743,13 +2750,19 @@ export default function LearningApp() {
                 const subjectsList = Array.from(new Set(classified.filter((f) => f.subject).map((f) => f.subject!))).sort()
                 const relevant = classified.filter((f) => !filesSubjectFilter || f.subject === filesSubjectFilter)
 
-                const bySubject = new Map<string, Entry[]>()
+                // Subject -> Topic -> entries. A file with no topic (loose in
+                // materials/<subject>/) falls into that subject's own
+                // "General" bucket rather than a fake topic group.
+                const bySubject = new Map<string, Map<string, Entry[]>>()
                 const general: Entry[] = []
                 relevant.forEach((f) => {
                   const entry: Entry = { path: f.p, date: f.date, label: f.label }
                   if (!f.subject) { general.push(entry); return }
-                  if (!bySubject.has(f.subject)) bySubject.set(f.subject, [])
-                  bySubject.get(f.subject)!.push(entry)
+                  if (!bySubject.has(f.subject)) bySubject.set(f.subject, new Map())
+                  const topics = bySubject.get(f.subject)!
+                  const topicKey = f.topic || ''
+                  if (!topics.has(topicKey)) topics.set(topicKey, [])
+                  topics.get(topicKey)!.push(entry)
                 })
                 const byDateDesc = (a: Entry, b: Entry) => (b.date || '').localeCompare(a.date || '')
                 const renderEntries = (entries: Entry[]) => {
@@ -2790,12 +2803,33 @@ export default function LearningApp() {
                       <p className="fl-note">No uploaded material yet. Use the attach button to add photos or documents — they’ll appear here.</p>
                     ) : (
                       <>
-                        {Array.from(bySubject.entries()).map(([subj, entries]) => (
-                          <section key={subj} className="fl-asset-group">
-                            <p className="fl-drawer-label">{subj}</p>
-                            {renderEntries(entries)}
-                          </section>
-                        ))}
+                        {Array.from(bySubject.entries()).map(([subj, topics]) => {
+                          const topicEntries = Array.from(topics.entries()).filter(([t]) => t !== '')
+                          const loose = topics.get('') || []
+                          return (
+                            <section key={subj} className="fl-asset-group">
+                              <p className="fl-drawer-label">{subj}</p>
+                              {topicEntries.length > 0 ? (
+                                <>
+                                  {topicEntries.map(([topic, entries]) => (
+                                    <div key={topic} className="fl-asset-subgroup">
+                                      <p className="fl-drawer-sublabel">{topic}</p>
+                                      {renderEntries(entries)}
+                                    </div>
+                                  ))}
+                                  {loose.length > 0 && (
+                                    <div className="fl-asset-subgroup">
+                                      <p className="fl-drawer-sublabel">General</p>
+                                      {renderEntries(loose)}
+                                    </div>
+                                  )}
+                                </>
+                              ) : (
+                                renderEntries(loose)
+                              )}
+                            </section>
+                          )
+                        })}
                         {general.length > 0 && (
                           <section className="fl-asset-group">
                             <p className="fl-drawer-label">General</p>
